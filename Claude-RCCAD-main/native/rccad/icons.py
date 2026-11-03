@@ -332,6 +332,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             fl(_rounded(6, 30, 24, 7, 1.5), soft)
             st(acc, 3.0); p.drawPolyline(poly([(26, 33), (34, 33), (40, 12)]))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(37, 6), (32, 15), (43, 15)]))
+        elif name == 'flat':
+            fl(_rounded(5, 12, 38, 27, 2), soft)
+            pn = pen(acc, 2.6); pn.setStyle(Qt.DashLine); p.setPen(pn)
+            p.drawLine(QPointF(17, 12), QPointF(17, 39)); p.drawLine(QPointF(31, 12), QPointF(31, 39))
         elif name == 'flange':
             fl(_rounded(6, 30, 22, 7, 1.5), soft)
             fl(_rounded(24, 8, 7, 29, 1.5), soft)

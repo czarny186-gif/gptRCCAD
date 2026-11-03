@@ -175,7 +175,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules'],
+TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek
@@ -336,6 +336,7 @@ class StudioWindow(QMainWindow):
                  ('flange', ui.style_icon('flange', 38), 'Kołnierz — wybierz krawędź blachy'),
                  ('hem', ui.style_icon('hem', 38), 'Zawinięcie — zawiń krawędź blachy o 180°, z przerwą albo zaciśnięte'),
                  ('rules', ui.style_icon('rules', 38), 'Reguły blach — szczelina i wycięcia w narożnikach'),
+                 ('flat', ui.style_icon('flat', 38), 'Rozwinięcie DXF — zaznacz jedną blachę w drzewie obiektów'),
                  ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
                  ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii'),
                  ('mdist', ui.style_icon('mdist', 38), 'Pomiar odległości między dwoma punktami'),
@@ -346,11 +347,13 @@ class StudioWindow(QMainWindow):
                  ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku')]
         self.tools = {}
         for key, icon, tip in icons:
-            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface'))
+            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'flat'))
             button.setParent(v)
             ui.shadow(button, 12, 3, 36)
             self.tools[key] = button
-            if key == 'surface':
+            if key == 'flat':
+                button.clicked.connect(lambda _=False: self.export_flat_pattern())
+            elif key == 'surface':
                 button.clicked.connect(lambda _=False: self.pick_other_surface())
             elif key != 'file':
                 button.clicked.connect(lambda _=False, k=key: self.toggle_mode(k))
@@ -823,6 +826,8 @@ class StudioWindow(QMainWindow):
         self._field(lay, 'Kąt (°)', self.fl_angle)
         self.fl_length = _spin(20, .01, 1e5, 3, 1)
         self._field(lay, 'Długość kołnierza (mm)', self.fl_length)
+        self.fl_reverse = QCheckBox('Odwróć kierunek gięcia')
+        lay.addWidget(self.fl_reverse)
         self.fl_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
         lay.addWidget(self.fl_status)
         self._buttons3(lay, self.apply_flange, self.cancel_edge, lambda: self.set_mode(None))
@@ -841,13 +846,19 @@ class StudioWindow(QMainWindow):
 
         # --- reguły blach: szczelina i wycięcia w narożnikach (osobny panel, dotyczy kołnierzy) ---
         self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True)
-        lay.addWidget(_label('Szczelina rozdziela kołnierze z sąsiednich krawędzi w narożniku. Wycięcie usuwa materiał w rogu, więc ściany się nie łączą. Zmiany dotyczą kołnierzy dodawanych od teraz.', 'small'))
+        lay.addWidget(_label('Reguły narożników przeliczają całą blachę przy dodaniu gięcia. Dla rozwinięcia DXF wyłącz docinanie narożników i wycięcia; zawinięcia nie są jeszcze rozwijane. Współczynnik K dobierz do materiału i prób gięcia.', 'small'))
+        self.fl_miter = QCheckBox('Docinaj i przedłużaj narożniki')
+        self.fl_miter.setChecked(True)
+        lay.addWidget(self.fl_miter)
         self.fl_gap = _spin(0, 0, 1e5, 3, .5)
         self._field(lay, 'Szczelina między kołnierzami (mm)', self.fl_gap)
         self.fl_relief = ui.Segmented([('Brak', 'none', 'rl_none'), ('Kwadrat', 'square', 'rl_sq'), ('Okrąg', 'round', 'rl_round')], 30)
         self._field(lay, 'Wycięcie w narożniku', self.fl_relief)
         self.fl_relief_size = _spin(3, 0, 1e5, 3, .5)
         self._field(lay, 'Wielkość wycięcia (mm)', self.fl_relief_size)
+        self.fl_kfactor = _spin(shm.K_DEFAULT, 0, .5, 3, .01)
+        self.fl_kfactor.setToolTip('K = położenie warstwy obojętnej / grubość. Dobierz na podstawie prób gięcia materiału.')
+        self._field(lay, 'Współczynnik K rozwinięcia', self.fl_kfactor)
         self.fl_joint = ui.Segmented([('Równolegle', 'parallel', 'rl_par'), ('Skośnie', 'diagonal', 'rl_skos')], 30)
         self._field(lay, 'Łączenie kołnierzy w narożniku', self.fl_joint)
         self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')
@@ -3285,8 +3296,8 @@ class StudioWindow(QMainWindow):
 
     def _flange_rules(self):
         return dict(gap=float(self.fl_gap.value()), relief=self.fl_relief.currentData() or 'none',
-                    relief_size=float(self.fl_relief_size.value()), miter=True, joint=self.fl_joint.currentData() or 'parallel',
-                    outside=self.fl_outside.isChecked())
+                    relief_size=float(self.fl_relief_size.value()), miter=self.fl_miter.isChecked(), joint=self.fl_joint.currentData() or 'parallel',
+                    outside=self.fl_outside.isChecked(), kfactor=float(self.fl_kfactor.value()))
 
     def _sheet_state(self, body_id):
         """Stan blachy odczytany z historii (do bieżącego kroku): płyta bazowa, grubość, lista kołnierzy i reguły.
@@ -3324,7 +3335,7 @@ class StudioWindow(QMainWindow):
         tol = max(1e-3, 0.001 * max(box.xlen, box.ylen, box.zlen))
         mid = body.shape.Edges()[hit[1]].positionAt(.5).toTuple()
         try:
-            spec = shm.spec_for_edge(st['base'], st['t'], st['specs'], self._flange_rules(), mid, tol)
+            spec = shm.spec_for_edge(st['base'], st['t'], st['specs'], st['rules'], mid, tol)
         except kernel.CadError as exc:
             self.fl_pick = None
             self.view.set_picked_edge(None)
@@ -3370,7 +3381,17 @@ class StudioWindow(QMainWindow):
             spec.update(r=float(self.hm_radius.value()), angle=90.0, length=float(self.hm_length.value()),
                         hem=dict(gap=float(self.hm_gap.value()), ret=float(self.hm_length.value())))
         else:
-            spec.update(r=float(self.fl_radius.value()), angle=float(self.fl_angle.value()), length=float(self.fl_length.value()))
+            spec.update(r=float(self.fl_radius.value()), angle=float(self.fl_angle.value()), length=float(self.fl_length.value()),
+                        outside=self.fl_outside.isChecked())
+            if self.fl_reverse.isChecked():
+                if spec['kind'] == 'tip':
+                    spec['side'] = 'out' if spec['side'] == 'in' else 'in'
+                else:
+                    state = self._sheet_state(self.fl_pick['id'])
+                    n = np.asarray(spec['n'], float)
+                    spec['p0'] = (np.asarray(spec['p0']) - state['t'] * n).tolist()
+                    spec['p1'] = (np.asarray(spec['p1']) - state['t'] * n).tolist()
+                    spec['n'] = (-n).tolist()
         return spec
 
     def _add_pick(self):
@@ -3387,7 +3408,8 @@ class StudioWindow(QMainWindow):
         if self.busy or body is None or st is None or spec is None:
             self.toast('Najpierw wybierz krawędź blachy.')
             return
-        recipe = dict(type='sheetbuild', id=body.id, base=st['base'], t=st['t'], flanges=[*st['specs'], spec], rules=self._flange_rules())
+        previous = [dict(s, outside=s.get('outside', st['rules'].get('outside', False))) for s in st['specs']]
+        recipe = dict(type='sheetbuild', id=body.id, base=st['base'], t=st['t'], flanges=[*previous, spec], rules=self._flange_rules())
 
         def build():
             return body.changed(shm.build_sheet(recipe)), recipe
@@ -3400,6 +3422,31 @@ class StudioWindow(QMainWindow):
         self.fl_pick = None
         self.view.set_picked_edge(None)
         self.run_operation(label, build, apply, after=self._after_commit)
+
+    def export_flat_pattern(self):
+        if self.busy:
+            return
+        bodies = [b for b in self.document.bodies if b.id in self.selected and b.kind == 'solid']
+        if len(bodies) != 1:
+            self.toast('Zaznacz jedną blachę w drzewie obiektów, potem wybierz Rozwinięcie DXF.')
+            return
+        body = bodies[0]
+        state = self._sheet_state(body.id)
+        if state is None:
+            self.toast('Wybrana bryła nie ma aktualnej historii blachy.')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Zapisz rozwinięcie 1:1 — mm', f'{body.name}-rozwiniecie.dxf', 'DXF (*.dxf)')
+        if not path:
+            return
+        if not Path(path).suffix:
+            path += '.dxf'
+        rules = dict(state['rules'], kfactor=float(self.fl_kfactor.value()))
+        recipe = dict(type='sheetbuild', base=state['base'], t=state['t'], flanges=state['specs'], rules=rules)
+
+        def done(pattern):
+            self.toast(f'Zapisano DXF 1:1 (mm): {path}. CUT: cięcie; BEND_UP/DOWN: linie gięcia, nie do cięcia. K={pattern["kfactor"]:.3f}.', 12000)
+
+        self.run_operation('Rozwinięcie DXF', lambda: shm.export_flat_dxf(recipe, path, body.shape), done)
 
     def pick_shell(self, x, y):
         hit = self.view.pick_face(x, y)

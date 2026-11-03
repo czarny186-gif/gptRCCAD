@@ -11,7 +11,7 @@ import numpy as np
 import cadquery as cq
 from . import kernel
 
-K_DEFAULT = 0.44          # współczynnik K — domyślny (reguły blach, na razie tylko zapis)
+K_DEFAULT = 0.44          # położenie warstwy obojętnej jako ułamek grubości
 RELIEFS = ('none', 'square', 'round')
 _TOL = 1e-4
 
@@ -19,7 +19,7 @@ _TOL = 1e-4
 def _unit(v):
     v = np.asarray(v, float)
     n = float(np.linalg.norm(v))
-    if n < 1e-12:
+    if v.shape != (3,) or not np.all(np.isfinite(v)) or n < 1e-12:
         raise kernel.CadError("Nieprawidłowy kierunek blachy.")
     return v / n
 
@@ -124,8 +124,12 @@ def _frame(p0, p1, t, n, m):
     m = _unit(m)
     p0, p1 = _arr(p0), _arr(p1)
     span = float(np.linalg.norm(p1 - p0))
+    if not math.isfinite(span) or span < _TOL:
+        raise kernel.CadError("Krawędź gięcia ma zerową długość.")
     d = (p1 - p0) / span
     zdir = np.cross(m, n)
+    if abs(float(m @ n)) > 1e-6 or abs(abs(float(zdir @ d)) - 1) > 1e-6:
+        raise kernel.CadError("Krawędź i kierunki gięcia nie tworzą układu prostopadłego.")
     base = p0 if float(zdir @ d) > 0 else p1
     return base - t * n, m, n, zdir, span
 
@@ -257,7 +261,9 @@ def _straight(s, t, outside):
     L = float(s['length'])
     if not outside:
         return L
-    a = math.radians(min(float(s['angle']), 179.0))
+    if float(s['angle']) >= 180:
+        raise kernel.CadError("Dla gięcia 180° podaj długość prostej części, nie wymiar zewnętrzny.")
+    a = math.radians(float(s['angle']))
     L2 = L - (float(s['r']) + t) * math.tan(a / 2)
     if L2 <= 0:
         raise kernel.CadError("Wymiar zewnętrzny jest za mały dla tego promienia i kąta.")
@@ -272,7 +278,7 @@ def _effective(specs, t, miter, outside=False):
     for i in base_idx:
         s = specs[i]
         eff[i] = dict(kind='base', p0=_arr(s['p0']), p1=_arr(s['p1']), n=_unit(s['n']), m=_unit(s['m']),
-                      r=float(s['r']), angle=float(s['angle']), length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, outside)), hem=_hem_of(s))
+                      r=float(s['r']), angle=float(s['angle']), length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, s.get('outside', outside))), hem=_hem_of(s))
     ends, corners = {}, []
     orig = {i: (eff[i]['p0'].copy(), eff[i]['p1'].copy()) for i in base_idx}   # długość krawędzi bez wydłużeń w rogach
     if miter:
@@ -284,6 +290,8 @@ def _effective(specs, t, miter, outside=False):
                         continue
                     for Q in (eff[j]['p0'], eff[j]['p1']):
                         if float(np.linalg.norm(P - Q)) < _TOL and abs(float(eff[i]['m'] @ eff[j]['m'])) < 1e-6:
+                            if any(abs(eff[h]['angle'] - 90) > 1e-6 or eff[h].get('hem') for h in (i, j)):
+                                raise kernel.CadError("Docinanie wspólnych narożników obsługuje kołnierze 90°. Dla innych kątów lub zawinięć wyłącz docinanie narożników w Regułach blach.")
                             ends[i][k] = True
                             if i < j:
                                 # dwusieczna kąta między ścianami: płaszczyzna ukosu przechodzi przez krawędź narożnika
@@ -309,7 +317,7 @@ def _effective(specs, t, miter, outside=False):
             else:
                 p0, p1, n, m = _tip_geom(par, s['side'], t)
             eff[i] = dict(kind='tip', p0=p0, p1=p1, n=n, m=m, r=float(s['r']), angle=float(s['angle']),
-                          length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, outside)), hem=_hem_of(s))
+                          length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, s.get('outside', outside))), hem=_hem_of(s))
     return eff, corners
 
 
@@ -380,14 +388,60 @@ def relief_cut(shape, point, d, normal, kind, size):
     return kernel.valid(kernel.boolean('subtract', shape, [cutter]))
 
 
+def _same_end(spec, a, b, t):
+    """Compare both thickness-side edges of one physical flange attachment."""
+    for offset in (0, t, -t):
+        p = _arr(spec['p0']) + offset * _unit(spec['n'])
+        q = _arr(spec['p1']) + offset * _unit(spec['n'])
+        if (np.linalg.norm(p - a) < _TOL and np.linalg.norm(q - b) < _TOL or
+                np.linalg.norm(p - b) < _TOL and np.linalg.norm(q - a) < _TOL):
+            return True
+    return False
+
+
+def _validate_specs(specs, t):
+    parents = set()
+    for i, s in enumerate(specs):
+        if s.get('kind') == 'base':
+            _frame(s['p0'], s['p1'], t, s['n'], s['m'])
+            if any(p['kind'] == 'base' and _same_end(p, _arr(s['p0']), _arr(s['p1']), t) for p in specs[:i]):
+                raise kernel.CadError("Na tej krawędzi jest już gięcie. Nie można zagiąć jej drugi raz z przeciwnej strony.")
+        elif s.get('kind') == 'tip':
+            parent = s.get('parent')
+            if type(parent) is not int or not 0 <= parent < i:
+                raise kernel.CadError("Gięcie musi wskazywać wcześniejszy kołnierz nadrzędny.")
+            if s.get('side') not in ('in', 'out'):
+                raise kernel.CadError("Nieznany kierunek gięcia.")
+            if parent in parents:
+                raise kernel.CadError("Koniec kołnierza ma już kolejne gięcie.")
+            parents.add(parent)
+        else:
+            raise kernel.CadError("Nieznany rodzaj kołnierza.")
+
+
+def _join_sheet(shape, parts):
+    """One Boolean per level, with a volume check for material folded into itself."""
+    if not parts:
+        return shape
+    expected = shape.Volume() + sum(p.Volume() for p in parts)
+    result = kernel.boolean('union', shape, parts)
+    if expected - result.Volume() > max(1e-4, expected * 1e-8):
+        raise kernel.CadError("Gięcia nachodzą na siebie lub na płytę. Zmień kierunek, kąt albo długość kołnierza.")
+    return result
+
+
 def build_sheet(recipe):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
     base = base_solid(recipe['base'])
     t = float(recipe['t'])
+    if not math.isfinite(t) or t <= 0 or not math.isclose(t, float(recipe['base']['lz']), rel_tol=1e-6, abs_tol=1e-6):
+        raise kernel.CadError("Grubość blachy musi odpowiadać grubości płyty bazowej.")
     rules = recipe.get('rules') or {}
     gap = float(rules.get('gap', 0.0))
     relief = rules.get('relief', 'none')
     rsize = float(rules.get('relief_size', 0.0))
+    if not math.isfinite(rsize) or rsize < 0:
+        raise kernel.CadError("Wielkość wycięcia musi być nieujemną liczbą.")
     miter = bool(rules.get('miter', True))
     joint = rules.get('joint', 'parallel')
     if joint not in ('parallel', 'diagonal'):
@@ -398,6 +452,7 @@ def build_sheet(recipe):
     if not math.isfinite(gap) or gap < 0:
         raise kernel.CadError("Szczelina między kołnierzami nie może być ujemna.")
     specs = recipe.get('flanges') or []
+    _validate_specs(specs, t)
     for s in specs:
         _check_numbers(float(s['r']), float(s['angle']), float(s['length']))
     if not specs:
@@ -451,29 +506,37 @@ def build_sheet(recipe):
     base_idx = [i for i, s_ in enumerate(specs) if s_['kind'] == 'base']
     tip_idx = [i for i, s_ in enumerate(specs) if s_['kind'] != 'base']
     shape = base
-    for i in base_idx:
-        shape = kernel.boolean('union', shape, [pieces[i]])
+    if base_idx:
+        # Existing butt corners share material in the bend transition. Their
+        # clipping is not a neutral-surface development (flat_pattern refuses it).
+        shape = (kernel.boolean('union', shape, [pieces[i] for i in base_idx]) if corners
+                 else _join_sheet(shape, [pieces[i] for i in base_idx]))
     # wycięcie w narożniku tylko w warstwie płyt (dolnej): kołnierze wyższych warstw go nie przecinają
     if relief != 'none' and rsize > 0:
         for i in base_idx:
             d = _unit(_arr(specs[i]['p1']) - _arr(specs[i]['p0']))
             for P in (_arr(specs[i]['p0']), _arr(specs[i]['p1'])):
                 shape = relief_cut(shape, P, d, eff[i]['n'], relief, rsize)
-    for i in tip_idx:
-        shape = kernel.boolean('union', shape, [pieces[i]])
+    if tip_idx:
+        shape = _join_sheet(shape, [pieces[i] for i in tip_idx])
+    if len(shape.Solids()) != 1:
+        raise kernel.CadError("Gięcia nie tworzą jednej połączonej blachy. Sprawdź krawędzie i wycięcia.")
     return kernel.valid(shape)
 
 
 def spec_for_edge(base, t, specs, rules, mid, tol):
     """Kołnierz na wybranej krawędzi: krawędź końca istniejącego kołnierza („tip”) albo krawędź płyty („base”)."""
-    eff, _ = _effective(specs, t, bool((rules or {}).get('miter', True)))
+    rules = rules or {}
+    _validate_specs(specs, t)
+    eff, _ = _effective(specs, t, bool(rules.get('miter', True)), bool(rules.get('outside', False)))
+    tol = min(float(tol), float(t) * .25)
     mid = _arr(mid)
-    taken_tips = {(int(s['parent']), s['side']) for s in specs if s['kind'] == 'tip'}
+    taken_tips = {int(s['parent']) for s in specs if s['kind'] == 'tip'}
     # wybieramy najbliższą krawędź (tolerancja nie może być większa niż grubość, inaczej trafiamy w sąsiednią krawędź)
     best = None
     for i, f in enumerate(eff):
         for side in ('in', 'out'):
-            if (i, side) in taken_tips:
+            if i in taken_tips:
                 continue
             p0, p1, _, _ = (_hem_end_geom(f, side, t) if f.get('hem') else _tip_geom(f, side, t))
             d = _seg_dist(mid, p0, p1)
@@ -494,9 +557,115 @@ def spec_for_edge(base, t, specs, rules, mid, tol):
                                         or np.linalg.norm(_arr(s['p0']) - b) < _TOL and np.linalg.norm(_arr(s['p1']) - a) < _TOL)
                for s in specs):
             continue
+        # Górna i dolna krawędź to ten sam fizyczny koniec blachy.
+        if any(s['kind'] == 'base' and _same_end(s, a, b, t) for s in specs):
+            continue
         n, m = edge_side(shape, e, t)
         return dict(kind='base', p0=[float(x) for x in a], p1=[float(x) for x in b], n=[float(x) for x in n], m=[float(x) for x in m])
     raise kernel.CadError("Nie rozpoznano krawędzi blachy. Kliknij krawędź płyty albo krawędź kołnierza.")
+
+
+def flat_pattern(recipe):
+    """Develop untrimmed edge-flange chains in mm using BA = angle * (R + K*t).
+
+    Corner miters/reliefs and hems need a separate neutral-surface development;
+    refuse them rather than exporting a plausible but incorrect laser contour.
+    The returned solid has unit height solely for robust planar Boolean operations.
+    """
+    build_sheet(recipe)  # Includes connectivity and self-intersection checks.
+    base, t = recipe['base'], float(recipe['t'])
+    specs, rules = recipe.get('flanges') or [], recipe.get('rules') or {}
+    kfactor = float(rules.get('kfactor', K_DEFAULT))
+    if not math.isfinite(kfactor) or not 0 <= kfactor <= .5:
+        raise kernel.CadError("Współczynnik K musi być w zakresie 0–0,5; dobierz go do materiału i giętarki.")
+    eff, corners = _effective(specs, t, bool(rules.get('miter', True)), bool(rules.get('outside', False)))
+    if corners or rules.get('relief', 'none') != 'none' or any(s.get('hem') for s in specs):
+        raise kernel.CadError("Rozwinięcie DXF obsługuje niezależne łańcuchy kołnierzy bez zawinięć, ukosów i wycięć narożnych. Tego modelu nie można jeszcze bezpiecznie rozwinąć.")
+    origin, x, y = _arr(base['o']), _unit(base['x']), _unit(base['y'])
+
+    def xy(point):
+        v = _arr(point) - origin
+        return np.array([v @ x, v @ y], dtype=float)
+
+    def slab(points):
+        return cq.Workplane('XY').polyline([tuple(map(float, p)) for p in points]).close().extrude(1).val()
+
+    blank = cq.Workplane('XY').box(base['lx'], base['ly'], 1, centered=False).val()
+    frames, bends = [], []
+    for i, (s, f) in enumerate(zip(specs, eff)):
+        if s['kind'] == 'base':
+            a, b = xy(f['p0']), xy(f['p1'])
+            outward = np.array([f['m'] @ x, f['m'] @ y])
+            direction = 1 if f['n'] @ _unit(base['z']) > 0 else -1
+        else:
+            parent = frames[s['parent']]
+            par = eff[s['parent']]
+            d3 = _unit(par['p1'] - par['p0'])
+            d2 = (parent['b'] - parent['a']) / np.linalg.norm(parent['b'] - parent['a'])
+            # _frame may reverse the edge axis; preserve endpoint correspondence.
+            a = parent['end_a'] + float((f['p0'] - par['p0']) @ d3) * d2
+            b = parent['end_a'] + float((f['p1'] - par['p0']) @ d3) * d2
+            outward = parent['outward']
+            # 'in' means towards the inner side of the preceding bend.
+            direction = parent['direction'] * (1 if s['side'] == 'in' else -1)
+        allowance = math.radians(f['angle']) * (f['r'] + kfactor * t)
+        travel = allowance + f['length']
+        end_a, end_b = a + travel * outward, b + travel * outward
+        part = slab([a, b, end_b, end_a])
+        blank = _join_sheet(blank, [part])
+        frames.append(dict(a=a, b=b, end_a=end_a, end_b=end_b, outward=outward, direction=direction))
+        bends.append(dict(index=i + 1, angle=f['angle'], radius=f['r'], allowance=allowance,
+                          direction='UP' if direction > 0 else 'DOWN',
+                          a=(a + allowance / 2 * outward).tolist(), b=(b + allowance / 2 * outward).tolist()))
+    if len(blank.Solids()) != 1:
+        raise kernel.CadError("Rozwinięcie nie tworzy jednej połączonej części.")
+    return dict(shape=blank, bends=bends, thickness=t, kfactor=kfactor, area=blank.Volume())
+
+
+def export_flat_dxf(recipe, path, expected_shape=None):
+    """Atomic, 1:1 millimetre DXF: closed CUT contours, non-cutting bend lines."""
+    import os
+    from pathlib import Path
+    import tempfile
+    import ezdxf
+
+    if expected_shape is not None:
+        folded = build_sheet(recipe)
+        tolerance = max(1e-4, folded.Volume() * 1e-8)
+        if (abs(folded.Volume() - expected_shape.Volume()) > tolerance or
+                folded.cut(expected_shape).Volume() > tolerance or expected_shape.cut(folded).Volume() > tolerance):
+            raise kernel.CadError("Bryła zmieniła się poza operacjami blachy. Rozwinięcie nie uwzględnia tych zmian; eksport został zatrzymany.")
+    pattern = flat_pattern(recipe)
+    doc = ezdxf.new('R2010')
+    doc.units = ezdxf.units.MM
+    for layer, color in [('CUT', 7), ('BEND_UP', 1), ('BEND_DOWN', 5)]:
+        doc.layers.new(layer, dxfattribs={'color': color})
+    space = doc.modelspace()
+    top = next(f for f in pattern['shape'].Faces() if f.normalAt().z > .99)
+    for wire in top.Wires():
+        # All supported developed outlines are straight. Wire traversal keeps the contour ordered.
+        from OCP.BRepTools import BRepTools_WireExplorer
+        explorer = BRepTools_WireExplorer(wire.wrapped)
+        points = []
+        while explorer.More():
+            v = cq.Vertex(explorer.CurrentVertex())
+            points.append((v.X, v.Y))
+            explorer.Next()
+        space.add_lwpolyline(points, close=True, dxfattribs={'layer': 'CUT'})
+    for bend in pattern['bends']:
+        line = space.add_line(bend['a'], bend['b'], dxfattribs={'layer': 'BEND_' + bend['direction']})
+        doc.appids.add('RCCAD') if 'RCCAD' not in doc.appids else None
+        line.set_xdata('RCCAD', [(1070, bend['index']), (1040, bend['angle']), (1040, bend['radius']),
+                                (1040, pattern['thickness']), (1040, pattern['kfactor'])])
+    target = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix='.rccad-flat-', suffix='.dxf', dir=target.parent)
+    os.close(fd)
+    try:
+        doc.saveas(temporary)
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return pattern
 
 
 def add_flange(shape, edge, sheet, radius, angle, length, gap=0.0, relief='none', relief_size=0.0):

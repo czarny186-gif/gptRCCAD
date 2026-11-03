@@ -31,11 +31,18 @@ TOPICS = [
         'Po konwersji można dodawać kołnierze. Program zapamiętuje blachę w historii, więc zmiana wcześniejszych kroków przelicza ją ponownie.']),
     ('t_rules', 'Reguły blach', 'Szczelina i wycięcia w narożnikach', [
         'Ustawienia kołnierzy blachy: szczelina między kołnierzami w narożniku oraz wycięcie w rogu (brak, kwadrat albo okrąg) o zadanej wielkości.',
-        'Zmiany dotyczą kołnierzy dodawanych od teraz; już dodane kołnierze nie zmieniają się.']),
+        'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia. Docinanie wspólnych narożników dotyczy kołnierzy 90°. Dla innych kątów wyłącz docinanie.',
+        'Współczynnik K określa położenie warstwy obojętnej rozwinięcia. Zakres 0–0,5, domyślnie 0,44; dobierz go do materiału i prób na giętarce.']),
     ('t_flange', 'Kołnierz', 'Blacha: wyciągnięcie krawędzi w kołnierz', [
         'Wyciąga krawędź blachy w kołnierz z zadanym promieniem gięcia (promień stempla), kątem i długością prostej części.',
         'Wybierz KOŁNIERZ, kliknij krawędź. Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Ustaw promień, kąt i długość, potem Dodaj kołnierz.',
-        'Narożniki i wymiar zewnętrzny kołnierza jeszcze nie są obsługiwane: długość liczona jest od początku łuku gięcia.']),
+        'Odwróć kierunek gięcia zmienia stronę bez wybierania drugiej krawędzi grubości. Można kontynuować gięcia na końcach kolejnych kołnierzy, z różnymi kątami i kierunkami.',
+        'Długość oznacza prosty odcinek za łukiem. Opcja wymiaru zewnętrznego odejmuje (R+t)·tan(kąt/2); ta interpretacja zostaje zapisana osobno dla każdego gięcia.']),
+    ('t_flat', 'Rozwinięcie DXF', 'Blacha: rozwinięcie 1:1 do cięcia laserowego', [
+        'Zaznacz jedną blachę w drzewie obiektów, ustaw współczynnik K w Regułach blach i kliknij Rozwinięcie DXF. Eksport wykonuje się w tle, bez zmiany modelu ani historii.',
+        'Długość naddatku gięcia BA = kąt w radianach × (R + K × grubość). DXF jest w milimetrach, w skali 1:1. Tnij tylko zamknięte kontury warstwy CUT. BEND_UP i BEND_DOWN to linie środka gięcia, nie linie cięcia.',
+        'Obsługiwane są prostokątne płyty i łańcuchy kołnierzy bez docinanych narożników, wycięć narożnych i zawinięć. Dla wielu boków wyłącz docinanie narożników przed ich dodaniem. Dodatkowe otwory i obróbka poza historią blachy blokują eksport.',
+        'Kontury nie zawierają kompensacji szerokości szczeliny lasera; ustawia się ją w CAM. Przed produkcją sprawdź parametry materiału, K, kierunki i technologię gięcia.']),
     ('t_hem', 'Zawinięcie', 'Blacha: zawinięcie krawędzi o 180°', [
         'Krawędź zawija się od razu o 180° i odcinek powrotny przylega do powierzchni blachy, bez dodatkowego kołnierza.',
         'Wybierz ZAWINIĘCIE, kliknij krawędź (płyty, kołnierza albo wolny koniec zawinięcia). Ustaw promień, długość zawinięcia i szczelinę (min 0,1 mm), potem Dodaj zawinięcie.',

@@ -3,6 +3,8 @@ import os, faulthandler
 faulthandler.dump_traceback_later(420, exit=True, file=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w"))
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
+import tempfile
+from pathlib import Path
 import numpy as np
 import unittest
 from unittest.mock import patch
@@ -118,6 +120,64 @@ class StudioTests(unittest.TestCase):
         self.assertIn(w.fl_relief.currentData(),('none','square','round'))
         self.assertFalse(w.flange_panel.isVisible())
         w.toggle_mode('rules');self.assertIsNone(w.mode)
+
+    def converted_sheet(self):
+        from rccad import sheetmetal as shm
+        w = self.w
+        body = Body('Test blachy', k.box(100, 50, 2), 'solid').prepared()
+        w.document.commit([body])
+        face = next(f for f in body.shape.Faces() if abs(f.Center().z-2) < 1e-6)
+        info = shm.sheet_of_face(body.shape, face)
+        w.sheet_pick = dict(id=body.id, face=face, normal=(0,0,1), point=face.Center().toTuple(), info=info)
+        w.apply_sheet();self.wait()
+        w.toggle_mode('flange')
+        w.fl_pick = dict(id=body.id, spec=dict(kind='base', p0=[100,0,2], p1=[100,50,2], n=[0,0,1], m=[1,0,0]))
+        return body
+
+    def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):
+        body = self.converted_sheet();w = self.w
+        w.fl_reverse.setChecked(True)
+        w.apply_flange();self.wait()
+        folded = w.document.get(body.id).shape
+        self.assertLess(folded.BoundingBox().zmin, -20)
+        self.assertAlmostEqual(max(v.Z for v in folded.Vertices()), 2, delta=1e-6)
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(), 10000)
+        w.redo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(), folded.Volume())
+
+    def test_sheet_outside_tip_pick_survives_new_dimension_setting(self):
+        from rccad import sheetmetal as shm
+        body = self.converted_sheet();w = self.w
+        w.fl_outside.setChecked(True)
+        w.apply_flange();self.wait()
+        state = w._sheet_state(body.id)
+        eff, _ = shm._effective(state['specs'], state['t'], True, True)
+        a,b,_,_ = shm._tip_geom(eff[0], 'out', state['t'])
+        midpoint = (a+b)/2
+        folded = w.document.get(body.id)
+        index = next(i for i,e in enumerate(folded.shape.Edges()) if np.linalg.norm(np.array(e.positionAt(.5).toTuple())-midpoint) < 1e-4)
+        w.fl_outside.setChecked(False)
+        w.fl_armed = False
+        with patch.object(w.view, 'nearest_edge', return_value=(body.id,index,None)):
+            w.pick_flange(5,5)
+        self.assertEqual(w.fl_pick['spec'], dict(kind='tip',parent=0,side='out'))
+        w.apply_flange();self.wait()
+        state = w._sheet_state(body.id)
+        self.assertEqual([s['outside'] for s in state['specs']], [True, False])
+        eff, _ = shm._effective(state['specs'], state['t'], True, False)
+        self.assertAlmostEqual(eff[0]['length'], 16)
+        self.assertAlmostEqual(eff[1]['length'], 20)
+
+    def test_sheet_flat_button_exports_without_changing_history(self):
+        body = self.converted_sheet();w = self.w
+        w.fl_miter.setChecked(False);w.apply_flange();self.wait()
+        count = len(w.document.infos()[0])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'blank'
+            with patch('rccad.studio.QFileDialog.getSaveFileName', return_value=(str(path), 'DXF (*.dxf)')):
+                w.tools['flat'].click();self.wait()
+            self.assertTrue(path.with_suffix('.dxf').is_file())
+        self.assertEqual(len(w.document.infos()[0]), count)
+        self.assertEqual(w.selected, [body.id])
 
     def test_hem_tool_is_separate_and_adds_hem(self):
         w=self.w;plate=Body('Blacha',k.box(100,50,2),'solid').prepared();w.document.commit([plate]);w.refresh()

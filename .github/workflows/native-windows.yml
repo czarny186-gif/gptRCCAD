@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ['rccad-desktop-v*']
     paths:
       - 'Claude-RCCAD-main/native/**'
       - '.github/workflows/native-windows.yml'
@@ -35,8 +36,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test native geometry and interface
+        env:
+          DIAG_FILE: ${{ runner.temp }}/rccad-test-diag.log
+        run: |
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Windows executable
         run: |
+          python stamp_build.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm RCCAD.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test packaged executable
@@ -64,3 +73,23 @@ jobs:
             Claude-RCCAD-main/native/dist/RCCAD-Desktop-Windows-x64.zip
             Claude-RCCAD-main/native/dist/SHA256.txt
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/rccad-desktop-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RCCAD-Desktop-Windows-x64
+          path: release-assets
+      - name: Publish tested Windows package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --verify-tag --title "RCCAD Desktop ${GITHUB_REF_NAME#rccad-desktop-v} — blachy" \
+            --notes-file Claude-RCCAD-main/native/SHEETMETAL_RELEASE.md

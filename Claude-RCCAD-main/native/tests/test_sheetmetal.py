@@ -1,5 +1,10 @@
 import math
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+import ezdxf
 from rccad import kernel as k
 from rccad import history as hist
 from rccad import sheetmetal as shm
@@ -38,6 +43,164 @@ def build(sheet, specs, **rules):
 
 
 class SheetMetalTests(unittest.TestCase):
+    def recipe(self, specs, **rules):
+        sheet = base_of(plate())
+        return dict(type='sheetbuild', id='b', base=sheet['base'], t=sheet['t'], flanges=specs, rules=rules)
+
+    def chain(self, angles=(30, 45, 60), sides=('out', 'in'), root=UP):
+        return [spec(*root[:2], root[2], root[3], angle=angles[0])] + [
+            dict(kind='tip', parent=i, side=sides[i], r=2., angle=angle, length=20.)
+            for i, angle in enumerate(angles[1:])]
+
+    def test_multibend_angles_directions_and_analytic_volume(self):
+        for angles in ((30, 45, 60), (90, 90, 90), (45, 90, 120), (120, 60, 30)):
+            for sides in (('out', 'in'), ('in', 'out'), ('out', 'out')):
+                for root in (UP, DOWN):
+                    with self.subTest(angles=angles, sides=sides, root=root):
+                        recipe = self.recipe(self.chain(angles, sides, root))
+                        shape = shm.build_sheet(recipe)
+                        expected = 10000 + 50 * sum(math.radians(a) * ((2 + T)**2 - 2**2) / 2 + 20*T for a in angles)
+                        self.assertTrue(shape.isValid())
+                        self.assertEqual(len(shape.Solids()), 1)
+                        self.assertAlmostEqual(shape.Volume(), expected, delta=.01)
+
+    def test_outside_dimension_tip_pick_uses_actual_shortened_parent(self):
+        parent = spec(*UP[:2], UP[2], UP[3], length=20)
+        recipe = self.recipe([parent], outside=True)
+        eff, _ = shm._effective([parent], T, True, True)
+        a, b, _, _ = shm._tip_geom(eff[0], 'out', T)
+        found = shm.spec_for_edge(recipe['base'], T, [parent], recipe['rules'], (a+b)/2, .01)
+        self.assertEqual(found, dict(kind='tip', parent=0, side='out'))
+
+    def test_each_flange_keeps_its_dimension_mode(self):
+        parent = dict(spec(*UP[:2], UP[2], UP[3]), outside=False)
+        eff, _ = shm._effective([parent], T, True, True)
+        self.assertEqual(eff[0]['length'], 20)
+        with self.assertRaises(k.CadError):
+            shm.build_sheet(self.recipe([dict(parent, outside=True, angle=180)]))
+
+    def test_duplicate_sides_and_invalid_parent_graph_are_refused(self):
+        parent = spec(*UP[:2], UP[2], UP[3])
+        for other in (spec(*DOWN[:2], DOWN[2], DOWN[3]),
+                      dict(kind='tip', parent=-1, side='out', r=2, angle=90, length=20),
+                      dict(kind='tip', parent=1, side='out', r=2, angle=90, length=20)):
+            with self.subTest(other=other), self.assertRaises(k.CadError):
+                shm.build_sheet(self.recipe([parent, other]))
+        chain = self.chain()
+        with self.assertRaises(k.CadError):
+            shm.build_sheet(self.recipe(chain + [dict(chain[1], side='in')]))
+
+    def test_self_intersecting_return_is_refused(self):
+        parent = spec(*UP[:2], UP[2], UP[3], angle=180, length=10)
+        child = dict(kind='tip', parent=0, side='in', r=2, angle=90, length=20)
+        with self.assertRaisesRegex(k.CadError, 'nachodzą'):
+            shm.build_sheet(self.recipe([parent, child]))
+
+    def test_flat_length_uses_kfactor_and_bend_allowance(self):
+        recipe = self.recipe(self.chain(), kfactor=.33)
+        pattern = shm.flat_pattern(recipe)
+        allowance = math.radians(30+45+60) * (2 + .33*T)
+        self.assertAlmostEqual(pattern['area'], 5000 + 50*(60+allowance), delta=1e-5)
+        self.assertEqual([b['direction'] for b in pattern['bends']], ['UP', 'DOWN', 'DOWN'])
+        self.assertAlmostEqual(sum(b['allowance'] for b in pattern['bends']), allowance)
+        other = shm.flat_pattern(self.recipe(self.chain(), kfactor=.5))
+        self.assertGreater(other['area'], pattern['area'])
+
+    def test_rotated_plate_has_same_developed_area(self):
+        original = plate()
+        rotated = original.rotate((0,0,0), (1,2,3), 37).translate((10,-5,8))
+        face = face_at_z(original, 2).rotate((0,0,0), (1,2,3), 37).translate((10,-5,8))
+        face = min(rotated.Faces(), key=lambda f: (f.Center()-face.Center()).Length)
+        sheet = shm.sheet_of_face(rotated, face)
+        # Long upper edge in the transformed local frame.
+        edge = next(e for e in face.Edges() if abs(e.Length()-100) < 1e-5)
+        n,m = shm.edge_side(rotated, edge, T)
+        s = spec(edge.startPoint().toTuple(), edge.endPoint().toTuple(), n, m, angle=45)
+        pattern = shm.flat_pattern(dict(base=sheet['base'], t=T, flanges=[s], rules={}))
+        self.assertAlmostEqual(pattern['area'], 5000+100*(20+math.pi/4*(2+.44*T)), delta=.001)
+
+    def test_five_bends_pick_replay_and_project_roundtrip(self):
+        from rccad.document import Document
+        specs = self.chain((15,25,35,40,30), ('out','in','out','in'))
+        recipe = self.recipe(specs)
+        folded = shm.build_sheet(recipe)
+        eff, _ = shm._effective(specs, T, True)
+        a,b,_,_ = shm._tip_geom(eff[-1], 'in', T)
+        self.assertEqual(shm.spec_for_edge(recipe['base'], T, specs, {}, (a+b)/2, .01),
+                         dict(kind='tip', parent=4, side='in'))
+        doc = Document();body = Body('Blacha', plate()).prepared()
+        recipe['id'] = body.id
+        doc.commit([body])
+        replay = hist.run_recipe([body], recipe)
+        doc.commit(replay, label='Gięcia', op=recipe)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'five.rccadx';doc.save(path)
+            restored = Document.load(path)
+            self.assertAlmostEqual(restored.get(body.id).shape.Volume(), folded.Volume(), delta=.001)
+            info = restored.infos()[0][-1]['op']
+            self.assertEqual(info['flanges'], specs)
+            self.assertAlmostEqual(shm.flat_pattern(info)['area'], shm.flat_pattern(recipe)['area'], delta=.001)
+
+    def test_four_independent_sides_flatten_without_corner_extensions(self):
+        specs = [spec(*e[:2], e[2], e[3]) for e in (UP, UP_Y50, UP_X0, UP_Y0)]
+        pattern = shm.flat_pattern(self.recipe(specs, miter=False))
+        self.assertEqual(len(pattern['bends']), 4)
+        self.assertAlmostEqual(pattern['area'], 5000 + 300*(20 + math.pi/2*(2+.44*T)), delta=.001)
+
+    def test_mixed_angle_adjacent_sides_require_untrimmed_corners(self):
+        specs = [spec(*UP[:2], UP[2], UP[3], angle=45), spec(*UP_Y50[:2], UP_Y50[2], UP_Y50[3], angle=60)]
+        with self.assertRaisesRegex(k.CadError, '90°'):
+            shm.build_sheet(self.recipe(specs))
+        pattern = shm.flat_pattern(self.recipe(specs, miter=False))
+        self.assertAlmostEqual(pattern['area'], 5000 + 50*(20+math.pi/4*(2+.44*T)) + 100*(20+math.pi/3*(2+.44*T)), delta=.001)
+
+    def test_flat_rejects_unsupported_geometry_and_invalid_k(self):
+        parent = spec(*UP[:2], UP[2], UP[3])
+        for factor in (-.1, .51, float('nan')):
+            with self.subTest(factor=factor), self.assertRaises(k.CadError):
+                shm.flat_pattern(self.recipe([parent], kfactor=factor))
+        for recipe in (self.recipe([parent, spec(*UP_Y50[:2], UP_Y50[2], UP_Y50[3])]),
+                       self.recipe([dict(parent, hem=dict(gap=.1, ret=5))]),
+                       self.recipe([parent], relief='square', relief_size=1)):
+            with self.subTest(recipe=recipe), self.assertRaisesRegex(k.CadError, 'rozwinąć'):
+                shm.flat_pattern(recipe)
+
+    def test_dxf_roundtrip_has_mm_closed_cut_and_separate_bends(self):
+        recipe = self.recipe(self.chain())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'laser.dxf'
+            pattern = shm.export_flat_dxf(recipe, path)
+            doc = ezdxf.readfile(path)
+            self.assertEqual(doc.units, ezdxf.units.MM)
+            self.assertFalse(doc.audit().has_errors)
+            cuts = list(doc.modelspace().query('LWPOLYLINE[layer=="CUT"]'))
+            self.assertEqual(len(cuts), 1)
+            self.assertTrue(cuts[0].closed)
+            points = np.array(list(cuts[0].get_points('xy')))
+            area = abs(np.dot(points[:,0], np.roll(points[:,1], 1))-np.dot(points[:,1], np.roll(points[:,0], 1)))/2
+            self.assertAlmostEqual(area, pattern['area'], delta=1e-5)
+            bends = list(doc.modelspace().query('LINE'))
+            self.assertEqual(len(bends), 3)
+            self.assertEqual([e.dxf.layer for e in bends], ['BEND_UP', 'BEND_DOWN', 'BEND_DOWN'])
+            self.assertTrue(all(e.has_xdata('RCCAD') for e in bends))
+            original = path.read_bytes()
+            with patch('ezdxf.document.Drawing.saveas', side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):
+                    shm.export_flat_dxf(recipe, path)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_flat_export_rejects_untracked_holes_without_overwriting_file(self):
+        recipe = self.recipe(self.chain())
+        folded = shm.build_sheet(recipe)
+        drilled = k.hole(folded, 3, 20, 20)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'laser.dxf'
+            path.write_text('existing')
+            with self.assertRaisesRegex(k.CadError, 'zmieniła'):
+                shm.export_flat_dxf(recipe, path, drilled)
+            self.assertEqual(path.read_text(), 'existing')
+
     def test_convert_reads_thickness_normal_and_base(self):
         s = plate()
         sheet = base_of(s)

@@ -24,6 +24,26 @@ def run(report_path=None):
     wire = k.sketch('rectangle','XY',20,10)
     assert abs(k.extrude(wire,'XY',10).Volume()-2000) < 1e-5
     checks.append('native sketch extrusion')
+    from . import sheetmetal as shm
+    slab = k.box(100, 50, 2)
+    top = next(f for f in slab.Faces() if abs(f.Center().z-2) < 1e-6)
+    sheet = shm.sheet_of_face(slab, top)
+    flanges = [dict(kind='base', p0=[100,0,2], p1=[100,50,2], n=[0,0,1], m=[1,0,0], r=2, angle=45, length=20),
+               dict(kind='tip', parent=0, side='out', r=2, angle=90, length=20),
+               dict(kind='tip', parent=1, side='in', r=2, angle=60, length=20)]
+    recipe = dict(base=sheet['base'], t=2, flanges=flanges, rules=dict(kfactor=.44))
+    folded = shm.build_sheet(recipe)
+    assert folded.isValid() and len(folded.Solids()) == 1
+    checks.append('sheet metal: three bends, mixed angles and directions')
+    with tempfile.TemporaryDirectory() as directory:
+        import ezdxf
+        path = Path(directory)/'laser.dxf'
+        shm.export_flat_dxf(recipe, path, folded)
+        dxf = ezdxf.readfile(path)
+        cuts = list(dxf.modelspace().query('LWPOLYLINE[layer=="CUT"]'))
+        assert dxf.units == 4 and len(cuts) == 1 and cuts[0].closed
+        assert len(list(dxf.modelspace().query('LINE'))) == 3 and not dxf.audit().has_errors
+    checks.append('sheet metal: millimetre flat DXF, closed cut contour and bend layers')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')
