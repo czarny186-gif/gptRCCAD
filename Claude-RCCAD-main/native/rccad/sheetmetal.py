@@ -287,8 +287,13 @@ def _effective(specs, t, miter, outside=False):
                         continue
                     for Q in (eff[j]['p0'], eff[j]['p1']):
                         if float(np.linalg.norm(P - Q)) < _TOL and abs(float(eff[i]['m'] @ eff[j]['m'])) < 1e-6:
-                            if any(abs(eff[h]['angle'] - 90) > 1e-6 or eff[h].get('hem') for h in (i, j)):
-                                raise kernel.CadError("Docinanie wspólnych narożników obsługuje kołnierze 90°. Dla innych kątów lub zawinięć wyłącz docinanie narożników w Regułach blach.")
+                            # Corner ownership is a spatial half-plane, independent
+                            # of bend angle. Circular sectors and tangent panels are
+                            # clipped separately below; only hems need a different
+                            # corner construction. Do not restrict ordinary bends
+                            # to upright walls here.
+                            if any(eff[h].get('hem') for h in (i, j)):
+                                raise kernel.CadError("Docinanie wspólnych narożników nie obsługuje zawinięć. Wyłącz docinanie narożników w Regułach blach.")
                             if i < j:
                                 # dwusieczna kąta między ścianami: płaszczyzna ukosu przechodzi przez krawędź narożnika
                                 corners.append((P.copy(), i, j, _unit(eff[i]['m'] - eff[j]['m'])))

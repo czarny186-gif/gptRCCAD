@@ -147,10 +147,11 @@ class SheetMetalTests(unittest.TestCase):
         self.assertEqual(len(pattern['bends']), 4)
         self.assertAlmostEqual(pattern['area'], 5000 + 300*(20 + math.pi/2*(2+.44*T)), delta=.001)
 
-    def test_mixed_angle_adjacent_sides_require_untrimmed_corners(self):
+    def test_mixed_angle_adjacent_sides_build_with_trimmed_corners(self):
         specs = [spec(*UP[:2], UP[2], UP[3], angle=45), spec(*UP_Y50[:2], UP_Y50[2], UP_Y50[3], angle=60)]
-        with self.assertRaisesRegex(k.CadError, '90°'):
-            shm.build_sheet(self.recipe(specs))
+        folded = shm.build_sheet(self.recipe(specs))
+        self.assertTrue(folded.isValid())
+        self.assertEqual(len(folded.Solids()), 1)
         pattern = shm.flat_pattern(self.recipe(specs, miter=False))
         self.assertAlmostEqual(pattern['area'], 5000 + 50*(20+math.pi/4*(2+.44*T)) + 100*(20+math.pi/3*(2+.44*T)), delta=.001)
 

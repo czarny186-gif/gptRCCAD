@@ -67,6 +67,12 @@ def run(report_path=None):
     assert any(f.geomType()=='BSPLINE' for f in sheet_corner.Faces())
     assert any(f.geomType()=='CYLINDER' for f in sheet_corner.Faces())
     checks.append('sheet corner construction: square upright panels, circular bends and curved reliefs')
+    inclined = [dict(spec, angle=135) for spec in walls[:4]]
+    inclined_shape = shm.build_sheet(dict(base=sheet['base'],t=2,flanges=inclined,
+                                          rules=dict(gap=.2,joint='sheet')))
+    assert inclined_shape.isValid() and len(inclined_shape.Solids())==1
+    assert sum(f.geomType()=='CYLINDER' for f in inclined_shape.Faces())==8
+    checks.append('inclined sheet box: four 135 degree bends with shared corner clearance')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')
