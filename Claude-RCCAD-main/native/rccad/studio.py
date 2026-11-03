@@ -859,7 +859,10 @@ class StudioWindow(QMainWindow):
         self.fl_kfactor = _spin(shm.K_DEFAULT, 0, .5, 3, .01)
         self.fl_kfactor.setToolTip('K = położenie warstwy obojętnej / grubość. Dobierz na podstawie prób gięcia materiału.')
         self._field(lay, 'Współczynnik K rozwinięcia', self.fl_kfactor)
-        self.fl_joint = ui.Segmented([('Równolegle', 'parallel', 'rl_par'), ('Skośnie', 'diagonal', 'rl_skos')], 30)
+        self.fl_joint = ui.Segmented([('Równolegle', 'parallel', 'rl_par'), ('Skośnie', 'diagonal', 'rl_skos'),
+                                      ('Blacharskie', 'sheet', 'rl_sheet')], 30)
+        self.fl_joint.setCurrentIndex(2)
+        self.fl_joint.setToolTip('Blacharskie: proste końce pionowych ścian, ukosy między poziomymi kołnierzami i dopasowane wycięcia na łukach gięcia.')
         self._field(lay, 'Łączenie kołnierzy w narożniku', self.fl_joint)
         self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')
         self.fl_outside.setToolTip('Podajesz długość od zewnętrznej powierzchni blachy do końca kołnierza. Program odejmuje część gięcia.')
@@ -1424,6 +1427,17 @@ class StudioWindow(QMainWindow):
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Konwersja na blachę: kliknij płaską ścianę prostopadłościanu.')
         elif mode == 'rules':
+            bodies = [b for b in self.document.bodies if b.id in self.selected]
+            state = self._sheet_state(bodies[0].id) if len(bodies)==1 else None
+            if state is not None:
+                rules = state['rules']
+                self.fl_joint.setCurrentIndex(self.fl_joint.findData(rules.get('joint','parallel')))
+                self.fl_gap.setValue(float(rules.get('gap',0)))
+                self.fl_relief.setCurrentIndex(self.fl_relief.findData(rules.get('relief','none')))
+                self.fl_relief_size.setValue(float(rules.get('relief_size',3)))
+                self.fl_kfactor.setValue(float(rules.get('kfactor',shm.K_DEFAULT)))
+                self.fl_miter.setChecked(bool(rules.get('miter',True)))
+                self.fl_outside.setChecked(bool(rules.get('outside',False)))
             self.rules_panel.show()
             self.view.setCursor(Qt.ArrowCursor)
             self.hint('Reguły blach: szczelina i wycięcia w narożnikach dla nowych kołnierzy.')
@@ -3291,7 +3305,8 @@ class StudioWindow(QMainWindow):
             self.toast('Kliknij płaską ścianę prostopadłościanu.')
             return
         info = pick['info']
-        recipe = dict(type='sheet', id=body.id, face=hist.face_ref(pick['face'], pick['normal'], pick['point'], body.shape), base=info['base'], t=info['t'])
+        recipe = dict(type='sheet', id=body.id, face=hist.face_ref(pick['face'], pick['normal'], pick['point'], body.shape),
+                      base=info['base'], t=info['t'], rules=self._flange_rules())
         self.sheet_pick = None
         self.view.set_selection_meshes(None)
         self.document.commit(self.document.bodies, label='Konwersja na blachę', icon='sheet', op=recipe)
@@ -3312,7 +3327,7 @@ class StudioWindow(QMainWindow):
             op = (info or {}).get('op') or {}
             kind = op.get('type')
             if kind == 'sheet' and op.get('id') == body_id and op.get('base') is not None:
-                state = dict(base=op['base'], t=float(op['t']), specs=[], rules={})
+                state = dict(base=op['base'], t=float(op['t']), specs=[], rules=dict(op.get('rules') or {}))
             elif kind == 'sheetbuild' and op.get('id') == body_id and state is not None:
                 state = dict(base=state['base'], t=state['t'], specs=list(op['flanges']), rules=dict(op.get('rules') or {}))
             elif kind in ('mod', 'shell', 'transform', 'mirror', 'pattern', 'bool') and body_id in {op.get('id'), op.get('base'), *(op.get('tools') or [])}:
@@ -3353,6 +3368,7 @@ class StudioWindow(QMainWindow):
             self.view.set_picked_edge(None)
             self._edge_status().setText('To nie jest blacha (albo zmieniła się po konwersji). Kliknij KONWERTUJ NA BLACHĘ.')
             return
+        self.fl_joint.setCurrentIndex(self.fl_joint.findData(st['rules'].get('joint','parallel')))
         box = body.shape.BoundingBox()
         tol = max(1e-3, 0.001 * max(box.xlen, box.ylen, box.zlen))
         mid = body.shape.Edges()[hit[1]].positionAt(.5).toTuple()

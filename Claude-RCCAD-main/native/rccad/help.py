@@ -30,6 +30,8 @@ TOPICS = [
         'Najpierw zrób szkic prostokąta albo kwadratu i wyciągnij go na grubość blachy. Potem wybierz KONWERTUJ NA BLACHĘ i kliknij płaską ścianę (prostokąt albo kwadrat). Inne kształty są odrzucane.',
         'Po konwersji można dodawać kołnierze. Program zapamiętuje blachę w historii, więc zmiana wcześniejszych kroków przelicza ją ponownie.']),
     ('t_rules', 'Reguły blach', 'Szczelina i wycięcia w narożnikach', [
+        'Blacharskie: pionowe ściany mają proste zakończenia, a sąsiednie poziome kołnierze są przycinane skośnie. Wycięcie na łuku przechodzi płynnie między zakończeniami obu ścian. Okrągłe powierzchnie gięcia zachowują promień i grubość.',
+        'Blacharskie jest domyślne dla nowych konwersji. Starsze projekty zachowują zapisany sposób łączenia. Aby zmienić istniejącą blachę, zaznacz ją, wybierz Blacharskie i kliknij Zastosuj do zaznaczonej blachy. Zapisane szczeliny i wycięcia są odczytywane przy otwieraniu reguł.',
         'Ustawienia kołnierzy blachy: szczelina między kołnierzami w narożniku oraz wycięcie w rogu (brak, kwadrat albo okrąg) o zadanej wielkości.',
         'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia. Docinanie wspólnych narożników dotyczy kołnierzy 90°. Dla innych kątów wyłącz docinanie.',
         'Łuki gięcia i kołnierze kontynuowane kolejnym gięciem mają wspólny ukos narożnika. Równoległy styk na styk dotyczy pasujących końcowych odcinków; dzięki temu następne gięcie nie nakłada się na wcześniejsze przedłużenie.',

@@ -213,6 +213,26 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),original,delta=.001)
         w.undo();self.wait();self.assertEqual(w._sheet_state(body.id)['rules']['gap'],0)
 
+    def test_sheet_joint_default_and_saved_rules_are_preserved(self):
+        body = self.converted_sheet();w = self.w
+        self.assertEqual(w._sheet_state(body.id)['rules']['joint'],'sheet')
+        w.fl_joint.setCurrentIndex(w.fl_joint.findData('parallel'))
+        w.fl_gap.setValue(.7)
+        w.fl_relief.setCurrentIndex(w.fl_relief.findData('round'))
+        w.fl_relief_size.setValue(2)
+        w.apply_flange();self.wait()
+        original = w.document.get(body.id).shape.Volume()
+        w.fl_joint.setCurrentIndex(w.fl_joint.findData('sheet'));w.fl_gap.setValue(0)
+        w.toggle_mode('rules')
+        self.assertEqual(w.fl_joint.currentData(),'parallel')
+        self.assertAlmostEqual(w.fl_gap.value(),.7)
+        self.assertEqual(w.fl_relief.currentData(),'round')
+        self.assertAlmostEqual(w.fl_relief_size.value(),2)
+        self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),original,delta=.001)
+        w.fl_joint.setCurrentIndex(w.fl_joint.findData('sheet'));w.fl_apply_rules.click();self.wait()
+        self.assertEqual(w._sheet_state(body.id)['rules']['joint'],'sheet')
+        self.assertAlmostEqual(w.fl_gap.value(),.7)
+
     def test_hem_tool_is_separate_and_adds_hem(self):
         w=self.w;plate=Body('Blacha',k.box(100,50,2),'solid').prepared();w.document.commit([plate]);w.refresh()
         self.assertIn('hem',w.tools)

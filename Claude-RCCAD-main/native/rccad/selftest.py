@@ -62,6 +62,11 @@ def run(report_path=None):
     assert any(f.geomType()=='PLANE' and abs(sum(a*b for a,b in zip(f.normalAt().toTuple(),axis)))>.99999
                and f.Area()>9.9 for f in parts[5][-1].Faces())
     checks.append('mixed sheet returns: three inward, one outward, straight non-intersecting ends')
+    sheet_corner = shm.build_sheet(dict(base=sheet['base'],t=2,flanges=walls,rules=dict(gap=.2,joint='sheet')))
+    assert sheet_corner.isValid() and len(sheet_corner.Solids())==1
+    assert any(f.geomType()=='BSPLINE' for f in sheet_corner.Faces())
+    assert any(f.geomType()=='CYLINDER' for f in sheet_corner.Faces())
+    checks.append('sheet corner construction: square upright panels, circular bends and curved reliefs')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

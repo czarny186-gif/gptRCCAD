@@ -157,6 +157,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         # łączenie skośne: ukos 45° przez narożnik
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPolygon(QPolygonF([QPointF(6, 8), QPointF(20, 8), QPointF(30, 42), QPointF(6, 42)])); p.drawPolygon(QPolygonF([QPointF(28, 8), QPointF(42, 8), QPointF(42, 42), QPointF(30, 42)]))
         p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(24, 6), QPointF(30, 42))
+    elif kind == 'rl_sheet':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4))
+        p.drawRoundedRect(QRectF(7,8,10,32),1,1)
+        p.drawRoundedRect(QRectF(22,30,20,10),1,1)
+        p.setPen(pen(ORANGE,2.8)); p.drawArc(QRectF(12,16,22,22),90*16,-90*16)
     elif kind == 'x_hem':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2); p.drawRoundedRect(QRectF(8, 6, 27, 8), 2, 2)
         p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(12, 20), QPointF(12, 32)); p.drawPolyline(QPolygonF([QPointF(7, 27), QPointF(12, 33), QPointF(17, 27)]))

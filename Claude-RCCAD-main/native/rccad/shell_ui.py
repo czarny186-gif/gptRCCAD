@@ -340,6 +340,9 @@ class Segmented(QFrame):
     def count(self):
         return len(self._data)
 
+    def findData(self, value):
+        return next((index for index,data in enumerate(self._data) if data == value),-1)
+
     def setCurrentIndex(self, index):
         index = max(0, min(index, len(self._data) - 1))
         for i, b in enumerate(self._buttons):

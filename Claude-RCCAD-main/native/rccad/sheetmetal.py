@@ -381,9 +381,14 @@ def _join_sheet(shape, parts):
     """One Boolean per level, with a volume check for material folded into itself."""
     if not parts:
         return shape
-    expected = shape.Volume() + sum(p.Volume() for p in parts)
+    # Default quadrature can differ by several thousandths of a mm³ before
+    # and after splitting a ruled relief surface. Use adaptive integration for
+    # these surfaces so a clean join is not reported as a material collision.
+    curved = any(f.geomType()=='BSPLINE' for piece in [shape,*parts] for f in piece.Faces())
+    volume = (lambda piece:piece.Volume(1e-9)) if curved else (lambda piece:piece.Volume())
+    expected = volume(shape) + sum(volume(p) for p in parts)
     result = kernel.boolean('union', shape, parts)
-    if expected - result.Volume() > max(1e-4, expected * 1e-8):
+    if expected - volume(result) > max(1e-4, expected * 1e-8):
         raise kernel.CadError("Gięcia nachodzą na siebie lub na płytę. Zmień kierunek, kąt albo długość kołnierza.")
     return result
 
@@ -446,6 +451,34 @@ def _leg_profile(f, root, P, normal, t):
     return np.array(sorted((round(float((v-P) @ root['m']), 9), round(float((v-P) @ normal), 9)) for v in points))
 
 
+def _curved_endcut(solid, frame, t, point, direction, start, end, reach, vertical_end=False):
+    """Relieve a bend between its parent's square end and the next panel end.
+
+    The transition follows the tangents of the circular bend. Only the end
+    surface is ruled; cutting the analytic bend preserves its cylindrical faces.
+    """
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+    origin,X,Y,Z,_ = _frame(frame['p0'],frame['p1'],t,frame['n'],frame['m'])
+    theta = math.radians(frame['angle'])
+    denominator = math.sin(theta) if vertical_end else 1-math.cos(theta)
+    axial = float(Z@direction)
+    center = t+frame['r']
+    def boundary(radius):
+        slope = (end-start)/(denominator*radius*axial)
+        offset = (start-float((origin-point)@direction)+
+                  (0 if vertical_end else (end-start)*(1-center/radius)/denominator))/axial
+        translation = origin+offset*Z
+        columns = (X+slope*Z,Y,Z) if vertical_end else (X,Y+slope*Z,Z)
+        transform = cq.Matrix([[float(columns[col][row]) for col in range(3)]+[float(translation[row])] for row in range(3)]+[[0,0,0,1]])
+        edge = cq.Edge.makeCircle(radius,cq.Vector(0,center,0),cq.Vector(0,0,1),-90,-90+frame['angle'])
+        return edge.transformGeometry(transform)
+    face = cq.Face.makeRuledSurface(boundary(frame['r']*.5),boundary((frame['r']+t)*2))
+    prism = BRepPrimAPI_MakePrism(face.wrapped,gp_Vec(*(float(v) for v in reach*direction)))
+    cutter = kernel.valid(cq.Shape.cast(prism.Shape()))
+    return kernel.boolean('subtract',solid,[cutter])
+
+
 def _corner_parts(recipe, eff, corners):
     """Trim each bend and leg before fusing; keep material pieces independently valid."""
     specs, t = recipe['flanges'], float(recipe['t'])
@@ -458,6 +491,7 @@ def _corner_parts(recipe, eff, corners):
     # The cutter must cover the full developed chain, including distant returns.
     K = sum(float(recipe['base'][key]) for key in ('lx','ly','lz')) + 4*extension + gap + 1
     normal = _unit(recipe['base']['z'])
+    sheet_joint = rules.get('joint') == 'sheet'
     caps = {}
 
     def straight_end(i, corner):
@@ -493,6 +527,34 @@ def _corner_parts(recipe, eff, corners):
                     return True
         return False
 
+    def relieve_bend(i,corner):
+        if not sheet_joint or depths[i]==0 or len(parts[i])!=2 or abs(eff[i]['angle']-90)>1e-6:
+            return
+        parent_end = straight_end(i,corner)
+        if parent_end is None:
+            return
+        P = corners[corner][0]
+        direction = parent_end[0][1]
+        start = float((parent_end[0][0]-P)@direction)
+        ends = []
+        vertices = [np.array(v.toTuple()) for v in parts[i][1].Vertices()]
+        for side in ('in','out'):
+            point,_,n,d = _tip_geom(eff[i],side,t)
+            point = point-eff[i]['length']*d
+            edge = [v for v in vertices if abs(float((v-point)@n))<_TOL and abs(float((v-point)@d))<_TOL]
+            if not edge:
+                return
+            ends.append(max(float((v-P)@direction) for v in edge))
+        if abs(ends[0]-ends[1])>_TOL:
+            return
+        end = sum(ends)/2
+        if abs(start-end)<_TOL:
+            parts[i][0] = _endcut(parts[i][0],P+start*direction,direction,K)
+        else:
+            d = _tip_geom(eff[i],'out',t)[3]
+            parts[i][0] = _curved_endcut(parts[i][0],frames[i],t,P,direction,start,end,K,
+                                        vertical_end=abs(float(d@normal))>1-1e-6)
+
     # All parent edges must already be trimmed before their children inherit an end.
     for i in sorted(range(len(frames)),key=lambda index:depths[index]):
         f = frames[i]
@@ -506,6 +568,29 @@ def _corner_parts(recipe, eff, corners):
             peer_profile = _leg_profile(eff[peer], eff[other], P, normal, t) if peer is not None else None
             matching = (profile is not None and peer_profile is not None
                         and np.allclose(profile,peer_profile,atol=_TOL,rtol=0))
+            direction = _tip_geom(eff[i], 'out', t)[3] if profile is not None else normal
+            peer_direction = _tip_geom(eff[peer], 'out', t)[3] if peer_profile is not None else normal
+            vertical_pair = (sheet_joint and profile is not None and peer_profile is not None
+                             and abs(float(direction@normal))>1-1e-6
+                             and abs(float(peer_direction@normal))>1-1e-6
+                             and np.allclose([profile[:,0].min(),profile[:,0].max()],
+                                             [peer_profile[:,0].min(),peer_profile[:,0].max()],atol=_TOL,rtol=0)
+                             and min(profile[:,1].max(),peer_profile[:,1].max()) >
+                                 max(profile[:,1].min(),peer_profile[:,1].min())+_TOL)
+            if vertical_pair:
+                # Upright panels end square to their edge, not on a 45-degree
+                # plane through their thickness. Both sides get equal clearance.
+                offset = float(peer_profile[:,0].min())-gap/math.sqrt(2)
+                parts[i][1] = _endcut(parts[i][1],P+offset*eff[other]['m'],eff[other]['m'],K)
+                if depths[i] == 0:
+                    # The first bend follows the real plate edge. Extending its
+                    # curved cross section creates artificial bulges in corners.
+                    parts[i][0] = _endcut(parts[i][0],P,eff[other]['m'],K)
+                else:
+                    sign = 1 if owner == a else -1
+                    parts[i][0] = _miter(parts[i][0],P,N,sign,gap/2,K,K)
+                    relieve_bend(i,corner)
+                continue
             if not matching:
                 capped = straight_end(i,corner)
                 peer_cap = straight_end(peer,corner) if peer is not None else None
@@ -546,6 +631,7 @@ def _corner_parts(recipe, eff, corners):
                     parts[i][1] = _endcut(parts[i][1], P + offset*direction, direction, K)
                 else:
                     parts[i][1] = _miter(parts[i][1], P, N, sign, gap/2, K, K)
+            relieve_bend(i,corner)
         # Corner cuts must not silently shorten a flange until its requested
         # free end disappears (e.g. inward returns longer than the box opening).
         end, _, _, direction = (_hem_end_geom(eff[i], 'out', t) if eff[i].get('hem') else _tip_geom(eff[i], 'out', t))
@@ -591,7 +677,7 @@ def build_sheet(recipe):
         raise kernel.CadError("Wielkość wycięcia musi być nieujemną liczbą.")
     miter = bool(rules.get('miter', True))
     joint = rules.get('joint', 'parallel')
-    if joint not in ('parallel', 'diagonal'):
+    if joint not in ('parallel', 'diagonal', 'sheet'):
         raise kernel.CadError("Nieznany sposób łączenia kołnierzy w narożniku.")
     outside = bool(rules.get('outside', False))
     if relief not in RELIEFS:

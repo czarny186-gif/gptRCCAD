@@ -1,6 +1,6 @@
 # RCCAD Desktop 0.1 — Windows 10/11 x64
 
-Aktualizacja 0.4.3: proste końce rozchodzących się gięć, narożniki pudełek i rozwinięcie DXF do cięcia.
+Aktualizacja 0.4.4: blacharskie zakończenia ścian i wycięcia na łukach gięcia, narożniki pudełek i rozwinięcie DXF do cięcia.
 Instrukcja i ograniczenia: [SHEETMETAL_RELEASE.md](SHEETMETAL_RELEASE.md).
 
 Nowy program desktopowy: natywne okno Qt i modelowanie bryłowe OpenCascade.
