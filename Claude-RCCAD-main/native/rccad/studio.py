@@ -864,6 +864,10 @@ class StudioWindow(QMainWindow):
         self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')
         self.fl_outside.setToolTip('Podajesz długość od zewnętrznej powierzchni blachy do końca kołnierza. Program odejmuje część gięcia.')
         lay.addWidget(self.fl_outside)
+        self.fl_apply_rules = QPushButton('Zastosuj do zaznaczonej blachy')
+        self.fl_apply_rules.setObjectName('primary')
+        self.fl_apply_rules.clicked.connect(lambda _=False: self.apply_sheet_rules())
+        lay.addWidget(self.fl_apply_rules)
         self._buttons(lay, 'Zamknij', 'Anuluj', lambda: self.set_mode(None), lambda: self.set_mode(None))
         # --- przeciągnięcie ---
         self.sweep_panel, lay = self._panel(312, 'Przeciągnięcie', 'x_sweep', 'Profil wzdłuż ścieżki → bryła', plain=True)
@@ -3318,6 +3322,24 @@ class StudioWindow(QMainWindow):
     def _edge_status(self):
         """Etykieta stanu wyboru krawędzi: osobna dla kołnierza i dla zawinięcia."""
         return self.hm_status if self.mode == 'hem' else self.fl_status
+
+    def apply_sheet_rules(self):
+        """Rebuild existing corners without adding an artificial extra flange."""
+        if self.busy:
+            return
+        bodies = [b for b in self.document.bodies if b.id in self.selected and b.kind == 'solid']
+        body = bodies[0] if len(bodies) == 1 else None
+        state = self._sheet_state(body.id) if body else None
+        if state is None:
+            self.toast('Zaznacz jedną blachę w drzewie obiektów, aby zastosować reguły narożników.')
+            return
+        specs = [dict(spec, outside=spec.get('outside', state['rules'].get('outside',False))) for spec in state['specs']]
+        recipe = dict(type='sheetbuild',id=body.id,base=state['base'],t=state['t'],flanges=specs,rules=self._flange_rules())
+        def apply(result):
+            self.document.commit([result if b.id == body.id else b for b in self.document.bodies],
+                                 label='Narożniki blachy',icon='flange',op=recipe)
+            self.selected = [body.id]
+        self.run_operation('Narożniki blachy',lambda: body.changed(shm.build_sheet(recipe)),apply)
 
     def pick_flange(self, x, y):
         hit = self.view.nearest_edge(x, y, True)

@@ -179,6 +179,40 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len(w.document.infos()[0]), count)
         self.assertEqual(w.selected, [body.id])
 
+    def test_sheet_box_five_mm_walls_then_returns_and_reverse_bends(self):
+        body = self.converted_sheet();w = self.w
+        w.fl_length.setValue(5);w.fl_gap.setValue(.2)
+        edges = [([100,0,2],[100,50,2],[1,0,0]),([100,50,2],[0,50,2],[0,1,0]),
+                 ([0,50,2],[0,0,2],[-1,0,0]),([0,0,2],[100,0,2],[0,-1,0])]
+        picks = [dict(kind='base',p0=a,p1=b,n=[0,0,1],m=m) for a,b,m in edges]
+        picks += [dict(kind='tip',parent=i,side='in') for i in range(4)]
+        picks += [dict(kind='tip',parent=i+4,side='in') for i in range(4)]
+        for index,pick in enumerate(picks):
+            with self.subTest(step=index+1):
+                w.fl_pick = dict(id=body.id,spec=pick)
+                w.fl_reverse.setChecked(index >= 8)
+                w.apply_flange();self.wait()
+                state = w._sheet_state(body.id)
+                self.assertEqual(len(state['specs']),index+1)
+                self.assertTrue(w.document.get(body.id).shape.isValid())
+        self.assertTrue(all(spec['side']=='out' for spec in state['specs'][8:]))
+        volume = w.document.get(body.id).shape.Volume()
+        w.undo();self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),11)
+        w.redo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),volume,delta=.001)
+
+    def test_sheet_rules_rebuild_existing_bends_without_adding_one(self):
+        body = self.converted_sheet();w = self.w
+        w.fl_outside.setChecked(True);w.apply_flange();self.wait()
+        original = w.document.get(body.id).shape.Volume()
+        w.toggle_mode('rules');w.fl_outside.setChecked(False);w.fl_gap.setValue(.5)
+        w.fl_apply_rules.click();self.wait()
+        state = w._sheet_state(body.id)
+        self.assertEqual(len(state['specs']),1)
+        self.assertTrue(state['specs'][0]['outside'])
+        self.assertEqual(state['rules']['gap'],.5)
+        self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),original,delta=.001)
+        w.undo();self.wait();self.assertEqual(w._sheet_state(body.id)['rules']['gap'],0)
+
     def test_hem_tool_is_separate_and_adds_hem(self):
         w=self.w;plate=Body('Blacha',k.box(100,50,2),'solid').prepared();w.document.commit([plate]);w.refresh()
         self.assertIn('hem',w.tools)

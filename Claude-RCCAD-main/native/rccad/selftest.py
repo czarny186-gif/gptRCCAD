@@ -44,6 +44,14 @@ def run(report_path=None):
         assert dxf.units == 4 and len(cuts) == 1 and cuts[0].closed
         assert len(list(dxf.modelspace().query('LINE'))) == 3 and not dxf.audit().has_errors
     checks.append('sheet metal: millimetre flat DXF, closed cut contour and bend layers')
+    edges = [([100,0,2],[100,50,2],[1,0,0]),([100,50,2],[0,50,2],[0,1,0]),
+             ([0,50,2],[0,0,2],[-1,0,0]),([0,0,2],[100,0,2],[0,-1,0])]
+    walls = [dict(kind='base',p0=a,p1=b,n=[0,0,1],m=m,r=2,angle=90,length=5) for a,b,m in edges]
+    walls += [dict(kind='tip',parent=i,side='in',r=2,angle=90,length=5) for i in range(4)]
+    walls += [dict(kind='tip',parent=i+4,side='out',r=2,angle=90,length=5) for i in range(4)]
+    box = shm.build_sheet(dict(base=sheet['base'],t=2,flanges=walls,rules=dict(gap=.2)))
+    assert box.isValid() and len(box.Solids()) == 1 and k.point_state(box,(92.7,41.3,17)) == 'in'
+    checks.append('sheet metal box: four 5mm walls, inward returns and reversed third bends')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

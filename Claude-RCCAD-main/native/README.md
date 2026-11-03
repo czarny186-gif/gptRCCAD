@@ -1,6 +1,6 @@
 # RCCAD Desktop 0.1 — Windows 10/11 x64
 
-Aktualizacja 0.4.1: poprawki wielokrotnych gięć i rozwinięcie DXF do cięcia.
+Aktualizacja 0.4.2: poprawione narożniki pudełek, kolejne gięcia i rozwinięcie DXF do cięcia.
 Instrukcja i ograniczenia: [SHEETMETAL_RELEASE.md](SHEETMETAL_RELEASE.md).
 
 Nowy program desktopowy: natywne okno Qt i modelowanie bryłowe OpenCascade.

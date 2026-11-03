@@ -271,20 +271,17 @@ def _straight(s, t, outside):
 
 
 def _effective(specs, t, miter, outside=False):
-    """Kołnierze z geometrią: końce krawędzi płyty w narożach z sąsiadem wydłużone o (promień + grubość),
-    żeby ukos miał materiał do cięcia. Zwraca (lista, narożniki (P, i, j, N)), N = normalna płaszczyzny ukosu."""
+    """Nominal attachment frames and shared base corners, before corner trimming."""
     eff = [None] * len(specs)
     base_idx = [i for i, s in enumerate(specs) if s['kind'] == 'base']
     for i in base_idx:
         s = specs[i]
         eff[i] = dict(kind='base', p0=_arr(s['p0']), p1=_arr(s['p1']), n=_unit(s['n']), m=_unit(s['m']),
                       r=float(s['r']), angle=float(s['angle']), length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, s.get('outside', outside))), hem=_hem_of(s))
-    ends, corners = {}, []
-    orig = {i: (eff[i]['p0'].copy(), eff[i]['p1'].copy()) for i in base_idx}   # długość krawędzi bez wydłużeń w rogach
+    corners = []
     if miter:
         for i in base_idx:
-            ends[i] = [False, False]
-            for k, P in enumerate((eff[i]['p0'], eff[i]['p1'])):
+            for P in (eff[i]['p0'], eff[i]['p1']):
                 for j in base_idx:
                     if j == i:
                         continue
@@ -292,26 +289,14 @@ def _effective(specs, t, miter, outside=False):
                         if float(np.linalg.norm(P - Q)) < _TOL and abs(float(eff[i]['m'] @ eff[j]['m'])) < 1e-6:
                             if any(abs(eff[h]['angle'] - 90) > 1e-6 or eff[h].get('hem') for h in (i, j)):
                                 raise kernel.CadError("Docinanie wspólnych narożników obsługuje kołnierze 90°. Dla innych kątów lub zawinięć wyłącz docinanie narożników w Regułach blach.")
-                            ends[i][k] = True
                             if i < j:
                                 # dwusieczna kąta między ścianami: płaszczyzna ukosu przechodzi przez krawędź narożnika
                                 corners.append((P.copy(), i, j, _unit(eff[i]['m'] - eff[j]['m'])))
-        for i in base_idx:
-            f = eff[i]
-            ext = f['r'] + t
-            d = _unit(f['p1'] - f['p0'])
-            if ends[i][0]:
-                f['p0'] = f['p0'] - ext * d
-            if ends[i][1]:
-                f['p1'] = f['p1'] + ext * d
     for i, s in enumerate(specs):
         if s['kind'] == 'tip':
             par = eff[int(s['parent'])]
             if par is None:
                 raise kernel.CadError("Kołnierz na końcu nie ma kołnierza nadrzędnego.")
-            if int(s['parent']) in orig:
-                # zaczep biegnie po długości krawędzi, nie po wydłużeniu w narożniku (inaczej wystaje poza blachę)
-                par = dict(par, p0=orig[int(s['parent'])][0], p1=orig[int(s['parent'])][1])
             if par.get('hem'):
                 p0, p1, n, m = _hem_end_geom(par, s['side'], t)
             else:
@@ -340,13 +325,6 @@ def _miter(solid, P, N, sgn, c, Kh, Kv):
     return kernel.valid(kernel.boolean('subtract', solid, [region]))
 
 
-def _end_dir(spec, P):
-    """Kierunek wzdłuż ściany wychodzący z jej oryginalnego końca w narożniku P (od krawędzi na zewnątrz ściany)."""
-    p0, p1 = _arr(spec['p0']), _arr(spec['p1'])
-    d = _unit(p1 - p0)
-    return d if float(np.linalg.norm(_arr(P) - p1)) < float(np.linalg.norm(_arr(P) - p0)) else -d
-
-
 def _endcut(solid, P, d, K):
     """Cięcie prostopadłe (90°) na końcu ściany: usuwa część po stronie d od płaszczyzny przechodzącej przez P."""
     d = _unit(d)
@@ -355,26 +333,6 @@ def _endcut(solid, P, d, K):
     plane = cq.Plane(origin=tuple(float(x) for x in _arr(P)), xDir=tuple(float(x) for x in xd), normal=tuple(float(x) for x in d))
     region = cq.Workplane(plane).rect(2 * K, 2 * K).extrude(2 * K).val()
     return kernel.valid(kernel.boolean('subtract', solid, [region]))
-
-
-def _butt_cut(solid, P, m_a, offset, gap, K):
-    """Styk na styk: część po stronie m_a za płaszczyzną odsuniętą o `offset` od P (wzdłuż m_a) minus szczelina.
-    Dla ściany to wewnętrzna powierzchnia drugiej ściany (offset = promień gięcia); dla kołnierza wewnętrznego
-    to najdalej wysunięty punkt kołnierza sąsiada (offset < 0)."""
-    Q = _arr(P) + (float(offset) - float(gap)) * _unit(m_a)
-    return _endcut(solid, Q, m_a, K)
-
-
-def _free_offset(solid, P, m):
-    """Najbardziej wysunięty w głąb (przeciwnie do m) punkt bryły, liczony od P wzdłuż m."""
-    m = _unit(m)
-    return min(float((np.array(v.toTuple(), float) - _arr(P)) @ m) for v in solid.Vertices())
-
-
-def _union_all(solids):
-    if len(solids) == 1:
-        return solids[0]
-    return kernel.boolean('union', solids[0], solids[1:])
 
 
 def relief_cut(shape, point, d, normal, kind, size):
@@ -430,6 +388,145 @@ def _join_sheet(shape, parts):
     return result
 
 
+def _corner_layout(specs, eff, corners, t):
+    owners, depths = [], []
+    for i, s in enumerate(specs):
+        parent = s.get('parent')
+        owners.append(i if s['kind'] == 'base' else owners[parent])
+        depths.append(0 if s['kind'] == 'base' else depths[parent] + 1)
+    # A later outward bend can reach much farther than R+t. Reserve enough
+    # material at shared ends for the complete chain, then trim it exactly.
+    reach = []
+    for i, f in enumerate(eff):
+        reach.append(f['length'] + 2*(f['r'] + t) + (reach[specs[i]['parent']] if specs[i]['kind'] == 'tip' else 0))
+    extension = max(reach, default=0) + t
+    frames = []
+    for i, f in enumerate(eff):
+        root = eff[owners[i]]
+        axis = _unit(root['p1'] - root['p0'])
+        d = _unit(f['p1'] - f['p0'])
+        p0, p1 = f['p0'].copy(), f['p1'].copy()
+        for P, a, b, _ in corners:
+            if owners[i] not in (a, b):
+                continue
+            if abs(float((f['p0'] - P) @ axis)) < _TOL:
+                p0 -= extension * d
+            if abs(float((f['p1'] - P) @ axis)) < _TOL:
+                p1 += extension * d
+        frames.append(dict(f, p0=p0, p1=p1))
+    return frames, owners, depths, extension
+
+
+def _flange_parts(f, t):
+    """Separate the bend and straight leg so butt joints cannot clip a bend as a box."""
+    if f.get('hem'):
+        return [hem_solid(f['p0'], f['p1'], t, f['n'], f['m'], f['r'], f['hem']['ret'], f['hem']['gap'])]
+    origin, X, Y, Z, span = _frame(f['p0'], f['p1'], t, f['n'], f['m'])
+    plane = cq.Plane(origin=tuple(origin), xDir=tuple(X), normal=tuple(Z))
+    theta = math.radians(f['angle'])
+    r = f['r']
+    def point(radius, angle):
+        return (radius * math.sin(angle), t + r - radius * math.cos(angle))
+    inner, outer = point(r, theta), point(r+t, theta)
+    bend = (cq.Workplane(plane).moveTo(0, t).threePointArc(point(r, theta/2), inner)
+            .lineTo(*outer).threePointArc(point(r+t, theta/2), (0, 0)).close().extrude(span).val())
+    delta = f['length'] * np.array([math.cos(theta), math.sin(theta)])
+    leg = (cq.Workplane(plane).polyline([inner, tuple(_arr(inner)+delta), tuple(_arr(outer)+delta), outer])
+           .close().extrude(span).val())
+    return [kernel.valid(bend), kernel.valid(leg)]
+
+
+def _leg_profile(f, root, P, normal, t):
+    """Straight-leg cross section in a common corner coordinate system."""
+    if f.get('hem'):
+        return None
+    a, _, _, direction = _tip_geom(f, 'in', t)
+    b, _, _, _ = _tip_geom(f, 'out', t)
+    points = [a, b, a - f['length']*direction, b - f['length']*direction]
+    return np.array(sorted((round(float((v-P) @ root['m']), 9), round(float((v-P) @ normal), 9)) for v in points))
+
+
+def _corner_parts(recipe, eff, corners):
+    """Trim each bend and leg before fusing; keep material pieces independently valid."""
+    specs, t = recipe['flanges'], float(recipe['t'])
+    rules = recipe.get('rules') or {}
+    gap = float(rules.get('gap', 0))
+    frames, owners, depths, extension = _corner_layout(specs, eff, corners, t)
+    lookup = {(owner, depth): i for i, (owner, depth) in enumerate(zip(owners, depths))}
+    parts = {i: _flange_parts(f, t) for i, f in enumerate(frames)}
+    # The cutter must cover the full developed chain, including distant returns.
+    K = sum(float(recipe['base'][key]) for key in ('lx','ly','lz')) + 4*extension + gap + 1
+    normal = _unit(recipe['base']['z'])
+    for i, f in enumerate(frames):
+        for P, a, b, N in corners:
+            owner = owners[i]
+            if owner not in (a, b):
+                continue
+            other = b if owner == a else a
+            peer = lookup.get((other, depths[i]))
+            if peer is None:
+                # Keep the same seam as the preceding bend while a box is
+                # assembled one edge at a time. A missing peer is not a wall
+                # at the old base width and must not truncate the return.
+                sign = 1 if owner == a else -1
+                parts[i] = [_miter(part, P, N, sign, gap/2, K, K) for part in parts[i]]
+                continue
+            profile = _leg_profile(eff[i], eff[owner], P, normal, t)
+            peer_profile = _leg_profile(eff[peer], eff[other], P, normal, t)
+            leg_direction = _tip_geom(eff[i], 'out', t)[3] if profile is not None else normal
+            vertical = abs(float(leg_direction @ normal))
+            axis_aligned = vertical < 1e-6 or abs(vertical-1) < 1e-6
+            butt = (rules.get('joint', 'parallel') == 'parallel' and profile is not None
+                    and peer_profile is not None and np.allclose(profile, peer_profile, atol=_TOL, rtol=0)
+                    and axis_aligned
+                    and (owner, depths[i]+1) not in lookup and (other, depths[i]+1) not in lookup)
+            sign = 1 if owner == a else -1
+            # Rounded transitions and legs continued by another bend share one
+            # bisector. Only matching terminal legs use their current butt plane;
+            # otherwise adding a return collides with the previous butt extension.
+            parts[i][0] = _miter(parts[i][0], P, N, sign, gap/2, K, K)
+            if len(parts[i]) == 2:
+                if butt:
+                    if owner == a:
+                        offset = float(peer_profile[:, 0].max())
+                        direction = eff[b]['m']
+                    else:
+                        offset = float(peer_profile[:, 0].min()) - gap
+                        direction = eff[a]['m']
+                    parts[i][1] = _endcut(parts[i][1], P + offset*direction, direction, K)
+                else:
+                    parts[i][1] = _miter(parts[i][1], P, N, sign, gap/2, K, K)
+        # Corner cuts must not silently shorten a flange until its requested
+        # free end disappears (e.g. inward returns longer than the box opening).
+        end, _, _, direction = (_hem_end_geom(eff[i], 'out', t) if eff[i].get('hem') else _tip_geom(eff[i], 'out', t))
+        vertices = [np.array(v.toTuple()) for v in parts[i][-1].Vertices()
+                    if abs(float((np.array(v.toTuple())-end) @ direction)) < _TOL]
+        axis = _unit(eff[i]['p1']-eff[i]['p0'])
+        if len(vertices) < 2 or np.ptp([float(v @ axis) for v in vertices]) < _TOL:
+            raise kernel.CadError("Narożniki zabierają cały koniec kołnierza. Zmniejsz jego długość albo zmień kierunek gięcia.")
+    return parts
+
+
+def _build_corner_sheet(base, recipe, eff, corners):
+    specs, t = recipe['flanges'], float(recipe['t'])
+    rules = recipe.get('rules') or {}
+    parts = _corner_parts(recipe, eff, corners)
+    roots = [part for i in parts if specs[i]['kind'] == 'base' for part in parts[i]]
+    shape = _join_sheet(base, roots)
+    relief = rules.get('relief', 'none')
+    size = float(rules.get('relief_size', 0))
+    if relief != 'none' and size > 0:
+        for i, s in enumerate(specs):
+            if s['kind'] == 'base':
+                direction = _unit(_arr(s['p1']) - _arr(s['p0']))
+                for point in (s['p0'], s['p1']):
+                    shape = relief_cut(shape, point, direction, eff[i]['n'], relief, size)
+    shape = _join_sheet(shape, [part for i in parts if specs[i]['kind'] == 'tip' for part in parts[i]])
+    if len(shape.Solids()) != 1:
+        raise kernel.CadError("Gięcia nie tworzą jednej połączonej blachy. Sprawdź długości, promienie i narożniki.")
+    return shape
+
+
 def build_sheet(recipe):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
     base = base_solid(recipe['base'])
@@ -458,13 +555,8 @@ def build_sheet(recipe):
     if not specs:
         return base
     eff, corners = _effective(specs, t, miter, outside)
-    # właściciel kołnierza = numer kołnierza płyty, z której wyrasta (kołnierz na kołnierzu dziedziczy właściciela)
-    owner = []
-    for i, s_ in enumerate(specs):
-        owner.append(i if s_['kind'] == 'base' else owner[int(s_['parent'])])
-    c = gap / 2.0
-    K = max(f['length'] + (f['hem']['ret'] if f.get('hem') else 0.0) for f in eff) + 2 * (max(f['r'] for f in eff) + t) + 2 * t + 5.0
-
+    if corners:
+        return _build_corner_sheet(base, recipe, eff, corners)
     pieces = {}
     for i, f in enumerate(eff):
         if f.get('hem'):
@@ -472,45 +564,11 @@ def build_sheet(recipe):
                                   f['hem']['ret'], f['hem']['gap'])
         else:
             pieces[i] = flange_solid(tuple(f['p0']), tuple(f['p1']), t, tuple(f['n']), tuple(f['m']), f['r'], f['angle'], f['length'])
-    # każdy kawałek przycinamy płaszczyzną ukosu własnej ściany; kołnierze na kołnierzach w wąskim pasie wokół narożnika
-    K_tip = max(f['r'] for f in eff) + 3 * t + gap + 2.0
-    reach = {}
-    for P, a, b, N in corners:
-        offs = [_free_offset(pieces[i], P, eff[a]['m']) for i in pieces
-                if owner[i] == a and specs[i]['kind'] == 'tip' and specs[i].get('side') == 'in']
-        reach[(a, b)] = min(offs) if offs else None
-    for i in pieces:
-        for P, a, b, N in corners:
-            if owner[i] not in (a, b):
-                continue
-            outward_tip = specs[i]['kind'] == 'tip' and specs[i].get('side') == 'out'
-            if joint == 'diagonal':
-                # łączenie skośne: ukos 45° w narożniku, kołnierz na zewnątrz kończy się prostopadle do ściany
-                if outward_tip:
-                    pieces[i] = _endcut(pieces[i], P, _end_dir(specs[owner[i]], P), K)
-                elif owner[i] == a:
-                    pieces[i] = _miter(pieces[i], P, N, 1, c, K, K)
-                else:
-                    pieces[i] = _miter(pieces[i], P, N, -1, c, K, K)
-            else:
-                # łączenie równoległe (styk na styk): pierwsza ściana (a) biegnie przez narożnik,
-                # druga (b) kończy się przy jej powierzchni; wewnętrzne kołnierze a kończą się przy powierzchni b,
-                # a wewnętrzne kołnierze b kończą się przed wolnym końcem kołnierzy a (żeby się nie nakładały)
-                if owner[i] == b:
-                    inner_tip = specs[i]['kind'] == 'tip' and specs[i].get('side') == 'in'
-                    offset = reach.get((a, b)) if inner_tip and reach.get((a, b)) is not None else eff[a]['r']
-                    pieces[i] = _butt_cut(pieces[i], P, eff[a]['m'], offset, gap, K)
-                elif specs[i]['kind'] == 'tip' and specs[i].get('side') == 'in':
-                    pieces[i] = _butt_cut(pieces[i], P, eff[b]['m'], eff[b]['r'], gap, K)
-
     base_idx = [i for i, s_ in enumerate(specs) if s_['kind'] == 'base']
     tip_idx = [i for i, s_ in enumerate(specs) if s_['kind'] != 'base']
     shape = base
     if base_idx:
-        # Existing butt corners share material in the bend transition. Their
-        # clipping is not a neutral-surface development (flat_pattern refuses it).
-        shape = (kernel.boolean('union', shape, [pieces[i] for i in base_idx]) if corners
-                 else _join_sheet(shape, [pieces[i] for i in base_idx]))
+        shape = _join_sheet(shape, [pieces[i] for i in base_idx])
     # wycięcie w narożniku tylko w warstwie płyt (dolnej): kołnierze wyższych warstw go nie przecinają
     if relief != 'none' and rsize > 0:
         for i in base_idx:
@@ -528,7 +586,9 @@ def spec_for_edge(base, t, specs, rules, mid, tol):
     """Kołnierz na wybranej krawędzi: krawędź końca istniejącego kołnierza („tip”) albo krawędź płyty („base”)."""
     rules = rules or {}
     _validate_specs(specs, t)
-    eff, _ = _effective(specs, t, bool(rules.get('miter', True)), bool(rules.get('outside', False)))
+    eff, corners = _effective(specs, t, bool(rules.get('miter', True)), bool(rules.get('outside', False)))
+    if corners:
+        eff, _, _, _ = _corner_layout(specs, eff, corners, t)
     tol = min(float(tol), float(t) * .25)
     mid = _arr(mid)
     taken_tips = {int(s['parent']) for s in specs if s['kind'] == 'tip'}

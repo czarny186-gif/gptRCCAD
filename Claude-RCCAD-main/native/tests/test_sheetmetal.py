@@ -325,11 +325,18 @@ class SheetMetalTests(unittest.TestCase):
         sheet, A, B = self._butt_model()
         tipA = dict(kind='tip', parent=0, side='in', r=0.5, angle=90.0, length=5.0)
         tipB = dict(kind='tip', parent=1, side='in', r=0.5, angle=90.0, length=5.0)
-        onlyA = build(sheet, [A, B, tipA], gap=1.0)
-        both = build(sheet, [A, B, tipA, tipB], gap=1.0)
-        # obszar zajmowany przez kołnierz A przy narożniku (x 96–99,5; y 45–49,4): kołnierz B nie może tam wchodzić
+        specs = [A, B, tipA, tipB]
+        both = build(sheet, specs, gap=1.0)
+        # Przy dodaniu sąsiada tymczasowy ukos zmienia się w styk na styk.
+        # Ten obszar ma być wypełniony jedną warstwą, bez wcześniejszej dziury.
         R = (96.0, 99.5, 45.0, 49.4, 4.0, 8.0)
-        self.assertAlmostEqual(self._vol_in(both, *R), self._vol_in(onlyA, *R), delta=1e-3)
+        self.assertAlmostEqual(self._vol_in(both, *R), (R[1]-R[0])*(R[3]-R[2])*sheet['t'], delta=1e-3)
+        recipe = dict(base=sheet['base'],t=sheet['t'],flanges=specs,rules=dict(gap=1.0))
+        eff,corners = shm._effective(specs,sheet['t'],True)
+        parts = [part for pieces in shm._corner_parts(recipe,eff,corners).values() for part in pieces]
+        for i,part in enumerate(parts):
+            for other in parts[:i]:
+                self.assertLess(abs(part.intersect(other).Volume()),1e-5)
 
     def test_diagonal_joint_closes_box_into_one_solid(self):
         sheet = base_of(plate())
