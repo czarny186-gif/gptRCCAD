@@ -33,6 +33,7 @@ TOPICS = [
         'Ustawienia kołnierzy blachy: szczelina między kołnierzami w narożniku oraz wycięcie w rogu (brak, kwadrat albo okrąg) o zadanej wielkości.',
         'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia. Docinanie wspólnych narożników dotyczy kołnierzy 90°. Dla innych kątów wyłącz docinanie.',
         'Łuki gięcia i kołnierze kontynuowane kolejnym gięciem mają wspólny ukos narożnika. Równoległy styk na styk dotyczy pasujących końcowych odcinków; dzięki temu następne gięcie nie nakłada się na wcześniejsze przedłużenie.',
+        'Gdy kolejne kołnierze rozchodzą się w różne strony i nie przecinają się, ich końce pozostają proste. Wspólna krawędź podstawy nie wymusza ukosu na wszystkich późniejszych poziomach.',
         'Zastosuj do zaznaczonej blachy przelicza narożniki istniejącego modelu, także w projekcie zapisanym w starszej wersji. Nie dodaje kołnierza i zachowuje sposób wymiarowania każdego istniejącego gięcia. Przeliczenie można cofnąć.',
         'Współczynnik K określa położenie warstwy obojętnej rozwinięcia. Zakres 0–0,5, domyślnie 0,44; dobierz go do materiału i prób na giętarce.']),
     ('t_flange', 'Kołnierz', 'Blacha: wyciągnięcie krawędzi w kołnierz', [

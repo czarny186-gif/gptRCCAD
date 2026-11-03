@@ -453,17 +453,69 @@ def _corner_parts(recipe, eff, corners):
     gap = float(rules.get('gap', 0))
     frames, owners, depths, extension = _corner_layout(specs, eff, corners, t)
     lookup = {(owner, depth): i for i, (owner, depth) in enumerate(zip(owners, depths))}
-    parts = {i: _flange_parts(f, t) for i, f in enumerate(frames)}
+    raw = {i: _flange_parts(f, t) for i, f in enumerate(frames)}
+    parts = {i:list(pieces) for i,pieces in raw.items()}
     # The cutter must cover the full developed chain, including distant returns.
     K = sum(float(recipe['base'][key]) for key in ('lx','ly','lz')) + 4*extension + gap + 1
     normal = _unit(recipe['base']['z'])
-    for i, f in enumerate(frames):
-        for P, a, b, N in corners:
+    caps = {}
+
+    def straight_end(i, corner):
+        """Continue the parent's real end as a plane when adjacent folds diverge."""
+        key = (i,corner)
+        if key in caps:
+            return caps[key]
+        if specs[i]['kind'] != 'tip':
+            return None
+        f, root = eff[i], eff[owners[i]]
+        P = corners[corner][0]
+        axis = _unit(root['p1']-root['p0'])
+        direction = axis if np.linalg.norm(P-root['p1']) < np.linalg.norm(P-root['p0']) else -axis
+        vertices = [np.array(v.toTuple()) for piece in parts[specs[i]['parent']] for v in piece.Vertices()]
+        edge = [v for v in vertices if abs(float((v-f['p0'])@f['m'])) < _TOL
+                and abs(float((v-f['p0'])@f['n'])) < _TOL]
+        if not edge:
+            return None
+        cap = max(float((v-P)@direction) for v in edge)
+        plane = (P+cap*direction,direction)
+        caps[key] = (plane,[_endcut(piece,*plane,K) for piece in raw[i]])
+        return caps[key]
+
+    def overlap(left,right):
+        for a in left:
+            bb = a.BoundingBox()
+            for b in right:
+                cb = b.BoundingBox()
+                if any(min(getattr(bb,dim+'max'),getattr(cb,dim+'max')) -
+                       max(getattr(bb,dim+'min'),getattr(cb,dim+'min')) <= _TOL for dim in 'xyz'):
+                    continue
+                if abs(a.intersect(b).Volume()) > 1e-5:
+                    return True
+        return False
+
+    # All parent edges must already be trimmed before their children inherit an end.
+    for i in sorted(range(len(frames)),key=lambda index:depths[index]):
+        f = frames[i]
+        for corner,(P, a, b, N) in enumerate(corners):
             owner = owners[i]
             if owner not in (a, b):
                 continue
             other = b if owner == a else a
             peer = lookup.get((other, depths[i]))
+            profile = _leg_profile(eff[i], eff[owner], P, normal, t)
+            peer_profile = _leg_profile(eff[peer], eff[other], P, normal, t) if peer is not None else None
+            matching = (profile is not None and peer_profile is not None
+                        and np.allclose(profile,peer_profile,atol=_TOL,rtol=0))
+            if not matching:
+                capped = straight_end(i,corner)
+                peer_cap = straight_end(peer,corner) if peer is not None else None
+                neighbors = (peer_cap[1] if peer_cap is not None else raw[peer] if peer is not None else
+                             [piece for j in parts if owners[j] == other and depths[j] < depths[i] for piece in parts[j]])
+                if capped is not None and not overlap(capped[1],neighbors):
+                    # A common root does not imply a common corner at every
+                    # level. Non-intersecting returns keep straight end faces.
+                    parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
+                    continue
             if peer is None:
                 # Keep the same seam as the preceding bend while a box is
                 # assembled one edge at a time. A missing peer is not a wall
@@ -471,13 +523,11 @@ def _corner_parts(recipe, eff, corners):
                 sign = 1 if owner == a else -1
                 parts[i] = [_miter(part, P, N, sign, gap/2, K, K) for part in parts[i]]
                 continue
-            profile = _leg_profile(eff[i], eff[owner], P, normal, t)
-            peer_profile = _leg_profile(eff[peer], eff[other], P, normal, t)
             leg_direction = _tip_geom(eff[i], 'out', t)[3] if profile is not None else normal
             vertical = abs(float(leg_direction @ normal))
             axis_aligned = vertical < 1e-6 or abs(vertical-1) < 1e-6
             butt = (rules.get('joint', 'parallel') == 'parallel' and profile is not None
-                    and peer_profile is not None and np.allclose(profile, peer_profile, atol=_TOL, rtol=0)
+                    and matching
                     and axis_aligned
                     and (owner, depths[i]+1) not in lookup and (other, depths[i]+1) not in lookup)
             sign = 1 if owner == a else -1

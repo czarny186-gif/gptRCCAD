@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.2 — narożniki pudełek z kolejnymi gięciami
+# RCCAD Desktop 0.4.3 — mieszane kierunki gięcia
+
+## Poprawki 0.4.3
+
+- Kołnierze rozchodzące się w różne strony nie są już automatycznie przycinane pod 45° tylko dlatego, że wyrastają ze wspólnego narożnika podstawy.
+- Gdy części nie przecinają się, końce są prowadzone prosto od rzeczywistej krawędzi poprzedniego gięcia. Dotyczy to również dalszych poziomów przy krótszej sąsiedniej ścianie.
+- Wspólny ukos pozostaje przy rzeczywistych połączeniach. Przed zachowaniem prostego zakończenia sprawdzane jest przecięcie materiału.
+- Dodane testy: trzy powroty do środka i jeden na zewnątrz, zmiana dowolnej z czterech stron, dalsze odwrócone gięcia oraz sprawdzenie prostopadłych zakończeń.
 
 ## Poprawki 0.4.2
 
