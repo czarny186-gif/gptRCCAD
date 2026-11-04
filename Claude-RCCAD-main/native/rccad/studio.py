@@ -18,6 +18,7 @@ icons_orange = '#f09a22'
 from .document import Body, Document
 from . import history as hist
 from . import sheetmetal as shm
+from . import sheetedit as she
 from .viewcube import ViewCube
 from . import sketchmeta as sm
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE
@@ -175,7 +176,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'flat'],
+TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek
@@ -336,6 +337,9 @@ class StudioWindow(QMainWindow):
                  ('flange', ui.style_icon('flange', 38), 'Kołnierz — wybierz krawędź blachy'),
                  ('hem', ui.style_icon('hem', 38), 'Zawinięcie — zawiń krawędź blachy o 180°, z przerwą albo zaciśnięte'),
                  ('rules', ui.style_icon('rules', 38), 'Reguły blach — szczelina i wycięcia w narożnikach'),
+                 ('unfold_sheet', ui.style_icon('unfold_sheet',38), 'Rozłóż blachę — edytuj płaskie rozwinięcie'),
+                 ('fold_sheet', ui.style_icon('fold_sheet',38), 'Zegnij blachę — przywróć gięcia z wykonanymi zmianami'),
+                 ('sheet_sync', ui.style_icon('sheet_sync',38), 'Aktualizuj blachę — utrwal i sprawdź zmiany bez przełączania widoku'),
                  ('flat', ui.style_icon('flat', 38), 'Rozwinięcie DXF — zaznacz jedną blachę w drzewie obiektów'),
                  ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
                  ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii'),
@@ -347,11 +351,13 @@ class StudioWindow(QMainWindow):
                  ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku')]
         self.tools = {}
         for key, icon, tip in icons:
-            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'flat'))
+            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'flat', 'unfold_sheet', 'fold_sheet', 'sheet_sync'))
             button.setParent(v)
             ui.shadow(button, 12, 3, 36)
             self.tools[key] = button
-            if key == 'flat':
+            if key in ('unfold_sheet','fold_sheet','sheet_sync'):
+                button.clicked.connect(lambda _=False,k=key:self.switch_sheet(k))
+            elif key == 'flat':
                 button.clicked.connect(lambda _=False: self.export_flat_pattern())
             elif key == 'surface':
                 button.clicked.connect(lambda _=False: self.pick_other_surface())
@@ -3309,7 +3315,8 @@ class StudioWindow(QMainWindow):
                       base=info['base'], t=info['t'], rules=self._flange_rules())
         self.sheet_pick = None
         self.view.set_selection_meshes(None)
-        self.document.commit(self.document.bodies, label='Konwersja na blachę', icon='sheet', op=recipe)
+        metadata=she.state(dict(base=info['base'],t=info['t'],flanges=[],rules=recipe['rules']))
+        self.document.commit([replace(b,meta={'sheet':metadata}) if b.id==body.id else b for b in self.document.bodies], label='Konwersja na blachę', icon='sheet', op=recipe)
         self.selected = [body.id]
         self.set_mode(None)
 
@@ -3320,7 +3327,15 @@ class StudioWindow(QMainWindow):
 
     def _sheet_state(self, body_id):
         """Stan blachy odczytany z historii (do bieżącego kroku): płyta bazowa, grubość, lista kołnierzy i reguły.
-        Po zmianie bryły innym narzędziem (przesunięcie, fazowanie…) blacha wymaga ponownej konwersji — zwraca None."""
+        Nowe blachy zachowują opis gięć także po zwykłej edycji bryły.
+        Dla starszych projektów opis jest odtwarzany z historii."""
+        body=self.document.get(body_id)
+        metadata=(body.meta or {}).get('sheet') if body else None
+        if metadata:
+            nominal=metadata['recipe']
+            return dict(base=nominal['base'],t=nominal['t'],specs=list(nominal.get('flanges') or []),
+                        rules=dict(nominal.get('rules') or {}),flat=metadata.get('flat',False),
+                        dirty=metadata.get('dirty',False),edited=metadata.get('edited',False))
         infos, cur = self.document.infos()
         state = None
         for info in infos[:cur + 1]:
@@ -3330,9 +3345,49 @@ class StudioWindow(QMainWindow):
                 state = dict(base=op['base'], t=float(op['t']), specs=[], rules=dict(op.get('rules') or {}))
             elif kind == 'sheetbuild' and op.get('id') == body_id and state is not None:
                 state = dict(base=state['base'], t=state['t'], specs=list(op['flanges']), rules=dict(op.get('rules') or {}))
-            elif kind in ('mod', 'shell', 'transform', 'mirror', 'pattern', 'bool') and body_id in {op.get('id'), op.get('base'), *(op.get('tools') or [])}:
-                state = None
+            elif kind in ('extrude','revolve','sweep','loft') and op.get('mode')!='new' and state is not None:
+                state['dirty']=True
+            elif kind in ('mod','shell','bool') and body_id in {op.get('id'),op.get('base')} and state is not None:
+                state['dirty']=True
+            elif kind in ('transform','mirror','pattern') and body_id in {op.get('id'),op.get('base')} :
+                state=None
         return state
+
+    def _editable_sheet_state(self, body_id):
+        source=self._sheet_state(body_id)
+        if source is None:
+            return None
+        metadata=she.state(dict(base=source['base'],t=source['t'],flanges=source['specs'],rules=source['rules']),source.get('flat',False))
+        metadata.update(dirty=source.get('dirty',False),edited=source.get('edited',False))
+        return metadata
+
+    def switch_sheet(self, command):
+        if self.busy:
+            return
+        chosen=[b for b in self.document.bodies if b.id in self.selected and b.kind=='solid']
+        body=chosen[0] if len(chosen)==1 else None
+        metadata=self._editable_sheet_state(body.id) if body else None
+        if metadata is None:
+            self.toast('Zaznacz jedną blachę z zapisaną historią gięć.')
+            return
+        sync=command=='sheet_sync'
+        flat=metadata['flat'] if sync else command=='unfold_sheet'
+        if not sync and flat==metadata['flat']:
+            self.toast('Blacha jest już rozłożona.' if flat else 'Blacha jest już zgięta.')
+            return
+        label={'unfold_sheet':'Rozłóż blachę','fold_sheet':'Zegnij blachę','sheet_sync':'Aktualizuj blachę'}[command]
+        recipe=dict(type='sheetmode',id=body.id,state=metadata,flat=flat,sync=sync)
+        def build():
+            return hist.run_sheetmode([body],recipe)[0]
+        def apply(result):
+            self.document.commit([result if b.id==body.id else b for b in self.document.bodies],label=label,icon=command,op=recipe)
+            self.selected=[body.id]
+        self.set_mode(None)
+        def shown():
+            if not sync:
+                name='XY' if flat else 'iso'
+                self.view.set_view(name);self._mark_view(name);self.view.fit_all()
+        self.run_operation(label,build,apply,fit=not sync,after=shown)
 
     def _edge_status(self):
         """Etykieta stanu wyboru krawędzi: osobna dla kołnierza i dla zawinięcia."""
@@ -3354,7 +3409,8 @@ class StudioWindow(QMainWindow):
             self.document.commit([result if b.id == body.id else b for b in self.document.bodies],
                                  label='Narożniki blachy',icon='flange',op=recipe)
             self.selected = [body.id]
-        self.run_operation('Narożniki blachy',lambda: body.changed(shm.build_sheet(recipe)),apply)
+        source=replace(body,meta={'sheet':self._editable_sheet_state(body.id)})
+        self.run_operation('Narożniki blachy',lambda:hist.run_sheetbuild([source],recipe)[0],apply)
 
     def pick_flange(self, x, y):
         hit = self.view.nearest_edge(x, y, True)
@@ -3367,6 +3423,9 @@ class StudioWindow(QMainWindow):
             self.fl_pick = None
             self.view.set_picked_edge(None)
             self._edge_status().setText('To nie jest blacha (albo zmieniła się po konwersji). Kliknij KONWERTUJ NA BLACHĘ.')
+            return
+        if st.get('flat'):
+            self.toast('Najpierw zegnij blachę, zanim dodasz kolejne gięcie.')
             return
         self.fl_joint.setCurrentIndex(self.fl_joint.findData(('sheet' if st['rules'].get('joint') == 'diagonal' else st['rules'].get('joint','parallel'))))
         box = body.shape.BoundingBox()
@@ -3449,8 +3508,9 @@ class StudioWindow(QMainWindow):
         previous = [dict(s, outside=s.get('outside', st['rules'].get('outside', False))) for s in st['specs']]
         recipe = dict(type='sheetbuild', id=body.id, base=st['base'], t=st['t'], flanges=[*previous, spec], rules=self._flange_rules())
 
+        source=replace(body,meta={'sheet':self._editable_sheet_state(body.id)})
         def build():
-            return body.changed(shm.build_sheet(recipe)), recipe
+            return hist.run_sheetbuild([source],recipe)[0],recipe
 
         def apply(result):
             new, rec = result
@@ -3478,13 +3538,11 @@ class StudioWindow(QMainWindow):
             return
         if not Path(path).suffix:
             path += '.dxf'
-        rules = dict(state['rules'], kfactor=float(self.fl_kfactor.value()))
-        recipe = dict(type='sheetbuild', base=state['base'], t=state['t'], flanges=state['specs'], rules=rules)
-
         def done(pattern):
             self.toast(f'Zapisano DXF 1:1 (mm): {path}. CUT: cięcie; BEND_UP/DOWN: linie gięcia, nie do cięcia. K={pattern["kfactor"]:.3f}.', 12000)
 
-        self.run_operation('Rozwinięcie DXF', lambda: shm.export_flat_dxf(recipe, path, body.shape), done)
+        metadata=self._editable_sheet_state(body.id)
+        self.run_operation('Rozwinięcie DXF',lambda:she.export_dxf(body.shape,metadata,path),done)
 
     def pick_shell(self, x, y):
         hit = self.view.pick_face(x, y)

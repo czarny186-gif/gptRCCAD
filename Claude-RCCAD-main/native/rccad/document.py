@@ -27,7 +27,10 @@ class Body:
         return replace(self, mesh=display_mesh(self.shape))
 
     def changed(self, shape):
-        return replace(self, shape=shape, mesh=display_mesh(shape), meta=None)
+        meta = None
+        if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
+            meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
+        return replace(self, shape=shape, mesh=display_mesh(shape), meta=meta)
 
 
 class Document:

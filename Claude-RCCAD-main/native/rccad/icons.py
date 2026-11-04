@@ -310,7 +310,24 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         st = lambda c=ink, w=2.6: (p.setBrush(Qt.NoBrush), p.setPen(pen(c, w)))
         fl = lambda path, c, edge=ink, w=2.6: (p.setBrush(c if isinstance(c, QColor) else QColor(c)), p.setPen(pen(edge, w)), p.drawPath(path))
         poly = lambda pts: QPolygonF([QPointF(*q) for q in pts])
-        if name == 'file':
+        if name in ('unfold_sheet', 'fold_sheet', 'sheet_sync'):
+            outline=QPainterPath();outline.moveTo(5,32);outline.lineTo(22,32)
+            if name=='unfold_sheet':
+                outline.lineTo(42,32);outline.lineTo(42,38);outline.lineTo(5,38)
+            else:
+                outline.lineTo(22,12);outline.lineTo(29,12);outline.lineTo(29,38);outline.lineTo(5,38)
+            outline.closeSubpath();fl(outline,soft)
+            st(acc,3)
+            if name=='sheet_sync':
+                p.drawArc(QRectF(29,5,14,14),30*16,290*16)
+                p.drawPolyline(poly([(39,4),(44,7),(40,11)]))
+            elif name=='unfold_sheet':
+                p.drawArc(QRectF(17,6,22,22),0,150*16)
+                p.drawPolyline(poly([(35,18),(40,18),(40,12)]))
+            else:
+                p.drawArc(QRectF(29,12,14,17),0,140*16)
+                p.drawPolyline(poly([(30,9),(28,15),(34,16)]))
+        elif name == 'file':
             body = QPainterPath(); body.moveTo(8, 8); body.lineTo(34, 8); body.lineTo(41, 15); body.lineTo(41, 41); body.lineTo(8, 41); body.closeSubpath()
             fl(body, soft)
             fl(_rounded(14, 8, 17, 10, 1.5), QColor(acc), ink, 2.2)

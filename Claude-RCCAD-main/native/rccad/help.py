@@ -33,8 +33,8 @@ TOPICS = [
         'Blacharskie: pionowe ściany mają proste zakończenia, a sąsiednie poziome kołnierze są przycinane skośnie. Wycięcie na łuku przechodzi płynnie między zakończeniami obu ścian. Okrągłe powierzchnie gięcia zachowują promień i grubość.',
         'Blacharskie jest domyślne dla nowych konwersji. Starsze projekty zachowują zapisany sposób łączenia. Aby zmienić istniejącą blachę, zaznacz ją, wybierz Blacharskie i kliknij Zastosuj do zaznaczonej blachy. Zapisane szczeliny i wycięcia są odczytywane przy otwieraniu reguł.',
         'Ustawienia kołnierzy blachy: szczelina między kołnierzami w narożniku oraz wycięcie w rogu (brak, kwadrat albo okrąg) o zadanej wielkości.',
-        'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia. Docinanie wspólnych narożników dotyczy kołnierzy 90°. Dla innych kątów wyłącz docinanie.',
-        'Łuki gięcia i kołnierze kontynuowane kolejnym gięciem mają wspólny ukos narożnika. Równoległy styk na styk dotyczy pasujących końcowych odcinków; dzięki temu następne gięcie nie nakłada się na wcześniejsze przedłużenie.',
+        'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia lub po wybraniu Zastosuj do zaznaczonej blachy. Zwykłe kołnierze obsługują także kąty ostre i rozwarte; zawinięcia wymagają wyłączenia docinania wspólnych narożników.',
+        'Równolegle: jedna ściana dochodzi do rzeczywistej powierzchni sąsiada, także na kolejnych poziomach gięć. Łuki i szczelina są dopasowywane do sąsiedniego materiału bez wymuszania ukosu 45°.',
         'Gdy kolejne kołnierze rozchodzą się w różne strony i nie przecinają się, ich końce pozostają proste. Wspólna krawędź podstawy nie wymusza ukosu na wszystkich późniejszych poziomach.',
         'Zastosuj do zaznaczonej blachy przelicza narożniki istniejącego modelu, także w projekcie zapisanym w starszej wersji. Nie dodaje kołnierza i zachowuje sposób wymiarowania każdego istniejącego gięcia. Przeliczenie można cofnąć.',
         'Współczynnik K określa położenie warstwy obojętnej rozwinięcia. Zakres 0–0,5, domyślnie 0,44; dobierz go do materiału i prób na giętarce.']),
@@ -43,10 +43,19 @@ TOPICS = [
         'Wybierz KOŁNIERZ, kliknij krawędź. Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Ustaw promień, kąt i długość, potem Dodaj kołnierz.',
         'Odwróć kierunek gięcia zmienia stronę bez wybierania drugiej krawędzi grubości. Można kontynuować gięcia na końcach kolejnych kołnierzy, z różnymi kątami i kierunkami.',
         'Długość oznacza prosty odcinek za łukiem. Opcja wymiaru zewnętrznego odejmuje (R+t)·tan(kąt/2); ta interpretacja zostaje zapisana osobno dla każdego gięcia.']),
+    ('t_unfold_sheet', 'Rozłóż blachę', 'Blacha: edytowalne rozwinięcie', [
+        'Zaznacz jedną blachę z historią kołnierzy i kliknij Rozłóż blachę. Powstaje płaska bryła o rzeczywistej grubości; promienie, kąty, kierunki i reguły pozostają zapisane.',
+        'Na prostych obszarach używaj zwykłych szkiców, wycinania, łączenia wyciągnięć i zaokrąglania krawędzi. Na łukach można przenosić wykonane na płasko wycięcia przez całą grubość, także przez granicę ściany i łuku. Kieszenie i zaokrąglenia zmieniające grubość samego łuku, zawinięcia oraz nakładające się lub rozdzielone rozwinięcia nie są obsługiwane. Nieudana operacja nie usuwa zmian.']),
+    ('t_fold_sheet', 'Zegnij blachę', 'Blacha: powrót do zapisanych gięć', [
+        'Zaznacz rozłożoną blachę i kliknij Zegnij blachę. Program odtwarza poprzednie gięcia i przenosi zmiany z prostych ścian.',
+        'Można edytować także zgiętą blachę, po czym ponownie ją rozłożyć. Kolejne przełączenia zachowują wykonane otwory i inne obsługiwane zmiany. Historia, cofanie i zapis projektu obejmują oba stany.']),
+    ('t_sheet_sync', 'Aktualizuj blachę', 'Blacha: utrwalenie zmian w bieżącym stanie', [
+        'Zaznacz blachę i kliknij Aktualizuj blachę, aby sprawdzić przenoszenie bieżących zmian i przebudować model bez zmiany stanu płaskiego/zgiętego.',
+        'Jeśli zmiana dotyka strefy gięcia, tworzy kolizję po zgięciu lub nie daje się dokładnie przenieść, program pozostawia bieżący model i zgłasza przyczynę.']),
     ('t_flat', 'Rozwinięcie DXF', 'Blacha: rozwinięcie 1:1 do cięcia laserowego', [
         'Zaznacz jedną blachę w drzewie obiektów, ustaw współczynnik K w Regułach blach i kliknij Rozwinięcie DXF. Eksport wykonuje się w tle, bez zmiany modelu ani historii.',
         'Długość naddatku gięcia BA = kąt w radianach × (R + K × grubość). DXF jest w milimetrach, w skali 1:1. Tnij tylko zamknięte kontury warstwy CUT. BEND_UP i BEND_DOWN to linie środka gięcia, nie linie cięcia.',
-        'Obsługiwane są prostokątne płyty i łańcuchy kołnierzy bez docinanych narożników, wycięć narożnych i zawinięć. Dla wielu boków wyłącz docinanie narożników przed ich dodaniem. Dodatkowe otwory i obróbka poza historią blachy blokują eksport.',
+        'Edytowalne rozwinięcie uwzględnia także docinane narożniki, jeśli powstaje jedna część bez nakładania materiału. Zawinięcia i układy wymagające innego rozcięcia są odrzucane. Dodatkowe otwory są zachowywane w nowym edytowalnym rozwinięciu. Eksport wymaga jednej części o jednakowej grubości.',
         'Kontury nie zawierają kompensacji szerokości szczeliny lasera; ustawia się ją w CAM. Przed produkcją sprawdź parametry materiału, K, kierunki i technologię gięcia.']),
     ('t_hem', 'Zawinięcie', 'Blacha: zawinięcie krawędzi o 180°', [
         'Krawędź zawija się od razu o 180° i odcinek powrotny przylega do powierzchni blachy, bez dodatkowego kołnierza.',

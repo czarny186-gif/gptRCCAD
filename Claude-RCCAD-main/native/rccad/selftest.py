@@ -1,6 +1,7 @@
 """Executed by the packaged EXE as well as Python: validates shipped DLLs and I/O."""
 from __future__ import annotations
 import json
+import math
 from pathlib import Path
 import platform
 import tempfile
@@ -80,6 +81,34 @@ def run(report_path=None):
     assert inclined_shape.isValid() and len(inclined_shape.Solids())==1
     assert sum(f.geomType()=='CYLINDER' for f in inclined_shape.Faces())==8
     checks.append('inclined sheet box: four 135 degree bends with shared corner clearance')
+    from . import sheetedit as she
+    import cadquery as cq
+    edit_recipe=dict(base=sheet['base'],t=2,flanges=[dict(walls[0],length=20)],rules=dict(joint='sheet',gap=.2,kfactor=.44))
+    edit_model=she.layout(edit_recipe)
+    edited=edit_model.flat.cut(cq.Solid.makeCylinder(1,6,cq.Vector(20,20,-2)))
+    refolded,edit_state=she.switch(edited,she.state(edit_recipe,True),False)
+    unfolded,_=she.switch(refolded,edit_state,True)
+    assert unfolded.isValid() and abs(unfolded.cut(edited).Volume())+abs(edited.cut(unfolded).Volume())<2e-5
+    checks.append('editable sheet: unfold, cut hole, refold and restore edited blank')
+    bend=edit_model.bends[0];allowance=math.radians(90)*2.88
+    span=math.dist(bend.frame['p1'],bend.frame['p0'])
+    slot=cq.Solid.makeBox(allowance+2,3,4,cq.Vector(-1,span/2-1.5,-1)).transformShape(bend.flat_frame)
+    cut_blank=edit_model.flat.cut(slot)
+    bent_slot,slot_state=she.switch(cut_blank,she.state(edit_recipe,True),False)
+    restored_slot,_=she.switch(bent_slot,slot_state,True)
+    assert bent_slot.isValid() and abs(cut_blank.cut(restored_slot).Volume())+abs(restored_slot.cut(cut_blank).Volume())<1e-4
+    checks.append('editable sheet: through slot crosses base, circular bend and flange')
+    with tempfile.TemporaryDirectory() as directory:
+        path=Path(directory)/'edited-sheet.dxf'
+        she.export_dxf(edited,she.state(edit_recipe,True),path)
+        dxf=ezdxf.readfile(path)
+        assert dxf.units==4 and len(dxf.modelspace().query('CIRCLE[layer=="CUT"]'))==1 and not dxf.audit().has_errors
+        corner_recipe=dict(base=sheet['base'],t=2,flanges=walls,rules=dict(gap=.2,joint='sheet'))
+        corner_blank=she.layout(corner_recipe).flat
+        she.export_dxf(corner_blank,she.state(corner_recipe,True),path)
+        corner_dxf=ezdxf.readfile(path)
+        assert len(corner_dxf.modelspace().query('SPLINE[layer=="CUT"]'))>0 and not corner_dxf.audit().has_errors
+    checks.append('edited sheet DXF: analytic circle, complex spline corners, millimetres and bend layers')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')
@@ -126,13 +155,20 @@ def run(report_path=None):
     app.processEvents()
     assert len(studio.document.bodies)==1 and studio.document.bodies[0].kind=='sketch'
     assert studio.fl_joint.findData('diagonal') == -1
-    test_body=Body('Sheet selection',slab).prepared()
+    test_body=Body('Sheet selection',edit_model.folded,meta={'sheet':she.state(edit_recipe)}).prepared()
     studio.document.commit([test_body]);studio.selected=[test_body.id]
     studio.set_mode('flange')
     assert test_body.id not in studio.view.selected_bodies and test_body.id in studio.selected
     studio.set_mode(None)
     assert test_body.id in studio.view.selected_bodies
     checks.append('sheet tools: two corner choices and edge-only highlighting during bends')
+    for command,flat in [('unfold_sheet',True),('fold_sheet',False)]:
+        studio.tools[command].click();end=time.monotonic()+20
+        while studio.busy and time.monotonic()<end:app.processEvents();time.sleep(.005)
+        app.processEvents()
+        assert not studio.busy and studio.document.get(test_body.id).meta['sheet']['flat']==flat
+    checks.append('Qt editable sheet: unfold and refold buttons with persistent sheet identity')
+
     studio.document._saved_revision=studio.document._revision
     studio.close();app.processEvents()
     checks.append('Studio window (HTML layout), icons and click-click sketch')

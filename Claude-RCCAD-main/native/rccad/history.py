@@ -13,11 +13,12 @@ import cadquery as cq
 from . import kernel
 from . import sketchmeta as sm
 from . import sheetmetal as shm
+from . import sheetedit as she
 from .document import Body
 
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
-         'mirror': 'mirror', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange'}
+         'mirror': 'mirror', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
@@ -786,8 +787,9 @@ def run_sheet(bodies, recipe):
     """Konwersja na blachę: sprawdza, że wskazana ściana jest prostokątem na prostopadłościanie (sam krok nie zmienia bryły)."""
     body = _body(bodies, recipe['id'])
     face = match_face(body.shape, recipe['face'])[0]
-    shm.sheet_of_face(body.shape, face)
-    return bodies
+    info=shm.sheet_of_face(body.shape, face)
+    nominal=dict(base=recipe.get('base',info['base']),t=recipe.get('t',info['t']),flanges=[],rules=recipe.get('rules') or {})
+    return _replace(bodies,replace(body,meta={'sheet':she.state(nominal)}))
 
 
 def run_flange(bodies, recipe):
@@ -803,7 +805,19 @@ def run_flange(bodies, recipe):
 def run_sheetbuild(bodies, recipe):
     """Blacha od podstaw: płyta bazowa i lista kołnierzy zapisane w kroku (geometria liczy się z nich, nie z poprzedniego stanu)."""
     body = _body(bodies, recipe['id'])
-    return _replace(bodies, body.changed(shm.build_sheet(recipe)))
+    source=(body.meta or {}).get('sheet')
+    if source:
+        shape,metadata=she.rebuild(body.shape,source,recipe)
+    else:
+        shape,metadata=shm.build_sheet(recipe),she.state(recipe)
+    return _replace(bodies,replace(body.changed(shape),meta={'sheet':metadata}))
+
+
+def run_sheetmode(bodies,recipe):
+    body=_body(bodies,recipe['id'])
+    source=(body.meta or {}).get('sheet') or recipe['state']
+    shape,metadata=she.switch(body.shape,source,recipe['flat'],recipe.get('sync',False))
+    return _replace(bodies,replace(body.changed(shape),meta={'sheet':metadata}))
 
 
 def run_text(bodies, recipe):
@@ -879,7 +893,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild}
+RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -981,7 +995,7 @@ def reads(recipe, current):
             else:
                 ids.add(spec['id'])
         return ids
-    if kind in ('mod', 'shell', 'transform', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild'):
+    if kind in ('mod', 'shell', 'transform', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode'):
         return {recipe['id']}
     if kind == 'bool':
         return {recipe['base'], *recipe['tools']}

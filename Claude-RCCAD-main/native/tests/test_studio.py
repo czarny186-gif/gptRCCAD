@@ -150,10 +150,46 @@ class StudioTests(unittest.TestCase):
         state = w._sheet_state(body.id)
         op = dict(type='sheetbuild', id=body.id, base=state['base'], t=state['t'],
                   flanges=[], rules=dict(joint='diagonal'))
-        w.document.commit(w.document.bodies, label='Stare narożniki', op=op)
+        w.document.commit([body], label='Stare narożniki', op=op)  # old project without sheet metadata
         w.set_mode('rules')
         self.assertEqual(w.fl_joint.currentData(), 'sheet')
         self.assertEqual(w._sheet_state(body.id)['rules']['joint'], 'diagonal')
+
+    def test_unfold_edit_sync_fold_buttons_preserve_holes_and_history(self):
+        import cadquery as cq
+        w=self.w;body=self.converted_sheet()
+        w.apply_flange();self.wait()
+        original=w.document.get(body.id).shape.Volume()
+        w.tools['unfold_sheet'].click();self.wait()
+        self.assertTrue(w._sheet_state(body.id)['flat'])
+        sheet=w.document.get(body.id)
+        sketch=Body('Otwór',cq.Workplane('XY').center(20,20).circle(1).val(),'sketch','XY').prepared()
+        op=dict(type='extrude',mode='cut',dir='one',d1=6,d2=0,
+                profiles=[dict(k='sketch',id=sketch.id)],spent=[sketch.id],out=[])
+        w.document.commit(hist.run_recipe([sheet,sketch],op),label='Wycięcie',op=op)
+        w.selected=[body.id];w.refresh()
+        w.tools['sheet_sync'].click();self.wait()
+        self.assertTrue(w._sheet_state(body.id)['flat'])
+        w.tools['fold_sheet'].click();self.wait()
+        self.assertFalse(w._sheet_state(body.id)['flat'])
+        self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),original-2*math.pi,delta=1e-4)
+        w.undo();self.wait();self.assertTrue(w._sheet_state(body.id)['flat'])
+        w.redo();self.wait();self.assertFalse(w._sheet_state(body.id)['flat'])
+
+    def test_failed_refold_keeps_flat_edits_and_does_not_add_history(self):
+        import cadquery as cq
+        from rccad import sheetedit
+        w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()
+        w.tools['unfold_sheet'].click();self.wait()
+        current=w.document.get(body.id);metadata=current.meta['sheet']
+        layout=sheetedit.layout(metadata['recipe']);point=layout.flat_bends[0].Center();t=metadata['recipe']['t']
+        shape=current.shape.cut(cq.Solid.makeCylinder(.3,t/2,cq.Vector(point.x,point.y,t/2)))
+        changed=current.changed(shape);w.document.commit([changed],label='Kieszeń na łuku');w.refresh()
+        revision=w.document._revision;volume=shape.Volume()
+        w.tools['fold_sheet'].click();self.wait()
+        self.assertEqual(w.document._revision,revision)
+        self.assertTrue(w._sheet_state(body.id)['flat'])
+        self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),volume,delta=1e-8)
 
     def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):
         body = self.converted_sheet();w = self.w
