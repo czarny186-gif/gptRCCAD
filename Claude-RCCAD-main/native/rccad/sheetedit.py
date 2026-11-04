@@ -397,11 +397,30 @@ def _apply(model, changes, flat):
     return k.valid(result)
 
 
+def _unchanged(actual, baseline):
+    """Szybkie potwierdzenie, że nieedytowana blacha jest dokładnie bryłą z układu gięć (objętość, wymiary, liczba ścian).
+    Każda zmiana geometrii oznacza blachę jako edytowaną, a ten test dodatkowo chroni przed przesunięciem lub inną bryłą."""
+    try:
+        if actual is baseline or actual.wrapped.IsSame(baseline.wrapped):
+            return True
+        va,vb=_volume(actual),_volume(baseline)
+        if abs(va-vb)>max(1e-6,vb*1e-7) or len(actual.Faces())!=len(baseline.Faces()) or len(actual.Solids())!=len(baseline.Solids()):
+            return False
+        a,b=actual.BoundingBox(),baseline.BoundingBox()
+        return all(abs(getattr(a,n)-getattr(b,n))<1e-5 for n in ('xmin','ymin','zmin','xmax','ymax','zmax'))
+    except Exception:
+        return False
+
+
 def _switch(actual, source_state, flat, sync=False):
     """Switch atomically, including all accumulated edits on straight panels."""
     model=layout(source_state['recipe'])
     source_model=model if _source_engine(source_state)==3 else _source_layout(source_state)
-    changes=_changes(actual,source_model,source_state.get('flat',False))
+    source_flat=source_state.get('flat',False)
+    if not source_state.get('dirty') and not source_state.get('edited') and _unchanged(actual,source_model.flat if source_flat else source_model.folded):
+        changes={p.key:{'removed':[],'added':[]} for p in [*source_model.panels,*source_model.bends]}      # blacha bez zmian: bez kosztownego porównania brył
+    else:
+        changes=_changes(actual,source_model,source_flat)
     if sync:
         _apply(model,changes,not flat)  # Confirm edits survive the other state.
     target_state=state(source_state['recipe'],flat)
@@ -434,40 +453,73 @@ def rebuild(actual, source_state, recipe):
     return _apply(new,changes,False),target_state
 
 
-def export_dxf(actual, source_state, path):
-    """Export the edited constant-thickness blank, with analytic cut curves."""
-    import os
-    import tempfile
-    from pathlib import Path
-    from cadquery.occ_impl.exporters.dxf import DxfDocument
-    blank,_=switch(actual,source_state,True)
-    model=layout(source_state['recipe']);t=float(source_state['recipe']['t'])
+BEND_DASH=[6.0,4.0,-2.0]      # linia gięcia w dół: kreska 4 mm, przerwa 2 mm (wzór DXF: długość całkowita, kreska, przerwa)
+
+
+def _flat_sections(blank, t):
     reach=1+sum(abs(v) for vertex in blank.Vertices() for v in vertex.toTuple())
-    sections=_section(blank,np.array([0,0,t/2]),np.array([0,0,1]),np.array([1,0,0]),reach)
-    prism=_faces_slab(sections,t)
-    if _volume(blank.cut(prism))+_volume(prism.cut(blank))>max(1e-5,_volume(blank)*1e-8):
-        raise k.CadError('DXF do lasera wymaga jednakowej grubości. Kieszenie, występy i zaokrąglenia zmieniające grubość pozostają w modelu 3D, ale nie mogą być zapisane jako zwykły kontur cięcia.')
-    writer=DxfDocument(doc_units=4,approx=None)
-    for name,color in [('CUT',7),('BEND_UP',1),('BEND_DOWN',5)]:writer.add_layer(name,color=color)
-    for face in sections:
-        for wire in face.Wires():
-            contour=wire.translate((0,0,-face.Center().z)).copy()
-            writer.add_shape(cq.Workplane('XY').newObject([contour]),layer='CUT')
-    writer.document.appids.add('RCCAD')
-    factor=float((source_state['recipe'].get('rules') or {}).get('kfactor',s.K_DEFAULT))
+    return _section(blank,np.array([0,0,t/2]),np.array([0,0,1]),np.array([1,0,0]),reach)
+
+
+def _bend_lines(model, sections, recipe):
+    """Linie gięcia rozwinięcia (środek strefy gięcia) przycięte do obrysu blachy: dict(a, b, direction UP/DOWN, index, angle, r)."""
+    t=float(recipe['t']);factor=float((recipe.get('rules') or {}).get('kfactor',s.K_DEFAULT))
     lines=[]
     for bend in model.bends:
         f=bend.frame;allowance=math.radians(f['angle'])*(f['r']+factor*t)
         a=bend.origin+allowance/2*bend.outward
         span=float(np.linalg.norm(f['p1']-f['p0']));b=a+span*bend.axis
         direction='UP' if bend.flat_frame[2,2]<0 else 'DOWN'
-        for start,end in s.clip_line_to_faces(a,b,sections):      # linia gięcia przycięta do konturu cięcia (nie wychodzi poza blachę)
+        for start,end in s.clip_line_to_faces(a,b,sections):      # linia gięcia nie wychodzi poza kontur blachy
             start,end=np.asarray(start,float)[:len(a)],np.asarray(end,float)[:len(a)]
-            line=writer.msp.add_line(tuple(start),tuple(end),dxfattribs={'layer':'BEND_'+direction})
-            line.set_xdata('RCCAD',[(1070,int(bend.key[1:])+1),(1040,float(f['angle'])),(1040,float(f['r'])),(1040,t),(1040,factor)])
-            lines.append(dict(a=start.tolist(),b=end.tolist(),direction=direction))
+            lines.append(dict(a=start.tolist(),b=end.tolist(),direction=direction,index=int(bend.key[1:])+1,angle=float(f['angle']),r=float(f['r'])))
+    return lines
+
+
+def flat_bend_lines(actual, source_state):
+    """Linie gięcia rozłożonej blachy w jej własnych współrzędnych (do rysunku technicznego): lista dict(a, b, direction)."""
+    blank=actual if source_state.get('flat') else switch(actual,source_state,True)[0]
+    model=layout(source_state['recipe']);t=float(source_state['recipe']['t'])
+    return _bend_lines(model,_flat_sections(blank,t),source_state['recipe'])
+
+
+def export_dxf(actual, source_state, path):
+    """Export the edited constant-thickness blank, with analytic cut curves.
+    Linie gięcia: BEND_UP ciągła, BEND_DOWN przerywana (typ linii GIECIE_DOL), obie przycięte do konturu cięcia."""
+    import os
+    import tempfile
+    from pathlib import Path
+    from cadquery.occ_impl.exporters.dxf import DxfDocument
+    model=layout(source_state['recipe']);t=float(source_state['recipe']['t'])
+    pristine=not source_state.get('dirty') and not source_state.get('edited')
+    if pristine and source_state.get('flat') and _unchanged(actual,model.flat):
+        blank=actual
+    elif pristine and not source_state.get('flat') and _unchanged(actual,model.folded):
+        blank=model.flat          # nieedytowana blacha: rozwinięcie wprost z układu gięć
+    else:
+        blank=switch(actual,source_state,True)[0]
+    pristine=pristine and blank is model.flat or (pristine and blank is actual)
+    sections=_flat_sections(blank,t)
+    prism=_faces_slab(sections,t)
+    # Nieedytowana blacha ma z definicji stałą grubość; kosztowne porównanie brył tylko po edycjach (kieszenie, występy).
+    if not pristine and _volume(blank.cut(prism))+_volume(prism.cut(blank))>max(1e-5,_volume(blank)*1e-8):
+        raise k.CadError('DXF do lasera wymaga jednakowej grubości. Kieszenie, występy i zaokrąglenia zmieniające grubość pozostają w modelu 3D, ale nie mogą być zapisane jako zwykły kontur cięcia.')
+    writer=DxfDocument(doc_units=4,approx=None)
+    if 'GIECIE_DOL' not in writer.document.linetypes:
+        writer.document.linetypes.add('GIECIE_DOL',pattern=BEND_DASH,description='Giecie w dol ----  ----')
+    for name,color,ltype in [('CUT',7,'CONTINUOUS'),('BEND_UP',1,'CONTINUOUS'),('BEND_DOWN',5,'GIECIE_DOL')]:writer.add_layer(name,color=color,linetype=ltype)
+    for face in sections:
+        for wire in face.Wires():
+            contour=wire.translate((0,0,-face.Center().z)).copy()
+            writer.add_shape(cq.Workplane('XY').newObject([contour]),layer='CUT')
+    writer.document.appids.add('RCCAD')
+    factor=float((source_state['recipe'].get('rules') or {}).get('kfactor',s.K_DEFAULT))
+    lines=_bend_lines(model,sections,source_state['recipe'])
+    for bend in lines:
+        line=writer.msp.add_line(tuple(bend['a']),tuple(bend['b']),dxfattribs={'layer':'BEND_'+bend['direction'],'linetype':'CONTINUOUS' if bend['direction']=='UP' else 'GIECIE_DOL'})
+        line.set_xdata('RCCAD',[(1070,bend['index']),(1040,bend['angle']),(1040,bend['r']),(1040,t),(1040,factor)])
     target=Path(path);fd,tmp=tempfile.mkstemp(prefix='.rccad-edited-flat-',suffix='.dxf',dir=target.parent);os.close(fd)
     try:
         writer.document.saveas(tmp);os.replace(tmp,target)
     finally:Path(tmp).unlink(missing_ok=True)
-    return dict(shape=blank,thickness=t,kfactor=factor,bends=lines,area=_volume(prism)/t)
+    return dict(shape=blank,thickness=t,kfactor=factor,bends=[dict(a=l['a'],b=l['b'],direction=l['direction']) for l in lines],area=_volume(prism)/t)

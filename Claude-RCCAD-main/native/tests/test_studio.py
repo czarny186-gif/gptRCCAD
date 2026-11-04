@@ -177,6 +177,50 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait();self.assertTrue(w._sheet_state(body.id)['flat'])
         w.redo();self.wait();self.assertFalse(w._sheet_state(body.id)['flat'])
 
+    def test_flat_sheet_drawing_and_dxf_reload_show_bend_lines(self):
+        import tempfile,os,ezdxf
+        from rccad import drawing as D
+        w=self.w;body=self.converted_sheet()
+        w.apply_flange();self.wait()
+        w.tools['unfold_sheet'].click();self.wait();self.assertTrue(w._sheet_state(body.id)['flat'])
+        # rysunek rozłożonej blachy: linie gięcia w rzucie z góry, przycięte do obrysu
+        w.open_drawing(w.document.get(body.id));self.wait()
+        win=w._drawing_windows[-1];self.assertTrue(win.source.bends)
+        win.view_boxes['top'].setChecked(True)
+        d=D.build_drawing(win.source,('top',),'A4',True,'eu',None,True,True,True,False)
+        styles={p.style for p in d.prims if isinstance(p,D.Poly)};self.assertTrue(styles & {'bend_up','bend_down'})
+        flat=w.document.get(body.id).shape;bb=flat.BoundingBox()
+        for a,b,_ in win.source.bends:
+            for q in (a,b):
+                self.assertTrue(bb.xmin-1e-6<=q[0]<=bb.xmax+1e-6 and bb.ymin-1e-6<=q[1]<=bb.ymax+1e-6)
+        win.close()
+        # eksport DXF i ponowne wczytanie w zakładce Rysunek: linie gięcia wracają jako linie gięcia, nie kontur
+        with tempfile.TemporaryDirectory() as tmp:
+            path=os.path.join(tmp,'blacha.dxf')
+            with patch('rccad.studio.QFileDialog.getSaveFileName',return_value=(path,'DXF')):
+                w.selected=[body.id];w.tools['flat'].click();self.wait()
+            doc=ezdxf.readfile(path)
+            self.assertIn('GIECIE_DOL',doc.linetypes)
+            for line in doc.modelspace().query('LINE[layer=="BEND_UP"]'):self.assertEqual(line.dxf.linetype,'CONTINUOUS')
+            for line in doc.modelspace().query('LINE[layer=="BEND_DOWN"]'):self.assertEqual(line.dxf.linetype,'GIECIE_DOL')
+            w.import_drawing_file(path);self.wait()
+            win=w._drawing_windows[-1];self.assertEqual(len(win.source.bends),len(doc.modelspace().query('LINE[layer!="CUT"]')))
+            win.close()
+
+    def test_loaded_dxf_bend_lines_are_clipped_to_outline_and_holes(self):
+        import tempfile,os,ezdxf
+        from rccad import import2d
+        with tempfile.TemporaryDirectory() as tmp:
+            path=os.path.join(tmp,'stary.dxf');doc=ezdxf.new('R2010');doc.units=ezdxf.units.MM;m=doc.modelspace()
+            for n in ('CUT','BEND_UP','BEND_DOWN'):doc.layers.new(n)
+            m.add_lwpolyline([(0,0),(100,0),(100,50),(0,50)],close=True,dxfattribs={'layer':'CUT'});m.add_circle((50,25),5,dxfattribs={'layer':'CUT'})
+            m.add_line((-10,10),(110,10),dxfattribs={'layer':'BEND_UP'});m.add_line((-10,40),(110,40),dxfattribs={'layer':'BEND_DOWN'})
+            m.add_line((-10,25),(110,25),dxfattribs={'layer':'BEND_UP'});doc.saveas(path)
+            shape,bends=import2d.load_flat_parts(path)
+        self.assertEqual(len(shape.Edges()),5)        # linie gięcia nie są częścią konturu
+        got=sorted((round(a[0],3),round(a[1],3),round(b[0],3),round(b[1],3),d) for a,b,d in bends)
+        self.assertEqual(got,[(0,10,100,10,'up'),(0,25,45,25,'up'),(0,40,100,40,'down'),(55,25,100,25,'up')])
+
     def test_failed_refold_keeps_flat_edits_and_does_not_add_history(self):
         import cadquery as cq
         from rccad import sheetedit
@@ -683,6 +727,13 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),8000,1)            # bryła-wysokość nietknięta
         self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),8000,1)
         self.assertAlmostEqual(c.shape.Volume(),4*10*10,1)                               # bryła po drodze wycięta do połowy
+
+    def test_cut_removes_solid_lying_wholly_inside_and_cuts_the_rest(self):
+        a=Body('A',k.box(20,20,20)).prepared();c=Body('C',k.box(4,4,4).translate(cq.Vector(30,5,5))).prepared()
+        out=hist.combine([a,c],[k.box(30,20,20).translate(cq.Vector(15,0,0))],'cut')
+        self.assertEqual([b.name for b in out],['A']);self.assertAlmostEqual(out[0].shape.Volume(),6000,1)
+        with self.assertRaises(k.CadError):       # nic do wycięcia - jak dotychczas komunikat zamiast cichej zmiany
+            hist.combine([a],[k.box(5,5,5).translate(cq.Vector(50,50,50))],'cut')
 
     def test_extrude_up_to_same_solid_step_still_joins(self):
         w=self.w

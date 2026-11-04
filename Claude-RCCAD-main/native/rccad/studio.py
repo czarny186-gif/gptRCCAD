@@ -3509,19 +3509,42 @@ class StudioWindow(QMainWindow):
         self.set_mode(None)
         self.open_drawing(body, auto=mode == 'autodrawing')
 
+    def _flat_sheet_bends(self, body):
+        """Funkcja licząca linie gięcia rozłożonej blachy (w górę / w dół, przycięte do obrysu) albo None, gdy bryła nie jest płaską blachą."""
+        meta = (body.meta or {}).get('sheet') if body is not None else None
+        if not meta or not meta.get('flat'):
+            return None
+        state = self._editable_sheet_state(body.id)
+        if state is None:
+            return None
+        shape = body.shape
+
+        def compute():
+            try:
+                return [(l['a'], l['b'], l['direction']) for l in she.flat_bend_lines(shape, state)]
+            except Exception:
+                return []          # rysunek powstaje także wtedy, gdy linii gięcia nie da się wyznaczyć
+        return compute
+
     def open_drawing(self, body, auto=False):
         from . import drawing as dr
         from .drawing_window import DrawingWindow, FILTERS, export_drawing
+        bends_of = self._flat_sheet_bends(body)
         if not auto:
-            win = DrawingWindow(body.shape, body.name, self)
-            self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
-            win.show()
-            win.raise_()
+            def show(bends):
+                win = DrawingWindow(body.shape, body.name, self, bends=bends)
+                self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
+                win.show()
+                win.raise_()
+            if bends_of is None:
+                show(None)
+            else:       # rozłożona blacha: linie gięcia liczone w tle, potem okno rysunku
+                self.run_operation('Linie gięcia', bends_of, show)
             return
 
         def build():
             from . import FULL_VERSION
-            source = dr.DrawingSource(body.shape, body.name)
+            source = dr.DrawingSource(body.shape, body.name, bends_of() if bends_of else None)
             return dr.build_drawing(source, version=FULL_VERSION, **dr.auto_settings(source))
 
         def apply(drawing):
@@ -3546,15 +3569,16 @@ class StudioWindow(QMainWindow):
         from . import import2d
         name = Path(path).stem
 
-        def apply(shape):
+        def apply(parts):
             from .drawing_window import DrawingWindow
+            shape, bends = parts
             self.set_mode(None)
-            win = DrawingWindow(shape, name, self, views=('top',))
+            win = DrawingWindow(shape, name, self, views=('top',), bends=bends)
             self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
             win.show()
             win.raise_()
 
-        self.run_operation('Wczytywanie rysunku', lambda: import2d.load_flat(path), apply)
+        self.run_operation('Wczytywanie rysunku', lambda: import2d.load_flat_parts(path), apply)
 
     # =====================================================================
     # skorupa

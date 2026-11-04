@@ -526,10 +526,26 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
                 used = True
                 touched.add(b.id)
             except kernel.CadError:
+                if op == 'cut' and _swallowed(b.shape, tool):
+                    bodies[i] = None        # bryła leży w całości w wycinanym obszarze: wycięcie ją usuwa
+                    used = True
                 continue
+        bodies = [b for b in bodies if b is not None]
     if not used:
         raise kernel.CadError('Nie ma bryły, z którą można wykonać tę operację. Profil musi dotykać bryły lub ją przecinać.')
     return fade(split_parts(bodies, touched) if op != 'join' else bodies)
+
+
+def _swallowed(shape, tool):
+    """Czy bryła mieści się w całości w narzędziu (wycięcie nie zostawia z niej nic)."""
+    try:
+        volume = float(shape.Volume())
+        if volume <= 0:
+            return False
+        rest = shape.cut(tool)
+        return float(rest.Volume()) <= max(1e-9, volume * 1e-7)
+    except Exception:
+        return False
 
 
 def gap_pad(bodies, src):

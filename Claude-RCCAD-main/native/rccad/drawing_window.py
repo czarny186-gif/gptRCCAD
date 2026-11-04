@@ -13,7 +13,8 @@ from . import FULL_VERSION, drawing as D, icons
 
 K = 10.0        # jednostek rysowania na milimetr arkusza (254 dpi)
 INK = QColor('#14202e')
-STYLES = {'visible': (0.5, None), 'hidden': (0.25, [10, 4]), 'center': (0.2, [28, 4, 4, 4]), 'dim': (0.2, None), 'frame': (0.7, None), 'thin': (0.2, None)}
+STYLES = {'visible': (0.5, None), 'hidden': (0.25, [10, 4]), 'center': (0.2, [28, 4, 4, 4]), 'dim': (0.2, None), 'frame': (0.7, None), 'thin': (0.2, None),
+          'bend_up': (0.3, None), 'bend_down': (0.3, [14, 6])}      # linie gięcia rozwinięcia: w górę ciągła, w dół przerywana
 FILTERS = 'PDF (*.pdf);;DXF (*.dxf);;SVG (*.svg);;JPG (*.jpg)'
 
 
@@ -873,7 +874,7 @@ def _big(text, icon_name, checkable=False, primary=False, tip=''):
 class DrawingWindow(QMainWindow):
     """Osobne, niemodalne okno. Rzuty liczone są w tle, zmiana opcji przelicza tylko rozmieszczenie."""
 
-    def __init__(self, shape, name='Bryła', parent=None, views=None):
+    def __init__(self, shape, name='Bryła', parent=None, views=None, bends=None):
         """views: rzuty dostępne w oknie (np. ('top',) dla płaskiego rysunku wczytanego z SVG / DXF); None = wszystkie."""
         super().__init__(parent)
         self._only_views = tuple(views) if views else None
@@ -885,7 +886,7 @@ class DrawingWindow(QMainWindow):
         self.resize(w, h)
         self.setMinimumSize(min(760, w), min(520, h))
         self.setStyleSheet(QSS)
-        self.source = D.DrawingSource(shape, name)
+        self.source = D.DrawingSource(shape, name, bends)
         self.pool = QThreadPool.globalInstance()
         self._ticket = 0
         self._busy = False

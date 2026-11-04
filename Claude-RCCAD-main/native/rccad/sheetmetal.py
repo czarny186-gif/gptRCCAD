@@ -479,7 +479,26 @@ def _curved_endcut(solid, frame, t, point, direction, start, end, reach, vertica
     return kernel.boolean('subtract',solid,[cutter])
 
 
+_PARTS_CACHE = {}
+_PARTS_ORDER = []
+
+
 def _corner_parts(recipe, eff, corners, parallel_version=3):
+    """Przycięte części narożników z pamięcią: budowa blachy i jej rozwinięcie liczą te same części (kilka sekund),
+    więc drugie wywołanie z identycznymi danymi bierze gotowy wynik. Kopia słownika chroni pamięć przed zmianami."""
+    key = _recipe_key([_geometry(recipe), eff, corners], parallel_version)
+    if key is not None and key in _PARTS_CACHE:
+        return {i: list(v) for i, v in _PARTS_CACHE[key].items()}
+    parts = _corner_parts_build(recipe, eff, corners, parallel_version)
+    if key is not None:
+        _PARTS_CACHE[key] = {i: list(v) for i, v in parts.items()}
+        _PARTS_ORDER.append(key)
+        while len(_PARTS_ORDER) > 8:
+            _PARTS_CACHE.pop(_PARTS_ORDER.pop(0), None)
+    return parts
+
+
+def _corner_parts_build(recipe, eff, corners, parallel_version=3):
     """Trim each bend and leg before fusing; keep material pieces independently valid."""
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
@@ -753,7 +772,45 @@ def _build_corner_sheet(base, recipe, eff, corners, parallel_version=3):
     return shape
 
 
+_BUILD_CACHE = {}
+_BUILD_ORDER = []
+
+
+def _geometry(recipe):
+    """Tylko pola recepty, od których zależy geometria (bez np. typu kroku historii)."""
+    return {key: recipe[key] for key in ('base', 't', 'flanges', 'rules') if key in recipe} if isinstance(recipe, dict) else recipe
+
+
+def _recipe_key(recipe, parallel_version):
+    import json
+    def plain(v):
+        if isinstance(v, np.ndarray):
+            return v.tolist()
+        if isinstance(v, (np.floating, np.integer)):
+            return v.item()
+        raise TypeError
+    try:
+        return json.dumps([recipe, parallel_version], sort_keys=True, default=plain, allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_sheet(recipe, parallel_version=3):
+    """Blacha od podstaw (z pamięcią ostatnich wyników: ta sama recepta - np. przy rozkładaniu tuż po dodaniu kołnierza -
+    nie jest budowana drugi raz; bryły OpenCascade są niezmienne, więc wynik można bezpiecznie współdzielić)."""
+    key = _recipe_key(_geometry(recipe), parallel_version)
+    if key is not None and key in _BUILD_CACHE:
+        return _BUILD_CACHE[key]
+    shape = _build_sheet(recipe, parallel_version)
+    if key is not None:
+        _BUILD_CACHE[key] = shape
+        _BUILD_ORDER.append(key)
+        while len(_BUILD_ORDER) > 8:
+            _BUILD_CACHE.pop(_BUILD_ORDER.pop(0), None)
+    return shape
+
+
+def _build_sheet(recipe, parallel_version=3):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
     if parallel_version not in (1,2,3):
         raise kernel.CadError('Nieobsługiwana wersja konstrukcji narożników równoległych.')
@@ -958,8 +1015,10 @@ def export_flat_dxf(recipe, path, expected_shape=None):
     pattern = flat_pattern(recipe)
     doc = ezdxf.new('R2010')
     doc.units = ezdxf.units.MM
-    for layer, color in [('CUT', 7), ('BEND_UP', 1), ('BEND_DOWN', 5)]:
-        doc.layers.new(layer, dxfattribs={'color': color})
+    if 'GIECIE_DOL' not in doc.linetypes:
+        doc.linetypes.add('GIECIE_DOL', pattern=[6.0, 4.0, -2.0], description='Giecie w dol ----  ----')
+    for layer, color, ltype in [('CUT', 7, 'CONTINUOUS'), ('BEND_UP', 1, 'CONTINUOUS'), ('BEND_DOWN', 5, 'GIECIE_DOL')]:
+        doc.layers.new(layer, dxfattribs={'color': color, 'linetype': ltype})
     space = doc.modelspace()
     top = next(f for f in pattern['shape'].Faces() if f.normalAt().z > .99)
     for wire in top.Wires():
@@ -974,7 +1033,7 @@ def export_flat_dxf(recipe, path, expected_shape=None):
         space.add_lwpolyline(points, close=True, dxfattribs={'layer': 'CUT'})
     for bend in pattern['bends']:
         for start, end in clip_line_to_faces(bend['a'], bend['b'], [top]):      # linia gięcia tylko w obrysie blachy
-            line = space.add_line(tuple(start), tuple(end), dxfattribs={'layer': 'BEND_' + bend['direction']})
+            line = space.add_line(tuple(start), tuple(end), dxfattribs={'layer': 'BEND_' + bend['direction'], 'linetype': 'CONTINUOUS' if bend['direction'] == 'UP' else 'GIECIE_DOL'})
             doc.appids.add('RCCAD') if 'RCCAD' not in doc.appids else None
             line.set_xdata('RCCAD', [(1070, bend['index']), (1040, bend['angle']), (1040, bend['radius']),
                                     (1040, pattern['thickness']), (1040, pattern['kfactor'])])

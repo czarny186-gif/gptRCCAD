@@ -89,6 +89,7 @@ class ViewGeom:
     circles: list          # dict(c=(x, y), r, full, mid=(x, y))
     bbox: tuple            # xmin, ymin, xmax, ymax widocznych krawędzi
     centers: list = field(default_factory=list)     # środki zamkniętych kształtów (wielokąty, fasolki, prostokąty): (x, y)
+    bends: list = field(default_factory=list)       # linie gięcia rozwinięcia: (łamana N x 2, 'up' | 'down')
 
 
 def _compound_edges(compound):
@@ -244,15 +245,26 @@ def project_view(shape, name):
 
 
 class DrawingSource:
-    """Bryła z pamięcią rzutów (liczenie HLR jest najdroższe, więc zmiana opcji nie powtarza go)."""
+    """Bryła z pamięcią rzutów (liczenie HLR jest najdroższe, więc zmiana opcji nie powtarza go).
+    bends: linie gięcia rozłożonej blachy w płaszczyźnie XY - [(a, b, 'up' | 'down')] - rysowane w rzutach z góry i z dołu."""
 
-    def __init__(self, shape, name='Bryła'):
+    def __init__(self, shape, name='Bryła', bends=None):
         self.shape, self.name = shape, name
+        self.bends = [(tuple(map(float, a[:2])), tuple(map(float, b[:2])), 'down' if str(d).lower() == 'down' else 'up') for a, b, d in (bends or ())]
         self._cache = {}
 
     def view(self, name):
         if name not in self._cache:
-            self._cache[name] = project_view(self.shape, name)
+            g = project_view(self.shape, name)
+            if self.bends and name in ('top', 'bottom'):
+                _, normal, xdir = VIEWS[name]
+                n, x = _unit(normal), _unit(xdir)
+                y = np.cross(n, x)
+                flip = name == 'bottom'          # od spodu gięcie w górę wygląda jak gięcie w dół
+                for a, b, d in self.bends:
+                    pts = np.array([[a[0] * x[0] + a[1] * x[1], a[0] * y[0] + a[1] * y[1]], [b[0] * x[0] + b[1] * x[1], b[0] * y[0] + b[1] * y[1]]], float)
+                    g.bends.append((pts, ({'up': 'down', 'down': 'up'}[d] if flip else d)))
+            self._cache[name] = g
         return self._cache[name]
 
 
@@ -391,6 +403,10 @@ def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape
         for pts in g.visible:
             line = [place(p) for p in pts]
             prims.append(Poly(line, 'visible'))
+            d.snaps += [line[0], line[-1]]
+        for pts, direction in g.bends:       # linie gięcia: w górę ciągła, w dół przerywana
+            line = [place(p) for p in pts]
+            prims.append(Poly(line, 'bend_up' if direction == 'up' else 'bend_down'))
             d.snaps += [line[0], line[-1]]
         if hidden:
             for pts in g.hidden:
@@ -740,7 +756,8 @@ def auto_settings(source):
 # eksport DXF (format R12, czytany przez każdy program CAD)
 # ---------------------------------------------------------------------------
 _LAYERS = {'visible': ('WIDOCZNE', 7, 'CONTINUOUS'), 'hidden': ('UKRYTE', 8, 'DASHED'), 'center': ('OSIE', 1, 'CENTER'),
-           'dim': ('WYMIARY', 3, 'CONTINUOUS'), 'frame': ('RAMKA', 7, 'CONTINUOUS'), 'thin': ('CIENKIE', 8, 'CONTINUOUS'), 'text': ('TEKST', 7, 'CONTINUOUS')}
+           'dim': ('WYMIARY', 3, 'CONTINUOUS'), 'frame': ('RAMKA', 7, 'CONTINUOUS'), 'thin': ('CIENKIE', 8, 'CONTINUOUS'), 'text': ('TEKST', 7, 'CONTINUOUS'),
+           'bend_up': ('GIECIE_GORA', 1, 'CONTINUOUS'), 'bend_down': ('GIECIE_DOL', 5, 'DASHED')}
 
 
 def dxf_text(drawing: Drawing) -> str:

@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.13 — poprawki wyciągania
+# RCCAD Desktop 0.4.14 — linie gięcia na rysunku, szybsze rozkładanie
+
+## Zmiany 0.4.14
+
+- **Linie gięcia na rysunku technicznym.** Rysunek rozłożonej blachy oraz rysunek z wczytanego pliku DXF (Rysunek → Załaduj plik) pokazują linie gięcia: w górę linią ciągłą, w dół przerywaną. Linie są przycięte do obrysu blachy (także wokół otworów) i nie są traktowane jak kontur.
+- **Rozwinięcie DXF:** warstwa BEND_DOWN ma przerywany typ linii GIECIE_DOL, BEND_UP - ciągły.
+- **Szybciej:** rozkładanie nieedytowanej blachy kilka razy szybciej (np. pudełko z czterema ściankami: z ok. 16 s do ok. 2 s), eksport rozwinięcia DXF z ok. 5 s do poniżej 1 s, a wczytanie takiego DXF w zakładce Rysunek z ok. 4 s do ułamka sekundy - krzywe są wczytywane jako pojedyncze krzywe zamiast tysięcy odcinków, więc okno rysunku nie zwalnia.
+- **Wytnij** usuwa także bryły leżące w całości w wycinanym obszarze i wycina wszystko napotkane po drodze.
 
 ## Poprawki 0.4.13
 

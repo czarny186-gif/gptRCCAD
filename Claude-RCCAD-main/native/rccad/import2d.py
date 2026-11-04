@@ -75,6 +75,60 @@ class _Sink:
         except Exception:
             self.polyline([_bezier_point(pts, t) for t in np.linspace(0, 1, 24)])
 
+    def spline(self, pts, closed=False):
+        """Gładka krzywa przez punkty jako JEDNA krawędź (zamiast setek odcinków, które spowalniają rysunek)."""
+        pts = [np.asarray(p, float) for p in pts]
+        clean = [pts[0]] if pts else []
+        for q in pts[1:]:
+            if np.linalg.norm(q - clean[-1]) > 1e-7:
+                clean.append(q)
+        if closed and len(clean) > 2 and np.linalg.norm(clean[-1] - clean[0]) < 1e-7:
+            clean = clean[:-1]
+        if len(clean) < 2:
+            return
+        if len(clean) == 2:
+            self.line(clean[0], clean[1])
+            return
+        try:
+            self.edges.append(cq.Edge.makeSpline([cq.Vector(q[0], q[1], 0) for q in clean], periodic=closed))
+            self._check()
+        except CadError:
+            raise
+        except Exception:
+            self.polyline(clean, closed)
+
+    def bspline(self, poles, knots, degree, weights=None):
+        """Dokładna krzywa B-sklejana z DXF (punkty kontrolne, węzły, stopień) jako jedna krawędź."""
+        from OCP.Geom import Geom_BSplineCurve
+        from OCP.TColgp import TColgp_Array1OfPnt
+        from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+        from OCP.gp import gp_Pnt
+        uniq, mult = [], []
+        for k in knots:
+            if uniq and abs(k - uniq[-1]) < 1e-12:
+                mult[-1] += 1
+            else:
+                uniq.append(float(k)); mult.append(1)
+        cp = TColgp_Array1OfPnt(1, len(poles))
+        for i, q in enumerate(poles, 1):
+            cp.SetValue(i, gp_Pnt(float(q[0]), float(q[1]), 0.0))
+        kn = TColStd_Array1OfReal(1, len(uniq))
+        mu = TColStd_Array1OfInteger(1, len(mult))
+        for i, (k, m) in enumerate(zip(uniq, mult), 1):
+            kn.SetValue(i, k); mu.SetValue(i, m)
+        if weights is not None and len(weights) == len(poles) and any(abs(w - 1) > 1e-12 for w in weights):
+            wt = TColStd_Array1OfReal(1, len(weights))
+            for i, w in enumerate(weights, 1):
+                wt.SetValue(i, float(w))
+            curve = Geom_BSplineCurve(cp, wt, kn, mu, int(degree))
+        else:
+            curve = Geom_BSplineCurve(cp, kn, mu, int(degree))
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        edge = cq.Edge(BRepBuilderAPI_MakeEdge(curve).Edge())
+        if edge.Length() > _TOL:
+            self.edges.append(edge)
+            self._check()
+
     def shape(self):
         if not self.edges:
             raise CadError('W pliku nie znaleziono linii, łuków ani krzywych do narysowania.')
@@ -178,14 +232,14 @@ class _SvgOut:
             ccw_on_paper = (dt > 0) != self.flip     # oś Y odwrócona względem SVG
             self.sink.arc(centre, r, a0, a1) if ccw_on_paper else self.sink.arc(centre, r, a1, a0)
             return
-        n = max(16, int(abs(dt) / (2 * math.pi) * 96))
+        n = max(8, int(abs(dt) / (2 * math.pi) * 48))
         cp, sp = math.cos(phi), math.sin(phi)
         pts = []
         for t in np.linspace(t0, t0 + dt, n + 1):
             x, y = rx * math.cos(t), ry * math.sin(t)
             pts.append(self.p((c[0] + x * cp - y * sp, c[1] + x * sp + y * cp)))
         closed = abs(abs(dt) - 2 * math.pi) < 1e-9
-        self.sink.polyline(pts[:-1] if closed else pts, closed)
+        self.sink.spline(pts, closed)
 
 
 def _arc_center(p0, p1, rx, ry, phi_deg, large, sweep):
@@ -442,8 +496,12 @@ def _dxf_entity(e, sink, s, depth=0):
         elif kind == 'INSERT' and depth < 12:
             for sub in e.virtual_entities():
                 _dxf_entity(sub, sink, s, depth + 1)
-        elif kind in ('ELLIPSE', 'SPLINE'):
-            _flatten(e, sink, s)
+        elif kind == 'SPLINE':
+            _spline(e, sink, s)
+        elif kind == 'ELLIPSE':
+            closed = abs(((e.dxf.end_param - e.dxf.start_param) % (2 * math.pi))) < 1e-9
+            pts = [_xy(v) * s for v in e.vertices(np.linspace(e.dxf.start_param, e.dxf.end_param if not closed else e.dxf.start_param + 2 * math.pi, 49))]
+            sink.spline(pts, closed)
         elif kind in ('SOLID', 'TRACE', '3DFACE'):
             pts = [_xy(e.dxf.get(n)) * s for n in ('vtx0', 'vtx1', 'vtx3', 'vtx2') if e.dxf.hasattr(n)]
             sink.polyline(pts, True)
@@ -465,11 +523,35 @@ def _flat(e):
         return True
 
 
+def _spline(e, sink, s):
+    """SPLINE z DXF jako jedna dokładna krawędź B-sklejana; gdy dane są niepełne - krzywa przez punkty dopasowania lub spłaszczenie."""
+    try:
+        tool = e.construction_tool()
+        poles = [_xy(v) * s for v in tool.control_points]
+        weights = list(tool.weights()) if tool.is_rational else None
+        sink.bspline(poles, list(tool.knots()), tool.degree, weights)
+        return
+    except CadError:
+        raise
+    except Exception:
+        pass
+    fit = [_xy(v) * s for v in getattr(e, 'fit_points', [])]
+    if len(fit) >= 2:
+        sink.spline(fit, bool(getattr(e, 'closed', False)))
+    else:
+        _flatten(e, sink, s)
+
+
 def _flatten(e, sink, s):
     from ezdxf import path as ezpath
     p = ezpath.make_path(e)
-    pts = [_xy(v) * s for v in p.flattening(0.01 / max(s, 1e-9))]
-    sink.polyline(pts)
+    pts = [_xy(v) * s for v in p.flattening(0.02 / max(s, 1e-9))]
+    if len(pts) > 200:
+        pts = [pts[int(i)] for i in np.linspace(0, len(pts) - 1, 200)]
+    if all(np.linalg.norm(np.cross(np.append(q - pts[0], 0), np.append(pts[-1] - pts[0], 0))) < 1e-9 for q in pts[1:-1]):
+        sink.line(pts[0], pts[-1])
+    else:
+        sink.spline(pts)
 
 
 def dxf_edges(path):
@@ -486,13 +568,73 @@ def dxf_edges(path):
             raise CadError(f'Nie można odczytać pliku DXF: {exc}')
     s = _dxf_scale(doc)
     sink = _Sink()
+    sink.bends = []
     for e in doc.modelspace():
+        direction = _bend_layer(e)
+        if direction is not None:          # linie gięcia (BEND_UP / BEND_DOWN z rozwinięcia blachy) nie należą do konturu
+            tmp = _Sink()
+            _dxf_entity(e, tmp, s)
+            for edge in tmp.edges:
+                a, b = edge.startPoint(), edge.endPoint()
+                sink.bends.append(((a.x, a.y), (b.x, b.y), direction))
+            continue
         _dxf_entity(e, sink, s)
     return sink
 
 
-def load_flat(path):
-    """Plik SVG albo DXF → płaski kształt (zbiór krawędzi w płaszczyźnie XY, mm) gotowy do rzutu z góry."""
+def _bend_layer(e):
+    """'up' / 'down' dla elementu na warstwie linii gięcia (BEND_UP, BEND_DOWN, GIECIE_GORA, GIECIE_DOL), inaczej None."""
+    try:
+        layer = str(e.dxf.layer).upper()
+    except Exception:
+        return None
+    if not (layer.startswith('BEND') or layer.startswith('GIECIE') or layer.startswith('GIĘCIE')):
+        return None
+    return 'down' if ('DOWN' in layer or 'DOL' in layer or 'DÓŁ' in layer) else 'up'
+
+
+def _outline_faces(edges):
+    """Płaskie ściany z zamkniętych konturów (zewnętrzne z otworami), do przycinania linii gięcia; [] gdy kontury nie są zamknięte."""
+    try:
+        wires = [w for w in cq.Wire.combine(edges, tol=1e-4) if w.IsClosed()]
+    except Exception:
+        return []
+    faces = []
+    for w in wires:
+        try:
+            faces.append((cq.Face.makeFromWires(w), w))
+        except Exception:
+            continue
+    from .kernel import face_contains
+    faces.sort(key=lambda fw: -fw[0].Area())
+    probe = [_inside_point(fw[0]) for fw in faces]
+    contains = lambda j, i: faces[j][0].Area() > faces[i][0].Area() and face_contains(faces[j][0], probe[i])
+    depth = [sum(1 for j in range(i) if contains(j, i)) for i in range(len(faces))]
+    out = []
+    for i, (face, wire) in enumerate(faces):
+        if depth[i] % 2:
+            continue            # otwór w większym konturze
+        holes = [faces[j][1] for j in range(i + 1, len(faces)) if depth[j] == depth[i] + 1 and contains(i, j)]
+        try:
+            out.append(cq.Face.makeFromWires(wire, holes))
+        except Exception:
+            out.append(face)
+    return out
+
+
+def _inside_point(face):
+    """Punkt wewnątrz ściany (środek trójkąta siatki) - środek ciężkości pierścienia lub litery C leży poza nią."""
+    try:
+        vertices, triangles = face.tessellate(0.1, 0.5)
+        if triangles:
+            return tuple(np.mean([vertices[k].toTuple() for k in triangles[0]], axis=0))
+    except Exception:
+        pass
+    return face.Center().toTuple()
+
+
+def load_flat_parts(path):
+    """Plik SVG albo DXF → (płaski kształt konturu, linie gięcia [(a, b, 'up' | 'down')] przycięte do obrysu)."""
     ext = Path(path).suffix.lower()
     if ext == '.svg':
         sink = svg_edges(path)
@@ -500,4 +642,21 @@ def load_flat(path):
         sink = dxf_edges(path)
     else:
         raise CadError('Obsługiwane są pliki SVG i DXF.')
-    return sink.shape()
+    shape = sink.shape()
+    bends = []
+    raw = getattr(sink, 'bends', [])
+    if raw:
+        from .sheetmetal import clip_line_to_faces
+        faces = _outline_faces(sink.edges)
+        for a, b, d in raw:
+            if faces:
+                for p, q in clip_line_to_faces((a[0], a[1], 0.0), (b[0], b[1], 0.0), faces):
+                    bends.append((tuple(p[:2]), tuple(q[:2]), d))
+            else:
+                bends.append((a, b, d))
+    return shape, bends
+
+
+def load_flat(path):
+    """Plik SVG albo DXF → płaski kształt (zbiór krawędzi w płaszczyźnie XY, mm) gotowy do rzutu z góry."""
+    return load_flat_parts(path)[0]
