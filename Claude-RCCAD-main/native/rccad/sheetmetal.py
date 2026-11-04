@@ -100,15 +100,11 @@ def edge_side(shape, edge, t):
     if big.Area() <= end.Area() * 1.0001:
         raise kernel.CadError("Nie rozpoznano strony blachy przy tej krawędzi.")
     mid = edge.positionAt(.5)
-    # normalne ściany na zewnątrz bryły: orientacja powierzchni nie jest zawsze zgodna, więc porównujemy z jej środkiem
-    centre = np.array(shape.Center().toTuple(), float)
-
-    def outward(face):
-        v = _unit(face.normalAt(mid).toTuple())
-        return v if float((np.array(face.Center().toTuple(), float) - centre) @ v) >= 0 else -v
-
-    n = outward(big)
-    m = outward(end)
+    # Oriented faces of a valid solid already carry outward normals. A global
+    # centre-of-mass test flips underside faces once folded material moves the
+    # centroid below them (e.g. the third/fourth lower hem).
+    n = _unit(big.normalAt(mid).toTuple())
+    m = _unit(end.normalAt(mid).toTuple())
     if abs(float(n @ m)) > 1e-6:
         raise kernel.CadError("Ta krawędź nie jest prostopadła do ściany blachy.")
     ref = np.array(mid.toTuple(), float)
@@ -287,13 +283,8 @@ def _effective(specs, t, miter, outside=False):
                         continue
                     for Q in (eff[j]['p0'], eff[j]['p1']):
                         if float(np.linalg.norm(P - Q)) < _TOL and abs(float(eff[i]['m'] @ eff[j]['m'])) < 1e-6:
-                            # Corner ownership is a spatial half-plane, independent
-                            # of bend angle. Circular sectors and tangent panels are
-                            # clipped separately below; only hems need a different
-                            # corner construction. Do not restrict ordinary bends
-                            # to upright walls here.
-                            if any(eff[h].get('hem') for h in (i, j)):
-                                raise kernel.CadError("Docinanie wspólnych narożników nie obsługuje zawinięć. Wyłącz docinanie narożników w Regułach blach.")
+                            # Corner ownership is independent of the bend
+                            # angle, including the 180-degree turn of a hem.
                             if i < j:
                                 # dwusieczna kąta między ścianami: płaszczyzna ukosu przechodzi przez krawędź narożnika
                                 corners.append((P.copy(), i, j, _unit(eff[i]['m'] - eff[j]['m'])))
@@ -308,6 +299,12 @@ def _effective(specs, t, miter, outside=False):
                 p0, p1, n, m = _tip_geom(par, s['side'], t)
             eff[i] = dict(kind='tip', p0=p0, p1=p1, n=n, m=m, r=float(s['r']), angle=float(s['angle']),
                           length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, s.get('outside', outside))), hem=_hem_of(s))
+    # Hems use the same analytic bend + tangent return as a 180-degree
+    # flange. Keep the actual gap-limited radius in every corner/development
+    # frame, rather than the tool radius and the UI's placeholder angle.
+    for frame in eff:
+        if frame.get('hem'):
+            frame.update(r=_hem_R(frame['r'],frame['hem']['gap']),angle=180.,length=frame['hem']['ret'])
     return eff, corners
 
 
@@ -430,7 +427,7 @@ def _corner_layout(specs, eff, corners, t):
 def _flange_parts(f, t):
     """Separate the bend and straight leg so butt joints cannot clip a bend as a box."""
     if f.get('hem'):
-        return [hem_solid(f['p0'], f['p1'], t, f['n'], f['m'], f['r'], f['hem']['ret'], f['hem']['gap'])]
+        f=dict(f,r=_hem_R(f['r'],f['hem']['gap']),angle=180.,length=f['hem']['ret'])
     origin, X, Y, Z, span = _frame(f['p0'], f['p1'], t, f['n'], f['m'])
     plane = cq.Plane(origin=tuple(origin), xDir=tuple(X), normal=tuple(Z))
     theta = math.radians(f['angle'])
@@ -448,8 +445,6 @@ def _flange_parts(f, t):
 
 def _leg_profile(f, root, P, normal, t):
     """Straight-leg cross section in a common corner coordinate system."""
-    if f.get('hem'):
-        return None
     a, _, _, direction = _tip_geom(f, 'in', t)
     b, _, _, _ = _tip_geom(f, 'out', t)
     points = [a, b, a - f['length']*direction, b - f['length']*direction]
@@ -648,6 +643,15 @@ def _corner_parts(recipe, eff, corners, parallel_version=3):
                     parts[i][0] = _endcut(parts[i][0],P+end*cut_direction,cut_direction,K)
                 else:
                     parts[i][0] = _endcut(parts[i][0],P+max(start,end)*cut_direction,cut_direction,K)
+                continue
+            if sheet_joint and f.get('hem') and depths[i]==0:
+                # The bend starts on the real plate edge. Miter extensions
+                # here overlap after development when K<0.5 and gap=0.
+                # Keep the root turn square; the inward return still receives
+                # the sheet-style miter shared with its neighbour.
+                sign=1 if owner==a else -1
+                parts[i][0]=_endcut(parts[i][0],P,eff[other]['m'],K)
+                parts[i][1]=_miter(parts[i][1],P,N,sign,gap/2,K,K)
                 continue
             if vertical_pair:
                 # Upright panels end square to their edge, not on a 45-degree

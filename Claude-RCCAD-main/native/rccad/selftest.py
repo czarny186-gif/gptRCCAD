@@ -136,6 +136,16 @@ def run(report_path=None):
     assert relieved.isValid() and len(relieved.Solids())==1
     assert {round(BRepAdaptor_Surface(face.wrapped).Cylinder().Radius(),6) for face in relieved.Faces() if face.geomType()=='CYLINDER'}=={.5,2.5}
     checks.append('parallel four-level seams: simple reliefs without additional rollover cylinders')
+    for hem_joint in ('parallel','sheet'):
+        hem_specs=[dict(kind='base',p0=[a[0],a[1],0],p1=[b[0],b[1],0],n=[0,0,-1],m=m,r=1,angle=90,length=3,hem=dict(gap=.2,ret=3)) for a,b,m in edges]
+        hem_recipe=dict(base=sheet['base'],t=2,flanges=hem_specs,rules=dict(joint=hem_joint,gap=0))
+        hem_body=shm.build_sheet(hem_recipe)
+        hem_flat,hem_state=she.switch(hem_body,she.state(hem_recipe),True)
+        assert hem_flat.isValid() and len(hem_flat.Solids())==1
+        hem_folded,_=she.switch(hem_flat,hem_state,False)
+        assert hem_folded.isValid() and len(hem_folded.Solids())==1
+        assert abs(hem_folded.Volume(1e-9)-hem_body.Volume(1e-9))<1e-4
+    checks.append('four underside hems: parallel and sheet joints unfold and refold with zero corner gap')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

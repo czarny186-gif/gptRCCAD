@@ -310,6 +310,37 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w._sheet_state(body.id)['rules']['joint'],'sheet')
         self.assertAlmostEqual(w.fl_gap.value(),.7)
 
+    def _four_bottom_hems_and_refold(self,joint):
+        w=self.w;body=self.converted_sheet()
+        w.fl_joint.setCurrentIndex(w.fl_joint.findData(joint));w.apply_sheet_rules();self.wait()
+        w.toggle_mode('hem');w.hm_radius.setValue(1);w.hm_gap.setValue(.2);w.hm_length.setValue(5)
+        for count,point in enumerate(((100,25,0),(50,50,0),(0,25,0),(50,0,0)),1):
+            current=w.document.get(body.id)
+            index=next(i for i,edge in enumerate(current.shape.Edges()) if edge.geomType()=='LINE' and
+                       np.linalg.norm(np.array(edge.positionAt(.5).toTuple())-point)<1e-5)
+            with patch.object(w.view,'nearest_edge',return_value=(body.id,index,None)):
+                w.view_clicked(5,5,False,False)
+            if count==1:w.apply_hem()
+            self.wait()
+            state=w._sheet_state(body.id)
+            self.assertEqual(len(state['specs']),count)
+            self.assertLess(state['specs'][-1]['n'][2],-.99)
+            self.assertEqual(state['rules']['joint'],joint)
+        original=w.document.get(body.id).shape
+        w.tools['unfold_sheet'].click();self.wait()
+        self.assertTrue(w._sheet_state(body.id)['flat'],w.notice.text())
+        self.assertEqual(len(w.document.get(body.id).shape.Solids()),1)
+        w.tools['fold_sheet'].click();self.wait()
+        self.assertFalse(w._sheet_state(body.id)['flat'])
+        folded=w.document.get(body.id).shape
+        self.assertLess(folded.cut(original).Volume(1e-9)+original.cut(folded).Volume(1e-9),1e-4)
+
+    def test_four_bottom_parallel_hems_can_be_picked_unfolded_and_refolded(self):
+        self._four_bottom_hems_and_refold('parallel')
+
+    def test_four_bottom_sheet_hems_can_be_picked_unfolded_and_refolded(self):
+        self._four_bottom_hems_and_refold('sheet')
+
     def test_hem_tool_is_separate_and_adds_hem(self):
         w=self.w;plate=Body('Blacha',k.box(100,50,2),'solid').prepared();w.document.commit([plate]);w.refresh()
         self.assertIn('hem',w.tools)

@@ -1,6 +1,17 @@
-# RCCAD Desktop 0.4.9 — prostsze łączenia równoległe
+# RCCAD Desktop 0.4.10 — zawinięcia z narożnikami i rozwinięciem
 
-## Poprawki 0.4.9
+## Poprawki 0.4.10
+
+- Można dodać zawinięcia na czterech krawędziach płyty, również od spodu, oraz na końcach istniejących kołnierzy.
+- Zawinięcia podlegają trybom **Równolegle** i **Blacharskie**: odcinki powrotne otrzymują odpowiednio styk prosty lub docinanie blacharskie. Przy podstawie łuk zawinięcia nie jest sztucznie przedłużany przez narożnik.
+- **Rozłóż blachę**, **Zegnij blachę**, **Aktualizuj blachę** i eksport rozwinięcia DXF obsługują zawinięcia. Rozwinięcie uwzględnia łuk 180°, odcinek powrotny, rzeczywisty promień ograniczony szczeliną oraz współczynnik K.
+- Zachowywane są obsługiwane edycje na płaskiej i zgiętej blasze, w tym otwory na odcinku powrotnym i wycięcia przez łuk, oraz historia i zapis projektu.
+- Naprawione rozpoznawanie dolnej strony blachy po zmianie położenia środka masy oraz rozwinięcie zawinięć blacharskich przy zerowej szczelinie narożników.
+
+Promień zawinięcia, jak dotychczas, jest ograniczony do połowy szczeliny od powierzchni. Współczynnik K dobierz do materiału i prób gięcia. Rzeczywiste kolizje materiału lub nachodzące na siebie rozwinięcia nadal są zgłaszane bez utraty modelu.
+
+## Poprawki 0.4.9 — prostsze łączenia równoległe
+
 
 - Uproszczone podcięcia narożników w opcji **Równolegle**, zwłaszcza przy wielopoziomowych gięciach z końcowym kołnierzem 45°. Drobne zawijasy i dodatkowe walcowe powierzchnie spoiny zastąpione prostymi podcięciami w przekroju naroża.
 - Uproszczenie dotyczy końców kołnierzy. Powierzchnie walcowe blachy zachowują zadane promienie i grubość; proste ścianki zachowują dotychczasowy styk równoległy i luz. Przy samych łukach pozostaje lokalny luz technologiczny.

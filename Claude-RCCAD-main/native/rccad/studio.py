@@ -852,7 +852,7 @@ class StudioWindow(QMainWindow):
 
         # --- reguły blach: szczelina i wycięcia w narożnikach (osobny panel, dotyczy kołnierzy) ---
         self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True)
-        lay.addWidget(_label('Reguły narożników przeliczają całą blachę przy dodaniu gięcia. Dla rozwinięcia DXF wyłącz docinanie narożników i wycięcia; zawinięcia nie są jeszcze rozwijane. Współczynnik K dobierz do materiału i prób gięcia.', 'small'))
+        lay.addWidget(_label('Reguły narożników przeliczają całą blachę przy dodaniu gięcia. Rozłóż blachę, aby edytować płaski model, także z zawinięciami. Rozwinięcie DXF uwzględnia aktualny obrys i linie gięć. Współczynnik K dobierz do materiału i prób gięcia.', 'small'))
         self.fl_miter = QCheckBox('Docinaj i przedłużaj narożniki')
         self.fl_miter.setChecked(True)
         lay.addWidget(self.fl_miter)

@@ -177,8 +177,6 @@ def _bend_blank(piece, frame, work_frame, t, factor, flat_origin, outward, flat_
 
 def _build_layout(recipe, require_blank=True, parallel_version=3):
     specs=recipe.get('flanges') or [];rules=recipe.get('rules') or {};t=float(recipe['t'])
-    if any(spec.get('hem') for spec in specs):
-        raise k.CadError('Rozkładanie zawinięć nie jest jeszcze obsługiwane. Zwykłe kołnierze można rozkładać i zginać ponownie.')
     factor=float(rules.get('kfactor',s.K_DEFAULT))
     if not math.isfinite(factor) or not 0<=factor<=.5:raise k.CadError('Współczynnik K musi być w zakresie 0–0,5.')
     folded=s.build_sheet(recipe,parallel_version=parallel_version)
