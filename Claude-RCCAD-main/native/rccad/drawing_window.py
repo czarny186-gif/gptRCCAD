@@ -873,8 +873,10 @@ def _big(text, icon_name, checkable=False, primary=False, tip=''):
 class DrawingWindow(QMainWindow):
     """Osobne, niemodalne okno. Rzuty liczone są w tle, zmiana opcji przelicza tylko rozmieszczenie."""
 
-    def __init__(self, shape, name='Bryła', parent=None):
+    def __init__(self, shape, name='Bryła', parent=None, views=None):
+        """views: rzuty dostępne w oknie (np. ('top',) dla płaskiego rysunku wczytanego z SVG / DXF); None = wszystkie."""
         super().__init__(parent)
+        self._only_views = tuple(views) if views else None
         self.setWindowTitle(f'Rysunek techniczny — {name}')
         self.setWindowFlag(Qt.Window, True)
         screen = QApplication.primaryScreen()
@@ -955,7 +957,8 @@ class DrawingWindow(QMainWindow):
             t = QToolButton()
             t.setObjectName('tile')
             t.setCheckable(True)
-            t.setChecked(key in ('front', 'top', 'right'))
+            t.setChecked(key in (self._only_views or ('front', 'top', 'right')))
+            t.setEnabled(self._only_views is None or key in self._only_views)
             t.setIcon(view_icon(key, 32))
             t.setIconSize(QSize(32, 32))
             t.setText(short[key])

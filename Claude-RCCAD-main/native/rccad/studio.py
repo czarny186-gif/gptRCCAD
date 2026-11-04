@@ -177,7 +177,7 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
-        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing']}
+        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek
 TOOLS_TOP = 50      # przyciski narzędzi pod zakładkami
@@ -277,7 +277,9 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # budowa interfejsu (wymiary i kolory z CSS wersji HTML)
     # =====================================================================
-    def _panel(self, width, title, kind='sketch', subtitle='', color=None, plain=False):
+    def _panel(self, width, title, kind='sketch', subtitle='', color=None, plain=False, scroll=False):
+        """Panel opcji. scroll=True: treść przewija się, a przyciski dodane do frame.footer stoją zawsze na dole, widoczne
+        także na niskim ekranie (wysokość panelu dopasowuje _fit_panel do miejsca nad paskiem historii)."""
         frame = QFrame(self.view)
         frame.setObjectName('panel')
         frame.setFixedWidth(width)
@@ -287,7 +289,51 @@ class StudioWindow(QMainWindow):
         lay.addWidget(ui.panel_header(kind, title, subtitle, color or ui.icons.BLUE, plain))
         ui.shadow(frame, 26, 7, 46)
         frame.hide()
+        frame.scroll = None
+        if scroll:
+            frame.setFixedWidth(width + 12)          # miejsce na pasek przewijania, pola zachowują dotychczasową szerokość
+            lay.setContentsMargins(16, 15, 8, 15)
+            area = QScrollArea()
+            area.setObjectName('panelscroll')
+            area.setWidgetResizable(True)
+            area.setFrameShape(QFrame.NoFrame)
+            area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            area.setStyleSheet('QScrollArea#panelscroll, QWidget#panelbody { background: transparent; }'
+                               'QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }'
+                               'QScrollBar::handle:vertical { background: #c3d2e1; border-radius: 4px; min-height: 28px; }'
+                               'QScrollBar::handle:vertical:hover { background: #9fb4c8; }'
+                               'QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }'
+                               'QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }')
+            body = QWidget()
+            body.setObjectName('panelbody')
+            inner = QVBoxLayout(body)
+            inner.setContentsMargins(0, 0, 12, 0)
+            inner.setSpacing(11)
+            area.setWidget(body)
+            area.viewport().setAutoFillBackground(False)
+            lay.addWidget(area, 1)
+            footer = QVBoxLayout()
+            footer.setContentsMargins(0, 0, 12, 0)
+            footer.setSpacing(8)
+            lay.addLayout(footer)
+            frame.scroll, frame.footer = (area, body), footer
+            return frame, inner
         return frame, lay
+
+    def _fit_panel(self, frame, top):
+        """Panel z przewijaną treścią: wysokość tylko taka, jak trzeba, ale nie niżej niż do paska historii (przyciski zawsze widoczne)."""
+        if getattr(frame, 'scroll', None) is None:
+            frame.adjustSize()
+            return
+        area, body = frame.scroll
+        H = self.view.height()
+        bottom = self.hist_bar.y() - 12 if self.hist_bar.isVisible() and self.hist_bar.y() > top else H - 18
+        natural = body.sizeHint().height()
+        frame.layout().activate()
+        frame.adjustSize()
+        other = frame.height() - area.height()        # nagłówek, stopka z przyciskami i marginesy (rzeczywiste wymiary)
+        area.setFixedHeight(int(max(90, min(natural, bottom - top - other))))
+        frame.adjustSize()
 
     @staticmethod
     def _field(layout, text, widget):
@@ -348,10 +394,11 @@ class StudioWindow(QMainWindow):
                  ('mrad', ui.style_icon('mrad', 38), 'Promień, średnica i długość krawędzi'),
                  ('mprops', ui.style_icon('mprops', 38), 'Właściwości: objętość, pole, wymiary, środek masy'),
                  ('drawing', ui.style_icon('drawing', 38), 'Utwórz rysunek techniczny — rzuty, wymiary, pomiary, zapis'),
-                 ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku')]
+                 ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku'),
+                 ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera')]
         self.tools = {}
         for key, icon, tip in icons:
-            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'flat', 'unfold_sheet', 'fold_sheet', 'sheet_sync'))
+            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'flat', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'importdrawing'))
             button.setParent(v)
             ui.shadow(button, 12, 3, 36)
             self.tools[key] = button
@@ -359,6 +406,8 @@ class StudioWindow(QMainWindow):
                 button.clicked.connect(lambda _=False,k=key:self.switch_sheet(k))
             elif key == 'flat':
                 button.clicked.connect(lambda _=False: self.export_flat_pattern())
+            elif key == 'importdrawing':
+                button.clicked.connect(lambda _=False: self.import_drawing_file())
             elif key == 'surface':
                 button.clicked.connect(lambda _=False: self.pick_other_surface())
             elif key != 'file':
@@ -743,7 +792,7 @@ class StudioWindow(QMainWindow):
         self.ex_target = None       # wskazany element (Do elementu): dict(kind, point, label)
         self.ex_dir_label = _label('Kierunek')
         lay.addWidget(self.ex_dir_label)
-        self.ex_dir = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 32)
+        self.ex_dir = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two'), ('Oba końce', 'ends', 'ends')], 32)
         lay.addWidget(self.ex_dir)
         self.ex_status = _label('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.', 'status')
         lay.addWidget(self.ex_status)
@@ -825,15 +874,15 @@ class StudioWindow(QMainWindow):
         self.sheet_meta = {}        # id bryły -> normalna i grubość blachy (z konwersji), potrzebne do kołnierzy
         self.sheet_pick = None
         self.fl_pick = None
-        self.sheet_panel, lay = self._panel(312, 'Konwertuj na blachę', 'x_sheet', 'Płaski prostokąt → blacha do gięcia', plain=True)
+        self.sheet_panel, lay = self._panel(312, 'Konwertuj na blachę', 'x_sheet', 'Płaski prostokąt → blacha do gięcia', plain=True, scroll=True)
         lay.addWidget(_label('Zamienia prostopadłościan na blachę. Wybrana ściana staje się górą blachy, a grubość to odległość od ściany przeciwnej. Tylko prostokąt albo kwadrat.', 'small'))
         self.sheet_step1 = ui.StepRow(1, 'x_area', 'Płaska ściana prostokątna', plain=True)
         lay.addWidget(self.sheet_step1)
         self.sheet_status = _label('Kliknij płaską ścianę prostopadłościanu.', 'status')
         lay.addWidget(self.sheet_status)
-        self._buttons(lay, 'Zamień na blachę', 'Anuluj', self.apply_sheet, lambda: self.set_mode(None))
+        self._buttons(self.sheet_panel.footer, 'Zamień na blachę', 'Anuluj', self.apply_sheet, lambda: self.set_mode(None))
 
-        self.flange_panel, lay = self._panel(312, 'Kołnierz', 'x_flange', 'Wyciągnij krawędź blachy', plain=True)
+        self.flange_panel, lay = self._panel(312, 'Kołnierz', 'x_flange', 'Wyciągnij krawędź blachy', plain=True, scroll=True)
         lay.addWidget(_label('Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Podajesz promień gięcia (promień stempla), kąt i długość prostej części.', 'small'))
         self.fl_step1 = ui.StepRow(1, 'x_area', 'Krawędź blachy', plain=True)
         lay.addWidget(self.fl_step1)
@@ -847,9 +896,9 @@ class StudioWindow(QMainWindow):
         lay.addWidget(self.fl_reverse)
         self.fl_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
         lay.addWidget(self.fl_status)
-        self._buttons3(lay, self.apply_flange, self.cancel_edge, lambda: self.set_mode(None))
+        self._buttons3(self.flange_panel.footer, self.apply_flange, self.cancel_edge, lambda: self.set_mode(None))
 
-        self.hem_panel, lay = self._panel(312, 'Zawinięcie', 'x_hem', 'Zawija krawędź blachy o 180°', plain=True)
+        self.hem_panel, lay = self._panel(312, 'Zawinięcie', 'x_hem', 'Zawija krawędź blachy o 180°', plain=True, scroll=True)
         lay.addWidget(_label('Krawędź zawija się od razu o 180° i przylega do powierzchni. Szczelina to odstęp od powierzchni do odcinka powrotnego; promień jest zmniejszany do połowy szczeliny. Zatwierdź ustawienia, potem klikaj krawędzie.', 'small'))
         self.hm_radius = _spin(2, .01, 1e5, 3, .5)
         self._field(lay, 'Promień gięcia (mm)', self.hm_radius)
@@ -859,10 +908,10 @@ class StudioWindow(QMainWindow):
         self._field(lay, 'Szczelina od powierzchni (mm, min 0,1)', self.hm_gap)
         self.hm_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
         lay.addWidget(self.hm_status)
-        self._buttons3(lay, self.apply_hem, self.cancel_edge, lambda: self.set_mode(None))
+        self._buttons3(self.hem_panel.footer, self.apply_hem, self.cancel_edge, lambda: self.set_mode(None))
 
         # --- reguły blach: szczelina i wycięcia w narożnikach (osobny panel, dotyczy kołnierzy) ---
-        self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True)
+        self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True, scroll=True)
         lay.addWidget(_label('Reguły narożników przeliczają całą blachę przy dodaniu gięcia. Rozłóż blachę, aby edytować płaski model, także z zawinięciami. Rozwinięcie DXF uwzględnia aktualny obrys i linie gięć. Współczynnik K dobierz do materiału i prób gięcia.', 'small'))
         self.fl_miter = QCheckBox('Docinaj i przedłużaj narożniki')
         self.fl_miter.setChecked(True)
@@ -887,8 +936,8 @@ class StudioWindow(QMainWindow):
         self.fl_apply_rules = QPushButton('Zastosuj do zaznaczonej blachy')
         self.fl_apply_rules.setObjectName('primary')
         self.fl_apply_rules.clicked.connect(lambda _=False: self.apply_sheet_rules())
-        lay.addWidget(self.fl_apply_rules)
-        self._buttons(lay, 'Zamknij', 'Anuluj', lambda: self.set_mode(None), lambda: self.set_mode(None))
+        self.rules_panel.footer.addWidget(self.fl_apply_rules)
+        self._buttons(self.rules_panel.footer, 'Zamknij', 'Anuluj', lambda: self.set_mode(None), lambda: self.set_mode(None))
         # --- przeciągnięcie ---
         self.sweep_panel, lay = self._panel(312, 'Przeciągnięcie', 'x_sweep', 'Profil wzdłuż ścieżki → bryła', plain=True)
         lay.addWidget(_label('Przeciąga profil szkicu wzdłuż ścieżki, tworząc bryłę. Służy do rur, prowadnic, uchwytów i każdej części o stałym przekroju biegnącej wzdłuż krzywej.', 'small'))
@@ -1210,7 +1259,7 @@ class StudioWindow(QMainWindow):
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
         for p in (self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values()):
-            p.adjustSize()
+            self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self.text_panel.adjustSize()
         self.text_panel.move(92, 88 + TOOLS_TOP - 18)
@@ -3018,6 +3067,10 @@ class StudioWindow(QMainWindow):
                     out.append(lambda w=wire, p=plane, a=d1, s=mode == 'symmetric': kernel.extrude(w, p, a, s))
             else:
                 out.append(lambda w=wire, n=normal, a=d1, s=mode == 'symmetric': kernel.extrude_dir(w, n, a, 0.0, s))
+        if mode == 'ends':       # oba końce: ta sama odległość na przeciwległej ścianie bryły (np. spód sześcianu dla wskazanej góry)
+            bodies = list(self.document.bodies)
+            for src in self.ex_profiles:
+                out.append(lambda b=bodies, p=src, a=d1: hist.opposite_tool(b, p, a))
         return out
 
     def update_extrude_preview(self):
@@ -3448,6 +3501,27 @@ class StudioWindow(QMainWindow):
             self.toast('Zapisano rysunek: ' + path, 6000)
 
         self.run_operation('Rysunek automatyczny', build, apply)
+
+    def import_drawing_file(self, path=None):
+        """Zakładka Rysunek → Załaduj plik: płaski rysunek SVG albo DXF z dysku otwierany w oknie rysunku technicznego (rzut z góry)."""
+        if self.busy:
+            return
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, 'Załaduj plik do rysunku technicznego', '', 'Rysunki 2D (*.svg *.dxf);;SVG (*.svg);;DXF (*.dxf)')
+        if not path:
+            return
+        from . import import2d
+        name = Path(path).stem
+
+        def apply(shape):
+            from .drawing_window import DrawingWindow
+            self.set_mode(None)
+            win = DrawingWindow(shape, name, self, views=('top',))
+            self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
+            win.show()
+            win.raise_()
+
+        self.run_operation('Wczytywanie rysunku', lambda: import2d.load_flat(path), apply)
 
     # =====================================================================
     # skorupa
@@ -5397,8 +5471,8 @@ class StudioWindow(QMainWindow):
         if kind == 'extrude':
             op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
             op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
-            direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 28)
-            direction.setCurrentIndex(['one', 'symmetric', 'two'].index(recipe.get('dir', 'one')))
+            direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two'), ('Oba końce', 'ends', 'ends')], 28)
+            direction.setCurrentIndex(['one', 'symmetric', 'two', 'ends'].index(recipe.get('dir', 'one')))
             d1, d2 = _ExprBox(recipe['d1'], vals), _ExprBox(recipe.get('d2', 0), vals)
             for caption, widget in (('Operacja', op), ('Kierunek', direction), ('Odległość (mm)', d1), ('Druga strona (mm)', d2)):
                 field(caption, widget)

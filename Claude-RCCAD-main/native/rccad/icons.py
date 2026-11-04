@@ -95,6 +95,14 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         if kind in ('sym', 'two'):
             p.setPen(pen(BLUE if kind == 'two' else ORANGE, 2.6))
             p.drawLine(QPointF(24, 28), QPointF(24, 42)); p.drawPolyline(QPolygonF([QPointF(19, 37), QPointF(24, 43), QPointF(29, 37)]))
+    elif kind == 'ends':
+        # bryła (niebieska) i dwie pomarańczowe strzałki wychodzące z przeciwległych ścian
+        fill(_rounded(13, 17, 22, 14, 2), BLUE_SOFT, BLUE)
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawRect(QRectF(13, 13, 22, 4)); p.drawRect(QRectF(13, 31, 22, 4))
+        p.setPen(pen(ORANGE, 2.6)); p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(24, 13), QPointF(24, 4)); p.drawPolyline(QPolygonF([QPointF(20, 8), QPointF(24, 3.5), QPointF(28, 8)]))
+        p.drawLine(QPointF(24, 35), QPointF(24, 44)); p.drawPolyline(QPolygonF([QPointF(20, 40), QPointF(24, 44.5), QPointF(28, 40)]))
     elif kind in ('ex_dist', 'ex_upto'):
         # profil (niebieski), strzałka wyciągnięcia (pomarańczowa); "do elementu": przerywana płaszczyzna-cel z punktem
         fill(QPainterPath(_rounded(8, 34, 22, 8, 2)), BLUE_SOFT, BLUE)
@@ -367,9 +375,21 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             st(acc, 3.0); p.drawPolyline(poly([(26, 33), (34, 33), (40, 12)]))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(37, 6), (32, 15), (43, 15)]))
         elif name == 'flat':
-            fl(_rounded(5, 12, 38, 27, 2), soft)
-            pn = pen(acc, 2.6); pn.setStyle(Qt.DashLine); p.setPen(pn)
-            p.drawLine(QPointF(17, 12), QPointF(17, 39)); p.drawLine(QPointF(31, 12), QPointF(31, 39))
+            # rozwinięcie pudełka: dno z czterema ściankami (krzyż z wycięciami w narożnikach), linie gięcia tylko wewnątrz obrysu
+            cross = QPainterPath(); cross.moveTo(15, 4); cross.lineTo(33, 4); cross.lineTo(33, 13); cross.lineTo(35, 15); cross.lineTo(44, 15)
+            cross.lineTo(44, 33); cross.lineTo(35, 33); cross.lineTo(33, 35); cross.lineTo(33, 44); cross.lineTo(15, 44); cross.lineTo(15, 35)
+            cross.lineTo(13, 33); cross.lineTo(4, 33); cross.lineTo(4, 15); cross.lineTo(13, 15); cross.lineTo(15, 13); cross.closeSubpath()
+            fl(cross, soft, ink, 2.3)
+            pn = pen(acc, 2.2); pn.setStyle(Qt.DashLine); pn.setDashPattern([2.2, 1.6]); p.setPen(pn); p.setBrush(Qt.NoBrush)
+            for a, b in (((16, 15), (32, 15)), ((16, 33), (32, 33)), ((15, 16), (15, 32)), ((33, 16), (33, 32))):
+                p.drawLine(QPointF(*a), QPointF(*b))
+            st(ink, 1.6); p.drawEllipse(QPointF(24, 24), 3.2, 3.2)
+        elif name == 'importdrawing':
+            p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawRoundedRect(QRectF(5, 12, 30, 31), 3, 3)
+            st(ink, 2.0); p.drawRect(QRectF(10, 20, 12, 9)); p.drawEllipse(QPointF(16, 24.5), 2.2, 2.2)
+            st(ink, 1.6); p.drawLine(QPointF(10, 35), QPointF(22, 35)); p.drawLine(QPointF(26, 20), QPointF(26, 29))
+            fl(_rounded(30, 3, 14, 17, 2), QColor('#ffffff') if not white else QColor(255, 255, 255, 60), ink, 2.0)
+            st(acc, 3.0); p.drawLine(QPointF(37, 9), QPointF(37, 26)); p.drawPolyline(poly([(31.5, 21), (37, 27), (42.5, 21)]))
         elif name == 'flange':
             fl(_rounded(6, 30, 22, 7, 1.5), soft)
             fl(_rounded(24, 8, 7, 29, 1.5), soft)

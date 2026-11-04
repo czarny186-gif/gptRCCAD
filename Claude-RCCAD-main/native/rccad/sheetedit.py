@@ -461,9 +461,11 @@ def export_dxf(actual, source_state, path):
         a=bend.origin+allowance/2*bend.outward
         span=float(np.linalg.norm(f['p1']-f['p0']));b=a+span*bend.axis
         direction='UP' if bend.flat_frame[2,2]<0 else 'DOWN'
-        line=writer.msp.add_line(tuple(a),tuple(b),dxfattribs={'layer':'BEND_'+direction})
-        line.set_xdata('RCCAD',[(1070,int(bend.key[1:])+1),(1040,float(f['angle'])),(1040,float(f['r'])),(1040,t),(1040,factor)])
-        lines.append(dict(a=a.tolist(),b=b.tolist(),direction=direction))
+        for start,end in s.clip_line_to_faces(a,b,sections):      # linia gięcia przycięta do konturu cięcia (nie wychodzi poza blachę)
+            start,end=np.asarray(start,float)[:len(a)],np.asarray(end,float)[:len(a)]
+            line=writer.msp.add_line(tuple(start),tuple(end),dxfattribs={'layer':'BEND_'+direction})
+            line.set_xdata('RCCAD',[(1070,int(bend.key[1:])+1),(1040,float(f['angle'])),(1040,float(f['r'])),(1040,t),(1040,factor)])
+            lines.append(dict(a=start.tolist(),b=end.tolist(),direction=direction))
     target=Path(path);fd,tmp=tempfile.mkstemp(prefix='.rccad-edited-flat-',suffix='.dxf',dir=target.parent);os.close(fd)
     try:
         writer.document.saveas(tmp);os.replace(tmp,target)

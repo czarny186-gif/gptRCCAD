@@ -1,0 +1,503 @@
+"""Wczytywanie płaskich rysunków SVG i DXF do rysunku technicznego (zakładka Rysunek → Załaduj plik).
+
+Wynikiem jest zbiór krawędzi CadQuery leżących w płaszczyźnie XY (w mm). Okręgi i łuki zostają prawdziwymi okręgami,
+więc rysunek techniczny może je zwymiarować (średnice, promienie, osie). Moduł nie zależy od Qt."""
+from __future__ import annotations
+import math
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import cadquery as cq
+import numpy as np
+
+from .kernel import CadError
+
+MAX_BYTES = 40 * 1024 * 1024
+MAX_EDGES = 60000
+_TOL = 1e-6
+
+
+class _Sink:
+    """Zbiera krawędzie, pomijając zdegenerowane (zerowej długości)."""
+
+    def __init__(self):
+        self.edges = []
+
+    def _check(self):
+        if len(self.edges) > MAX_EDGES:
+            raise CadError('Plik zawiera zbyt wiele elementów do narysowania.')
+
+    def line(self, a, b):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        if np.linalg.norm(b - a) > _TOL:
+            self.edges.append(cq.Edge.makeLine(cq.Vector(a[0], a[1], 0), cq.Vector(b[0], b[1], 0)))
+            self._check()
+
+    def polyline(self, pts, closed=False):
+        pts = [np.asarray(p, float) for p in pts]
+        for a, b in zip(pts, pts[1:]):
+            self.line(a, b)
+        if closed and len(pts) > 2:
+            self.line(pts[-1], pts[0])
+
+    def circle(self, c, r):
+        if r > _TOL:
+            self.edges.append(cq.Edge.makeCircle(float(r), cq.Vector(float(c[0]), float(c[1]), 0)))
+            self._check()
+
+    def arc(self, c, r, a0, a1):
+        """Łuk przeciwnie do ruchu wskazówek zegara od kąta a0 do a1 (stopnie)."""
+        if r <= _TOL:
+            return
+        sweep = (a1 - a0) % 360.0
+        if sweep < 1e-7:
+            sweep = 360.0
+        if abs(sweep - 360.0) < 1e-7:
+            self.circle(c, r)
+            return
+        cx, cy = float(c[0]), float(c[1])
+        pt = lambda a: cq.Vector(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a)), 0)
+        self.edges.append(cq.Edge.makeThreePointArc(pt(a0), pt(a0 + sweep / 2), pt(a0 + sweep)))
+        self._check()
+
+    def bezier(self, pts):
+        pts = [np.asarray(p, float) for p in pts]
+        if np.linalg.norm(pts[-1] - pts[0]) < _TOL and max(np.linalg.norm(p - pts[0]) for p in pts) < _TOL:
+            return
+        if all(np.linalg.norm(np.cross(np.append(p - pts[0], 0), np.append(pts[-1] - pts[0], 0))) < 1e-9 for p in pts[1:-1]):
+            self.line(pts[0], pts[-1])       # krzywa leżąca na prostej
+            return
+        try:
+            self.edges.append(cq.Edge.makeBezier([cq.Vector(p[0], p[1], 0) for p in pts]))
+            self._check()
+        except CadError:
+            raise
+        except Exception:
+            self.polyline([_bezier_point(pts, t) for t in np.linspace(0, 1, 24)])
+
+    def shape(self):
+        if not self.edges:
+            raise CadError('W pliku nie znaleziono linii, łuków ani krzywych do narysowania.')
+        return cq.Compound.makeCompound(self.edges)
+
+
+def _bezier_point(pts, t):
+    pts = [np.asarray(p, float) for p in pts]
+    while len(pts) > 1:
+        pts = [a + (b - a) * t for a, b in zip(pts, pts[1:])]
+    return pts[0]
+
+
+# ---------------------------------------------------------------------------
+# SVG
+# ---------------------------------------------------------------------------
+_UNITS = {'mm': 1.0, 'cm': 10.0, 'in': 25.4, 'pt': 25.4 / 72, 'pc': 25.4 / 6, 'px': 25.4 / 96, 'q': 0.25}
+_NUM = re.compile(r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')
+
+
+def _length(text, default=None):
+    """Długość z jednostką SVG w mm (bez jednostki: None - wtedy jednostka użytkownika = 1 mm)."""
+    if text is None:
+        return default, None
+    m = re.match(r'\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([a-zA-Z%]*)', str(text))
+    if not m:
+        return default, None
+    unit = m.group(2).lower()
+    return float(m.group(1)), unit or None
+
+
+def _num(el, name, default=0.0):
+    value, _ = _length(el.get(name), default)
+    return float(value) if value is not None else default
+
+
+def _matrix(a, b, c, d, e, f):
+    return np.array([[a, c, e], [b, d, f], [0, 0, 1]], float)
+
+
+def _transform(text):
+    """Atrybut transform → macierz 3x3 (matrix, translate, scale, rotate, skewX, skewY)."""
+    m = np.eye(3)
+    for name, args in re.findall(r'([a-zA-Z]+)\s*\(([^)]*)\)', text or ''):
+        v = [float(x) for x in _NUM.findall(args)]
+        name = name.lower()
+        if name == 'matrix' and len(v) == 6:
+            t = _matrix(*v)
+        elif name == 'translate' and v:
+            t = _matrix(1, 0, 0, 1, v[0], v[1] if len(v) > 1 else 0)
+        elif name == 'scale' and v:
+            t = _matrix(v[0], 0, 0, v[1] if len(v) > 1 else v[0], 0, 0)
+        elif name == 'rotate' and v:
+            a = math.radians(v[0])
+            r = _matrix(math.cos(a), math.sin(a), -math.sin(a), math.cos(a), 0, 0)
+            if len(v) == 3:
+                t = _matrix(1, 0, 0, 1, v[1], v[2]) @ r @ _matrix(1, 0, 0, 1, -v[1], -v[2])
+            else:
+                t = r
+        elif name == 'skewx' and v:
+            t = _matrix(1, 0, math.tan(math.radians(v[0])), 1, 0, 0)
+        elif name == 'skewy' and v:
+            t = _matrix(1, math.tan(math.radians(v[0])), 0, 1, 0, 0)
+        else:
+            continue
+        m = m @ t
+    return m
+
+
+class _SvgOut:
+    """Przekształca punkty SVG (macierz elementu, odwrócona oś Y) i rozpoznaje, czy łuki zostają okręgami (bez skośnego zniekształcenia)."""
+
+    def __init__(self, sink, matrix):
+        self.sink, self.m = sink, matrix
+        a, b, c, d = matrix[0, 0], matrix[1, 0], matrix[0, 1], matrix[1, 1]
+        self.uniform = abs(a * c + b * d) < 1e-9 and abs(math.hypot(a, b) - math.hypot(c, d)) < 1e-9 * max(1.0, math.hypot(a, b))
+        self.scale = math.hypot(a, b)
+        self.flip = (a * d - b * c) > 0       # po odwróceniu osi Y kierunek obiegu zmienia się, gdy macierz go nie odwraca
+
+    def p(self, pt):
+        q = self.m @ np.array([pt[0], pt[1], 1.0])
+        return np.array([q[0], -q[1]])
+
+    def line(self, a, b):
+        self.sink.line(self.p(a), self.p(b))
+
+    def bezier(self, pts):
+        self.sink.bezier([self.p(q) for q in pts])
+
+    def ellipse_arc(self, c, rx, ry, phi, t0, dt):
+        """Łuk elipsy (parametry SVG po konwersji na środek): okrąg → łuk / okrąg, inaczej łamana."""
+        c = np.asarray(c, float)
+        if self.uniform and abs(rx - ry) < 1e-9 * max(1.0, rx):
+            centre = self.p(c)
+            r = rx * self.scale
+            ang = lambda t: math.degrees(math.atan2(*(self.p(c + rx * np.array([math.cos(t + phi), math.sin(t + phi)])) - centre)[::-1]))
+            if abs(abs(dt) - 2 * math.pi) < 1e-9:
+                self.sink.circle(centre, r)
+                return
+            a0, a1 = ang(t0), ang(t0 + dt)
+            ccw_on_paper = (dt > 0) != self.flip     # oś Y odwrócona względem SVG
+            self.sink.arc(centre, r, a0, a1) if ccw_on_paper else self.sink.arc(centre, r, a1, a0)
+            return
+        n = max(16, int(abs(dt) / (2 * math.pi) * 96))
+        cp, sp = math.cos(phi), math.sin(phi)
+        pts = []
+        for t in np.linspace(t0, t0 + dt, n + 1):
+            x, y = rx * math.cos(t), ry * math.sin(t)
+            pts.append(self.p((c[0] + x * cp - y * sp, c[1] + x * sp + y * cp)))
+        closed = abs(abs(dt) - 2 * math.pi) < 1e-9
+        self.sink.polyline(pts[:-1] if closed else pts, closed)
+
+
+def _arc_center(p0, p1, rx, ry, phi_deg, large, sweep):
+    """Konwersja łuku SVG (punkty końcowe) na parametryzację środkową: (środek, rx, ry, phi, kąt początkowy, przyrost)."""
+    phi = math.radians(phi_deg % 360)
+    cp, sp = math.cos(phi), math.sin(phi)
+    dx, dy = (p0[0] - p1[0]) / 2, (p0[1] - p1[1]) / 2
+    x1, y1 = cp * dx + sp * dy, -sp * dx + cp * dy
+    rx, ry = abs(rx), abs(ry)
+    lam = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry)
+    if lam > 1:
+        rx, ry = rx * math.sqrt(lam), ry * math.sqrt(lam)
+    num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1
+    den = rx * rx * y1 * y1 + ry * ry * x1 * x1
+    k = math.sqrt(max(0.0, num / den)) if den > 0 else 0.0
+    if large == sweep:
+        k = -k
+    cx1, cy1 = k * rx * y1 / ry, -k * ry * x1 / rx
+    cx = cp * cx1 - sp * cy1 + (p0[0] + p1[0]) / 2
+    cy = sp * cx1 + cp * cy1 + (p0[1] + p1[1]) / 2
+    ang = lambda ux, uy, vx, vy: math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)
+    t0 = ang(1, 0, (x1 - cx1) / rx, (y1 - cy1) / ry)
+    dt = ang((x1 - cx1) / rx, (y1 - cy1) / ry, (-x1 - cx1) / rx, (-y1 - cy1) / ry)
+    if not sweep and dt > 0:
+        dt -= 2 * math.pi
+    elif sweep and dt < 0:
+        dt += 2 * math.pi
+    return (cx, cy), rx, ry, phi, t0, dt
+
+
+def _path(out, d):
+    tokens = re.findall(r'[MmLlHhVvCcSsQqTtAaZz]|' + _NUM.pattern, d or '')
+    i, cmd = 0, None
+    cur = np.zeros(2)
+    start = np.zeros(2)
+    last_c = last_q = None
+
+    def nums(n):
+        nonlocal i
+        vals = []
+        while len(vals) < n:
+            if i >= len(tokens) or tokens[i].isalpha():
+                raise ValueError
+            vals.append(float(tokens[i]))
+            i += 1
+        return vals
+
+    def flag():
+        """Flagi łuku mogą być sklejone bez odstępu (np. 'a1 1 0 01 1 1')."""
+        nonlocal i
+        t = tokens[i]
+        if t in ('0', '1'):
+            i += 1
+            return int(t)
+        if t[0] in '01' and len(t) > 1:
+            tokens[i] = t[1:]
+            return int(t[0])
+        i += 1
+        return int(float(t) != 0)
+
+    while i < len(tokens):
+        if tokens[i].isalpha():
+            cmd = tokens[i]
+            i += 1
+        elif cmd is None:
+            break
+        rel = cmd.islower()
+        c = cmd.upper()
+        base = cur if rel else np.zeros(2)
+        try:
+            if c == 'Z':
+                out.line(cur, start)
+                cur = start.copy()
+                last_c = last_q = None
+                cmd = None if i >= len(tokens) or tokens[i].isalpha() else cmd
+                continue
+            if c == 'M':
+                cur = base + nums(2)
+                start = cur.copy()
+                cmd = 'l' if rel else 'L'      # kolejne pary po M to linie
+                last_c = last_q = None
+            elif c == 'L':
+                p = base + nums(2)
+                out.line(cur, p)
+                cur, last_c, last_q = p, None, None
+            elif c == 'H':
+                x = nums(1)[0] + (cur[0] if rel else 0)
+                p = np.array([x, cur[1]])
+                out.line(cur, p)
+                cur, last_c, last_q = p, None, None
+            elif c == 'V':
+                y = nums(1)[0] + (cur[1] if rel else 0)
+                p = np.array([cur[0], y])
+                out.line(cur, p)
+                cur, last_c, last_q = p, None, None
+            elif c == 'C':
+                v = nums(6)
+                c1, c2, p = base + v[0:2], base + v[2:4], base + v[4:6]
+                out.bezier([cur, c1, c2, p])
+                cur, last_c, last_q = p, c2, None
+            elif c == 'S':
+                v = nums(4)
+                c1 = 2 * cur - last_c if last_c is not None else cur.copy()
+                c2, p = base + v[0:2], base + v[2:4]
+                out.bezier([cur, c1, c2, p])
+                cur, last_c, last_q = p, c2, None
+            elif c == 'Q':
+                v = nums(4)
+                q, p = base + v[0:2], base + v[2:4]
+                out.bezier([cur, q, p])
+                cur, last_q, last_c = p, q, None
+            elif c == 'T':
+                q = 2 * cur - last_q if last_q is not None else cur.copy()
+                p = base + nums(2)
+                out.bezier([cur, q, p])
+                cur, last_q, last_c = p, q, None
+            elif c == 'A':
+                rx, ry, rot = nums(3)
+                large, sweep = flag(), flag()
+                p = base + nums(2)
+                if np.linalg.norm(p - cur) > _TOL:
+                    if rx < _TOL or ry < _TOL:
+                        out.line(cur, p)
+                    else:
+                        out.ellipse_arc(*_arc_center(cur, p, rx, ry, rot, large, sweep))
+                cur, last_c, last_q = p, None, None
+            else:
+                break
+        except (ValueError, IndexError):
+            break
+
+
+def _points(text):
+    v = [float(x) for x in _NUM.findall(text or '')]
+    return [(v[k], v[k + 1]) for k in range(0, len(v) - 1, 2)]
+
+
+def _tag(el):
+    return el.tag.rsplit('}', 1)[-1].lower()
+
+
+def _hidden(el):
+    style = el.get('style', '')
+    return el.get('display') == 'none' or 'display:none' in style.replace(' ', '') or el.get('visibility') == 'hidden'
+
+
+def _svg_walk(el, matrix, sink, defs):
+    if _hidden(el):
+        return
+    tag = _tag(el)
+    if tag in ('defs', 'clippath', 'mask', 'symbol', 'marker', 'pattern', 'title', 'desc', 'metadata', 'style', 'text', 'script', 'lineargradient', 'radialgradient'):
+        return
+    m = matrix @ _transform(el.get('transform'))
+    out = _SvgOut(sink, m)
+    if tag == 'line':
+        out.line((_num(el, 'x1'), _num(el, 'y1')), (_num(el, 'x2'), _num(el, 'y2')))
+    elif tag in ('polyline', 'polygon'):
+        pts = _points(el.get('points'))
+        for a, b in zip(pts, pts[1:]):
+            out.line(a, b)
+        if tag == 'polygon' and len(pts) > 2:
+            out.line(pts[-1], pts[0])
+    elif tag == 'rect':
+        x, y, w, h = _num(el, 'x'), _num(el, 'y'), _num(el, 'width'), _num(el, 'height')
+        rx = el.get('rx'); ry = el.get('ry')
+        rx = _num(el, 'rx') if rx is not None else (_num(el, 'ry') if ry is not None else 0.0)
+        ry = _num(el, 'ry') if ry is not None else rx
+        rx, ry = min(rx, w / 2), min(ry, h / 2)
+        if w > 0 and h > 0:
+            if rx > _TOL and ry > _TOL:
+                out.line((x + rx, y), (x + w - rx, y)); out.line((x + w, y + ry), (x + w, y + h - ry))
+                out.line((x + w - rx, y + h), (x + rx, y + h)); out.line((x, y + h - ry), (x, y + ry))
+                for cx, cy, a in ((x + w - rx, y + ry, -math.pi / 2), (x + w - rx, y + h - ry, 0.0), (x + rx, y + h - ry, math.pi / 2), (x + rx, y + ry, math.pi)):
+                    out.ellipse_arc((cx, cy), rx, ry, 0.0, a, math.pi / 2)
+            else:
+                pts = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+                for a, b in zip(pts, pts[1:] + pts[:1]):
+                    out.line(a, b)
+    elif tag == 'circle':
+        r = _num(el, 'r')
+        if r > 0:
+            out.ellipse_arc((_num(el, 'cx'), _num(el, 'cy')), r, r, 0.0, 0.0, 2 * math.pi)
+    elif tag == 'ellipse':
+        rx, ry = _num(el, 'rx'), _num(el, 'ry')
+        if rx > 0 and ry > 0:
+            out.ellipse_arc((_num(el, 'cx'), _num(el, 'cy')), rx, ry, 0.0, 0.0, 2 * math.pi)
+    elif tag == 'path':
+        _path(out, el.get('d'))
+    elif tag == 'use':
+        ref = el.get('{http://www.w3.org/1999/xlink}href') or el.get('href') or ''
+        target = defs.get(ref.lstrip('#'))
+        if target is not None:
+            shift = _matrix(1, 0, 0, 1, _num(el, 'x'), _num(el, 'y'))
+            for child in ([target] if _tag(target) != 'symbol' else list(target)):
+                _svg_walk(child, m @ shift, sink, defs)
+        return
+    for child in list(el):
+        _svg_walk(child, m, sink, defs)
+
+
+def svg_edges(path):
+    data = Path(path).read_bytes()
+    if len(data) > MAX_BYTES:
+        raise CadError('Plik SVG jest zbyt duży.')
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as exc:
+        raise CadError(f'Nie można odczytać pliku SVG: {exc}')
+    # skala: jednostki użytkownika → mm (gdy szerokość ma jednostkę i jest viewBox), bez jednostek 1 jednostka = 1 mm
+    base = np.eye(3)
+    box = [float(v) for v in _NUM.findall(root.get('viewBox', ''))]
+    w, wu = _length(root.get('width'))
+    h, hu = _length(root.get('height'))
+    if len(box) == 4 and box[2] > 0 and box[3] > 0:
+        sx = (w * _UNITS[wu]) / box[2] if w and wu in _UNITS else 1.0
+        sy = (h * _UNITS[hu]) / box[3] if h and hu in _UNITS else sx
+        base = _matrix(sx, 0, 0, sy, 0, 0) @ _matrix(1, 0, 0, 1, -box[0], -box[1])
+    elif w and wu in _UNITS and wu != 'mm':
+        s = _UNITS[wu]
+        base = _matrix(s, 0, 0, s, 0, 0)
+    defs = {el.get('id'): el for el in root.iter() if el.get('id')}
+    sink = _Sink()
+    _svg_walk(root, base, sink, defs)
+    return sink
+
+
+# ---------------------------------------------------------------------------
+# DXF
+# ---------------------------------------------------------------------------
+def _dxf_scale(doc):
+    try:
+        from ezdxf import units
+        u = int(doc.header.get('$INSUNITS', 0))
+        return units.conversion_factor(u, units.MM) if u else 1.0
+    except Exception:
+        return 1.0
+
+
+def _dxf_entity(e, sink, s, depth=0):
+    kind = e.dxftype()
+    try:
+        if kind == 'LINE':
+            sink.line(_xy(e.dxf.start) * s, _xy(e.dxf.end) * s)
+        elif kind == 'CIRCLE':
+            sink.circle(_xy(e.dxf.center) * s, e.dxf.radius * s)
+        elif kind == 'ARC':
+            if _flat(e):
+                sink.arc(_xy(e.dxf.center) * s, e.dxf.radius * s, e.dxf.start_angle, e.dxf.end_angle)
+            else:
+                _flatten(e, sink, s)
+        elif kind in ('LWPOLYLINE', 'POLYLINE'):
+            for sub in e.virtual_entities():       # odcinki i łuki (wybrzuszenia) jako LINE / ARC
+                _dxf_entity(sub, sink, s, depth)
+        elif kind == 'INSERT' and depth < 12:
+            for sub in e.virtual_entities():
+                _dxf_entity(sub, sink, s, depth + 1)
+        elif kind in ('ELLIPSE', 'SPLINE'):
+            _flatten(e, sink, s)
+        elif kind in ('SOLID', 'TRACE', '3DFACE'):
+            pts = [_xy(e.dxf.get(n)) * s for n in ('vtx0', 'vtx1', 'vtx3', 'vtx2') if e.dxf.hasattr(n)]
+            sink.polyline(pts, True)
+    except CadError:
+        raise
+    except Exception:
+        pass        # nieobsługiwany lub uszkodzony element nie przerywa wczytywania reszty
+
+
+def _xy(v):
+    return np.array([float(v[0]), float(v[1])])
+
+
+def _flat(e):
+    try:
+        n = e.dxf.extrusion
+        return abs(n[2] - 1) < 1e-9
+    except Exception:
+        return True
+
+
+def _flatten(e, sink, s):
+    from ezdxf import path as ezpath
+    p = ezpath.make_path(e)
+    pts = [_xy(v) * s for v in p.flattening(0.01 / max(s, 1e-9))]
+    sink.polyline(pts)
+
+
+def dxf_edges(path):
+    if Path(path).stat().st_size > MAX_BYTES:
+        raise CadError('Plik DXF jest zbyt duży.')
+    import ezdxf
+    try:
+        doc = ezdxf.readfile(str(path))
+    except Exception:
+        try:
+            from ezdxf import recover
+            doc, _ = recover.readfile(str(path))
+        except Exception as exc:
+            raise CadError(f'Nie można odczytać pliku DXF: {exc}')
+    s = _dxf_scale(doc)
+    sink = _Sink()
+    for e in doc.modelspace():
+        _dxf_entity(e, sink, s)
+    return sink
+
+
+def load_flat(path):
+    """Plik SVG albo DXF → płaski kształt (zbiór krawędzi w płaszczyźnie XY, mm) gotowy do rzutu z góry."""
+    ext = Path(path).suffix.lower()
+    if ext == '.svg':
+        sink = svg_edges(path)
+    elif ext == '.dxf':
+        sink = dxf_edges(path)
+    else:
+        raise CadError('Obsługiwane są pliki SVG i DXF.')
+    return sink.shape()

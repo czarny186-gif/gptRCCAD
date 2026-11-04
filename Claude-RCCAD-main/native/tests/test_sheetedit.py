@@ -214,6 +214,25 @@ class SheetEditTests(unittest.TestCase):
             self.assertFalse(complex_dxf.audit().has_errors)
             self.assertGreater(len(complex_dxf.modelspace().query('SPLINE[layer=="CUT"]')),0)
 
+    def test_dxf_bend_lines_stay_inside_cut_outline(self):
+        from test_sheetmetal_boxes import box_recipe
+        box=box_recipe('in','out','sheet');blank=e.layout(box).flat
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'box.dxf';e.export_dxf(blank,e.state(box,True),path)
+            msp=ezdxf.readfile(path).modelspace()
+            outline=cq.importers.importDXF(str(path),include=['CUT']).faces().vals();self.assertTrue(outline)
+            bends=list(msp.query('LINE[layer=="BEND_UP"]'))+list(msp.query('LINE[layer=="BEND_DOWN"]'));self.assertEqual(len(bends),12)
+            shorter=0
+            for line in bends:
+                a,b=line.dxf.start,line.dxf.end
+                for t in (0,.25,.5,.75,1):
+                    q=cq.Vertex.makeVertex(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,0)
+                    self.assertLess(min(f.distance(q) for f in outline),1e-4)
+                shorter+=math.hypot(b.x-a.x,b.y-a.y)<50-1e-3
+            self.assertGreater(shorter,0)      # ukosy w narożnikach skracają skrajne linie gięcia
+        line=s.clip_line_to_faces((-10,5,0),(30,5,0),[cq.Face.makeFromWires(cq.Wire.makePolygon([cq.Vector(0,0,0),cq.Vector(20,0,0),cq.Vector(20,10,0),cq.Vector(0,10,0)],close=True))])
+        self.assertEqual(len(line),1);self.assertAlmostEqual(line[0][0][0],0,6);self.assertAlmostEqual(line[0][1][0],20,6)
+
     def test_nonuniform_dxf_is_rejected_atomically(self):
         r=recipe();l=e.layout(r);modified=l.flat.cut(cq.Solid.makeCylinder(2,1,cq.Vector(25,25,1)))
         with tempfile.TemporaryDirectory() as directory:

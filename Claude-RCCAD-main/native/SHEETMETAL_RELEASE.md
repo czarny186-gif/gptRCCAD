@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.11 — wyciąganie do elementu
+# RCCAD Desktop 0.4.12 — oba końce, rysunek z pliku, rozwinięcie z liniami gięcia
+
+## Nowości 0.4.12
+
+- **Bryła → Wyciągnij → Kierunek: Oba końce.** Wskazana ściana (albo szkic na niej) i przeciwległa, równoległa ściana bryły wyciągają się o tę samą odległość, np. góra i dół sześcianu albo oba denka walca. Działa z łączeniem i wycinaniem oraz przy przeliczaniu historii.
+- **Rysunek → Załaduj plik.** Płaski rysunek SVG albo DXF z komputera otwiera się w oknie rysunku technicznego jako rzut z góry: wymiary, średnice, osie, tabelka i zapis do PDF, DXF, SVG lub JPG. Jednostki z pliku są przeliczane na milimetry; okręgi i łuki pozostają prawdziwymi okręgami.
+- **Blacha:** panele Konwertuj na blachę, Kołnierz, Zawinięcie i Reguły blach mieszczą się na ekranie — treść przewija się, a przyciski Zatwierdź / Anuluj / Zamknij są zawsze widoczne na dole.
+- **Rozwinięcie DXF:** nowa ikona oraz linie gięcia przycięte do obrysu blachy — nie wychodzą poza kontur przy ukosach, wycięciach i szczelinach w narożnikach.
 
 ## Nowość 0.4.11
 

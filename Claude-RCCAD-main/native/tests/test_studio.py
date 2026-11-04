@@ -488,6 +488,29 @@ class StudioTests(unittest.TestCase):
                 w.view_clicked(5,5,False,False);self.wait()
             self.assertTrue(os.path.getsize(path)>500)
 
+    def test_drawing_tab_loads_svg_and_dxf_files(self):
+        import tempfile,os,ezdxf
+        w=self.w;self.assertIn('importdrawing',w.tools);self.assertFalse(w.tools['importdrawing'].isCheckable())
+        with tempfile.TemporaryDirectory() as tmp:
+            svg=os.path.join(tmp,'plyta.svg')
+            Path(svg).write_text('<svg xmlns="http://www.w3.org/2000/svg" width="80mm" height="40mm" viewBox="0 0 80 40"><rect x="0" y="0" width="80" height="40"/>'
+                                 '<circle cx="20" cy="20" r="6"/><path d="M50 10 A 10 10 0 0 1 70 10 Q 75 30 50 30 Z"/></svg>',encoding='utf-8')
+            dxf=os.path.join(tmp,'detal.dxf');doc=ezdxf.new('R2010');doc.units=ezdxf.units.CM;m=doc.modelspace()
+            m.add_lwpolyline([(0,0,0),(5,0,0.4142),(6,1,0),(6,3),(0,3)],format='xyb',close=True);m.add_circle((2,1.5),.5);doc.saveas(dxf)
+            with patch('rccad.studio.QFileDialog.getOpenFileName',return_value=(svg,'SVG')):
+                w.tools['importdrawing'].click();self.wait()
+            win=w._drawing_windows[-1];self.assertIn('plyta',win.windowTitle())
+            self.assertEqual(win.settings()['views'],('top',));self.assertFalse(win.view_boxes['front'].isEnabled())
+            bb=win.source.shape.BoundingBox();self.assertAlmostEqual(bb.xlen,80,3);self.assertAlmostEqual(bb.ylen,40,3)
+            g=win.source.view('top');self.assertTrue(any(c['full'] and abs(c['r']-6)<1e-6 for c in g.circles))
+            win.close()
+            w.import_drawing_file(dxf);self.wait()
+            win=w._drawing_windows[-1];bb=win.source.shape.BoundingBox()
+            self.assertAlmostEqual(bb.xlen,60,3);self.assertAlmostEqual(bb.ylen,30,3)       # centymetry przeliczone na mm
+            self.assertTrue(any(c['full'] and abs(c['r']-5)<1e-6 for c in win.source.view('top').circles));win.close()
+            bad=os.path.join(tmp,'pusty.svg');Path(bad).write_text('<svg xmlns="http://www.w3.org/2000/svg"></svg>',encoding='utf-8')
+            n=len(w._drawing_windows);w.import_drawing_file(bad);self.wait();self.assertEqual(len([x for x in w._drawing_windows if x.isVisible()]),0)
+
     def test_objects_list_rename_and_group_delete_are_in_history(self):
         w=self.w;from rccad import history as hist
         a=Body('Pudło A',k.box(10,10,10),'solid').prepared();b=Body('Pudło B',k.box(5,5,5),'solid').prepared();sk=Body('Szkic',k.sketch('circle','XY',10,0,50,0),'sketch','XY').prepared()
@@ -637,6 +660,31 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(abs(w.ex_value.value()),12.0,3);self.assertIsNotNone(w.ex_target)
         w.ex_value.setValue(7);self.assertIsNone(w.ex_target);self.assertFalse(w.ex_target_label.isVisible())
         w.ex_extent.setCurrentIndex(0);self.assertTrue(w.ex_dir.isVisible())
+
+    def test_extrude_both_ends_of_cube_join_cut_and_replay(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('extrude')
+        w.ex_dir.setCurrentIndex(w.ex_dir.findData('ends'))
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'pick_face',return_value=(a.id,np.array([0,0,1.0]),np.array([10.0,10.0,20.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.ex_profiles[0]['kind'],'face')
+        w.ex_op.setCurrentIndex(w.ex_op.findData('join'));w.ex_value.setValue(5);self.preview()
+        self.assertTrue(w.view.preview_items)
+        w.apply_extrude();self.wait()
+        solid=w.document.get(a.id);self.assertAlmostEqual(solid.shape.Volume(),20*20*30,1)
+        bb=solid.shape.BoundingBox();self.assertAlmostEqual(bb.zmin,-5,3);self.assertAlmostEqual(bb.zmax,25,3)
+        recipe=w.document.info['op'];self.assertEqual(recipe['dir'],'ends')
+        again=hist.run_extrude([a],recipe);self.assertAlmostEqual(next(b for b in again if b.kind=='solid').shape.Volume(),20*20*30,1)
+        # wycięcie do środka z obu stron
+        w.set_mode('extrude');w.ex_dir.setCurrentIndex(w.ex_dir.findData('ends'))
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'pick_face',return_value=(a.id,np.array([0,0,1.0]),np.array([10.0,10.0,25.0]))):
+            w.view_clicked(5,5,False,False)
+        w.ex_op.setCurrentIndex(w.ex_op.findData('cut'));w.ex_value.setValue(-10);w.apply_extrude();self.wait()
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),20*20*10,1)
+
+    def test_extrude_both_ends_needs_opposite_face(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');w.ex_dir.setCurrentIndex(3)
+        self.pick_sketch_profile(w.document.bodies[0]);w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        self.assertFalse([b for b in w.document.bodies if b.kind=='solid'])
 
     def test_two_sided_extrude(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])

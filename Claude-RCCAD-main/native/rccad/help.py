@@ -15,7 +15,8 @@ TOPICS = [
         'Esc lub prawy przycisk kończy bieżącą linię i zostawia ją. Kształty nachodzące na siebie dzielą się na obszary, które można osobno wyciągać. Narzędzie Przytnij usuwa odcinek między przecięciami.']),
     ('extrude', 'Wyciągnij', 'Wyciąganie i wycinanie', [
         'Kliknij Wyciągnij i wskaż zamknięty profil szkicu, obszar między liniami albo płaską ścianę bryły. Wybrana powierzchnia świeci się. Shift + klik dodaje kolejne profile.',
-        'Pociągnij strzałkę z grotem lub wpisz odległość. Podgląd odświeża się na żywo. Operacja: Nowa bryła, Połącz, Wytnij, Wspólna część. Kierunek: jedna strona, symetrycznie, dwie strony.',
+        'Pociągnij strzałkę z grotem lub wpisz odległość. Podgląd odświeża się na żywo. Operacja: Nowa bryła, Połącz, Wytnij, Wspólna część. Kierunek: jedna strona, symetrycznie, dwie strony albo oba końce.',
+        'Oba końce: wskaż ścianę bryły (albo szkic na niej) - ta sama odległość zostaje wyciągnięta także na przeciwległej, równoległej ścianie, np. góra i dół sześcianu albo oba denka walca. Działa z łączeniem i wycinaniem.',
         'Zakres „Do elementu”: po wybraniu profilu kliknij płaszczyznę, ścianę, krawędź albo punkt (także punkt szkicu). Bryła sięga do wysokości tego elementu mierzonej wzdłuż normalnej profilu; dla skośnej krawędzi liczy się punkt najbliżej kursora. Kliknięcie innego elementu zmienia wysokość, ręczna zmiana odległości odłącza element.',
         'Enter zatwierdza, Esc anuluje.']),
     ('t_revolve', 'Obrót', 'Bryły obrotowe', [
@@ -55,7 +56,7 @@ TOPICS = [
         'Jeśli zmiana dotyka strefy gięcia, tworzy kolizję po zgięciu lub nie daje się dokładnie przenieść, program pozostawia bieżący model i zgłasza przyczynę.']),
     ('t_flat', 'Rozwinięcie DXF', 'Blacha: rozwinięcie 1:1 do cięcia laserowego', [
         'Zaznacz jedną blachę w drzewie obiektów, ustaw współczynnik K w Regułach blach i kliknij Rozwinięcie DXF. Eksport wykonuje się w tle, bez zmiany modelu ani historii.',
-        'Długość naddatku gięcia BA = kąt w radianach × (R + K × grubość). DXF jest w milimetrach, w skali 1:1. Tnij tylko zamknięte kontury warstwy CUT. BEND_UP i BEND_DOWN to linie środka gięcia, nie linie cięcia.',
+        'Długość naddatku gięcia BA = kąt w radianach × (R + K × grubość). DXF jest w milimetrach, w skali 1:1. Tnij tylko zamknięte kontury warstwy CUT. BEND_UP i BEND_DOWN to linie środka gięcia, nie linie cięcia; są przycięte do obrysu blachy, więc nie wychodzą poza kontur przy wycięciach i ukosach w narożnikach.',
         'Edytowalne rozwinięcie uwzględnia także docinane narożniki, jeśli powstaje jedna część bez nakładania materiału. Zawinięcia i układy wymagające innego rozcięcia są odrzucane. Dodatkowe otwory są zachowywane w nowym edytowalnym rozwinięciu. Eksport wymaga jednej części o jednakowej grubości.',
         'Kontury nie zawierają kompensacji szerokości szczeliny lasera; ustawia się ją w CAM. Przed produkcją sprawdź parametry materiału, K, kierunki i technologię gięcia.']),
     ('t_hem', 'Zawinięcie', 'Blacha: zawinięcie krawędzi o 180°', [
@@ -66,7 +67,8 @@ TOPICS = [
         'Zakładka Rysunek tworzy rysunek techniczny wybranej bryły: rzuty z przodu, z tyłu, z lewej, z prawej, z góry, z dołu i izometryczny, z wymiarami i tabelką rysunkową.',
         'Utwórz rysunek techniczny: kliknij bryłę (podświetla się na niebiesko). Otworzy się osobne okno, w którym zaznaczasz rzuty, wybierasz arkusz (A4, A3, A2), skalę, metodę rzutowania oraz wymiary: gabarytowe, średnice i promienie, osie otworów, krawędzie niewidoczne.',
         'Mierz na rysunku: kliknij dwa punkty (przyciągają się do końców linii i środków otworów) - program poda odległość w mm bryły. Kółko myszy powiększa, prawy przycisk przesuwa. Zapisz rysunek: PDF, DXF, SVG lub JPG.',
-        'Rysunek automatyczny: kliknij bryłę - program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.']),
+        'Rysunek automatyczny: kliknij bryłę - program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.',
+        'Załaduj plik: wybierz z komputera płaski rysunek SVG albo DXF. Otworzy się okno rysunku technicznego z tym kształtem jako rzutem z góry - z wymiarami, tabelką i zapisem do PDF, DXF, SVG lub JPG. Linie, łuki, okręgi, elipsy, krzywe, polilinie i bloki są wczytywane w milimetrach (jednostki z pliku są przeliczane).']),
     ('t_sweep', 'Przeciągnięcie', 'Profil wzdłuż ścieżki', [
         'Przeciąga profil szkicu wzdłuż ścieżki, tworząc bryłę. Służy do rur, prowadnic, uchwytów i każdej części o stałym przekroju biegnącej wzdłuż krzywej.',
         'Kliknij Przeciągnięcie, wskaż zamknięty profil (szkic, obszar albo płaską ścianę), a potem ścieżkę: linię lub łuk szkicu albo krawędź bryły. Profil powinien leżeć na początku ścieżki, prostopadle do niej.',

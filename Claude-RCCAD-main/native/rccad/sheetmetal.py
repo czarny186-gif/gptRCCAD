@@ -910,6 +910,38 @@ def flat_pattern(recipe):
     return dict(shape=blank, bends=bends, thickness=t, kfactor=kfactor, area=blank.Volume())
 
 
+def clip_line_to_faces(a, b, faces, min_length=1e-4):
+    """Odcinek a-b (linia gięcia na rozwinięciu) przycięty do obrysu płaskich ścian: zwraca listę (początek, koniec) części leżących
+    w materiale, w kolejności od a do b. Linia gięcia nie może wychodzić poza kontur cięcia (wycięcia, ukosy i szczeliny w narożnikach)."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    d = b - a
+    span = float(np.linalg.norm(d[:2]))
+    if span < min_length:
+        return []
+    pieces = []
+    for face in faces:
+        z = float(face.Center().z)
+        edge = cq.Edge.makeLine(cq.Vector(float(a[0]), float(a[1]), z), cq.Vector(float(b[0]), float(b[1]), z))
+        try:
+            common = edge.intersect(face)
+        except Exception:
+            continue
+        for piece in common.Edges():
+            if piece.Length() < min_length:
+                continue
+            ends = [np.array(piece.startPoint().toTuple(), float), np.array(piece.endPoint().toTuple(), float)]
+            ts = sorted(float((q[:2] - a[:2]) @ d[:2]) / (span * span) for q in ends)
+            pieces.append((max(0.0, ts[0]), min(1.0, ts[1])))
+    pieces.sort()
+    merged = []
+    for t0, t1 in pieces:            # części stykające się (np. na granicy dwóch ścian) łączą się w jedną linię
+        if merged and t0 <= merged[-1][1] + min_length / span:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], t1))
+        else:
+            merged.append((t0, t1))
+    return [(a + d * t0, a + d * t1) for t0, t1 in merged if (t1 - t0) * span >= min_length]
+
+
 def export_flat_dxf(recipe, path, expected_shape=None):
     """Atomic, 1:1 millimetre DXF: closed CUT contours, non-cutting bend lines."""
     import os
@@ -941,10 +973,11 @@ def export_flat_dxf(recipe, path, expected_shape=None):
             explorer.Next()
         space.add_lwpolyline(points, close=True, dxfattribs={'layer': 'CUT'})
     for bend in pattern['bends']:
-        line = space.add_line(bend['a'], bend['b'], dxfattribs={'layer': 'BEND_' + bend['direction']})
-        doc.appids.add('RCCAD') if 'RCCAD' not in doc.appids else None
-        line.set_xdata('RCCAD', [(1070, bend['index']), (1040, bend['angle']), (1040, bend['radius']),
-                                (1040, pattern['thickness']), (1040, pattern['kfactor'])])
+        for start, end in clip_line_to_faces(bend['a'], bend['b'], [top]):      # linia gięcia tylko w obrysie blachy
+            line = space.add_line(tuple(start), tuple(end), dxfattribs={'layer': 'BEND_' + bend['direction']})
+            doc.appids.add('RCCAD') if 'RCCAD' not in doc.appids else None
+            line.set_xdata('RCCAD', [(1070, bend['index']), (1040, bend['angle']), (1040, bend['radius']),
+                                    (1040, pattern['thickness']), (1040, pattern['kfactor'])])
     target = Path(path)
     fd, temporary = tempfile.mkstemp(prefix='.rccad-flat-', suffix='.dxf', dir=target.parent)
     os.close(fd)

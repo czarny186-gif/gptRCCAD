@@ -436,6 +436,59 @@ def make_tool(src, d1, d2, mode):
     return kernel.extrude_dir(wire, normal, d1, 0.0, mode == 'symmetric')
 
 
+def opposite_profile(bodies, src):
+    """Wyciąganie „Na obu końcach”: przeciwległa płaska ściana tej samej bryły (np. spód sześcianu dla wskazanej góry).
+    Szuka ściany o przeciwnej normalnej, w którą trafia prosta poprowadzona przez wnętrze profilu na wskroś bryły (najbliższa taka ściana),
+    i zwraca (profil przesunięty na tę ścianę, normalna na zewnątrz przeciwległej ściany, znak: +1 gdy normalna profilu wychodzi z bryły)."""
+    n = np.asarray(src['normal'], float)
+    n = n / max(np.linalg.norm(n), 1e-12)
+    face = src.get('face')
+    if face is None:
+        face = profile_face(src['wire'])
+    if face is None:
+        raise kernel.CadError('Profil musi być zamknięty.')
+    p = _inner_point(face)
+    solids = [b for b in bodies if b.kind == 'solid' and (src.get('kind') != 'face' or src.get('id') is None or b.id == src.get('id'))]
+    eps = 1e-3
+    best = None
+    for out, sign in ((n, 1.0), (-n, -1.0)):         # szkic może mieć normalną skierowaną do wnętrza bryły
+        for b in solids:
+            try:
+                if kernel.point_state(b.shape, p - out * eps) != 'in':
+                    continue
+            except Exception:
+                continue
+            for f in b.shape.Faces():
+                try:
+                    if not kernel.is_planar_face(f):
+                        continue
+                    fc = np.array(f.Center().toTuple(), float)
+                    fn = np.array(f.normalAt(f.Center()).toTuple(), float)
+                    if float(np.dot(fn, out)) > -1 + 1e-6:
+                        continue
+                    h = float(np.dot(p - fc, out))
+                    if h <= 1e-4 or (best is not None and h >= best[0]):
+                        continue
+                    if not kernel.face_contains(f, p - out * h) or kernel.point_state(b.shape, p - out * (h / 2)) != 'in':
+                        continue
+                    best = (h, out, sign)
+                except Exception:
+                    continue
+        if best is not None:
+            break
+    if best is None:
+        raise kernel.CadError('Na obu końcach: nie znaleziono przeciwległej płaskiej ściany bryły dla wybranego profilu.')
+    h, out, sign = best
+    moved = face.translate(cq.Vector(*[float(c) for c in -out * h]))
+    return moved, -out, sign
+
+
+def opposite_tool(bodies, src, d1):
+    """Narzędzie dla przeciwległej ściany: ta sama odległość, kierunek odbity (wyciągnięcie na zewnątrz albo wycięcie do środka)."""
+    moved, normal, sign = opposite_profile(bodies, src)
+    return kernel.extrude_face(moved, normal, float(d1) * sign)
+
+
 def split_parts(bodies, only=None):
     """Bryła, która po wycięciu rozpadła się na części bez wspólnych styków, staje się osobnymi bryłami (największa zachowuje identyfikator,
     pozostałe dostają powtarzalne - przeliczenie historii daje te same obiekty). Dopiero Połącz skleja je z powrotem."""
@@ -522,6 +575,8 @@ def run_extrude(bodies, recipe):
             tools.append(make_tool(src, d1, -pad if d1 < 0 else pad, 'two'))
         else:
             tools.append(make_tool(src, d1, float(recipe.get('d2', 0)), mode))
+    if mode == 'ends':        # na obu końcach: druga część na przeciwległej ścianie (liczona na stanie sprzed kroku)
+        tools += [opposite_tool(bodies, src, d1) for src in sources]
     spent = set(recipe.get('spent', ()))
     for src in sources:
         spent |= set(src.get('spent', ()))
