@@ -69,15 +69,16 @@ class BoxCornerTests(unittest.TestCase):
                 self.assertEqual(k.point_state(shape,point), 'in')
 
     def test_butt_clearance_is_requested_gap_at_current_leg(self):
-        # The outward butt ends against the actual outer bend at z=12:
-        # circle centre (106,9), R=4, rather than the tangent leg at x=106.
-        for first, edge, y in (('in',95,47),('out',106-math.sqrt(16-9),58)):
+        # Measure along the real skin normal, including a circular bend.
+        # Translation along X alone would under-measure the clearance here.
+        for first,point,normal in [('in',np.array([95,47,12]),np.array([-1,0,0])),
+                                   ('out',np.array([106-math.sqrt(7),58,12]),np.array([-math.sqrt(7)/4,0,.75]))]:
             for gap in (.1,.5,1.):
                 with self.subTest(first=first,gap=gap):
-                    shape = s.build_sheet(box_recipe(first,gap=gap))
-                    self.assertEqual(k.point_state(shape,(edge-gap/2,y,12)), 'out')
-                    self.assertEqual(k.point_state(shape,(edge+.02,y,12)), 'in')
-                    self.assertEqual(k.point_state(shape,(edge-gap-.02,y,12)), 'in')
+                    shape=s.build_sheet(box_recipe(first,gap=gap))
+                    self.assertEqual(k.point_state(shape,point+gap/2*normal),'out')
+                    self.assertEqual(k.point_state(shape,point-.02*normal),'in')
+                    self.assertEqual(k.point_state(shape,point+(gap+.02)*normal),'in')
 
     def test_rotation_and_translation_do_not_change_corner_solution(self):
         recipe = box_recipe('in','out','diagonal')

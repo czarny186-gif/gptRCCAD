@@ -3335,7 +3335,7 @@ class StudioWindow(QMainWindow):
             nominal=metadata['recipe']
             return dict(base=nominal['base'],t=nominal['t'],specs=list(nominal.get('flanges') or []),
                         rules=dict(nominal.get('rules') or {}),flat=metadata.get('flat',False),
-                        dirty=metadata.get('dirty',False),edited=metadata.get('edited',False))
+                        dirty=metadata.get('dirty',False),edited=metadata.get('edited',False),bend_engine=metadata.get('bend_engine',1))
         infos, cur = self.document.infos()
         state = None
         for info in infos[:cur + 1]:
@@ -3358,7 +3358,7 @@ class StudioWindow(QMainWindow):
         if source is None:
             return None
         metadata=she.state(dict(base=source['base'],t=source['t'],flanges=source['specs'],rules=source['rules']),source.get('flat',False))
-        metadata.update(dirty=source.get('dirty',False),edited=source.get('edited',False))
+        metadata.update(dirty=source.get('dirty',False),edited=source.get('edited',False),bend_engine=source.get('bend_engine',1))
         return metadata
 
     def switch_sheet(self, command):

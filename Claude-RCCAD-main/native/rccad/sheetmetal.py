@@ -484,7 +484,7 @@ def _curved_endcut(solid, frame, t, point, direction, start, end, reach, vertica
     return kernel.boolean('subtract',solid,[cutter])
 
 
-def _corner_parts(recipe, eff, corners):
+def _corner_parts(recipe, eff, corners, parallel_version=2):
     """Trim each bend and leg before fusing; keep material pieces independently valid."""
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
@@ -497,6 +497,25 @@ def _corner_parts(recipe, eff, corners):
     K = sum(float(recipe['base'][key]) for key in ('lx','ly','lz')) + 4*extension + gap + 1
     normal = _unit(recipe['base']['z'])
     sheet_joint = rules.get('joint') == 'sheet'
+    parallel = rules.get('joint','parallel') == 'parallel' and parallel_version>=2
+    legacy_parallel = rules.get('joint','parallel') == 'parallel' and not parallel
+    curtains_cache,curtains_world={},{}
+    def curtain(owner,corner,far):
+        from . import sheetcorner
+        root=eff[owner]
+        family=[j for j in raw if owners[j]==owner]
+        signature=tuple((round(float(eff[j]['r']),10),round(float(eff[j]['angle']),10),round(float(eff[j]['length']),10),
+                         tuple(round(float(v),10) for v in ((eff[j]['p0']-root['p0'])@root['m'],(eff[j]['p0']-root['p0'])@normal,
+                                                          eff[j]['n']@root['m'],eff[j]['n']@normal,eff[j]['m']@root['m'],eff[j]['m']@normal)),
+                         tuple(sorted((eff[j].get('hem') or {}).items()))) for j in family)
+        if signature not in curtains_cache:
+            curtains_cache[signature]=sheetcorner.curtains(root,[piece for j in family for piece in raw[j]],normal,K,gap,cache_key=(round(t,10),round(K,10),round(gap,10),signature))
+        key=(owner,corner,far)
+        if key not in curtains_world:
+            axis=_unit(np.cross(root['m'],normal))
+            plane=cq.Plane(origin=tuple(corners[corner][0]),xDir=tuple(root['m']),normal=tuple(axis))
+            curtains_world[key]=curtains_cache[signature][0 if far else 1].transformShape(plane.rG)
+        return curtains_world[key]
     caps = {}
 
     def straight_end(i, corner):
@@ -582,7 +601,25 @@ def _corner_parts(recipe, eff, corners):
                                              [peer_profile[:,0].min(),peer_profile[:,0].max()],atol=_TOL,rtol=0)
                              and min(profile[:,1].max(),peer_profile[:,1].max()) >
                                  max(profile[:,1].min(),peer_profile[:,1].min())+_TOL)
-            if (rules.get('joint', 'parallel') == 'parallel' and profile is not None and peer_profile is not None):
+            if parallel:
+                capped=straight_end(i,corner)
+                if not matching and capped is not None:
+                    peer_cap=straight_end(peer,corner) if peer is not None else None
+                    neighbors=(peer_cap[1] if peer_cap is not None else raw[peer] if peer is not None else
+                               [piece for j in parts if owners[j]==other and depths[j]<depths[i] for piece in parts[j]])
+                    if not overlap(capped[1],neighbors):
+                        parts[i]=[_endcut(piece,*capped[0],K) for piece in parts[i]]
+                        continue
+                if peer is None:
+                    root=eff[owner];axis=_unit(root['p1']-root['p0'])
+                    outward=axis if np.linalg.norm(P-root['p1'])<np.linalg.norm(P-root['p0']) else -axis
+                    plane=capped[0] if capped is not None else (P,outward)
+                    parts[i]=[_endcut(piece,*plane,K) for piece in parts[i]]
+                else:
+                    tool=curtain(other,corner,owner==a)
+                    parts[i]=[kernel.boolean('subtract',piece,[tool]) for piece in parts[i]]
+                continue
+            if (legacy_parallel and profile is not None and peer_profile is not None):
                 if not matching:
                     capped, peer_cap = straight_end(i,corner), straight_end(peer,corner)
                     if capped is not None and not overlap(capped[1],peer_cap[1] if peer_cap else raw[peer]):
@@ -636,7 +673,7 @@ def _corner_parts(recipe, eff, corners):
                     # level. Non-intersecting returns keep straight end faces.
                     parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
                     continue
-            if peer is None and rules.get('joint','parallel') == 'parallel':
+            if peer is None and legacy_parallel:
                 capped = straight_end(i,corner)
                 root = eff[owner]
                 axis = _unit(root['p1']-root['p0'])
@@ -655,7 +692,8 @@ def _corner_parts(recipe, eff, corners):
             # The retained diagonal mode is needed to replay existing projects.
             parts[i] = [_miter(part,P,N,sign,gap/2,K,K) for part in parts[i]]
             relieve_bend(i,corner)
-    if rules.get('joint', 'parallel') == 'parallel':
+    if legacy_parallel:
+        # Retained only for mapping edits from pre-0.4.8 project baselines.
         # A butt seam has a through wall and a wall ending against it. Trim
         # the latter against the real neighbouring material, including bends
         # on preceding levels; a fixed diagonal plane cannot describe it.
@@ -691,10 +729,10 @@ def _corner_parts(recipe, eff, corners):
     return parts
 
 
-def _build_corner_sheet(base, recipe, eff, corners):
+def _build_corner_sheet(base, recipe, eff, corners, parallel_version=2):
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
-    parts = _corner_parts(recipe, eff, corners)
+    parts = _corner_parts(recipe, eff, corners,parallel_version)
     roots = [part for i in parts if specs[i]['kind'] == 'base' for part in parts[i]]
     shape = _join_sheet(base, roots)
     relief = rules.get('relief', 'none')
@@ -711,8 +749,10 @@ def _build_corner_sheet(base, recipe, eff, corners):
     return shape
 
 
-def build_sheet(recipe):
+def build_sheet(recipe, parallel_version=2):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
+    if parallel_version not in (1,2):
+        raise kernel.CadError('Nieobsługiwana wersja konstrukcji narożników równoległych.')
     base = base_solid(recipe['base'])
     t = float(recipe['t'])
     if not math.isfinite(t) or t <= 0 or not math.isclose(t, float(recipe['base']['lz']), rel_tol=1e-6, abs_tol=1e-6):
@@ -740,7 +780,7 @@ def build_sheet(recipe):
         return base
     eff, corners = _effective(specs, t, miter, outside)
     if corners:
-        return _build_corner_sheet(base, recipe, eff, corners)
+        return _build_corner_sheet(base, recipe, eff, corners,parallel_version)
     pieces = {}
     for i, f in enumerate(eff):
         if f.get('hem'):

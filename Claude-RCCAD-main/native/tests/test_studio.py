@@ -1,6 +1,6 @@
 """Okno Studio: układ jak w HTML oraz przepływ szkic → wyciągnięcie → Boolean / zaokrąglenie / lustro."""
 import os, faulthandler
-faulthandler.dump_traceback_later(420, exit=True, file=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w"))
+faulthandler.dump_traceback_later(600, exit=True, file=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w"))
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
 import tempfile
@@ -190,6 +190,26 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.document._revision,revision)
         self.assertTrue(w._sheet_state(body.id)['flat'])
         self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),volume,delta=1e-8)
+
+    def test_old_parallel_project_without_engine_marker_upgrades_in_the_ui(self):
+        from test_sheetmetal_parallel import small_box
+        from rccad import sheetmetal
+        w=self.w;r=small_box(90,3)
+        body=Body('Starsza blacha',sheetmetal.base_solid(r['base'])).prepared()
+        face=next(f for f in body.shape.Faces() if f.geomType()=='PLANE' and f.normalAt().z>.99)
+        w.document.commit([body])
+        conv=dict(type='sheet',id=body.id,base=r['base'],t=1,rules=r['rules'],
+                  face=hist.face_ref(face,[0,0,1],face.Center().toTuple(),body.shape))
+        w.document.commit([body],op=conv)
+        legacy=body.changed(sheetmetal.build_sheet(r,parallel_version=1))
+        w.document.commit([legacy],op=dict(r,type='sheetbuild',id=body.id))
+        w.selected=[body.id];w.refresh()
+        self.assertEqual(w._editable_sheet_state(body.id)['bend_engine'],1)
+        w.tools['unfold_sheet'].click();self.wait()
+        current=w.document.get(body.id)
+        self.assertTrue(current.meta['sheet']['flat'])
+        self.assertEqual(current.meta['sheet']['bend_engine'],2)
+        self.assertEqual(len(current.shape.Solids()),1)
 
     def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):
         body = self.converted_sheet();w = self.w

@@ -109,6 +109,25 @@ def run(report_path=None):
         corner_dxf=ezdxf.readfile(path)
         assert len(corner_dxf.modelspace().query('SPLINE[layer=="CUT"]'))>0 and not corner_dxf.audit().has_errors
     checks.append('edited sheet DXF: analytic circle, complex spline corners, millimetres and bend layers')
+    parallel_blank=she.layout(parallel_recipe).flat
+    assert parallel_blank.isValid() and len(parallel_blank.Solids())==1
+    assert not any(face.innerWires() for face in parallel_blank.Faces() if face.normalAt().z>.99)
+    checks.append('parallel sheet: three bend levels unfold without detached strips or hidden holes')
+    legacy_parallel=shm.build_sheet(parallel_recipe,parallel_version=1)
+    old_source=she.state(parallel_recipe);old_source.pop('bend_engine');old_source['dirty']=True
+    old_hole=cq.Solid.makeCylinder(1,5,cq.Vector(20,20,-1))
+    migrated,migrated_state=she.rebuild(legacy_parallel.cut(old_hole),old_source,parallel_recipe)
+    assert migrated_state['bend_engine']==2 and k.point_state(migrated,(20,20,1))=='out'
+    checks.append('legacy parallel sheet migration preserves edited holes')
+    slim_base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=100,ly=50,lz=1)
+    for slim_angle in (45,135):
+        slim_specs=[dict(kind='base',p0=[a[0],a[1],1],p1=[b[0],b[1],1],n=[0,0,1],m=m,r=.5,angle=slim_angle,length=5) for a,b,m in edges]
+        slim_recipe=dict(base=slim_base,t=1,flanges=slim_specs,rules=dict(joint='parallel',gap=.2))
+        slim_result=shm.build_sheet(slim_recipe)
+        expected_reach=1.5 if slim_angle==135 else 6.5/math.sqrt(2)
+        assert slim_result.isValid() and len(slim_result.Solids())==1
+        assert abs(slim_result.BoundingBox().xmax-100-expected_reach)<2e-5
+    checks.append('parallel inclined walls: 45 and 135 degree bends keep nominal extents')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

@@ -88,11 +88,25 @@ class SheetEditTests(unittest.TestCase):
                 restored,_=e.switch(folded,st,True)
                 self.assertSame(modified,restored,tol=5e-5)
 
-    def test_disconnected_development_is_rejected(self):
+    def test_parallel_multilevel_box_develops_without_detached_material(self):
+        from test_sheetmetal_boxes import box_recipe
+        r=box_recipe('in','out','parallel');flat=e.layout(r).flat
+        self.assertEqual(len(flat.Solids()),1)
+        self.assertEqual(sum(len(face.innerWires()) for face in flat.Faces() if face.normalAt().z>.99),0)
+
+    def test_legacy_parallel_project_migrates_without_losing_holes(self):
         from test_sheetmetal_boxes import box_recipe
         r=box_recipe('in','out','parallel')
-        with self.assertRaisesRegex(k.CadError,'połączonej'):
-            e.layout(r)
+        legacy=s.build_sheet(r,parallel_version=1);tool=cylinder(25,25)
+        edited=legacy.cut(tool);source=e.state(r);source.pop('bend_engine');source['dirty']=True
+        blank,st=e.switch(edited,source,True)
+        self.assertEqual(st['bend_engine'],2);self.assertEqual(len(blank.Solids()),1)
+        folded,st=e.switch(blank,st,False)
+        self.assertSame(folded,s.build_sheet(r).cut(tool),tol=1e-4)
+        updated=copy.deepcopy(r);updated['rules']['gap']=.3
+        rebuilt,st=e.rebuild(edited,source,updated)
+        self.assertEqual(st['bend_engine'],2)
+        self.assertSame(rebuilt,s.build_sheet(updated).cut(tool),tol=1e-4)
 
     def test_holes_on_flat_base_and_flange_retain_positions_over_repeated_cycles(self):
         r=recipe();l=e.layout(r);allowance=math.pi/2*2.88

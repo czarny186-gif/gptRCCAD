@@ -16,7 +16,7 @@ from . import kernel as k, sheetmetal as s
 
 
 def state(recipe, flat=False):
-    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False}
+    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':2}
 
 
 def _matrix(origin, axes):
@@ -175,16 +175,16 @@ def _bend_blank(piece, frame, work_frame, t, factor, flat_origin, outward, flat_
     return _faces_slab(developed,t)
 
 
-def _build_layout(recipe, require_blank=True):
+def _build_layout(recipe, require_blank=True, parallel_version=2):
     specs=recipe.get('flanges') or [];rules=recipe.get('rules') or {};t=float(recipe['t'])
     if any(spec.get('hem') for spec in specs):
         raise k.CadError('Rozkładanie zawinięć nie jest jeszcze obsługiwane. Zwykłe kołnierze można rozkładać i zginać ponownie.')
     factor=float(rules.get('kfactor',s.K_DEFAULT))
     if not math.isfinite(factor) or not 0<=factor<=.5:raise k.CadError('Współczynnik K musi być w zakresie 0–0,5.')
-    folded=s.build_sheet(recipe)
+    folded=s.build_sheet(recipe,parallel_version=parallel_version)
     eff,corners=s._effective(specs,t,bool(rules.get('miter',True)),bool(rules.get('outside',False)))
     if corners:
-        pieces=s._corner_parts(recipe,eff,corners)
+        pieces=s._corner_parts(recipe,eff,corners,parallel_version=parallel_version)
         work,_,_,_=s._corner_layout(specs,eff,corners,t)
     else:
         pieces={i:s._flange_parts(f,t) for i,f in enumerate(eff)};work=eff
@@ -248,8 +248,8 @@ def _build_layout(recipe, require_blank=True):
 
 
 @lru_cache(maxsize=4)
-def _cached_layout(key, require_blank=True):
-    return _build_layout(json.loads(key),require_blank)
+def _cached_layout(key, require_blank=True, parallel_version=2):
+    return _build_layout(json.loads(key),require_blank,parallel_version)
 
 
 def layout(recipe):
@@ -257,6 +257,19 @@ def layout(recipe):
     # same validated maps. Edits remain in the document, never in this cache.
     key=json.dumps(state(recipe)['recipe'],sort_keys=True,allow_nan=False)
     return _cached_layout(key)
+
+
+def _source_engine(source_state):
+    version=source_state.get('bend_engine',1)
+    if version not in (1,2):
+        raise k.CadError('Ten projekt używa nieobsługiwanej wersji konstrukcji gięć.')
+    joint=(source_state['recipe'].get('rules') or {}).get('joint','parallel')
+    return version if joint=='parallel' else 2
+
+
+def _source_layout(source_state):
+    key=json.dumps(state(source_state['recipe'])['recipe'],sort_keys=True,allow_nan=False)
+    return _cached_layout(key,False,_source_engine(source_state))
 
 
 def _bend_cut(canonical, bend):
@@ -389,7 +402,8 @@ def _apply(model, changes, flat):
 def _switch(actual, source_state, flat, sync=False):
     """Switch atomically, including all accumulated edits on straight panels."""
     model=layout(source_state['recipe'])
-    changes=_changes(actual,model,source_state.get('flat',False))
+    source_model=model if _source_engine(source_state)==2 else _source_layout(source_state)
+    changes=_changes(actual,source_model,source_state.get('flat',False))
     if sync:
         _apply(model,changes,not flat)  # Confirm edits survive the other state.
     target_state=state(source_state['recipe'],flat)
@@ -414,7 +428,7 @@ def rebuild(actual, source_state, recipe):
         return s.build_sheet(recipe),state(recipe,False)
     # Carrying edits in folded space does not require the complete model to
     # be manufacturable as a single flat blank. Mode switches still do.
-    old=_cached_layout(json.dumps(state(source_state['recipe'])['recipe'],sort_keys=True,allow_nan=False),False)
+    old=_source_layout(source_state)
     changes=_changes(actual,old,False)
     new=_cached_layout(json.dumps(state(recipe)['recipe'],sort_keys=True,allow_nan=False),False)
     target_state=state(recipe,False)
