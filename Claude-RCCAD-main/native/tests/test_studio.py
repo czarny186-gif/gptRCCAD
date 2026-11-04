@@ -712,6 +712,22 @@ class StudioTests(unittest.TestCase):
         w.ex_op.setCurrentIndex(w.ex_op.findData(op));w.apply_extrude();self.wait()
         return a,b
 
+    def test_extrude_up_to_point_inside_other_solid_cuts_into_it(self):
+        """Narzędzie wchodzi w drugą bryłę do wskazanego punktu (jej dalszego narożnika): Wytnij wycina z niej tę część."""
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(20,20,20).translate(cq.Vector(40,0,0))).prepared()
+        w.document.commit([a,b]);w.refresh();w.set_mode('extrude');w.ex_extent.setCurrentIndex(w.ex_extent.findData('upto'))
+        sk=Body('Okno',cq.Workplane('XY').rect(10,10).val().translate(cq.Vector(20,10,10)).rotate(cq.Vector(20,10,10),cq.Vector(20,11,10),90),'sketch',
+                k.face_frame((20,10,10),(1,0,0))).prepared()
+        w.document.commit([a,b,sk]);w.refresh()
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'pick_profile',return_value=sk.id):
+            w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'nearest_vertex',return_value=(b.id,np.array([50.0,0.0,0.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertAlmostEqual(abs(w.ex_value.value()),30.0,3)
+        w.ex_op.setCurrentIndex(w.ex_op.findData('cut'));w.apply_extrude();self.wait()
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),8000-10*10*10,1)      # w B wycięte 10 mm głębokości
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),8000,1)
+
     def test_extrude_up_to_other_solid_joins_only_own_solid(self):
         w=self.w;a,b=self._upto_between_boxes('join')
         solids=[x for x in w.document.bodies if x.kind=='solid'];self.assertEqual(len(solids),2)
@@ -724,7 +740,7 @@ class StudioTests(unittest.TestCase):
     def test_extrude_up_to_other_solid_cuts_only_solids_on_the_way(self):
         w=self.w;a,b=self._upto_between_boxes('cut',middle=True)
         c=next(x for x in w.document.bodies if x.name=='C')
-        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),8000,1)            # bryła-wysokość nietknięta
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),8000,1)            # narzędzie tylko dotyka B - nic z niej nie ubywa
         self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),8000,1)
         self.assertAlmostEqual(c.shape.Volume(),4*10*10,1)                               # bryła po drodze wycięta do połowy
 
@@ -1069,12 +1085,54 @@ class StudioTests(unittest.TestCase):
         grabbed=w.view._grab_handle(*geo['end']);self.assertIsNotNone(grabbed);self.assertEqual(grabbed['id'],'ex')
         w.view.overlay.repaint();self.app.processEvents()
 
+    def _dwell_clock(self):
+        from rccad import snap as snapping
+        now=[100.0];self.w._dwell=snapping.Dwell(clock=lambda:now[0])
+        self.w._dwell_timer=__import__('PySide6.QtCore',fromlist=['QTimer']).QTimer(self.w);self.w._dwell_timer.setSingleShot(True)
+        return now
+
     def test_snap_to_existing_sketch_corner(self):
-        w=self.w;self.sketch('rect',(0,0),(10,10));w.choose_tool('line')
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.choose_tool('line');now=self._dwell_clock()
         x,y=w.view.project_one(k.to_world('XY',10,10))
+        u,v,label=w._snapper(x+3,y+2,(10.4,10.3));self.assertIsNone(label);self.assertAlmostEqual(u,10.4,6)      # w ruchu: bez przyklejania
+        self.assertTrue(w._dwell_timer.isActive())                                                                  # odczeka i sprawdzi ponownie
+        now[0]+=.3
         u,v,label=w._snapper(x+3,y+2,(10.4,10.3));self.assertEqual(label,'Punkt styku');self.assertAlmostEqual(u,10,3);self.assertAlmostEqual(v,10,3)
-        u,v,label=w._snapper(x+60,y+60,(14.3,3.9));self.assertEqual(label,None if label is None else 'Siatka')
+        u,v,label=w._snapper(x+5,y+1,(10.6,10.1));self.assertEqual(label,'Punkt styku')                           # drżenie ręki nie gubi punktu
+        u,v,label=w._snapper(x+60,y+60,(14.3,3.9));self.assertIsNone(label);self.assertAlmostEqual(u,14.3,6)      # z dala: kursor wolny
         w.view.set_marker(k.to_world('XY',10,10),label='Punkt styku');self.assertIsNotNone(w.view.snap_marker)
+
+    def test_sketch_on_face_shows_axes_cross_and_arrows_pan_view(self):
+        w=self.w;box=Body('Kostka',k.box(30,20,10)).prepared();w.document.commit([box]);w.refresh()
+        top=next(f for f in box.shape.Faces() if f.normalAt().z>.99)
+        w.enter_sketch(k.face_frame(top.Center().toTuple(),(0,0,1)))
+        self.assertEqual(len(w.view.sketch_axis_items),2)
+        for item in w.view.sketch_axis_items:      # krzyż przechodzi przez środek ścianki
+            a,b=item.pos[0],item.pos[1];mid=(a+b)/2
+            self.assertAlmostEqual(float(mid[0]),15,3);self.assertAlmostEqual(float(mid[1]),10,3)
+        before=w.view.opts['center'];before=(before.x(),before.y(),before.z())
+        w.view.setFocus();ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Right,Qt.NoModifier);QApplication.sendEvent(w.view,ev)
+        after=w.view.opts['center'];self.assertNotEqual(before,(after.x(),after.y(),after.z()))
+        c1=w.view.opts['center'];c1=(c1.x(),c1.y(),c1.z())
+        ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Up,Qt.KeypadModifier);w.keyPressEvent(ev)       # blok numeryczny, okno główne
+        c2=w.view.opts['center'];self.assertNotEqual(c1,(c2.x(),c2.y(),c2.z()))
+        w.set_mode(None);self.assertEqual(w.view.sketch_axis_items,[])        # po wyjściu ze szkicu krzyż znika
+        w.enter_sketch('XY');self.assertEqual(w.view.sketch_axis_items,[])   # płaszczyzna główna ma własne osie
+
+    def test_snap_to_grid_corner_and_face_corner_after_dwell(self):
+        from rccad import snap as snapping
+        w=self.w;box=Body('Kostka',k.box(20,20,20)).prepared();w.document.commit([box]);w.refresh()
+        top=next(f for f in box.shape.Faces() if f.normalAt().z>.99)
+        w.enter_sketch(k.face_frame(top.Center().toTuple(),(0,0,1)));w.choose_tool('line');now=self._dwell_clock()
+        geo=snapping.SketchGeometry(w.document.bodies,w.sketch_plane)
+        self.assertIn('Narożnik',geo.pt_label);self.assertIn('Krawędź ściany',geo.seg_label)
+        x,y=w.view.project_one((20.0,20.0,20.0));raw=k.uv_of(w.sketch_plane,(19.7,19.8,20.0))
+        w._snapper(x+2,y+1,raw);now[0]+=.3
+        u,v,label=w._snapper(x+2,y+1,raw);self.assertEqual(label,'Narożnik')
+        self.assertAlmostEqual(k.to_world(w.sketch_plane,u,v)[0],20,3);self.assertAlmostEqual(k.to_world(w.sketch_plane,u,v)[1],20,3)
+        step=snapping.grid_step(w.view,geo);gx,gy=w.view.project_one(k.to_world(w.sketch_plane,-3*step,-2*step))
+        c=snapping.candidate(w.view,geo,gx+1,gy+1,(-3*step+.01*step,-2*step+.01*step))
+        self.assertEqual(c[2],'Siatka');self.assertAlmostEqual(c[0],-3*step,6);self.assertAlmostEqual(c[1],-2*step,6)
 
     def test_overlapping_shapes_make_regions_and_extrude_overlap(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));self.sketch('rect',(5,0),(15,10))

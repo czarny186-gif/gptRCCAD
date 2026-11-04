@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.14 — linie gięcia na rysunku, szybsze rozkładanie
+# RCCAD Desktop 0.4.15 — wygodniejsze szkicowanie
+
+## Zmiany 0.4.15
+
+- **Przyciąganie w szkicu z opóźnieniem:** kursor w ruchu nie klei się do niczego; gdy zatrzymasz go na chwilę (ok. 0,25 s) przy punkcie, przyciąga się do narożnika kratki siatki, punktu lub środka szkicu, krawędzi, okręgu, przecięcia albo do krawędzi i narożnika ścianki, na której rysujesz. Drobne drżenie ręki nie gubi złapanego punktu. Alt wyłącza przyciąganie.
+- **Płynny kursor:** wyszukiwanie punktów przyciągania jest ok. 1000 razy szybsze (np. 40 kształtów w szkicu: z ok. 380 ms do poniżej 1 ms na ruch myszy).
+- **Krzyż osi na ściance:** szkic na ściance bryły pokazuje tymczasowy krzyż osi (czerwona U, zielona V) przez środek ścianki, jak osie głównej siatki.
+- **Strzałki** (także z bloku numerycznego) przesuwają widok w czasie szkicowania; Shift + strzałka - większy krok.
+- **Wyciąganie do elementu + Wytnij** wycina także bryłę wskazaną jako cel, gdy narzędzie w nią wchodzi. Połącz nadal dołącza wyciągnięcie tylko do bryły, z której wychodzi profil.
 
 ## Zmiany 0.4.14
 

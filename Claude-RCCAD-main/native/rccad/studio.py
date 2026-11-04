@@ -21,7 +21,7 @@ from . import sheetmetal as shm
 from . import sheetedit as she
 from .viewcube import ViewCube
 from . import sketchmeta as sm
-from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE
+from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
         'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'line': 2, 'circleTangent2': 3}
@@ -1688,11 +1688,41 @@ class StudioWindow(QMainWindow):
         self.enter_sketch(name)
 
     def _snapper(self, x, y, raw):
+        """Przyciąganie w szkicu z opóźnieniem: kursor jest wolny w ruchu, a do punktu (narożnik kratki siatki, punkt szkicu, krawędź
+        lub narożnik ścianki) przykleja się dopiero, gdy chwilę przy nim zostanie. Timer odświeża wtedy podgląd bez ruchu myszy."""
         key = (self.sketch_plane if isinstance(self.sketch_plane, str) else id(self.sketch_plane),
-               tuple((b.id, id(b.mesh)) for b in self.document.bodies if b.kind == 'sketch'))
+               tuple((b.id, id(b.mesh), b.visible) for b in self.document.bodies if b.kind in ('sketch', 'solid')))
         if self._snap_cache is None or self._snap_cache[0] != key:
             self._snap_cache = (key, snapping.SketchGeometry(self.document.bodies, self.sketch_plane))
-        return snapping.snap(self.view, self.sketch_plane, self._snap_cache[1], x, y, raw)
+        if getattr(self, '_dwell', None) is None:
+            self._dwell = snapping.Dwell()
+            self._dwell_timer = QTimer(self)
+            self._dwell_timer.setSingleShot(True)
+            self._dwell_timer.timeout.connect(self._dwell_refresh)
+        c = snapping.candidate(self.view, self._snap_cache[1], x, y, raw)
+        point, wait = self._dwell.update(c, x, y)
+        if wait:
+            self._dwell_timer.start(int(snapping.DWELL * 1000) + 15)
+        return point if point is not None else (float(raw[0]), float(raw[1]), None)
+
+    def _dwell_refresh(self):
+        """Kursor stoi przy punkcie: ponowne wyliczenie podglądu (bez ruchu myszy), żeby przyciąganie się pokazało."""
+        if self.mode != 'sketch' or self.view.snapper is None:
+            return
+        from PySide6.QtGui import QCursor
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        if not self.view.rect().contains(pos):
+            return
+        self.view._hover_time = 0.0
+        if self.view._sk_start is not None:      # przeciąganie kształtu (prostokąt, okrąg): odśwież podgląd jak przy ruchu
+            point = self.view.plane_point(self.view.sketch_plane, pos.x(), pos.y())
+            if point:
+                from PySide6.QtCore import QPointF
+                end = self.view._snap(point, pos=QPointF(pos))
+                self.view._set_sketch_preview(self.view._sketch_outline(self.view.sketch_plane, self.view._sk_start, end))
+            return
+        from PySide6.QtCore import QPointF
+        self.view._hover(QPointF(pos))
 
     def _wire(self, points):
         t = self.tool
@@ -2927,7 +2957,8 @@ class StudioWindow(QMainWindow):
         return None
 
     def _extent_skip(self):
-        """Bryła wskazana przy wyciąganiu „Do elementu” wyznacza tylko wysokość: operacja jej nie łączy ani nie wycina.
+        """Bryła wskazana przy wyciąganiu „Do elementu” wyznacza tylko wysokość: Połącz nie dokleja do niej wyciągnięcia
+        (Wytnij i Wspólna działają na wszystkich bryłach, przez które przechodzi narzędzie, także na niej).
         Wyjątek: profil leży na tej samej bryle (np. wyrównanie schodka do wyższej ściany tej bryły) - wtedy to jej własna operacja."""
         target = self.ex_target
         body = self.document.get(target.get('body')) if target and target.get('body') else None
@@ -3160,7 +3191,7 @@ class StudioWindow(QMainWindow):
         out = [uuid.uuid4().hex for _ in makers]
         target = self.ex_target
         upto = None if target is None else dict(kind=target['kind'], point=[float(c) for c in target['point']])
-        skip = self._extent_skip()
+        skip = self._extent_skip() if op == 'join' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
 
         def build():
             bodies = hist.combine(existing, [m() for m in makers], op, spent, out, skip=skip)
@@ -6343,6 +6374,11 @@ class StudioWindow(QMainWindow):
                 return
             super().keyPressEvent(event)
             return
+        if self.mode == 'sketch' and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+            focus = QApplication.focusWidget()
+            if not isinstance(focus, (QLineEdit, QDoubleSpinBox, QPlainTextEdit, QComboBox)) and pan_arrow(self.view, event):
+                event.accept()          # strzałki w szkicu przesuwają widok
+                return
         if self.mode == 'sketch':
             if key in (Qt.Key_Return, Qt.Key_Enter) and self.tool == 'line' and self.points and not self.dim_panel.isVisible():
                 self.finish_line()

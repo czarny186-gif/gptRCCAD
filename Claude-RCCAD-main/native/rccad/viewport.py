@@ -312,6 +312,20 @@ def _segments(chains):
     return np.concatenate(parts) if parts else None
 
 
+PAN_STEP = 40.0      # px na jedno naciśnięcie strzałki
+
+
+def pan_arrow(view, event):
+    """Strzałka bez modyfikatorów (poza blokiem numerycznym i Shift) przesuwa widok w jej kierunku. Zwraca, czy obsłużono."""
+    moves = {Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0), Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1)}
+    move = moves.get(event.key())
+    if move is None or event.modifiers() & ~(Qt.KeypadModifier | Qt.ShiftModifier):
+        return False
+    step = PAN_STEP * (4 if event.modifiers() & Qt.ShiftModifier else 1)
+    view.pan_step(move[0] * step, move[1] * step)
+    return True
+
+
 class CadView(gl.GLViewWidget):
     edgeClicked = Signal(str, int, bool, bool)  # bryła, krawędź, dodaj do zaznaczenia, cały łańcuch styczny
     planeClicked = Signal(str)
@@ -377,6 +391,7 @@ class CadView(gl.GLViewWidget):
             self.addItem(axis)
             self.axis_lines.append((axis, np.array(pts[1], float) / 1000.0))
         self.custom_plane_items = []
+        self.sketch_axis_items = []      # tymczasowy krzyż osi szkicu na ściance bryły
         self.marker_items = []
         self.bodies = ()
         self.model_items = []
@@ -1088,10 +1103,31 @@ class CadView(gl.GLViewWidget):
 
     # ---------- siatka szkicu, płaszczyzna ściany, kamera, znacznik ----------
     def set_grid_frame(self, plane):
-        """Siatka leży na płaszczyźnie szkicu (None = XY)."""
+        """Siatka leży na płaszczyźnie szkicu (None = XY). Na ściance bryły dochodzi tymczasowy krzyż osi szkicu
+        (czerwona oś U, zielona V) przechodzący przez środek ścianki - jak osie głównej siatki."""
         self._grid_plane = plane
         self._grid_key = None
+        for item in self.sketch_axis_items:
+            self.removeItem(item)
+        self.sketch_axis_items = []
+        if plane is not None and not isinstance(plane, str):
+            frame = kernel.frame_of(plane)
+            o, x, y, n = (np.array(v, float) for v in (frame.origin, frame.xdir, frame.ydir, frame.normal))
+            lift = n * 0.02          # nad ścianką, żeby linie nie migotały na jej powierzchni
+            for direction, col in ((x, (.89, .31, .33, .9)), (y, (.14, .64, .42, .9))):
+                pts = np.array([o + lift - direction * 1000.0, o + lift + direction * 1000.0], dtype=np.float32)
+                item = gl.GLLinePlotItem(pos=pts, color=col, width=2, antialias=True)
+                item.setGLOptions('translucent')
+                self.addItem(item)
+                self.sketch_axis_items.append(item)
         self.update()
+
+    def keyPressEvent(self, event):
+        """W szkicu strzałki (także z bloku numerycznego) przesuwają widok; Shift - większy krok."""
+        if self.sketch_plane is not None and pan_arrow(self, event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def show_custom_plane(self, frame, half=30.0, color=(1.0, .55, .1)):
         for item in self.custom_plane_items:
@@ -1272,6 +1308,12 @@ class CadView(gl.GLViewWidget):
             self._update_hover_handle(pos)
             self._hover(pos)
         super().mouseMoveEvent(event)
+
+    def pan_step(self, dx, dy):
+        """Obraz przesuwa się o (dx, dy) pikseli ekranu (x w prawo, y w dół), jak przy przeciąganiu - w płaszczyźnie ekranu,
+        więc działa także przy patrzeniu prosto na ściankę (tryb 'view-upright' przesuwa tylko w płaszczyźnie XY świata)."""
+        self.pan(float(dx), float(dy), 0, relative='view')
+        self.update()
 
     def _hover(self, pos):
         now = time.monotonic()
