@@ -207,6 +207,25 @@ class StudioTests(unittest.TestCase):
             win=w._drawing_windows[-1];self.assertEqual(len(win.source.bends),len(doc.modelspace().query('LINE[layer!="CUT"]')))
             win.close()
 
+    def test_flat_sheet_drawing_iso_view_shows_folded_sheet(self):
+        from rccad import drawing as D
+        w=self.w;body=self.converted_sheet()
+        w.apply_flange();self.wait();folded_box=w.document.get(body.id).shape.BoundingBox()
+        w.tools['unfold_sheet'].click();self.wait()
+        flat=w.document.get(body.id)
+        w.open_drawing(flat);self.wait();win=w._drawing_windows[-1]
+        self.assertIsNotNone(win.source.iso_shape)
+        iso=win.source.iso_shape.BoundingBox();self.assertAlmostEqual(iso.zmax-iso.zmin,folded_box.zmax-folded_box.zmin,3)     # zgięta: ścianka w górę
+        top=win.source.view('top');self.assertAlmostEqual(top.bbox[3]-top.bbox[1]+top.bbox[2]-top.bbox[0],
+                                                          flat.shape.BoundingBox().xlen+flat.shape.BoundingBox().ylen,3)  # rzut z góry: nadal rozwinięcie
+        win.close()
+        w.selected=[body.id];w.set_mode(None);w.toggle_mode('sheetdrawing')
+        with patch.object(w.view,'pick_face',return_value=(body.id,(0,0,1),(50,25,2))):w.view_clicked(5,5,False,False)
+        self.wait();win=w._drawing_windows[-1]
+        self.assertTrue(win.view_boxes['iso'].isEnabled());self.assertFalse(win.view_boxes['iso'].isChecked())
+        win.view_boxes['iso'].setChecked(True);d=D.build_drawing(win.source,**win.settings());self.assertIn('iso',d.views)
+        win.close()
+
     def test_sheet_bending_drawing_has_bend_chain_dims_labels_and_notes(self):
         from rccad import drawing as D
         w=self.w;body=self.converted_sheet()
@@ -1147,8 +1166,13 @@ class StudioTests(unittest.TestCase):
         c1=w.view.opts['center'];c1=(c1.x(),c1.y(),c1.z())
         ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Up,Qt.KeypadModifier);w.keyPressEvent(ev)       # blok numeryczny, okno główne
         c2=w.view.opts['center'];self.assertNotEqual(c1,(c2.x(),c2.y(),c2.z()))
+        self.assertTrue(all(not item.visible() for item,_ in w.view.axis_lines))      # główny krzyż w tle ukryty
+        w.view.update();self.assertTrue(all(not item.visible() for item,_ in w.view.axis_lines))
         w.set_mode(None);self.assertEqual(w.view.sketch_axis_items,[])        # po wyjściu ze szkicu krzyż znika
+        w.view.setCameraPosition(elevation=25,azimuth=-55);w.view.update()
+        self.assertTrue(all(item.visible() for item,_ in w.view.axis_lines))          # a główny wraca
         w.enter_sketch('XY');self.assertEqual(w.view.sketch_axis_items,[])   # płaszczyzna główna ma własne osie
+        self.assertTrue(any(item.visible() for item,_ in w.view.axis_lines))
 
     def test_snap_to_grid_corner_and_face_corner_after_dwell(self):
         from rccad import snap as snapping

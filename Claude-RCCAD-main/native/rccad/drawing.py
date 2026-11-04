@@ -248,9 +248,11 @@ class DrawingSource:
     """Bryła z pamięcią rzutów (liczenie HLR jest najdroższe, więc zmiana opcji nie powtarza go).
     bends: linie gięcia rozłożonej blachy w płaszczyźnie XY - [(a, b, 'up' | 'down')] - rysowane w rzutach z góry i z dołu."""
 
-    def __init__(self, shape, name='Bryła', bends=None, sheet=None):
-        """sheet: opis blachy do rysunku do gięcia - dict(t, k, info=[dict(angle, r) na linię gięcia]); włącza wymiary linii gięcia."""
+    def __init__(self, shape, name='Bryła', bends=None, sheet=None, iso_shape=None):
+        """sheet: opis blachy do rysunku do gięcia - dict(t, k); włącza wymiary linii gięcia.
+        iso_shape: bryła do widoku izometrycznego (rozłożona blacha pokazuje tam blachę zgiętą)."""
         self.shape, self.name = shape, name
+        self.iso_shape = iso_shape
         self.bends = [(tuple(map(float, b[0][:2])), tuple(map(float, b[1][:2])), 'down' if str(b[2]).lower() == 'down' else 'up') for b in (bends or ())]
         self.bend_info = [dict(b[3]) if len(b) > 3 and b[3] else {} for b in (bends or ())]
         self.sheet = sheet
@@ -258,7 +260,7 @@ class DrawingSource:
 
     def view(self, name):
         if name not in self._cache:
-            g = project_view(self.shape, name)
+            g = project_view(self.iso_shape if name == 'iso' and self.iso_shape is not None else self.shape, name)
             if self.bends and name in ('top', 'bottom'):
                 _, normal, xdir = VIEWS[name]
                 n, x = _unit(normal), _unit(xdir)

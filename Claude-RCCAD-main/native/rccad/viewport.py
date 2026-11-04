@@ -494,8 +494,9 @@ class CadView(gl.GLViewWidget):
             return
         self._axes_busy = True
         try:
+            hidden = getattr(self, '_main_axes_hidden', False)
             for item, direction in getattr(self, 'axis_lines', ()):
-                show = abs(float(np.dot(cam, direction))) < .985
+                show = not hidden and abs(float(np.dot(cam, direction))) < .985
                 if item.visible() != show:
                     item.setVisible(show)
         finally:
@@ -1120,6 +1121,10 @@ class CadView(gl.GLViewWidget):
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.sketch_axis_items.append(item)
+        # szkic na ściance: główny krzyż osi świata znika, żeby nie mylił się z krzyżem ścianki
+        self._main_axes_hidden = bool(self.sketch_axis_items)
+        for item, _ in self.axis_lines:
+            item.setVisible(not self._main_axes_hidden)
         self.update()
 
     def keyPressEvent(self, event):

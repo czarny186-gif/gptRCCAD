@@ -1,4 +1,9 @@
-# RCCAD Desktop 0.4.16 — rysunek blachy do gięcia
+# RCCAD Desktop 0.4.17 — izometria zgiętej blachy
+
+## Zmiany 0.4.17
+
+- **Rysunek rozłożonej blachy:** widok izometryczny pokazuje blachę zgiętą, a rzuty (z góry, z przodu, z boku) nadal rozwinięcie z liniami gięcia. Dotyczy Utwórz rysunek, Rysunek automatyczny i Rysunek blachy do gięcia (tam widok izometryczny można dołączyć).
+- **Szkic na ściance:** główny krzyż osi w tle jest ukryty, widać tylko krzyż ścianki; wraca po wyjściu ze szkicu.
 
 ## Zmiany 0.4.16
 

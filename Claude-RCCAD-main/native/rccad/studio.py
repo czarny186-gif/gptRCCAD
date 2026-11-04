@@ -3565,11 +3565,13 @@ class StudioWindow(QMainWindow):
             lines = she.flat_bend_lines(flat, flat_state)
             k = float((state['recipe'].get('rules') or {}).get('kfactor', shm.K_DEFAULT))
             bends = [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in lines]
-            return flat, bends, dict(t=float(state['recipe']['t']), k=k)
+            folded = self._folded_of(shape, state)
+            return flat, bends, dict(t=float(state['recipe']['t']), k=k), folded
 
         def apply(result):
-            flat, bends, sheet = result
-            win = DrawingWindow(flat, f'{body.name} — rozwinięcie', self, views=('top',), bends=bends, sheet=sheet)
+            flat, bends, sheet, folded = result
+            win = DrawingWindow(flat, f'{body.name} — rozwinięcie', self, views=('top', 'iso') if folded is not None else ('top',),
+                                checked=('top',), bends=bends, sheet=sheet, iso_shape=folded)
             self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
             win.show()
             win.raise_()
@@ -3587,19 +3589,30 @@ class StudioWindow(QMainWindow):
         shape = body.shape
 
         def compute():
+            """(linie gięcia, blacha zgięta do widoku izometrycznego albo None)."""
             try:
-                return [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in she.flat_bend_lines(shape, state)]
+                bends = [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in she.flat_bend_lines(shape, state)]
             except Exception:
-                return []          # rysunek powstaje także wtedy, gdy linii gięcia nie da się wyznaczyć
+                bends = []          # rysunek powstaje także wtedy, gdy linii gięcia nie da się wyznaczyć
+            return bends, self._folded_of(shape, state)
         return compute
+
+    @staticmethod
+    def _folded_of(shape, state):
+        """Zgięta postać blachy (do widoku izometrycznego rysunku); None, gdy nie da się jej wyznaczyć."""
+        try:
+            return shape if not state.get('flat') else she.switch(shape, state, False)[0]
+        except Exception:
+            return None
 
     def open_drawing(self, body, auto=False):
         from . import drawing as dr
         from .drawing_window import DrawingWindow, FILTERS, export_drawing
         bends_of = self._flat_sheet_bends(body)
         if not auto:
-            def show(bends):
-                win = DrawingWindow(body.shape, body.name, self, bends=bends)
+            def show(result):
+                bends, folded = result if result is not None else (None, None)
+                win = DrawingWindow(body.shape, body.name, self, bends=bends, iso_shape=folded)
                 self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
                 win.show()
                 win.raise_()
@@ -3611,7 +3624,8 @@ class StudioWindow(QMainWindow):
 
         def build():
             from . import FULL_VERSION
-            source = dr.DrawingSource(body.shape, body.name, bends_of() if bends_of else None)
+            bends, folded = bends_of() if bends_of else (None, None)
+            source = dr.DrawingSource(body.shape, body.name, bends, iso_shape=folded)
             return dr.build_drawing(source, version=FULL_VERSION, **dr.auto_settings(source))
 
         def apply(drawing):

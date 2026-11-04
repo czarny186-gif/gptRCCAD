@@ -12,7 +12,7 @@ TOPICS = [
     ('sketch', 'Szkic', 'Rysowanie na płaszczyźnie lub ścianie', [
         'Kliknij Szkic, potem płaszczyznę środkową albo dowolną płaską ścianę bryły (podświetli się na pomarańczowo). Można też kliknąć ścianę kostki widoku.',
         'Wybierz kształt: linia, prostokąt, okrąg, łuk, wielokąt, tekst. Rysuj klik–klik. Kursor w ruchu jest wolny; gdy zatrzymasz go na chwilę przy punkcie, przyciąga się (znacznik pokazuje typ): narożniki kratek siatki, punkty i środki szkiców, krawędzie, okręgi, przecięcia oraz krawędzie i narożniki ścianki, na której rysujesz. Alt wyłącza przyciąganie.',
-        'Na ściance bryły pojawia się tymczasowy krzyż osi szkicu (czerwona U, zielona V) przechodzący przez środek ścianki. Strzałki (także z bloku numerycznego) przesuwają widok, Shift + strzałka - większy krok.',
+        'Na ściance bryły pojawia się tymczasowy krzyż osi szkicu (czerwona U, zielona V) przechodzący przez środek ścianki; główny krzyż osi jest wtedy ukryty. Strzałki (także z bloku numerycznego) przesuwają widok, Shift + strzałka - większy krok.',
         'Esc lub prawy przycisk kończy bieżącą linię i zostawia ją. Kształty nachodzące na siebie dzielą się na obszary, które można osobno wyciągać. Narzędzie Przytnij usuwa odcinek między przecięciami.']),
     ('extrude', 'Wyciągnij', 'Wyciąganie i wycinanie', [
         'Kliknij Wyciągnij i wskaż zamknięty profil szkicu, obszar między liniami albo płaską ścianę bryły. Wybrana powierzchnia świeci się. Shift + klik dodaje kolejne profile.',
@@ -70,7 +70,7 @@ TOPICS = [
         'Mierz na rysunku: kliknij dwa punkty (przyciągają się do końców linii i środków otworów) - program poda odległość w mm bryły. Kółko myszy powiększa, prawy przycisk przesuwa. Zapisz rysunek: PDF, DXF, SVG lub JPG.',
         'Rysunek automatyczny: kliknij bryłę - program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.',
         'Załaduj plik: wybierz z komputera płaski rysunek SVG albo DXF. Otworzy się okno rysunku technicznego z tym kształtem jako rzutem z góry - z wymiarami, tabelką i zapisem do PDF, DXF, SVG lub JPG. Linie, łuki, okręgi, elipsy, krzywe, polilinie i bloki są wczytywane w milimetrach (jednostki z pliku są przeliczane). Linie gięcia z warstw BEND_UP i BEND_DOWN (np. z Rozwinięcia DXF) pojawiają się jako linie gięcia: w górę ciągła, w dół przerywana, przycięte do obrysu blachy.',
-        'Rysunek rozłożonej blachy (Rozłóż blachę, potem Utwórz rysunek albo Rysunek automatyczny) zawiera linie gięcia w rzucie z góry i z dołu: w górę ciągła, w dół przerywana.',
+        'Rysunek rozłożonej blachy (Rozłóż blachę, potem Utwórz rysunek albo Rysunek automatyczny) zawiera linie gięcia w rzucie z góry i z dołu: w górę ciągła, w dół przerywana. Widok izometryczny pokazuje blachę zgiętą.',
         'Rysunek blachy do gięcia: kliknij blachę (zgiętą albo rozłożoną). Powstaje rozwinięcie widziane od góry blachy z wymiarami całości, łańcuchem wymiarów od krawędzi do linii gięcia i między liniami, opisem każdego gięcia (GÓRA / DÓŁ, kąt, promień) oraz grubością, promieniem i współczynnikiem K w lewym dolnym rogu.',
         'Linie gięcia można wymiarować (Wymiaruj, Odległość) i mierzyć (Mierz) tak samo jak krawędzie.']),
     ('t_sweep', 'Przeciągnięcie', 'Profil wzdłuż ścieżki', [
