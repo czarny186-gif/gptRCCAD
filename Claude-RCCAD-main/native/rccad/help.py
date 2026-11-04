@@ -45,7 +45,7 @@ TOPICS = [
         'Wyciąga krawędź blachy w kołnierz z zadanym promieniem gięcia (promień stempla), kątem i długością prostej części.',
         'Wybierz KOŁNIERZ, kliknij krawędź. Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Ustaw promień, kąt i długość, potem Dodaj kołnierz.',
         'Odwróć kierunek gięcia zmienia stronę bez wybierania drugiej krawędzi grubości. Można kontynuować gięcia na końcach kolejnych kołnierzy, z różnymi kątami i kierunkami.',
-        'Długość oznacza prosty odcinek za łukiem. Opcja wymiaru zewnętrznego odejmuje (R+t)·tan(kąt/2); ta interpretacja zostaje zapisana osobno dla każdego gięcia.']),
+        'Długość mierzona od (zapisane osobno dla każdego gięcia): Prosta - sam prosty odcinek za łukiem; Zewn. - od przecięcia zewnętrznych powierzchni kołnierza bazowego i nowego, prosta część = L − (R+t)·tg(kąt/2); Wewn. - od przecięcia powierzchni wewnętrznych, L − R·tg(kąt/2); Styczna - od linii stycznej do zewnętrznej strony zagięcia i prostopadłej do nowego kołnierza, L − (R+t) dla kątów od 90° (zalecana przy kątach powyżej 90°).']),
     ('t_unfold_sheet', 'Rozłóż blachę', 'Blacha: edytowalne rozwinięcie', [
         'Zaznacz jedną blachę z historią kołnierzy i kliknij Rozłóż blachę. Powstaje płaska bryła o rzeczywistej grubości; promienie, kąty, kierunki i reguły pozostają zapisane.',
         'Na prostych obszarach używaj zwykłych szkiców, wycinania, łączenia wyciągnięć i zaokrąglania krawędzi. Na łukach można przenosić wykonane na płasko wycięcia przez całą grubość, także przez granicę ściany i łuku. Kieszenie i zaokrąglenia zmieniające grubość samego łuku, zawinięcia oraz nakładające się lub rozdzielone rozwinięcia nie są obsługiwane. Nieudana operacja nie usuwa zmian.']),

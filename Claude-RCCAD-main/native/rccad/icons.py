@@ -38,6 +38,64 @@ def _draw_drawing(p, which, ink, acc, soft, pen):
         p.drawPolygon(QPolygonF([QPointF(36, 28), QPointF(38.5, 34), QPointF(45, 36.5), QPointF(38.5, 39), QPointF(36, 46), QPointF(33.5, 39), QPointF(27, 36.5), QPointF(33.5, 34)]))
 
 
+def _draw_datum(p, which, ink, acc, soft, pen):
+    """Sposób mierzenia długości kołnierza: płyta bazowa, gięcie i nowy kołnierz z wymiarem długości (pomarańczowy)
+    od odniesienia (przerywane linie): prosta część / przecięcie zewnętrznych lub wewnętrznych powierzchni / styczna do zagięcia."""
+    import numpy as np
+    alpha = math.radians(120.0 if which == 'tangent' else 60.0)
+    t, r, L, base = 4.0, 4.0, 22.0, 20.0
+    d = np.array([-math.cos(alpha), math.sin(alpha)])
+    C = np.array([0.0, t + r])
+    u = lambda phi: np.array([-math.sin(phi), -math.cos(phi)])
+    Ti, To = C + r * u(alpha), C + (r + t) * u(alpha)
+    Ei, Eo = Ti + L * d, To + L * d
+    out_n = (To - Ti) / t                       # od wnętrza gięcia na zewnątrz, prostopadle do kołnierza
+    if which == 'outer':
+        start, end, side = To - (r + t) * math.tan(alpha / 2) * d, Eo, out_n
+    elif which == 'inner':
+        start, end, side = Ti - r * math.tan(alpha / 2) * d, Ei, -out_n
+    elif which == 'tangent':
+        start, end, side = To - (r + t) * d, Eo, out_n
+    else:
+        start, end, side = To, Eo, out_n
+    a = start + 5.0 * side
+    b = a + float((end - start) @ d) * d
+    pts = [np.array([base, 0.0]), np.array([base, t]), Ei, Eo, start, a, b, np.array([0.0, 0.0])]
+    lo, hi = np.min(pts, axis=0) - 1.5, np.max(pts, axis=0) + 1.5
+    k = 42.0 / max(hi - lo)
+    cx, cy = (lo + hi) / 2
+    Q = lambda v: QPointF(float(24.0 + (v[0] - cx) * k), float(24.0 - (v[1] - cy) * k))
+    # płyta bazowa
+    p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 1.8))
+    p.drawPolygon(QPolygonF([Q((0, 0)), Q((base, 0)), Q((base, t)), Q((0, t))]))
+    # gięcie i nowy kołnierz
+    path = QPainterPath(Q((0, t)))
+    for phi in np.linspace(0, alpha, 12)[1:]:
+        path.lineTo(Q(C + r * u(phi)))
+    path.lineTo(Q(Ei)); path.lineTo(Q(Eo))
+    for phi in np.linspace(alpha, 0, 12):
+        path.lineTo(Q(C + (r + t) * u(phi)))
+    path.closeSubpath()
+    p.setBrush(soft); p.setPen(pen(ink, 1.8)); p.drawPath(path)
+    # odniesienie (przerywane)
+    dash = pen(acc, 1.4); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.6]); p.setPen(dash); p.setBrush(Qt.NoBrush)
+    if which in ('outer', 'inner'):
+        y = 0.0 if which == 'outer' else t
+        p.drawLine(Q((base, y)), Q((start[0] - 1.5, y)))
+        p.drawLine(Q(start - 1.5 * d), Q(end))
+    elif which == 'tangent':
+        p.drawLine(Q(start - 2.0 * side), Q(a + 1.5 * side))
+    else:
+        p.drawLine(Q(start - 1.0 * side), Q(a + 1.5 * side))
+    p.setPen(pen(acc, 1.2)); p.drawLine(Q(end), Q(b + 1.5 * side))
+    # wymiar długości: równoległy do kołnierza
+    p.setPen(pen(acc, 2.0)); p.drawLine(Q(a), Q(b))
+    p.setBrush(QColor(acc)); p.setPen(Qt.NoPen)
+    for tip, back in ((a, d), (b, -d)):
+        across = np.array([-back[1], back[0]])
+        p.drawPolygon(QPolygonF([Q(tip), Q(tip + 3.4 * back + 1.6 * across), Q(tip + 3.4 * back - 1.6 * across)]))
+
+
 def _draw_sheet_drawing(p, ink, acc, soft, pen):
     """Rysunek blachy do gięcia: arkusz z rozwinięciem, linie gięcia (ciągła i przerywana) i wymiar między nimi."""
     p.setBrush(soft); p.setPen(pen(ink, 2.4))
@@ -226,6 +284,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setBrush(QColor(ORANGE)); p.setPen(pen(ORANGE, 2.4)); p.drawPolygon(upper)
     elif kind in ('x_drawing', 'x_autodrawing'):
         _draw_drawing(p, kind[2:], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind in ('dl_leg', 'dl_outer', 'dl_inner', 'dl_tangent'):
+        _draw_datum(p, kind[3:], INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_sheetdrawing':
         _draw_sheet_drawing(p, BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('x_mdist', 'x_mangle', 'x_mrad', 'x_mprops'):

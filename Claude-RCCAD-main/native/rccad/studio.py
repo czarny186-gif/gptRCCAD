@@ -884,7 +884,7 @@ class StudioWindow(QMainWindow):
         self._buttons(self.sheet_panel.footer, 'Zamień na blachę', 'Anuluj', self.apply_sheet, lambda: self.set_mode(None))
 
         self.flange_panel, lay = self._panel(312, 'Kołnierz', 'x_flange', 'Wyciągnij krawędź blachy', plain=True, scroll=True)
-        lay.addWidget(_label('Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Podajesz promień gięcia (promień stempla), kąt i długość prostej części.', 'small'))
+        lay.addWidget(_label('Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Podajesz promień gięcia (promień stempla), kąt i długość kołnierza mierzoną od wybranego odniesienia.', 'small'))
         self.fl_step1 = ui.StepRow(1, 'x_area', 'Krawędź blachy', plain=True)
         lay.addWidget(self.fl_step1)
         self.fl_radius = _spin(2, .01, 1e5, 3, .5)
@@ -893,6 +893,18 @@ class StudioWindow(QMainWindow):
         self._field(lay, 'Kąt (°)', self.fl_angle)
         self.fl_length = _spin(20, .01, 1e5, 3, 1)
         self._field(lay, 'Długość kołnierza (mm)', self.fl_length)
+        self.fl_datum = ui.Segmented([('Prosta', 'leg', 'dl_leg'), ('Zewn.', 'outer', 'dl_outer'), ('Wewn.', 'inner', 'dl_inner'), ('Styczna', 'tangent', 'dl_tangent')], 34)
+        self._field(lay, 'Długość mierzona od', self.fl_datum)
+        self.fl_datum_info = _label('', 'small')
+        lay.addWidget(self.fl_datum_info)
+        tips = {'leg': 'Prosta część: długość samej prostej części kołnierza, od końca łuku gięcia.',
+                'outer': 'Powierzchnie zewnętrzne: od przecięcia zewnętrznych powierzchni kołnierza bazowego i nowego kołnierza.',
+                'inner': 'Powierzchnie wewnętrzne: od przecięcia wewnętrznych powierzchni kołnierza bazowego i nowego kołnierza.',
+                'tangent': 'Styczna do zagięcia: od linii stycznej do zewnętrznej strony zagięcia, prostopadłej do nowego kołnierza (zalecana dla kątów powyżej 90°).'}
+        for button, key in zip(self.fl_datum._buttons, self.fl_datum._data):
+            button.setToolTip(tips[key])
+        self.fl_datum.currentIndexChanged.connect(lambda *_: self.fl_datum_info.setText(tips[self.fl_datum.currentData()]))
+        self.fl_datum_info.setText(tips['leg'])
         self.fl_reverse = QCheckBox('Odwróć kierunek gięcia')
         lay.addWidget(self.fl_reverse)
         self.fl_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
@@ -931,9 +943,9 @@ class StudioWindow(QMainWindow):
         self.fl_joint.setCurrentIndex(1)
         self.fl_joint.setToolTip('Równolegle: jedna ściana dochodzi do powierzchni drugiej, również przy kolejnych gięciach. Blacharskie: proste końce pionowych ścian, ukosy między poziomymi kołnierzami i dopasowane wycięcia na łukach gięcia.')
         self._field(lay, 'Łączenie kołnierzy w narożniku', self.fl_joint)
-        self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')
+        self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')      # starsze projekty; nowe kołnierze mają odniesienie w panelu Kołnierz
         self.fl_outside.setToolTip('Podajesz długość od zewnętrznej powierzchni blachy do końca kołnierza. Program odejmuje część gięcia.')
-        lay.addWidget(self.fl_outside)
+        self.fl_outside.setVisible(False)
         self.fl_apply_rules = QPushButton('Zastosuj do zaznaczonej blachy')
         self.fl_apply_rules.setObjectName('primary')
         self.fl_apply_rules.clicked.connect(lambda _=False: self.apply_sheet_rules())
@@ -3858,7 +3870,7 @@ class StudioWindow(QMainWindow):
                         hem=dict(gap=float(self.hm_gap.value()), ret=float(self.hm_length.value())))
         else:
             spec.update(r=float(self.fl_radius.value()), angle=float(self.fl_angle.value()), length=float(self.fl_length.value()),
-                        outside=self.fl_outside.isChecked())
+                        datum=self.fl_datum.currentData(), outside=self.fl_datum.currentData() == 'outer')
             if self.fl_reverse.isChecked():
                 if spec['kind'] == 'tip':
                     spec['side'] = 'out' if spec['side'] == 'in' else 'in'

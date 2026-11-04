@@ -253,18 +253,48 @@ def _hem_of(s):
     return dict(gap=gap, ret=ret)
 
 
+DATUMS = ('leg', 'outer', 'inner', 'tangent')
+DATUM_NAMES = {'leg': 'prosta część', 'outer': 'powierzchnie zewnętrzne', 'inner': 'powierzchnie wewnętrzne', 'tangent': 'styczna do zagięcia'}
+
+
+def datum_setback(datum, r, t, angle):
+    """O ile długość mierzona od wybranego odniesienia jest większa od prostej części kołnierza (kąt gięcia w stopniach):
+    - leg: długość = prosta część (0),
+    - outer: od przecięcia zewnętrznych powierzchni kołnierza bazowego i nowego: (R + t)·tg(α/2),
+    - inner: od przecięcia wewnętrznych powierzchni: R·tg(α/2),
+    - tangent: od linii prostopadłej do nowego kołnierza, stycznej do zewnętrznej strony zagięcia: (R + t) dla α ≥ 90°,
+      (R + t)·sin α dla mniejszych kątów (skrajny punkt łuku)."""
+    a = math.radians(float(angle))
+    r, t = float(r), float(t)
+    if datum in (None, 'leg'):
+        return 0.0
+    if datum in ('outer', 'inner'):
+        if float(angle) >= 180 - 1e-9:
+            raise kernel.CadError("Przy gięciu 180° powierzchnie się nie przecinają - wybierz prostą część albo styczną do zagięcia.")
+        return (r + t if datum == 'outer' else r) * math.tan(a / 2)
+    if datum == 'tangent':
+        return (r + t) * (1.0 if float(angle) >= 90 - 1e-9 else math.sin(a))
+    raise kernel.CadError("Nieznany sposób mierzenia długości kołnierza.")
+
+
+def spec_datum(s, outside=False):
+    """Odniesienie długości kołnierza z jego opisu; starsze projekty: znacznik 'outside' oznacza powierzchnie zewnętrzne."""
+    datum = s.get('datum')
+    if datum is None:
+        datum = 'outer' if s.get('outside', outside) else 'leg'
+    return datum
+
+
 def _straight(s, t, outside):
-    """Długość prostej części kołnierza. Przy wymiarze zewnętrznym odejmujemy od podanej długości styczną
-    łuku gięcia: (promień + grubość) * tg(kąt/2)."""
+    """Długość prostej części kołnierza: podana długość minus naddatek wynikający z odniesienia (spec_datum)."""
     L = float(s['length'])
-    if not outside:
+    datum = spec_datum(s, outside)
+    if datum == 'leg':
         return L
-    if float(s['angle']) >= 180:
-        raise kernel.CadError("Dla gięcia 180° podaj długość prostej części, nie wymiar zewnętrzny.")
-    a = math.radians(float(s['angle']))
-    L2 = L - (float(s['r']) + t) * math.tan(a / 2)
-    if L2 <= 0:
-        raise kernel.CadError("Wymiar zewnętrzny jest za mały dla tego promienia i kąta.")
+    L2 = L - datum_setback(datum, s['r'], t, s['angle'])
+    if L2 <= 1e-6:
+        raise kernel.CadError(f"Długość mierzona od odniesienia „{DATUM_NAMES.get(datum, datum)}” jest za mała dla tego promienia i kąta "
+                              f"(musi być większa niż {datum_setback(datum, s['r'], t, s['angle']):.3f} mm).")
     return L2
 
 
@@ -275,7 +305,7 @@ def _effective(specs, t, miter, outside=False):
     for i in base_idx:
         s = specs[i]
         eff[i] = dict(kind='base', p0=_arr(s['p0']), p1=_arr(s['p1']), n=_unit(s['n']), m=_unit(s['m']),
-                      r=float(s['r']), angle=float(s['angle']), length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, s.get('outside', outside))), hem=_hem_of(s))
+                      r=float(s['r']), angle=float(s['angle']), length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, outside)), hem=_hem_of(s))
     corners = []
     if miter:
         for i in base_idx:
@@ -300,7 +330,7 @@ def _effective(specs, t, miter, outside=False):
             else:
                 p0, p1, n, m = _tip_geom(par, s['side'], t)
             eff[i] = dict(kind='tip', p0=p0, p1=p1, n=n, m=m, r=float(s['r']), angle=float(s['angle']),
-                          length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, s.get('outside', outside))), hem=_hem_of(s))
+                          length=(_hem_of(s)['ret'] if s.get('hem') else _straight(s, t, outside)), hem=_hem_of(s))
     # Hems use the same analytic bend + tangent return as a 180-degree
     # flange. Keep the actual gap-limited radius in every corner/development
     # frame, rather than the tool radius and the UI's placeholder angle.

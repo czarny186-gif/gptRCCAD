@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.18 — wymiary wszystkich linii gięcia
+# RCCAD Desktop 0.4.19 — odniesienie długości kołnierza
+
+## Zmiany 0.4.19
+
+- **Blacha → Kołnierz → Długość mierzona od:** cztery sposoby interpretacji długości kołnierza, zapisywane osobno dla każdego gięcia:
+  - **Prosta** - sam prosty odcinek za łukiem (jak dotychczas),
+  - **Powierzchnie zewnętrzne** - od przecięcia zewnętrznych powierzchni kołnierza bazowego i nowego kołnierza; prosta część = L − (R + t)·tg(α/2),
+  - **Powierzchnie wewnętrzne** - od przecięcia powierzchni wewnętrznych; L − R·tg(α/2),
+  - **Styczna do zagięcia** - od linii stycznej do zewnętrznej strony zagięcia, prostopadłej do nowego kołnierza; L − (R + t) dla α ≥ 90°.
+- Dotychczasowa opcja „Długość kołnierza jako wymiar zewnętrzny” (Reguły blach) odpowiada Powierzchniom zewnętrznym; starsze projekty zachowują swoje wymiary.
 
 ## Zmiany 0.4.18
 

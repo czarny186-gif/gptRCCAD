@@ -340,7 +340,7 @@ class StudioTests(unittest.TestCase):
     def test_sheet_outside_tip_pick_survives_new_dimension_setting(self):
         from rccad import sheetmetal as shm
         body = self.converted_sheet();w = self.w
-        w.fl_outside.setChecked(True)
+        w.fl_datum.setCurrentIndex(w.fl_datum.findData('outer'))
         w.apply_flange();self.wait()
         state = w._sheet_state(body.id)
         eff, _ = shm._effective(state['specs'], state['t'], True, True)
@@ -348,7 +348,7 @@ class StudioTests(unittest.TestCase):
         midpoint = (a+b)/2
         folded = w.document.get(body.id)
         index = next(i for i,e in enumerate(folded.shape.Edges()) if np.linalg.norm(np.array(e.positionAt(.5).toTuple())-midpoint) < 1e-4)
-        w.fl_outside.setChecked(False)
+        w.fl_datum.setCurrentIndex(w.fl_datum.findData('leg'))
         w.fl_armed = False
         with patch.object(w.view, 'nearest_edge', return_value=(body.id,index,None)):
             w.pick_flange(5,5)
@@ -393,9 +393,36 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),11)
         w.redo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),volume,delta=.001)
 
+    def test_flange_length_datum_outer_inner_tangent_and_leg(self):
+        from rccad import sheetmetal as shm
+        w=self.w;self.assertEqual(w.fl_datum.currentData(),'leg')
+        L,r,t=20.0,2.0,2.0
+        tops={}
+        for datum in ('leg','outer','inner','tangent'):
+            body=self.converted_sheet();w.fl_length.setValue(L);w.fl_radius.setValue(r);w.fl_angle.setValue(90)
+            w.fl_datum.setCurrentIndex(w.fl_datum.findData(datum))
+            self.assertTrue(w.fl_datum_info.text().startswith({'leg':'Prosta część','outer':'Powierzchnie zewnętrzne','inner':'Powierzchnie wewnętrzne','tangent':'Styczna do zagięcia'}[datum]))
+            w.apply_flange();self.wait()
+            spec=w._sheet_state(body.id)['specs'][-1];self.assertEqual(spec['datum'],datum)
+            tops[datum]=w.document.get(body.id).shape.BoundingBox().zmax
+            w.document.commit([]);w.set_mode(None)
+        # ścianka w górę na płycie z=0..2: wysokość od spodu płyty
+        self.assertAlmostEqual(tops['leg'],t+r+L,3)          # sama prosta część nad łukiem
+        self.assertAlmostEqual(tops['outer'],L,3)            # od zewnętrznej powierzchni płyty (spód) do końca
+        self.assertAlmostEqual(tops['inner'],t+L,3)          # od wewnętrznej (górnej) powierzchni płyty
+        self.assertAlmostEqual(tops['tangent'],L,3)          # przy 90° styczna pokrywa się z powierzchnią zewnętrzną
+        # kąty inne niż 90°: naddatki wg wzorów
+        self.assertAlmostEqual(shm.datum_setback('outer',2,2,60),4*math.tan(math.radians(30)),9)
+        self.assertAlmostEqual(shm.datum_setback('inner',2,2,120),2*math.tan(math.radians(60)),9)
+        self.assertAlmostEqual(shm.datum_setback('tangent',2,2,135),4.0,9)
+        self.assertAlmostEqual(shm.datum_setback('tangent',2,2,30),4*.5,9)
+        with self.assertRaises(k.CadError):shm.datum_setback('outer',2,2,180)
+        with self.assertRaises(k.CadError):shm._straight(dict(length=3,r=2,angle=90,datum='outer'),2,False)
+        self.assertEqual(shm.spec_datum(dict(outside=True)),'outer');self.assertEqual(shm.spec_datum({}),'leg')    # starsze projekty
+
     def test_sheet_rules_rebuild_existing_bends_without_adding_one(self):
         body = self.converted_sheet();w = self.w
-        w.fl_outside.setChecked(True);w.apply_flange();self.wait()
+        w.fl_datum.setCurrentIndex(w.fl_datum.findData('outer'));w.apply_flange();self.wait()
         original = w.document.get(body.id).shape.Volume()
         w.toggle_mode('rules');w.fl_outside.setChecked(False);w.fl_gap.setValue(.5)
         w.fl_apply_rules.click();self.wait()
