@@ -70,6 +70,8 @@ def sheet_of_face(shape, face):
     p0 = verts[0]
     near = sorted(verts[1:], key=lambda q: float(np.linalg.norm(q - p0)))
     a, b = near[0] - p0, near[1] - p0            # dwa boki przy p0 (przekątna jest najdłuższa)
+    if float(np.cross(a, b) @ n) < 0:
+        a, b = b, a           # oś z blachy = normalna wybranej ściany: wybrana ściana jest „górą” (rozwinięcie i linie gięcia patrzą od niej)
     z = _unit(np.cross(a, b))
     x = _unit(a)
     y = np.cross(z, x)
@@ -320,7 +322,49 @@ def _cutter(P, N, sgn, c, Kh, Kv):
     return cq.Workplane(plane).rect(2 * Kv, 2 * Kh).extrude(2 * Kh).val()
 
 
+# --- pamięć cięć: dodanie kolejnego kołnierza powtarza dla pozostałych kołnierzy dokładnie te same cięcia płaszczyznami.
+# Każda część ma podpis (parametry kołnierza + ciąg wykonanych cięć); identyczny podpis = identyczna bryła, więc wynik
+# można wziąć z pamięci. Podpisy używają pełnej precyzji liczb (repr), więc różne dane nigdy nie dają tego samego klucza.
+_OPS_CACHE = {}
+_OPS_ORDER = []
+_OPS_LIMIT = 4000
+
+
+def _num_key(v):
+    return tuple(repr(float(x)) for x in np.ravel(np.asarray(v, float)))
+
+
+def _sig(shape):
+    return getattr(shape, '_rccad_sig', None)
+
+
+def _signed(shape, sig):
+    try:
+        shape._rccad_sig = sig
+    except Exception:
+        pass
+    return shape
+
+
+def _ops_memo(key, compute):
+    if key is not None and key in _OPS_CACHE:
+        return _OPS_CACHE[key]
+    result = compute()
+    if key is not None:
+        _OPS_CACHE[key] = _signed(result, key)
+        _OPS_ORDER.append(key)
+        while len(_OPS_ORDER) > _OPS_LIMIT:
+            _OPS_CACHE.pop(_OPS_ORDER.pop(0), None)
+    return result
+
+
 def _miter(solid, P, N, sgn, c, Kh, Kv):
+    sig = _sig(solid)
+    key = None if sig is None else ('miter', sig, _num_key(P), _num_key(N), repr(float(sgn)), repr(float(c)), repr(float(Kh)), repr(float(Kv)))
+    return _ops_memo(key, lambda: _miter_raw(solid, P, N, sgn, c, Kh, Kv))
+
+
+def _miter_raw(solid, P, N, sgn, c, Kh, Kv):
     """Ukos w narożniku: usuwa z kołnierza część po stronie ukosu w pasie wokół narożnika na całej wysokości.
     Końce kołnierzy i zawinięć idą wzdłuż płaszczyzny ukosu, a nie wychodzą poza nią."""
     region = _cutter(P, N, sgn, c, Kh, Kv)
@@ -328,6 +372,12 @@ def _miter(solid, P, N, sgn, c, Kh, Kv):
 
 
 def _endcut(solid, P, d, K):
+    sig = _sig(solid)
+    key = None if sig is None else ('end', sig, _num_key(P), _num_key(d), repr(float(K)))
+    return _ops_memo(key, lambda: _endcut_raw(solid, P, d, K))
+
+
+def _endcut_raw(solid, P, d, K):
     """Cięcie prostopadłe (90°) na końcu ściany: usuwa część po stronie d od płaszczyzny przechodzącej przez P."""
     d = _unit(d)
     v = np.array([0.0, 0.0, 1.0]) if abs(float(d[2])) < 0.9 else np.array([1.0, 0.0, 0.0])
@@ -387,7 +437,15 @@ def _join_sheet(shape, parts):
     # and after splitting a ruled relief surface. Use adaptive integration for
     # these surfaces and intersected cylinders so a clean join is not
     # reported as a material collision.
-    volume = lambda piece: piece.Volume(1e-9)
+    def volume(piece):          # dokładna objętość części z podpisem jest stała - liczona raz
+        sig = _sig(piece)
+        if sig is None:
+            return piece.Volume(1e-9)
+        key = ('volume', sig)
+        if key not in _OPS_CACHE:
+            _OPS_CACHE[key] = piece.Volume(1e-9)
+            _OPS_ORDER.append(key)
+        return _OPS_CACHE[key]
     expected = volume(shape) + sum(volume(p) for p in parts)
     result = kernel.boolean('union', shape, parts)
     if expected - volume(result) > max(1e-4, expected * 1e-8):
@@ -425,6 +483,19 @@ def _corner_layout(specs, eff, corners, t):
 
 
 def _flange_parts(f, t):
+    """Łuk i prosta część kołnierza (z pamięcią: te same parametry kołnierza dają te same, podpisane części)."""
+    fkey = _recipe_key([f, float(t)], 0)
+    if fkey is None:
+        return _flange_parts_raw(f, t)
+    key = ('parts', fkey)
+    if key not in _OPS_CACHE:
+        pieces = _flange_parts_raw(f, t)
+        _OPS_CACHE[key] = tuple(_signed(piece, (key, n)) for n, piece in enumerate(pieces))
+        _OPS_ORDER.append(key)
+    return list(_OPS_CACHE[key])
+
+
+def _flange_parts_raw(f, t):
     """Separate the bend and straight leg so butt joints cannot clip a bend as a box."""
     if f.get('hem'):
         f=dict(f,r=_hem_R(f['r'],f['hem']['gap']),angle=180.,length=f['hem']['ret'])
@@ -452,6 +523,14 @@ def _leg_profile(f, root, P, normal, t):
 
 
 def _curved_endcut(solid, frame, t, point, direction, start, end, reach, vertical_end=False):
+    sig = _sig(solid)
+    fkey = _recipe_key(frame, 0) if sig is not None else None
+    key = None if fkey is None else ('curved', sig, fkey, repr(float(t)), _num_key(point), _num_key(direction),
+                                      repr(float(start)), repr(float(end)), repr(float(reach)), bool(vertical_end))
+    return _ops_memo(key, lambda: _curved_endcut_raw(solid, frame, t, point, direction, start, end, reach, vertical_end))
+
+
+def _curved_endcut_raw(solid, frame, t, point, direction, start, end, reach, vertical_end=False):
     """Relieve a bend between its parent's square end and the next panel end.
 
     The transition follows the tangents of the circular bend. Only the end

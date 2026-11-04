@@ -400,12 +400,13 @@ class Canvas(QWidget):
                     consider(math.hypot(sheet[0] - f['mid'][0], sheet[1] - f['mid'][1]), tp,
                              dict(view=v, kind='end', pt=tuple(f['mdl'][3]), line=None, sheet=f['mid'], label='środek łuku'))
             elif f['kind'] == 'line':
-                for key, idx, label in (('a', 0, 'koniec krawędzi'), ('b', 1, 'koniec krawędzi')):
+                name = f.get('name', 'krawędź')
+                for key, idx in (('a', 0), ('b', 1)):
                     consider(math.hypot(sheet[0] - f[key][0], sheet[1] - f[key][1]), tp,
-                             dict(view=v, kind='end', pt=tuple(f['mdl'][idx]), line=None, sheet=f[key], label=label))
+                             dict(view=v, kind='end', pt=tuple(f['mdl'][idx]), line=None, sheet=f[key], label='koniec: ' + name if 'name' in f else 'koniec krawędzi'))
                 mid = ((f['a'][0] + f['b'][0]) / 2, (f['a'][1] + f['b'][1]) / 2)
                 consider(math.hypot(sheet[0] - mid[0], sheet[1] - mid[1]), tp * 0.8,
-                         dict(view=v, kind='end', pt=D.model_of(d, v, mid), line=None, sheet=mid, label='środek krawędzi'))
+                         dict(view=v, kind='end', pt=D.model_of(d, v, mid), line=None, sheet=mid, label='środek: ' + name if 'name' in f else 'środek krawędzi'))
         if best is not None:
             return best
         for s in d.snaps:      # końce krawędzi krzywych (łuki, fasolki, elipsy)
@@ -424,7 +425,7 @@ class Canvas(QWidget):
                 q = (a[0] + t * dx, a[1] + t * dy)
                 (ma, mb) = f['mdl']
                 consider(math.hypot(sheet[0] - q[0], sheet[1] - q[1]), te,
-                         dict(view=v, kind='edge', pt=(ma[0] + t * (mb[0] - ma[0]), ma[1] + t * (mb[1] - ma[1])), line=(ma, mb), sheet=q, label='krawędź'))
+                         dict(view=v, kind='edge', pt=(ma[0] + t * (mb[0] - ma[0]), ma[1] + t * (mb[1] - ma[1])), line=(ma, mb), sheet=q, label=f.get('name', 'krawędź')))
             elif f['kind'] == 'circle':
                 dist = math.hypot(sheet[0] - f['c'][0], sheet[1] - f['c'][1])
                 if dist > 1e-9:
@@ -874,7 +875,7 @@ def _big(text, icon_name, checkable=False, primary=False, tip=''):
 class DrawingWindow(QMainWindow):
     """Osobne, niemodalne okno. Rzuty liczone są w tle, zmiana opcji przelicza tylko rozmieszczenie."""
 
-    def __init__(self, shape, name='Bryła', parent=None, views=None, bends=None):
+    def __init__(self, shape, name='Bryła', parent=None, views=None, bends=None, sheet=None):
         """views: rzuty dostępne w oknie (np. ('top',) dla płaskiego rysunku wczytanego z SVG / DXF); None = wszystkie."""
         super().__init__(parent)
         self._only_views = tuple(views) if views else None
@@ -886,7 +887,7 @@ class DrawingWindow(QMainWindow):
         self.resize(w, h)
         self.setMinimumSize(min(760, w), min(520, h))
         self.setStyleSheet(QSS)
-        self.source = D.DrawingSource(shape, name, bends)
+        self.source = D.DrawingSource(shape, name, bends, sheet)
         self.pool = QThreadPool.globalInstance()
         self._ticket = 0
         self._busy = False
@@ -1014,6 +1015,8 @@ class DrawingWindow(QMainWindow):
                               ('details', 'Wszystkie wymiary konturu', False),
                               ('centers', 'Osie symetrii otworów', True), ('hidden', 'Krawędzie niewidoczne (kreskowane)', True)):
             box = QCheckBox(text)
+            if sheet:       # rysunek blachy do gięcia: wymiary całości i otworów, bez krawędzi spodu (powtarzają obrys)
+                on = {'overall': True, 'circles': True, 'hidden': False}.get(key, on)
             box.setChecked(on)
             box.toggled.connect(self.request)
             cl.addWidget(box)

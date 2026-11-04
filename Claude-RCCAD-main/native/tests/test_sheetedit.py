@@ -253,3 +253,20 @@ class ParallelReliefMigrationTests(unittest.TestCase):
         self.assertEqual(st['bend_engine'],3)
         folded,st=e.switch(flat,st,False)
         self.assertLess(folded.cut(original.cut(tool)).Volume(1e-9)+original.cut(tool).cut(folded).Volume(1e-9),1e-4)
+
+
+class BendDirectionFromPickedFaceTests(unittest.TestCase):
+    """Wybrana przy konwersji ściana jest górą blachy: ścianki w górę nad nią to gięcia UP (na rysunku linia ciągła)
+    - niezależnie od proporcji płyty i kolejności jej wierzchołków."""
+
+    def test_walls_up_are_bend_up_for_any_plate_proportions(self):
+        for size in ((100,50,2),(50,100,2),(40,40,2)):
+            plate=k.box(*size)
+            top=next(f for f in plate.Faces() if abs(f.Center().z-size[2])<1e-6)
+            base=s.sheet_of_face(plate,top)['base']
+            self.assertGreater(base['z'][2],.99,size)
+            lx,ly=size[0],size[1]
+            r=dict(base=base,t=2,rules={},flanges=[dict(kind='base',p0=[lx,0,2],p1=[lx,ly,2],n=[0,0,1],m=[1,0,0],r=2,angle=90,length=15)])
+            folded=s.build_sheet(r);self.assertGreater(folded.BoundingBox().zmax,10,size)      # ścianka w górę
+            flat,fs=e.switch(folded,e.state(r,False),True)
+            self.assertEqual([l['direction'] for l in e.flat_bend_lines(flat,fs)],['UP'],size)

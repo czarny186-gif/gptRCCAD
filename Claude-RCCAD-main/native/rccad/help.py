@@ -70,7 +70,9 @@ TOPICS = [
         'Mierz na rysunku: kliknij dwa punkty (przyciągają się do końców linii i środków otworów) - program poda odległość w mm bryły. Kółko myszy powiększa, prawy przycisk przesuwa. Zapisz rysunek: PDF, DXF, SVG lub JPG.',
         'Rysunek automatyczny: kliknij bryłę - program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.',
         'Załaduj plik: wybierz z komputera płaski rysunek SVG albo DXF. Otworzy się okno rysunku technicznego z tym kształtem jako rzutem z góry - z wymiarami, tabelką i zapisem do PDF, DXF, SVG lub JPG. Linie, łuki, okręgi, elipsy, krzywe, polilinie i bloki są wczytywane w milimetrach (jednostki z pliku są przeliczane). Linie gięcia z warstw BEND_UP i BEND_DOWN (np. z Rozwinięcia DXF) pojawiają się jako linie gięcia: w górę ciągła, w dół przerywana, przycięte do obrysu blachy.',
-        'Rysunek rozłożonej blachy (Rozłóż blachę, potem Utwórz rysunek albo Rysunek automatyczny) zawiera linie gięcia w rzucie z góry i z dołu: w górę ciągła, w dół przerywana.']),
+        'Rysunek rozłożonej blachy (Rozłóż blachę, potem Utwórz rysunek albo Rysunek automatyczny) zawiera linie gięcia w rzucie z góry i z dołu: w górę ciągła, w dół przerywana.',
+        'Rysunek blachy do gięcia: kliknij blachę (zgiętą albo rozłożoną). Powstaje rozwinięcie widziane od góry blachy z wymiarami całości, łańcuchem wymiarów od krawędzi do linii gięcia i między liniami, opisem każdego gięcia (GÓRA / DÓŁ, kąt, promień) oraz grubością, promieniem i współczynnikiem K w lewym dolnym rogu.',
+        'Linie gięcia można wymiarować (Wymiaruj, Odległość) i mierzyć (Mierz) tak samo jak krawędzie.']),
     ('t_sweep', 'Przeciągnięcie', 'Profil wzdłuż ścieżki', [
         'Przeciąga profil szkicu wzdłuż ścieżki, tworząc bryłę. Służy do rur, prowadnic, uchwytów i każdej części o stałym przekroju biegnącej wzdłuż krzywej.',
         'Kliknij Przeciągnięcie, wskaż zamknięty profil (szkic, obszar albo płaską ścianę), a potem ścieżkę: linię lub łuk szkicu albo krawędź bryły. Profil powinien leżeć na początku ścieżki, prostopadle do niej.',

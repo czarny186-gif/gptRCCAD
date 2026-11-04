@@ -177,12 +177,12 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
-        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'importdrawing']}
+        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek
 TOOLS_TOP = 50      # przyciski narzędzi pod zakładkami
 MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
-DRAWING_MODES = ('drawing', 'autodrawing')
+DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing')
 
 
 class StudioWindow(QMainWindow):
@@ -395,6 +395,7 @@ class StudioWindow(QMainWindow):
                  ('mprops', ui.style_icon('mprops', 38), 'Właściwości: objętość, pole, wymiary, środek masy'),
                  ('drawing', ui.style_icon('drawing', 38), 'Utwórz rysunek techniczny — rzuty, wymiary, pomiary, zapis'),
                  ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku'),
+                 ('sheetdrawing', ui.style_icon('sheetdrawing', 38), 'Rysunek blachy do gięcia — rozwinięcie z liniami gięcia, wymiarami, promieniem i grubością'),
                  ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera')]
         self.tools = {}
         for key, icon, tip in icons:
@@ -999,7 +1000,8 @@ class StudioWindow(QMainWindow):
         self.dr_panels = {}
         for key, title, kind, sub, desc in (
                 ('drawing', 'Rysunek techniczny', 'x_drawing', 'Wskaż bryłę', 'Kliknij bryłę (podświetla się na niebiesko). Otworzy się osobne okno: wybierzesz rzuty, wymiary i arkusz, zmierzysz dowolne miejsce rysunku i zapiszesz go jako PDF, DXF, SVG lub JPG.'),
-                ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę', 'Kliknij bryłę. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.')):
+                ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę', 'Kliknij bryłę. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.'),
+                ('sheetdrawing', 'Rysunek blachy do gięcia', 'x_sheetdrawing', 'Wskaż blachę', 'Kliknij blachę (zgiętą albo rozłożoną). Powstanie rozwinięcie widziane od góry blachy: wymiary całości, odległości linii gięcia od krawędzi i między sobą, kierunek, kąt i promień każdego gięcia oraz grubość blachy.')):
             panel, lay = self._panel(312, title, kind, sub, plain=True)
             lay.addWidget(_label(desc, 'small'))
             lay.addWidget(_label('Kliknij bryłę na polu roboczym.', 'status'))
@@ -3537,8 +3539,42 @@ class StudioWindow(QMainWindow):
             self.toast('Kliknij bryłę (nie szkic).')
             return
         mode = self.mode
+        if mode == 'sheetdrawing':
+            if self._editable_sheet_state(body.id) is None:
+                self.toast('Kliknij blachę (bryłę zamienioną na blachę, z zapisanymi gięciami).')
+                return
+            self.set_mode(None)
+            self.open_sheet_drawing(body)
+            return
         self.set_mode(None)
         self.open_drawing(body, auto=mode == 'autodrawing')
+
+    def open_sheet_drawing(self, body):
+        """Rysunek blachy do gięcia: rozwinięcie (liczone w tle także z blachy zgiętej) z liniami gięcia, łańcuchami wymiarów
+        od krawędzi i między liniami, opisem gięć (kierunek, kąt, promień) oraz grubością - w oknie rysunku do sprawdzenia i zapisu."""
+        from .drawing_window import DrawingWindow
+        state = self._editable_sheet_state(body.id)
+        if state is None:
+            self.toast('To nie jest blacha z zapisanymi gięciami.')
+            return
+        shape = body.shape
+
+        def build():
+            flat = shape if state.get('flat') else she.switch(shape, state, True)[0]
+            flat_state = dict(state, flat=True)
+            lines = she.flat_bend_lines(flat, flat_state)
+            k = float((state['recipe'].get('rules') or {}).get('kfactor', shm.K_DEFAULT))
+            bends = [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in lines]
+            return flat, bends, dict(t=float(state['recipe']['t']), k=k)
+
+        def apply(result):
+            flat, bends, sheet = result
+            win = DrawingWindow(flat, f'{body.name} — rozwinięcie', self, views=('top',), bends=bends, sheet=sheet)
+            self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
+            win.show()
+            win.raise_()
+
+        self.run_operation('Rysunek blachy', build, apply)
 
     def _flat_sheet_bends(self, body):
         """Funkcja licząca linie gięcia rozłożonej blachy (w górę / w dół, przycięte do obrysu) albo None, gdy bryła nie jest płaską blachą."""
@@ -3552,7 +3588,7 @@ class StudioWindow(QMainWindow):
 
         def compute():
             try:
-                return [(l['a'], l['b'], l['direction']) for l in she.flat_bend_lines(shape, state)]
+                return [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in she.flat_bend_lines(shape, state)]
             except Exception:
                 return []          # rysunek powstaje także wtedy, gdy linii gięcia nie da się wyznaczyć
         return compute

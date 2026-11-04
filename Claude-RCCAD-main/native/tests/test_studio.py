@@ -207,6 +207,37 @@ class StudioTests(unittest.TestCase):
             win=w._drawing_windows[-1];self.assertEqual(len(win.source.bends),len(doc.modelspace().query('LINE[layer!="CUT"]')))
             win.close()
 
+    def test_sheet_bending_drawing_has_bend_chain_dims_labels_and_notes(self):
+        from rccad import drawing as D
+        w=self.w;body=self.converted_sheet()
+        w.apply_flange();self.wait()                       # zgięta blacha z jednym kołnierzem
+        self.assertIn('sheetdrawing',w.tools);w.set_mode(None);w.toggle_mode('sheetdrawing');self.assertEqual(w._tab,'Rysunek')
+        with patch.object(w.view,'pick_face',return_value=(body.id,(0,0,1),(50,25,2))):w.view_clicked(5,5,False,False)
+        self.wait();win=w._drawing_windows[-1]
+        self.assertIn('rozwinięcie',win.windowTitle());self.assertEqual(win.settings()['views'],('top',))
+        self.assertEqual(len(win.source.bends),1);self.assertEqual(win.source.sheet['t'],2.0)
+        self.assertEqual(win.source.bend_info[0]['angle'],90.0)
+        d=D.build_drawing(win.source,**win.settings())
+        texts=[p.text for p in d.prims if isinstance(p,D.Label)]
+        self.assertTrue(any(t.startswith('GÓRA 90° R2') for t in texts),texts)          # ścianka w górę: opis i linia ciągła
+        self.assertTrue(any('Grubość blachy t = 2 mm' in t for t in texts))
+        self.assertTrue(any('Promień gięcia' in t and 'R = 2 mm' in t for t in texts))
+        g=win.source.view('top');(pts,direction,_)=g.bends[0];self.assertEqual(direction,'up')
+        # łańcuch: krawędź - linia gięcia - krawędź (suma = wymiar całości w kierunku prostopadłym do linii)
+        horizontal=abs(pts[0][1]-pts[1][1])<1e-6
+        lo,hi=(g.bbox[1],g.bbox[3]) if horizontal else (g.bbox[0],g.bbox[2]);at=pts[0][1] if horizontal else pts[0][0]
+        for value in (at-lo,hi-at):self.assertIn(D.fmt(value),texts)
+        # linia gięcia jest elementem do wymiarowania i mierzenia
+        bend=[f for f in d.features if f.get('bend')];self.assertEqual(len(bend),1);self.assertEqual(bend[0]['name'],'linia gięcia')
+        win.canvas.drawing=d;mid=((bend[0]['a'][0]+bend[0]['b'][0])/2+.3,(bend[0]['a'][1]+bend[0]['b'][1])/2+.3)
+        self.assertIs(win.canvas.feature_at(mid),bend[0])
+        win.close()
+        w.set_mode(None);w.toggle_mode('sheetdrawing')        # zwykła bryła nie jest blachą
+        box=Body('Kostka',k.box(5,5,5).translate(cq.Vector(200,0,0))).prepared();w.document.commit([*w.document.bodies,box]);w.refresh()
+        n=len(w._drawing_windows)
+        with patch.object(w.view,'pick_face',return_value=(box.id,(0,0,1),(202,2,5))):w.view_clicked(5,5,False,False)
+        self.wait();self.assertEqual(len(w._drawing_windows),n);self.assertEqual(w.mode,'sheetdrawing')
+
     def test_loaded_dxf_bend_lines_are_clipped_to_outline_and_holes(self):
         import tempfile,os,ezdxf
         from rccad import import2d

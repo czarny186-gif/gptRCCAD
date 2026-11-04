@@ -248,9 +248,12 @@ class DrawingSource:
     """Bryła z pamięcią rzutów (liczenie HLR jest najdroższe, więc zmiana opcji nie powtarza go).
     bends: linie gięcia rozłożonej blachy w płaszczyźnie XY - [(a, b, 'up' | 'down')] - rysowane w rzutach z góry i z dołu."""
 
-    def __init__(self, shape, name='Bryła', bends=None):
+    def __init__(self, shape, name='Bryła', bends=None, sheet=None):
+        """sheet: opis blachy do rysunku do gięcia - dict(t, k, info=[dict(angle, r) na linię gięcia]); włącza wymiary linii gięcia."""
         self.shape, self.name = shape, name
-        self.bends = [(tuple(map(float, a[:2])), tuple(map(float, b[:2])), 'down' if str(d).lower() == 'down' else 'up') for a, b, d in (bends or ())]
+        self.bends = [(tuple(map(float, b[0][:2])), tuple(map(float, b[1][:2])), 'down' if str(b[2]).lower() == 'down' else 'up') for b in (bends or ())]
+        self.bend_info = [dict(b[3]) if len(b) > 3 and b[3] else {} for b in (bends or ())]
+        self.sheet = sheet
         self._cache = {}
 
     def view(self, name):
@@ -261,9 +264,9 @@ class DrawingSource:
                 n, x = _unit(normal), _unit(xdir)
                 y = np.cross(n, x)
                 flip = name == 'bottom'          # od spodu gięcie w górę wygląda jak gięcie w dół
-                for a, b, d in self.bends:
+                for (a, b, d), info in zip(self.bends, self.bend_info):
                     pts = np.array([[a[0] * x[0] + a[1] * x[1], a[0] * y[0] + a[1] * y[1]], [b[0] * x[0] + b[1] * x[1], b[0] * y[0] + b[1] * y[1]]], float)
-                    g.bends.append((pts, ({'up': 'down', 'down': 'up'}[d] if flip else d)))
+                    g.bends.append((pts, ({'up': 'down', 'down': 'up'}[d] if flip else d), info))
             self._cache[name] = g
         return self._cache[name]
 
@@ -319,6 +322,67 @@ def _centerlines(prims, c, rp):
     e = rp + 2.5
     prims.append(Poly([(c[0] - e, c[1]), (c[0] + e, c[1])], 'center'))
     prims.append(Poly([(c[0], c[1] - e), (c[0], c[1] + e)], 'center'))
+
+
+def _bend_dims(prims, g, place, x0, y0, x1, y1):
+    """Rysunek do gięcia: łańcuch wymiarów krawędź - linia gięcia - linia gięcia - ... - krawędź, osobno dla linii poziomych
+    (wymiary po lewej) i pionowych (wymiary nad rzutem), oraz opis każdej linii: kierunek, kąt i promień gięcia."""
+    xs, ys = set(), set()
+    for pts, direction, info in g.bends:
+        (ax, ay), (bx, by) = pts[0], pts[-1]
+        if abs(ay - by) < 1e-6:
+            ys.add(round(float(ay), 6))
+        elif abs(ax - bx) < 1e-6:
+            xs.add(round(float(ax), 6))
+        # opis linii gięcia: kierunek, kąt, promień (wzdłuż linii, tuż obok niej)
+        text = ('GÓRA' if direction == 'up' else 'DÓŁ') + (f" {fmt(info['angle'])}°" if info.get('angle') is not None else '') + \
+               (f" R{fmt(info['r'])}" if info.get('r') is not None else '')
+        A, B = np.array(place((ax, ay)), float), np.array(place((bx, by)), float)
+        t = B - A
+        length = float(np.linalg.norm(t))
+        if length < 1e-6:
+            continue
+        t /= length
+        ang = math.degrees(math.atan2(t[1], t[0]))
+        if ang > 90.0 + 1e-6 or ang <= -90.0 + 1e-6:
+            ang += 180.0 if ang <= 0 else -180.0
+        r = math.radians(ang)
+        pos = (A + B) / 2 + np.array([-math.sin(r), math.cos(r)]) * 1.0
+        prims.append(Label(float(pos[0]), float(pos[1]), text, 2.5, 'c', ang))
+    edge_y = (g.bbox[1], g.bbox[3])
+    if ys:
+        chain = [edge_y[0], *sorted(ys), edge_y[1]]
+        for p, q in zip(chain, chain[1:]):
+            if q - p > 1e-6:
+                _dim_vertical(prims, place((0, p))[1], place((0, q))[1], x0, x0 - 10.0, fmt(q - p))
+    if xs:
+        chain = [g.bbox[0], *sorted(xs), g.bbox[2]]
+        for p, q in zip(chain, chain[1:]):
+            if q - p > 1e-6:
+                _dim_horizontal(prims, place((p, 0))[0], place((q, 0))[0], y1, y1 + 10.0, fmt(q - p))
+
+
+def _sheet_notes(d, source, names):
+    """Opis blachy w lewym dolnym rogu arkusza: grubość, promienie, współczynnik K, rozmiar rozwinięcia i znaczenie linii."""
+    sheet = source.sheet
+    radii = sorted({round(float(i['r']), 4) for i in source.bend_info if i.get('r') is not None})
+    lines = []
+    if sheet.get('t') is not None:
+        lines.append(f"Grubość blachy t = {fmt(sheet['t'])} mm")
+    if radii:
+        lines.append('Promień gięcia (wewn.) R = ' + ', '.join(fmt(r) for r in radii) + ' mm')
+    if sheet.get('k') is not None:
+        lines.append(f"Współczynnik K = {fmt(sheet['k'])}")
+    for v in ('top', 'bottom'):
+        if v in names:
+            g = source.view(v)
+            lines.append(f"Rozwinięcie {fmt(g.bbox[2] - g.bbox[0])} × {fmt(g.bbox[3] - g.bbox[1])} mm, gięć: {len(source.bends)}")
+            break
+    lines.append('Gięcie w górę - linia ciągła, w dół - przerywana')
+    y = 10 + 3.0 + 4.6 * (len(lines) - 1)
+    for text in lines:
+        d.prims.append(Label(24.0, y, text, 3.0, 'l'))
+        y -= 4.6
 
 
 def _title_block(d, version):
@@ -404,10 +468,13 @@ def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape
             line = [place(p) for p in pts]
             prims.append(Poly(line, 'visible'))
             d.snaps += [line[0], line[-1]]
-        for pts, direction in g.bends:       # linie gięcia: w górę ciągła, w dół przerywana
+        for pts, direction, _info in g.bends:       # linie gięcia: w górę ciągła, w dół przerywana; można je wymiarować i mierzyć jak krawędzie
             line = [place(p) for p in pts]
             prims.append(Poly(line, 'bend_up' if direction == 'up' else 'bend_down'))
             d.snaps += [line[0], line[-1]]
+            if v != 'iso' and len(pts) == 2 and float(np.linalg.norm(pts[1] - pts[0])) > 1e-6:
+                d.features.append(dict(view=v, kind='line', bend=direction, name='linia gięcia',
+                                       mdl=(tuple(map(float, pts[0])), tuple(map(float, pts[1]))), a=line[0], b=line[1]))
         if hidden:
             for pts in g.hidden:
                 line = [place(p) for p in pts]
@@ -446,6 +513,8 @@ def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape
                     continue
                 used.add(key)
                 _dim_circle(prims, d.snaps, place(circ['c']), rp, circ['r'], circ['full'], place(circ['mid']), 45.0 + 30.0 * (k % 3))
+        if getattr(source, 'sheet', None) and g.bends:
+            _bend_dims(prims, g, place, x0, y0, x1, y1)
         if overall and (g.bbox[2] - g.bbox[0]) > 1e-6:
             _dim_horizontal(prims, x0, x1, y0, y0 - 10.0, fmt(g.bbox[2] - g.bbox[0]))
         if overall and (g.bbox[3] - g.bbox[1]) > 1e-6:
@@ -453,6 +522,8 @@ def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape
     if details:
         for m in contour_dims(d, {v: source.view(v) for v in names}):
             prims += manual_prims(d, m)
+    if getattr(source, 'sheet', None):
+        _sheet_notes(d, source, names)
     _title_block(d, version)
     return d
 
@@ -691,7 +762,7 @@ def contour_dims(d, g_by_view):
             continue
         seen, sides = set(), {}
         bw, bh = g.bbox[2] - g.bbox[0], g.bbox[3] - g.bbox[1]
-        for f in [x for x in d.features if x['view'] == v and x['kind'] == 'line' and not x.get('hidden')]:
+        for f in [x for x in d.features if x['view'] == v and x['kind'] == 'line' and not x.get('hidden') and not x.get('bend')]:      # wymiary konturu (linie gięcia mają własne)
             (ax, ay), (bx, by) = f['mdl']
             length = math.hypot(bx - ax, by - ay)
             if length * d.scale < 2.0 or abs(length - bw) < 0.01 or abs(length - bh) < 0.01:

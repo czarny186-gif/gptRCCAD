@@ -38,6 +38,16 @@ def _draw_drawing(p, which, ink, acc, soft, pen):
         p.drawPolygon(QPolygonF([QPointF(36, 28), QPointF(38.5, 34), QPointF(45, 36.5), QPointF(38.5, 39), QPointF(36, 46), QPointF(33.5, 39), QPointF(27, 36.5), QPointF(33.5, 34)]))
 
 
+def _draw_sheet_drawing(p, ink, acc, soft, pen):
+    """Rysunek blachy do gięcia: arkusz z rozwinięciem, linie gięcia (ciągła i przerywana) i wymiar między nimi."""
+    p.setBrush(soft); p.setPen(pen(ink, 2.4))
+    p.drawRoundedRect(QRectF(5, 6, 38, 36), 3, 3)
+    p.setBrush(QColor('#ffffff')); p.setPen(pen(ink, 2.0)); p.drawRect(QRectF(11, 12, 26, 18))
+    p.setPen(pen(acc, 2.0)); p.drawLine(QPointF(18, 12), QPointF(18, 30))
+    pn = pen(acc, 2.0); pn.setStyle(Qt.DashLine); pn.setDashPattern([2.0, 1.5]); p.setPen(pn); p.drawLine(QPointF(30, 12), QPointF(30, 30))
+    p.setPen(pen(ink, 1.6)); p.drawLine(QPointF(18, 36), QPointF(30, 36)); p.drawLine(QPointF(18, 33), QPointF(18, 39)); p.drawLine(QPointF(30, 33), QPointF(30, 39))
+
+
 def _draw_measure(p, which, ink, acc, soft, pen):
     """Ikony narzędzi pomiarowych (wspólne dla paska i nagłówków paneli)."""
     p.setBrush(Qt.NoBrush)
@@ -216,6 +226,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setBrush(QColor(ORANGE)); p.setPen(pen(ORANGE, 2.4)); p.drawPolygon(upper)
     elif kind in ('x_drawing', 'x_autodrawing'):
         _draw_drawing(p, kind[2:], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind == 'x_sheetdrawing':
+        _draw_sheet_drawing(p, BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('x_mdist', 'x_mangle', 'x_mrad', 'x_mprops'):
         _draw_measure(p, kind[2:], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_revolve':
@@ -435,6 +447,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(10, 34), (18, 30), (18, 38)])); p.drawPolygon(poly([(38, 34), (30, 30), (30, 38)]))
         elif name in ('drawing', 'autodrawing'):
             _draw_drawing(p, name, ink, acc, soft, pen)
+        elif name == 'sheetdrawing':
+            _draw_sheet_drawing(p, ink, acc, soft, pen)
         elif name in ('mdist', 'mangle', 'mrad', 'mprops'):
             _draw_measure(p, name, ink, acc, soft, pen)
         elif name == 'bool':

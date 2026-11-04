@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.15 — wygodniejsze szkicowanie
+# RCCAD Desktop 0.4.16 — rysunek blachy do gięcia
+
+## Zmiany 0.4.16
+
+- **Rysunek → Rysunek blachy do gięcia:** kliknij blachę (zgiętą albo rozłożoną). Powstaje rozwinięcie widziane od góry blachy z wymiarami całości, łańcuchem wymiarów od krawędzi do linii gięcia i między liniami gięcia, opisem każdego gięcia (GÓRA / DÓŁ, kąt, promień), średnicami otworów oraz grubością, promieniem gięcia, współczynnikiem K i rozmiarem rozwinięcia.
+- **Kierunek linii gięcia:** ściana wybrana przy „Konwertuj na blachę” jest zawsze górą blachy. Wcześniej przy niektórych proporcjach płyty górą stawał się spód, przez co rozwinięcie leżało odwrócone, a linie gięcia w górę były przerywane. Blachy zamienione we wcześniejszych wersjach zachowują zapisany układ — w razie potrzeby zamień płytę na blachę ponownie.
+- **Linie gięcia na rysunku** można wymiarować (Wymiaruj, Odległość) i mierzyć (Mierz) jak krawędzie.
+- **Szybsze dodawanie gięć:** cięcia narożników, które się nie zmieniają, nie są liczone ponownie (np. pudełko z czterema ściankami i zagięciami: łącznie ok. 1/3 krócej).
 
 ## Zmiany 0.4.15
 
