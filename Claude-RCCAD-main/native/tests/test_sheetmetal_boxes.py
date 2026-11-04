@@ -69,7 +69,9 @@ class BoxCornerTests(unittest.TestCase):
                 self.assertEqual(k.point_state(shape,point), 'in')
 
     def test_butt_clearance_is_requested_gap_at_current_leg(self):
-        for first, edge, y in (('in',95,47),('out',106,58)):
+        # The outward butt ends against the actual outer bend at z=12:
+        # circle centre (106,9), R=4, rather than the tangent leg at x=106.
+        for first, edge, y in (('in',95,47),('out',106-math.sqrt(16-9),58)):
             for gap in (.1,.5,1.):
                 with self.subTest(first=first,gap=gap):
                     shape = s.build_sheet(box_recipe(first,gap=gap))
@@ -105,7 +107,7 @@ class BoxCornerTests(unittest.TestCase):
         for spec,angle in zip(recipe['flanges'][4:],(30,60,90,120)):spec['angle']=angle
         self.assertSolid(s.build_sheet(recipe))
 
-    def test_inclined_matching_returns_use_continuous_miters(self):
+    def test_inclined_matching_returns_use_neighbor_surface_for_parallel_joint(self):
         for angle in (30,60,120):
             with self.subTest(angle=angle):
                 recipe = box_recipe('out')
@@ -114,8 +116,14 @@ class BoxCornerTests(unittest.TestCase):
                 recipe['rules']['joint']='diagonal'
                 diagonal = s.build_sheet(recipe)
                 self.assertSolid(parallel)
-                self.assertAlmostEqual(parallel.Volume(),diagonal.Volume(),delta=.001)
-                self.assertLess(parallel.cut(diagonal).Volume()+diagonal.cut(parallel).Volume(),.001)
+                self.assertSolid(diagonal)
+                recipe['rules']['joint']='parallel'
+                frames,corners=s._effective(recipe['flanges'],2,True)
+                parts=s._corner_parts(recipe,frames,corners)
+                peer_normal=s._tip_geom(frames[5],'out',2)[2]
+                self.assertTrue(any(face.geomType()=='PLANE' and
+                                    abs(float(np.array(face.normalAt().toTuple())@peer_normal))>1-1e-6
+                                    for face in parts[4][1].Faces()))
 
     def test_adding_another_level_does_not_change_existing_attachment_frames(self):
         recipe = box_recipe('out','in')

@@ -134,6 +134,27 @@ class StudioTests(unittest.TestCase):
         w.fl_pick = dict(id=body.id, spec=dict(kind='base', p0=[100,0,2], p1=[100,50,2], n=[0,0,1], m=[1,0,0]))
         return body
 
+    def test_flange_mode_highlights_only_edges_and_restores_object_selection(self):
+        body = self.converted_sheet(); w = self.w
+        self.assertEqual(w.selected, [body.id])
+        self.assertNotIn(body.id, w.view.selected_bodies)
+        w.apply_flange(); self.wait()
+        self.assertEqual(w.selected, [body.id])
+        self.assertNotIn(body.id, w.view.selected_bodies)
+        w.set_mode(None)
+        self.assertIn(body.id, w.view.selected_bodies)
+
+    def test_corner_choices_hide_diagonal_and_restore_legacy_as_sheet(self):
+        body = self.converted_sheet(); w = self.w
+        self.assertEqual(w.fl_joint.findData('diagonal'), -1)
+        state = w._sheet_state(body.id)
+        op = dict(type='sheetbuild', id=body.id, base=state['base'], t=state['t'],
+                  flanges=[], rules=dict(joint='diagonal'))
+        w.document.commit(w.document.bodies, label='Stare narożniki', op=op)
+        w.set_mode('rules')
+        self.assertEqual(w.fl_joint.currentData(), 'sheet')
+        self.assertEqual(w._sheet_state(body.id)['rules']['joint'], 'diagonal')
+
     def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):
         body = self.converted_sheet();w = self.w
         w.fl_reverse.setChecked(True)

@@ -52,6 +52,13 @@ def run(report_path=None):
     box = shm.build_sheet(dict(base=sheet['base'],t=2,flanges=walls,rules=dict(gap=.2)))
     assert box.isValid() and len(box.Solids()) == 1 and k.point_state(box,(92.7,41.3,17)) == 'in'
     checks.append('sheet metal box: four 5mm walls, inward returns and reversed third bends')
+    parallel_recipe = dict(base=sheet['base'],t=2,flanges=walls,rules=dict(gap=.2,joint='parallel'))
+    parallel_frames,parallel_corners = shm._effective(walls,2,True)
+    parallel_parts = shm._corner_parts(parallel_recipe,parallel_frames,parallel_corners)
+    assert not any(abs(face.normalAt().x)>1e-5 and abs(face.normalAt().y)>1e-5
+                   for pieces in parallel_parts.values() for piece in pieces for face in piece.Faces()
+                   if face.geomType()=='PLANE')
+    checks.append('parallel corners: square butt seams at every panel and bend level')
     mixed = walls[:4] + [dict(kind='tip',parent=i,side='out' if i==0 else 'in',r=2,angle=90,length=5) for i in range(4)]
     mixed_recipe = dict(base=sheet['base'],t=2,flanges=mixed,rules=dict(gap=.2,joint='diagonal'))
     mixed_shape = shm.build_sheet(mixed_recipe)
@@ -118,6 +125,14 @@ def run(report_path=None):
     while studio.busy and time.monotonic()<end:app.processEvents();time.sleep(.005)
     app.processEvents()
     assert len(studio.document.bodies)==1 and studio.document.bodies[0].kind=='sketch'
+    assert studio.fl_joint.findData('diagonal') == -1
+    test_body=Body('Sheet selection',slab).prepared()
+    studio.document.commit([test_body]);studio.selected=[test_body.id]
+    studio.set_mode('flange')
+    assert test_body.id not in studio.view.selected_bodies and test_body.id in studio.selected
+    studio.set_mode(None)
+    assert test_body.id in studio.view.selected_bodies
+    checks.append('sheet tools: two corner choices and edge-only highlighting during bends')
     studio.document._saved_revision=studio.document._revision
     studio.close();app.processEvents()
     checks.append('Studio window (HTML layout), icons and click-click sketch')

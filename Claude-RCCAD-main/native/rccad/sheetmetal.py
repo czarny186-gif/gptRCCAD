@@ -388,9 +388,9 @@ def _join_sheet(shape, parts):
         return shape
     # Default quadrature can differ by several thousandths of a mm³ before
     # and after splitting a ruled relief surface. Use adaptive integration for
-    # these surfaces so a clean join is not reported as a material collision.
-    curved = any(f.geomType()=='BSPLINE' for piece in [shape,*parts] for f in piece.Faces())
-    volume = (lambda piece:piece.Volume(1e-9)) if curved else (lambda piece:piece.Volume())
+    # these surfaces and intersected cylinders so a clean join is not
+    # reported as a material collision.
+    volume = lambda piece: piece.Volume(1e-9)
     expected = volume(shape) + sum(volume(p) for p in parts)
     result = kernel.boolean('union', shape, parts)
     if expected - volume(result) > max(1e-4, expected * 1e-8):
@@ -582,6 +582,36 @@ def _corner_parts(recipe, eff, corners):
                                              [peer_profile[:,0].min(),peer_profile[:,0].max()],atol=_TOL,rtol=0)
                              and min(profile[:,1].max(),peer_profile[:,1].max()) >
                                  max(profile[:,1].min(),peer_profile[:,1].min())+_TOL)
+            if (rules.get('joint', 'parallel') == 'parallel' and profile is not None and peer_profile is not None):
+                if not matching:
+                    capped, peer_cap = straight_end(i,corner), straight_end(peer,corner)
+                    if capped is not None and not overlap(capped[1],peer_cap[1] if peer_cap else raw[peer]):
+                        parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
+                        continue
+                # Butt ends belong to every level, not just terminal panels.
+                # Reserve the complete bend end; the actual neighbouring
+                # material trims it below instead of a diagonal seam plane.
+                end = float(peer_profile[:,0].max()) if owner == a else float(peer_profile[:,0].min())-gap
+                cut_direction = eff[other]['m']
+                peer_outer,_,peer_normal,_ = _tip_geom(eff[peer],'out',t)
+                if abs(float(peer_normal@cut_direction)) > 1e-6:
+                    peer_inner = _tip_geom(eff[peer],'in',t)[0]
+                    near, far = sorted((peer_inner,peer_outer),key=lambda point:float(point@cut_direction))
+                    plane_normal = peer_normal if float(peer_normal@cut_direction)>0 else -peer_normal
+                    plane_point = far if owner == a else near-gap*plane_normal
+                    parts[i][1] = _endcut(parts[i][1],plane_point,plane_normal,K)
+                    end = max(float((np.array(v.toTuple())-P)@cut_direction) for v in parts[i][1].Vertices())
+                else:
+                    parts[i][1] = _endcut(parts[i][1],P+end*cut_direction,cut_direction,K)
+                parent_end = straight_end(i,corner)
+                start = float((parent_end[0][0]-P)@cut_direction) if parent_end is not None else 0.
+                if depths[i] == 0:
+                    parts[i][0] = _endcut(parts[i][0],P,cut_direction,K)
+                elif abs(start-end) < _TOL:
+                    parts[i][0] = _endcut(parts[i][0],P+end*cut_direction,cut_direction,K)
+                else:
+                    parts[i][0] = _endcut(parts[i][0],P+max(start,end)*cut_direction,cut_direction,K)
+                continue
             if vertical_pair:
                 # Upright panels end square to their edge, not on a 45-degree
                 # plane through their thickness. Both sides get equal clearance.
@@ -606,6 +636,14 @@ def _corner_parts(recipe, eff, corners):
                     # level. Non-intersecting returns keep straight end faces.
                     parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
                     continue
+            if peer is None and rules.get('joint','parallel') == 'parallel':
+                capped = straight_end(i,corner)
+                root = eff[owner]
+                axis = _unit(root['p1']-root['p0'])
+                outward = axis if np.linalg.norm(P-root['p1']) < np.linalg.norm(P-root['p0']) else -axis
+                plane = capped[0] if capped is not None else (P,outward)
+                parts[i] = [_endcut(piece,*plane,K) for piece in parts[i]]
+                continue
             if peer is None:
                 # Keep the same seam as the preceding bend while a box is
                 # assembled one edge at a time. A missing peer is not a wall
@@ -613,30 +651,35 @@ def _corner_parts(recipe, eff, corners):
                 sign = 1 if owner == a else -1
                 parts[i] = [_miter(part, P, N, sign, gap/2, K, K) for part in parts[i]]
                 continue
-            leg_direction = _tip_geom(eff[i], 'out', t)[3] if profile is not None else normal
-            vertical = abs(float(leg_direction @ normal))
-            axis_aligned = vertical < 1e-6 or abs(vertical-1) < 1e-6
-            butt = (rules.get('joint', 'parallel') == 'parallel' and profile is not None
-                    and matching
-                    and axis_aligned
-                    and (owner, depths[i]+1) not in lookup and (other, depths[i]+1) not in lookup)
             sign = 1 if owner == a else -1
-            # Rounded transitions and legs continued by another bend share one
-            # bisector. Only matching terminal legs use their current butt plane;
-            # otherwise adding a return collides with the previous butt extension.
-            parts[i][0] = _miter(parts[i][0], P, N, sign, gap/2, K, K)
-            if len(parts[i]) == 2:
-                if butt:
-                    if owner == a:
-                        offset = float(peer_profile[:, 0].max())
-                        direction = eff[b]['m']
-                    else:
-                        offset = float(peer_profile[:, 0].min()) - gap
-                        direction = eff[a]['m']
-                    parts[i][1] = _endcut(parts[i][1], P + offset*direction, direction, K)
-                else:
-                    parts[i][1] = _miter(parts[i][1], P, N, sign, gap/2, K, K)
+            # The retained diagonal mode is needed to replay existing projects.
+            parts[i] = [_miter(part,P,N,sign,gap/2,K,K) for part in parts[i]]
             relieve_bend(i,corner)
+    if rules.get('joint', 'parallel') == 'parallel':
+        # A butt seam has a through wall and a wall ending against it. Trim
+        # the latter against the real neighbouring material, including bends
+        # on preceding levels; a fixed diagonal plane cannot describe it.
+        for P,a,b,_ in corners:
+            root = eff[b]
+            axis = _unit(root['p1']-root['p0'])
+            outward = axis if np.linalg.norm(P-root['p1']) < np.linalg.norm(P-root['p0']) else -axis
+            tools = [tool for j in parts if owners[j]==a for piece in parts[j]
+                     for tool in ((piece,piece.translate(tuple(-gap*outward))) if gap>_TOL else (piece,))]
+            for i in parts:
+                if owners[i] != b:
+                    continue
+                trimmed = []
+                for piece in parts[i]:
+                    bb = piece.BoundingBox()
+                    candidates = []
+                    for tool in tools:
+                        cb = tool.BoundingBox()
+                        if all(min(getattr(bb,d+'max'),getattr(cb,d+'max')) >
+                               max(getattr(bb,d+'min'),getattr(cb,d+'min'))+_TOL for d in 'xyz'):
+                            candidates.append(tool)
+                    trimmed.append(kernel.boolean('subtract',piece,candidates) if candidates else piece)
+                parts[i] = trimmed
+    for i in parts:
         # Corner cuts must not silently shorten a flange until its requested
         # free end disappears (e.g. inward returns longer than the box opening).
         end, _, _, direction = (_hem_end_geom(eff[i], 'out', t) if eff[i].get('hem') else _tip_geom(eff[i], 'out', t))

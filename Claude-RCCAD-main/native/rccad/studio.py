@@ -859,10 +859,10 @@ class StudioWindow(QMainWindow):
         self.fl_kfactor = _spin(shm.K_DEFAULT, 0, .5, 3, .01)
         self.fl_kfactor.setToolTip('K = położenie warstwy obojętnej / grubość. Dobierz na podstawie prób gięcia materiału.')
         self._field(lay, 'Współczynnik K rozwinięcia', self.fl_kfactor)
-        self.fl_joint = ui.Segmented([('Równolegle', 'parallel', 'rl_par'), ('Skośnie', 'diagonal', 'rl_skos'),
+        self.fl_joint = ui.Segmented([('Równolegle', 'parallel', 'rl_par'),
                                       ('Blacharskie', 'sheet', 'rl_sheet')], 30)
-        self.fl_joint.setCurrentIndex(2)
-        self.fl_joint.setToolTip('Blacharskie: proste końce pionowych ścian, ukosy między poziomymi kołnierzami i dopasowane wycięcia na łukach gięcia.')
+        self.fl_joint.setCurrentIndex(1)
+        self.fl_joint.setToolTip('Równolegle: jedna ściana dochodzi do powierzchni drugiej, również przy kolejnych gięciach. Blacharskie: proste końce pionowych ścian, ukosy między poziomymi kołnierzami i dopasowane wycięcia na łukach gięcia.')
         self._field(lay, 'Łączenie kołnierzy w narożniku', self.fl_joint)
         self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')
         self.fl_outside.setToolTip('Podajesz długość od zewnętrznej powierzchni blachy do końca kołnierza. Program odejmuje część gięcia.')
@@ -1431,7 +1431,7 @@ class StudioWindow(QMainWindow):
             state = self._sheet_state(bodies[0].id) if len(bodies)==1 else None
             if state is not None:
                 rules = state['rules']
-                self.fl_joint.setCurrentIndex(self.fl_joint.findData(rules.get('joint','parallel')))
+                self.fl_joint.setCurrentIndex(self.fl_joint.findData(('sheet' if rules.get('joint') == 'diagonal' else rules.get('joint','parallel'))))
                 self.fl_gap.setValue(float(rules.get('gap',0)))
                 self.fl_relief.setCurrentIndex(self.fl_relief.findData(rules.get('relief','none')))
                 self.fl_relief_size.setValue(float(rules.get('relief_size',3)))
@@ -3368,7 +3368,7 @@ class StudioWindow(QMainWindow):
             self.view.set_picked_edge(None)
             self._edge_status().setText('To nie jest blacha (albo zmieniła się po konwersji). Kliknij KONWERTUJ NA BLACHĘ.')
             return
-        self.fl_joint.setCurrentIndex(self.fl_joint.findData(st['rules'].get('joint','parallel')))
+        self.fl_joint.setCurrentIndex(self.fl_joint.findData(('sheet' if st['rules'].get('joint') == 'diagonal' else st['rules'].get('joint','parallel'))))
         box = body.shape.BoundingBox()
         tol = max(1e-3, 0.001 * max(box.xlen, box.ylen, box.zlen))
         mid = body.shape.Edges()[hit[1]].positionAt(.5).toTuple()
@@ -4714,7 +4714,10 @@ class StudioWindow(QMainWindow):
         self._hist_compare_update()
         if self.document.deferred and not self.busy:
             self._replay_deferred()
-        self.view.set_models(bodies, [*self.selected, self._obj_hover] if self._obj_hover else self.selected, self.edges)
+        highlighted = [] if self.mode in ('sheet', 'flange', 'hem') else self.selected
+        if self._obj_hover and self.mode not in ('sheet', 'flange', 'hem'):
+            highlighted = [*highlighted, self._obj_hover]
+        self.view.set_models(bodies, highlighted, self.edges)
         if fit:
             self.view.fit_all()
         self.undo_button.setEnabled(self.document.can_undo and not self.busy)
