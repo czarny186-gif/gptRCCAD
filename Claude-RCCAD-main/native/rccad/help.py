@@ -16,6 +16,7 @@ TOPICS = [
     ('extrude', 'Wyciągnij', 'Wyciąganie i wycinanie', [
         'Kliknij Wyciągnij i wskaż zamknięty profil szkicu, obszar między liniami albo płaską ścianę bryły. Wybrana powierzchnia świeci się. Shift + klik dodaje kolejne profile.',
         'Pociągnij strzałkę z grotem lub wpisz odległość. Podgląd odświeża się na żywo. Operacja: Nowa bryła, Połącz, Wytnij, Wspólna część. Kierunek: jedna strona, symetrycznie, dwie strony.',
+        'Zakres „Do elementu”: po wybraniu profilu kliknij płaszczyznę, ścianę, krawędź albo punkt (także punkt szkicu). Bryła sięga do wysokości tego elementu mierzonej wzdłuż normalnej profilu; dla skośnej krawędzi liczy się punkt najbliżej kursora. Kliknięcie innego elementu zmienia wysokość, ręczna zmiana odległości odłącza element.',
         'Enter zatwierdza, Esc anuluje.']),
     ('t_revolve', 'Obrót', 'Bryły obrotowe', [
         'Obraca profil szkicu wokół osi, tworząc okrągłą bryłę. Służy do wałków, gałek, misek i wszystkich części okrągłych względem osi.',

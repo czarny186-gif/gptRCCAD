@@ -737,8 +737,14 @@ class StudioWindow(QMainWindow):
         lay.setSpacing(11)
         self.ex_op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 32)
         self._field(lay, 'Operacja', self.ex_op)
+        self.ex_extent = ui.Segmented([('Na odległość', 'dist', 'ex_dist'), ('Do elementu', 'upto', 'ex_upto')], 32)
+        self.ex_extent.setToolTip('Do elementu: po wybraniu profilu kliknij płaszczyznę, ścianę, krawędź albo punkt - bryła sięga do jego wysokości.')
+        self._field(lay, 'Zakres', self.ex_extent)
+        self.ex_target = None       # wskazany element (Do elementu): dict(kind, point, label)
+        self.ex_dir_label = _label('Kierunek')
+        lay.addWidget(self.ex_dir_label)
         self.ex_dir = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 32)
-        self._field(lay, 'Kierunek', self.ex_dir)
+        lay.addWidget(self.ex_dir)
         self.ex_status = _label('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.', 'status')
         lay.addWidget(self.ex_status)
         self.ex_bar = QFrame(self.view)
@@ -753,6 +759,10 @@ class StudioWindow(QMainWindow):
         self.ex_value = _spin(10, -1e5, 1e5, 3, 1.0)
         self.ex_value.setFixedWidth(105)
         bar.addWidget(self.ex_value)
+        self.ex_target_label = QLabel('')
+        self.ex_target_label.setStyleSheet('color:#c46f00;font-weight:600;')
+        bar.addWidget(self.ex_target_label)
+        self.ex_target_label.hide()
         self.ex_second_label = QLabel('Druga strona (mm)')
         bar.addWidget(self.ex_second_label)
         self.ex_second = _spin(10, 0, 1e5, 3, 1.0)
@@ -768,6 +778,7 @@ class StudioWindow(QMainWindow):
         for w in (self.ex_value, self.ex_second):
             w.valueChanged.connect(lambda *_: self._ex_value_changed())
         self.ex_dir.currentIndexChanged.connect(self._ex_dir_changed)
+        self.ex_extent.currentIndexChanged.connect(self._ex_extent_changed)
         self.ex_op.currentIndexChanged.connect(lambda *_: (self._ex_op_user_changed(), self._timers['extrude'].start()))
         self.ex_second_label.hide()
         self.ex_second.hide()
@@ -1373,7 +1384,10 @@ class StudioWindow(QMainWindow):
         self.view.set_grid_frame(None)
         self.sketch_plane = None
         self.ex_profiles = []
-        self.rev_profiles, self.rev_line, self._rev_manual = [], None, False
+        self.ex_target = None
+        if hasattr(self, 'ex_target_label'):
+            self.ex_target_label.hide()
+        self.rev_profiles,self.rev_line, self._rev_manual = [], None, False
         self.sh_id, self.sh_faces = None, []
         self.sw_profiles, self.sw_path, self.lf_profiles, self.lf_point = [], None, [], None
         self.ms_points = []
@@ -2433,6 +2447,8 @@ class StudioWindow(QMainWindow):
                 self.view.setCursor(Qt.PointingHandCursor if name else Qt.ArrowCursor)
             elif self.mode == 'extrude' and not self.ex_profiles:
                 self._hover_extrude(x, y)
+            elif self.mode == 'extrude' and self.ex_extent.currentData() == 'upto':
+                self._hover_extent_target(x, y)
             elif self.mode in ('mdist', 'mangle'):
                 vertex = self.view.nearest_vertex(x, y, solids_only=False)
                 self.view.hover_vertex = vertex[1] if vertex else None
@@ -2526,7 +2542,10 @@ class StudioWindow(QMainWindow):
                 return
             self.enter_sketch(plane)
         elif self.mode == 'extrude':
-            self.pick_profile(x, y, shift)
+            if self.ex_profiles and not shift and self.ex_extent.currentData() == 'upto':
+                self.pick_extent_target(x, y)
+            else:
+                self.pick_profile(x, y, shift)
         elif self.mode == 'revolve':
             self.pick_revolve(x, y, shift)
         elif self.mode == 'sweep':
@@ -2745,7 +2764,13 @@ class StudioWindow(QMainWindow):
             return
         self._mark_profiles()
         self.ex_bar.show()
-        self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}. Przeciągnij strzałkę albo wpisz odległość u góry.')
+        if self.ex_extent.currentData() == 'upto':
+            if self.ex_target is not None:
+                self._apply_extent_target()
+            else:
+                self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}. Teraz kliknij płaszczyznę, ścianę, krawędź albo punkt, do którego ma sięgać bryła.')
+        else:
+            self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}. Przeciągnij strzałkę albo wpisz odległość u góry.')
         self.hint('Przeciągnij pomarańczową strzałkę lub wpisz odległość, potem Zastosuj (Enter).')
         self.ex_value.setFocus()
         self._layout_overlays()
@@ -2760,6 +2785,139 @@ class StudioWindow(QMainWindow):
             except Exception:
                 pass
         self.view.set_selection_meshes(meshes)
+
+    # ----- wyciągnięcie do elementu: wysokość wskazanej płaszczyzny, ściany, krawędzi albo punktu -----
+    def _ex_extent_changed(self, *_):
+        upto = self.ex_extent.currentData() == 'upto'
+        if upto and self.ex_dir.currentData() != 'one':
+            self.ex_dir.setCurrentIndex(0)        # bryła sięga do elementu po jednej stronie profilu
+        self.ex_dir_label.setVisible(not upto)
+        self.ex_dir.setVisible(not upto)
+        self.ex_target = None
+        self.ex_target_label.hide()
+        self.view.hover_vertex = None
+        self.view._set_hover_edge(None)
+        self.view.overlay.update()
+        if self.mode != 'extrude':
+            return
+        if not self.ex_profiles:
+            self.ex_status.setText('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.')
+        elif upto:
+            self.ex_status.setText('Kliknij płaszczyznę, ścianę, krawędź albo punkt, do którego ma sięgać bryła.')
+        else:
+            self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}. Przeciągnij strzałkę albo wpisz odległość u góry.')
+        self.ex_bar.adjustSize()
+
+    @staticmethod
+    def _edge_point_near(view, points, x, y):
+        """Punkt krawędzi (łamanej z siatki) najbliższy kursorowi na ekranie."""
+        points = np.asarray(points, float)
+        xy, _, w = view.project_points(points)
+        if len(xy) != len(points) or len(points) < 2:
+            return points[0] if len(points) else None
+        a, b = xy[:-1], xy[1:]
+        delta = b - a
+        t = np.clip(((np.array([x, y]) - a) * delta).sum(axis=1) / np.maximum((delta * delta).sum(axis=1), 1e-12), 0, 1)
+        dist = np.linalg.norm(a + delta * t[:, None] - [x, y], axis=1)
+        dist[(w[:-1] <= 0) | (w[1:] <= 0)] = np.inf
+        j = int(np.argmin(dist))
+        return points[j] + (points[j + 1] - points[j]) * t[j]
+
+    def _extent_target_at(self, x, y):
+        """Element wskazujący wysokość wyciągnięcia: punkt (wierzchołek), krawędź, ściana bryły albo płaszczyzna środkowa.
+        Zwraca dict(kind, point, label, edge) albo None. Wysokość to rzut punktu na normalną profilu."""
+        if not self.ex_profiles:
+            return None
+        n = np.array(self.ex_profiles[0]['normal'], float)
+        n = n / max(np.linalg.norm(n), 1e-12)
+        vertex = self.view.nearest_vertex(x, y, solids_only=False)
+        if vertex is not None:
+            return dict(kind='vertex', point=np.asarray(vertex[1], float), label='punkt', edge=None)
+        edge = self.view.nearest_edge(x, y)
+        if edge is not None:
+            body = next((b for b in self.view.bodies if b.id == edge[0]), None)
+            pts = body.mesh.edges.get(edge[1]) if body is not None and body.mesh is not None else None
+            if pts is not None and len(pts):
+                pts = np.asarray(pts, float)
+                heights = pts @ n
+                if float(heights.max() - heights.min()) < 1e-4:     # krawędź równoległa do profilu: jedna wysokość
+                    point = pts[0]
+                else:
+                    point = self._edge_point_near(self.view, pts, x, y)
+                if point is not None:
+                    return dict(kind='edge', point=np.asarray(point, float), label='krawędź', edge=edge)
+        hit = self.view.pick_face(x, y)
+        if hit is not None:
+            point = np.asarray(hit[2], float)
+            body = self.document.get(hit[0])
+            if body is not None and body.kind == 'solid':
+                try:
+                    face, normal = kernel.face_at(body.shape, hit[1], hit[2], curved=True)
+                    if abs(float(np.dot(np.asarray(normal, float), n))) > 1 - 1e-6:   # ściana równoległa do profilu: dokładna wysokość z jej środka
+                        point = np.asarray(face.Center().toTuple(), float)
+                except Exception:
+                    pass
+            return dict(kind='face', point=point, label='ściana', edge=None)
+        if self._planes_visible:
+            name = self.view.plane_at(x, y)
+            if name:
+                frame = kernel.frame_of(name)
+                hitp = self.view._plane_hit(name, x, y)
+                point = np.asarray(frame.origin, float) if abs(float(np.dot(np.asarray(frame.normal, float), n))) > 1 - 1e-6 or hitp is None else np.asarray(hitp[1], float)
+                return dict(kind='plane', point=point, label=f'płaszczyzna {name}', edge=None)
+        return None
+
+    def _extent_distance(self, target):
+        src = self.ex_profiles[0]
+        n = np.array(src['normal'], float)
+        n = n / max(np.linalg.norm(n), 1e-12)
+        return float(np.dot(np.asarray(target['point'], float) - np.array(src['center'], float), n))
+
+    def _hover_extent_target(self, x, y):
+        try:
+            target = self._extent_target_at(x, y)
+        except Exception:
+            target = None
+        self.view._set_hover_edge(target['edge'] if target and target['edge'] else None)
+        shown = target or self.ex_target       # bez elementu pod kursorem znacznik zostaje na wybranym celu
+        self.view.hover_vertex = shown['point'] if shown else None
+        self.view.overlay.update()
+
+    def pick_extent_target(self, x, y):
+        try:
+            target = self._extent_target_at(x, y)
+        except Exception as exc:
+            self.toast(str(exc) or 'Nie udało się wskazać elementu.')
+            return
+        if target is None:
+            self.toast('Kliknij płaszczyznę, ścianę, krawędź albo punkt, do którego ma sięgać bryła.')
+            return
+        if abs(self._extent_distance(target)) < 1e-4:
+            self.toast('Ten element leży na wysokości profilu - wskaż inny.')
+            return
+        self.ex_target = target
+        self._apply_extent_target()
+
+    def _apply_extent_target(self):
+        if self.ex_target is None or not self.ex_profiles:
+            return
+        d = round(self._extent_distance(self.ex_target), 4)
+        if abs(d) < 1e-4:
+            self.ex_target_label.hide()
+            self.ex_status.setText('Wskazany element leży na wysokości profilu - wskaż inny.')
+            return
+        self._ex_from_target = True
+        try:
+            self.ex_value.setValue(d)
+        finally:
+            self._ex_from_target = False
+        self.ex_target_label.setText(f'do: {self.ex_target["label"]}')
+        self.ex_target_label.show()
+        self.ex_bar.adjustSize()
+        self._layout_overlays()
+        self.view.hover_vertex = self.ex_target['point']
+        self.view.overlay.update()
+        self.ex_status.setText(f'Wyciągnięcie do elementu ({self.ex_target["label"]}): {d:g} mm. Kliknij inny element, aby zmienić, potem Zastosuj (Enter).')
 
     def _ex_dir_changed(self, *_):
         two = self.ex_dir.currentData() == 'two'
@@ -2814,6 +2972,11 @@ class StudioWindow(QMainWindow):
             self._ex_op_manual = True
 
     def _ex_value_changed(self):
+        if self.ex_target is not None and not getattr(self, '_ex_from_target', False):
+            self.ex_target = None        # odległość zmieniona ręcznie: wyciągnięcie nie jest już związane ze wskazanym elementem
+            self.ex_target_label.hide()
+            self.view.hover_vertex = None
+            self.view.overlay.update()
         self._auto_extrude_op()
         self._timers['extrude'].start()
         if self._hv is None:
@@ -2912,10 +3075,14 @@ class StudioWindow(QMainWindow):
         spent = self._consumed_sketches(self.ex_profiles)
         profiles, direction, d1, d2 = list(self.ex_profiles), self.ex_dir.currentData(), self.ex_value.value(), self.ex_second.value()
         out = [uuid.uuid4().hex for _ in makers]
+        target = self.ex_target
+        upto = None if target is None else dict(kind=target['kind'], point=[float(c) for c in target['point']])
 
         def build():
             bodies = hist.combine(existing, [m() for m in makers], op, spent, out)
             recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            if upto is not None:
+                recipe['upto'] = upto      # skąd wzięła się odległość (wyciągnięcie do elementu)
             return bodies, recipe      # zapis kroku do historii liczy się w tle razem z operacją
 
         def apply(result):

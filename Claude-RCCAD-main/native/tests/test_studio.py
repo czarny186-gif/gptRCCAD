@@ -596,6 +596,48 @@ class StudioTests(unittest.TestCase):
         w.ex_value.setValue(10);w.handle_dragged('ex',5.04);self.assertAlmostEqual(w.ex_value.value(),15.0,1)
         w.handle_dragged('ex',-2.0);self.assertAlmostEqual(w.ex_value.value(),8.0,1);w.handle_released('ex');self.assertIsNone(w._hv)
 
+    def test_extrude_up_to_vertex_edge_face_and_plane(self):
+        w=self.w;a=Body('A',k.box(20,20,30)).prepared();w.document.commit([a]);w.refresh()
+        self.sketch('rect',(40,0),(50,10));w.set_mode('extrude')
+        sk=next(b for b in w.document.bodies if b.kind=='sketch')
+        w.ex_extent.setCurrentIndex(w.ex_extent.findData('upto'))
+        self.assertFalse(w.ex_dir.isVisible());self.assertEqual(w.ex_dir.currentData(),'one')
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'pick_profile',return_value=sk.id):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.ex_profiles[0]['kind'],'sketch');self.assertIsNone(w.ex_target)
+        # punkt (wierzchołek bryły na wysokości 30)
+        with patch.object(w.view,'nearest_vertex',return_value=(a.id,np.array([20.0,20.0,30.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.ex_target['kind'],'vertex');self.assertAlmostEqual(abs(w.ex_value.value()),30.0,3);self.assertTrue(w.ex_target_label.isVisible())
+        # ściana równoległa (górna ściana bryły z=30) - liczy się środek ściany
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_face',return_value=(a.id,np.array([0,0,1.0]),np.array([5.0,5.0,30.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.ex_target['kind'],'face');self.assertAlmostEqual(abs(w.ex_value.value()),30.0,3)
+        # krawędź pozioma na wysokości 30
+        body=next(b for b in w.view.bodies if b.id==a.id)
+        idx=next(i for i,pts in body.mesh.edges.items() if np.ptp(np.asarray(pts)[:,2])<1e-6 and abs(np.asarray(pts)[0,2]-30)<1e-6)
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(a.id,idx)):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.ex_target['kind'],'edge');self.assertAlmostEqual(abs(w.ex_value.value()),30.0,3)
+        # płaszczyzna na wysokości profilu odrzucona, wartość zostaje
+        w._planes_visible=True
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'plane_at',return_value='XY'):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.ex_target['kind'],'edge');self.assertAlmostEqual(abs(w.ex_value.value()),30.0,3)
+        w.ex_op.setCurrentIndex(0);w.apply_extrude();self.wait()
+        new=[b for b in w.document.bodies if b.kind=='solid' and b.id!=a.id];self.assertEqual(len(new),1)
+        self.assertAlmostEqual(new[0].shape.Volume(),10*10*30,2)
+        self.assertEqual(w.document.info['op']['upto']['kind'],'edge')
+
+    def test_extrude_up_to_target_unlinks_on_manual_value(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');w.ex_extent.setCurrentIndex(1)
+        self.pick_sketch_profile(w.document.bodies[0])
+        with patch.object(w.view,'nearest_vertex',return_value=('x',np.array([0.0,0.0,-12.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertAlmostEqual(abs(w.ex_value.value()),12.0,3);self.assertIsNotNone(w.ex_target)
+        w.ex_value.setValue(7);self.assertIsNone(w.ex_target);self.assertFalse(w.ex_target_label.isVisible())
+        w.ex_extent.setCurrentIndex(0);self.assertTrue(w.ex_dir.isVisible())
+
     def test_two_sided_extrude(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
         w.ex_dir.setCurrentIndex(2);w.ex_value.setValue(10);w.ex_second.setValue(5);w.apply_extrude();self.wait()

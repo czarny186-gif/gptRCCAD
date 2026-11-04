@@ -1,4 +1,10 @@
-# RCCAD Desktop 0.4.10 — zawinięcia z narożnikami i rozwinięciem
+# RCCAD Desktop 0.4.11 — wyciąganie do elementu
+
+## Nowość 0.4.11
+
+- **Bryła → Wyciągnij → Zakres: Do elementu.** Po wybraniu profilu kliknij płaszczyznę (XY, XZ, YZ), ścianę bryły, krawędź albo punkt (wierzchołek bryły lub punkt szkicu). Bryła sięga dokładnie do wysokości wskazanego elementu, mierzonej wzdłuż normalnej profilu.
+- Element pod kursorem jest podświetlany; dla skośnej krawędzi liczy się punkt najbliżej kursora, dla ściany równoległej do profilu jej rzeczywista wysokość. Kliknięcie innego elementu zmienia wysokość, a ręczna zmiana odległości lub przeciągnięcie strzałki odłącza element.
+- Działa ze wszystkimi operacjami (Nowa, Połącz, Wytnij, Wspólna). Dotychczasowe wyciąganie na odległość pozostaje bez zmian.
 
 ## Poprawki 0.4.10
 

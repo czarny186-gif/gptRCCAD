@@ -95,6 +95,18 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         if kind in ('sym', 'two'):
             p.setPen(pen(BLUE if kind == 'two' else ORANGE, 2.6))
             p.drawLine(QPointF(24, 28), QPointF(24, 42)); p.drawPolyline(QPolygonF([QPointF(19, 37), QPointF(24, 43), QPointF(29, 37)]))
+    elif kind in ('ex_dist', 'ex_upto'):
+        # profil (niebieski), strzałka wyciągnięcia (pomarańczowa); "do elementu": przerywana płaszczyzna-cel z punktem
+        fill(QPainterPath(_rounded(8, 34, 22, 8, 2)), BLUE_SOFT, BLUE)
+        if kind == 'ex_dist':
+            p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(19, 34), QPointF(19, 12)); p.drawPolyline(QPolygonF([QPointF(14, 17), QPointF(19, 11), QPointF(24, 17)]))
+            p.setPen(pen(INK, 1.8)); p.drawLine(QPointF(34, 10), QPointF(42, 10)); p.drawLine(QPointF(34, 38), QPointF(42, 38))
+            p.setPen(pen(INK, 2.2)); p.drawLine(QPointF(38, 11), QPointF(38, 37))
+        else:
+            pn = pen(INK, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush)
+            p.drawPolygon(QPolygonF([QPointF(4, 12), QPointF(14, 5), QPointF(44, 5), QPointF(34, 12)]))
+            p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(19, 34), QPointF(19, 13)); p.drawPolyline(QPolygonF([QPointF(14, 18), QPointF(19, 12), QPointF(24, 18)]))
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(34, 8.5), 3.4, 3.4)
     elif kind == 'fillet':
         path = QPainterPath(); path.moveTo(10, 8); path.lineTo(10, 40); path.lineTo(38, 40); path.lineTo(38, 30)
         path.lineTo(28, 30); path.quadTo(20, 30, 20, 22); path.lineTo(20, 8); path.closeSubpath()
