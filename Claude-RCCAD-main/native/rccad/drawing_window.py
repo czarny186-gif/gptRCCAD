@@ -1012,9 +1012,12 @@ class DrawingWindow(QMainWindow):
         hint.setObjectName('hint'); hint.setWordWrap(True)
         cl.addWidget(hint)
         self.opt = {}
-        for key, text, on in (('overall', 'Wymiary gabarytowe', False), ('circles', 'Średnice i promienie', False),
-                              ('details', 'Wszystkie wymiary konturu', False),
-                              ('centers', 'Osie symetrii otworów', True), ('hidden', 'Krawędzie niewidoczne (kreskowane)', True)):
+        options = [('overall', 'Wymiary gabarytowe', False), ('circles', 'Średnice i promienie', False),
+                   ('details', 'Wszystkie wymiary konturu', False),
+                   ('centers', 'Osie symetrii otworów', True), ('hidden', 'Krawędzie niewidoczne (kreskowane)', True)]
+        if self.source.bends:       # blacha z liniami gięcia: łańcuch wymiarów od krawędzi przez wszystkie linie gięcia
+            options.insert(0, ('bends', 'Wymiary linii gięcia', True))
+        for key, text, on in options:
             box = QCheckBox(text)
             if sheet:       # rysunek blachy do gięcia: wymiary całości i otworów, bez krawędzi spodu (powtarzają obrys)
                 on = {'overall': True, 'circles': True, 'hidden': False}.get(key, on)
@@ -1071,7 +1074,8 @@ class DrawingWindow(QMainWindow):
         return dict(views=tuple(k for k, b in self.view_boxes.items() if b.isChecked()), sheet=self.sheet.currentData(),
                     landscape=self.orient.currentData(), projection=self.proj.currentData(), scale=self.scale.currentData(),
                     overall=self.opt['overall'].isChecked(), circles=self.opt['circles'].isChecked(),
-                    centers=self.opt['centers'].isChecked(), hidden=self.opt['hidden'].isChecked(), details=self.opt['details'].isChecked())
+                    centers=self.opt['centers'].isChecked(), hidden=self.opt['hidden'].isChecked(), details=self.opt['details'].isChecked(),
+                    bends=self.opt['bends'].isChecked() if 'bends' in self.opt else False)
 
     def apply_settings(self, s):
         for key, box in self.view_boxes.items():
@@ -1084,7 +1088,7 @@ class DrawingWindow(QMainWindow):
             combo.blockSignals(False)
         for key, box in self.opt.items():
             box.blockSignals(True)
-            box.setChecked(bool(s[key]))
+            box.setChecked(bool(s.get(key, box.isChecked())))
             box.blockSignals(False)
         self.request()
 

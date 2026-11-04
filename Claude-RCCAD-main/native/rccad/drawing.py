@@ -332,10 +332,11 @@ def _bend_dims(prims, g, place, x0, y0, x1, y1):
     xs, ys = set(), set()
     for pts, direction, info in g.bends:
         (ax, ay), (bx, by) = pts[0], pts[-1]
-        if abs(ay - by) < 1e-6:
-            ys.add(round(float(ay), 6))
-        elif abs(ax - bx) < 1e-6:
-            xs.add(round(float(ax), 6))
+        tol = 1e-5 * max(1.0, float(np.hypot(bx - ax, by - ay)))
+        if abs(ay - by) < tol:
+            ys.add(round(float(ay + by) / 2, 4))
+        elif abs(ax - bx) < tol:
+            xs.add(round(float(ax + bx) / 2, 4))
         # opis linii gięcia: kierunek, kąt, promień (wzdłuż linii, tuż obok niej)
         text = ('GÓRA' if direction == 'up' else 'DÓŁ') + (f" {fmt(info['angle'])}°" if info.get('angle') is not None else '') + \
                (f" R{fmt(info['r'])}" if info.get('r') is not None else '')
@@ -351,17 +352,51 @@ def _bend_dims(prims, g, place, x0, y0, x1, y1):
         r = math.radians(ang)
         pos = (A + B) / 2 + np.array([-math.sin(r), math.cos(r)]) * 1.0
         prims.append(Label(float(pos[0]), float(pos[1]), text, 2.5, 'c', ang))
-    edge_y = (g.bbox[1], g.bbox[3])
-    if ys:
-        chain = [edge_y[0], *sorted(ys), edge_y[1]]
-        for p, q in zip(chain, chain[1:]):
-            if q - p > 1e-6:
-                _dim_vertical(prims, place((0, p))[1], place((0, q))[1], x0, x0 - 10.0, fmt(q - p))
-    if xs:
-        chain = [g.bbox[0], *sorted(xs), g.bbox[2]]
-        for p, q in zip(chain, chain[1:]):
-            if q - p > 1e-6:
-                _dim_horizontal(prims, place((p, 0))[0], place((q, 0))[0], y1, y1 + 10.0, fmt(q - p))
+    def chain_of(values, lo, hi):
+        """Krawędź zewnętrzna - kolejne linie gięcia - krawędź zewnętrzna (bez powtórzeń i odcinków zerowych)."""
+        out = [lo]
+        for v in sorted(values):
+            if v - out[-1] > 1e-4 and hi - v > 1e-4:
+                out.append(v)
+        return out + [hi]
+
+    def place_label(label, a, b, index, count, vertical):
+        """Napis odcinka łańcucha: gdy nie mieści się między grotami, skrajny wychodzi za krawędź zewnętrzną,
+        a środkowy odsuwa się od linii wymiarowej (naprzemiennie), więc sąsiednie wartości się nie nakładają."""
+        width = 2.0 * len(label.text) + 1.5
+        if abs(b - a) >= width + 2.0:
+            return False
+        lo, hi = min(a, b), max(a, b)
+        if index == 0 or index == count - 1:
+            target = lo - width / 2 - 2.5 if index == 0 else hi + width / 2 + 2.5
+            if vertical:
+                label.y = target
+            else:
+                label.x = target
+            return False
+        return True
+
+    for values, lo_edge, hi_edge, vertical in ((ys, g.bbox[1], g.bbox[3], True), (xs, g.bbox[0], g.bbox[2], False)):
+        if not values:
+            continue
+        chain = chain_of(values, lo_edge, hi_edge)
+        count, alternate = len(chain) - 1, False
+        for index, (p, q) in enumerate(zip(chain, chain[1:])):
+            if vertical:
+                a, b = place((0, p))[1], place((0, q))[1]
+                _dim_vertical(prims, a, b, x0, x0 - 10.0, fmt(q - p))
+            else:
+                a, b = place((p, 0))[0], place((q, 0))[0]
+                _dim_horizontal(prims, a, b, y1, y1 + 10.0, fmt(q - p))
+            if place_label(prims[-1], a, b, index, count, vertical):
+                alternate = not alternate
+                if alternate:
+                    if vertical:
+                        prims[-1].x -= 3.8
+                    else:
+                        prims[-1].y += 3.8
+            else:
+                alternate = False
 
 
 def _sheet_notes(d, source, names):
@@ -423,7 +458,8 @@ def _extent(source, names, scale, dims, cells, extra=0.0):
 
 
 def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape=True, projection='eu', scale=None,
-                  overall=True, circles=True, centers=True, hidden=False, version='RCCAD', details=False) -> Drawing:
+                  overall=True, circles=True, centers=True, hidden=False, version='RCCAD', details=False, bends=True) -> Drawing:
+    """bends: wymiary linii gięcia (łańcuch od zewnętrznych krawędzi blachy przez wszystkie linie gięcia) i ich opisy."""
     names = [v for v in VIEWS if v in views]
     if not names:
         raise ValueError('Wybierz co najmniej jeden rzut.')
@@ -515,7 +551,7 @@ def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape
                     continue
                 used.add(key)
                 _dim_circle(prims, d.snaps, place(circ['c']), rp, circ['r'], circ['full'], place(circ['mid']), 45.0 + 30.0 * (k % 3))
-        if getattr(source, 'sheet', None) and g.bends:
+        if bends and g.bends:
             _bend_dims(prims, g, place, x0, y0, x1, y1)
         if overall and (g.bbox[2] - g.bbox[0]) > 1e-6:
             _dim_horizontal(prims, x0, x1, y0, y0 - 10.0, fmt(g.bbox[2] - g.bbox[0]))

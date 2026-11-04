@@ -6270,8 +6270,13 @@ class StudioWindow(QMainWindow):
         self.show_sketch_hint()
 
     def sketch_hover_wanted(self):
-        """Kursor ze znacznikiem i przyciąganiem działa dopiero po wybraniu miejsca rysowania (pierwszy klik) — bez ciągłego liczenia."""
-        return bool(self.points) or self.tool == 'trim' or (self.tool == 'circleTangent2' and len(self.tangent_lines) == 2)
+        """Kursor ze znacznikiem i przyciąganiem (z opóźnieniem) działa od razu po wybraniu kształtu, także przed pierwszym kliknięciem,
+        więc widać, gdzie kształt się zacznie. Okrąg styczny do dwóch linii najpierw wskazuje linie - kursor włącza się po ich wyborze."""
+        if self.tool in (None, 'text'):
+            return False
+        if self.tool == 'circleTangent2':
+            return len(self.tangent_lines) == 2
+        return True
 
     def context_menu(self, x, y):
         if self.busy:

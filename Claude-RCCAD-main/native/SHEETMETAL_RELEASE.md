@@ -1,4 +1,9 @@
-# RCCAD Desktop 0.4.17 — izometria zgiętej blachy
+# RCCAD Desktop 0.4.18 — wymiary wszystkich linii gięcia
+
+## Zmiany 0.4.18
+
+- **Wymiary linii gięcia na każdym rysunku blachy:** łańcuch wymiarów od zewnętrznych krawędzi blachy przez wszystkie linie gięcia (krawędź - gięcie - gięcie - ... - krawędź) w obu kierunkach - w Rysunku blachy do gięcia oraz w zwykłym Utwórz rysunek / Rysunek automatyczny rozłożonej blachy. Opcja „Wymiary linii gięcia” w oknie rysunku. Krótkie wartości na końcach łańcucha stoją za krawędzią, żeby się nie nakładały.
+- **Szkic:** przyciąganie (z tym samym opóźnieniem) i znacznik działają już przed pierwszym kliknięciem - widać, w którym punkcie zacznie się kształt.
 
 ## Zmiany 0.4.17
 

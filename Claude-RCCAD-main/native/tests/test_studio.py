@@ -226,6 +226,27 @@ class StudioTests(unittest.TestCase):
         win.view_boxes['iso'].setChecked(True);d=D.build_drawing(win.source,**win.settings());self.assertIn('iso',d.views)
         win.close()
 
+    def test_every_bend_line_is_dimensioned_from_outer_edges_in_any_flat_drawing(self):
+        from rccad import drawing as D, sheetedit as she, sheetmetal as shm
+        from rccad.drawing_window import DrawingWindow
+        from test_sheetmetal_boxes import box_recipe
+        r=box_recipe('out',None,'sheet',.2,2);folded=shm.build_sheet(r);flat,fs=she.switch(folded,she.state(r,False),True)
+        bends=[(l['a'],l['b'],l['direction'],dict(angle=l['angle'],r=l['r'])) for l in she.flat_bend_lines(flat,fs)]
+        win=DrawingWindow(flat,'Pudełko',None,bends=bends)          # zwykły „Utwórz rysunek” rozłożonej blachy
+        self.assertIn('bends',win.opt);self.assertTrue(win.opt['bends'].isChecked())
+        st=dict(win.settings(),views=('top',));d=D.build_drawing(win.source,**st)
+        texts=[p.text for p in d.prims if isinstance(p,D.Label)]
+        g=win.source.view('top')
+        for horizontal,lo,hi in ((True,g.bbox[1],g.bbox[3]),(False,g.bbox[0],g.bbox[2])):
+            at=sorted({round(float(pts[0][1] if horizontal else pts[0][0]),4) for pts,_,_ in g.bends
+                       if abs((pts[0][1]-pts[1][1]) if horizontal else (pts[0][0]-pts[1][0]))<1e-6})
+            chain=[lo,*at,hi]
+            self.assertEqual(len(at),4)                            # dwie linie gięcia z każdej strony
+            for p,q in zip(chain,chain[1:]):self.assertIn(D.fmt(q-p),texts)     # krawędź-gięcie, gięcie-gięcie, ..., gięcie-krawędź
+        d2=D.build_drawing(win.source,**dict(st,bends=False))
+        self.assertLess(len([p for p in d2.prims if isinstance(p,D.Label)]),len(texts))
+        win.close()
+
     def test_sheet_bending_drawing_has_bend_chain_dims_labels_and_notes(self):
         from rccad import drawing as D
         w=self.w;body=self.converted_sheet()
@@ -1329,9 +1350,19 @@ class StudioTests(unittest.TestCase):
         w.context_menu(5,5);self.wait();self.assertEqual(len(w.document.bodies),2)
         w.sketch_clicked('XY',40,0);w.context_menu(5,5);self.assertEqual(len(w.document.bodies),2)
 
-    def test_hover_cursor_only_after_first_click(self):
-        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');self.assertFalse(w.sketch_hover_wanted())
+    def test_hover_cursor_snaps_before_first_click(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');self.assertTrue(w.sketch_hover_wanted())    # od razu, przed pierwszym kliknięciem
         w.sketch_clicked('XY',0,0);self.assertTrue(w.sketch_hover_wanted())
+        w.choose_tool(None);self.assertFalse(w.sketch_hover_wanted())
+        w.choose_tool('circleTangent2');self.assertFalse(w.sketch_hover_wanted())      # najpierw wskazuje się linie
+        # przed pierwszym kliknięciem: postój przy narożniku istniejącego szkicu pokazuje znacznik i ustawia punkt startu
+        self.sketch('rect',(0,0),(10,10));w.choose_tool('line');now=self._dwell_clock()
+        x,y=w.view.project_one(k.to_world('XY',10,10));self.assertEqual(w.points,[])
+        from PySide6.QtCore import QPointF
+        w.view._hover_time=0;w.view._hover(QPointF(x+3,y+2));self.assertIsNone(w.view.snap_label)
+        now[0]+=.3;w.view._hover_time=0;w.view._hover(QPointF(x+3,y+2))
+        self.assertEqual(w.view.snap_label,'Punkt styku');self.assertIsNotNone(w.view.snap_marker)
+        self.assertAlmostEqual(w.last_uv[0],10,3);self.assertAlmostEqual(w.last_uv[1],10,3)
 
     def test_svg_import(self):
         import tempfile
