@@ -1,4 +1,9 @@
-# RCCAD Desktop 0.4.12 — oba końce, rysunek z pliku, rozwinięcie z liniami gięcia
+# RCCAD Desktop 0.4.13 — poprawki wyciągania
+
+## Poprawki 0.4.13
+
+- **Wyciąganie do elementu innej bryły:** bryła wskazana jako cel wyznacza tylko wysokość. Połącz dołącza wyciągnięcie do bryły, z której wychodzi profil, a Wytnij i Wspólna działają na bryłach napotkanych po drodze. Wskazana bryła pozostaje bez zmian (również przy przeliczaniu historii). Gdy cel leży na tej samej bryle co profil (np. wyrównanie schodka), działa jak dotychczas.
+- **Pole odległości** jest aktywne i zaznaczone zaraz po wybraniu profilu (i po wskazaniu elementu), więc wymiar można od razu wpisać z klawiatury i zatwierdzić Enterem.
 
 ## Nowości 0.4.12
 

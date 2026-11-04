@@ -6,6 +6,7 @@ import time, math
 import tempfile
 from pathlib import Path
 import numpy as np
+import cadquery as cq
 import unittest
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
@@ -651,6 +652,54 @@ class StudioTests(unittest.TestCase):
         new=[b for b in w.document.bodies if b.kind=='solid' and b.id!=a.id];self.assertEqual(len(new),1)
         self.assertAlmostEqual(new[0].shape.Volume(),10*10*30,2)
         self.assertEqual(w.document.info['op']['upto']['kind'],'edge')
+
+    def _upto_between_boxes(self,op,middle=False):
+        """Bryła A (0..20) i bryła B (x 40..60); ściana A x=20 wyciągana do ściany B x=40 (B tylko wyznacza odległość)."""
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.transform(k.box(20,20,20),(40,0,0),(0,0,0))).prepared()
+        bodies=[a,b]
+        if middle:
+            c=Body('C',k.box(4,20,10).translate(cq.Vector(28,10,5))).prepared();bodies.append(c)      # połowa w drodze narzędzia (y 10..30)
+        w.document.commit(bodies);w.refresh();w.set_mode('extrude');w.ex_extent.setCurrentIndex(w.ex_extent.findData('upto'))
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.0,0,0]),np.array([20.0,10.0,10.0]))):
+            w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_face',return_value=(b.id,np.array([-1.0,0,0]),np.array([40.0,10.0,10.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertAlmostEqual(w.ex_value.value(),20.0,3);self.assertEqual(w._extent_skip(),[b.id])
+        w.ex_op.setCurrentIndex(w.ex_op.findData(op));w.apply_extrude();self.wait()
+        return a,b
+
+    def test_extrude_up_to_other_solid_joins_only_own_solid(self):
+        w=self.w;a,b=self._upto_between_boxes('join')
+        solids=[x for x in w.document.bodies if x.kind=='solid'];self.assertEqual(len(solids),2)
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),40*20*20,1)        # A dochodzi do B
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),20*20*20,1)        # B bez zmian
+        self.assertEqual(w.document.info['op']['skip'],[b.id])
+        again=hist.run_extrude([a,b],w.document.info['op'])
+        self.assertAlmostEqual(next(x for x in again if x.id==b.id).shape.Volume(),8000,1)
+
+    def test_extrude_up_to_other_solid_cuts_only_solids_on_the_way(self):
+        w=self.w;a,b=self._upto_between_boxes('cut',middle=True)
+        c=next(x for x in w.document.bodies if x.name=='C')
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),8000,1)            # bryła-wysokość nietknięta
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),8000,1)
+        self.assertAlmostEqual(c.shape.Volume(),4*10*10,1)                               # bryła po drodze wycięta do połowy
+
+    def test_extrude_up_to_same_solid_step_still_joins(self):
+        w=self.w
+        step=Body('S',k.boolean('union',k.box(20,20,10),[k.transform(k.box(10,20,10),(0,0,10),(0,0,0))])).prepared()
+        w.document.commit([step]);w.refresh();w.set_mode('extrude');w.ex_extent.setCurrentIndex(1)
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'pick_face',return_value=(step.id,np.array([0,0,1.0]),np.array([15.0,10.0,10.0]))):
+            w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'nearest_vertex',return_value=(step.id,np.array([0.0,0.0,20.0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w._extent_skip(),[]);w.ex_op.setCurrentIndex(w.ex_op.findData('join'));w.apply_extrude();self.wait()
+        self.assertAlmostEqual(w.document.get(step.id).shape.Volume(),20*20*20,1)
+
+    def test_extrude_distance_field_is_focused_and_selected(self):
+        w=self.w;w.activateWindow();self.sketch('rect',(0,0),(10,10));w.set_mode('extrude')
+        self.pick_sketch_profile(w.document.bodies[0]);self.app.processEvents()
+        self.assertTrue(w.ex_value.hasFocus())
+        edit=w.ex_value.lineEdit();self.assertEqual(edit.selectedText(),edit.text())
 
     def test_extrude_up_to_target_unlinks_on_manual_value(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');w.ex_extent.setCurrentIndex(1)

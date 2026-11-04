@@ -503,8 +503,10 @@ def split_parts(bodies, only=None):
     return out
 
 
-def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie'):
-    """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają."""
+def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=()):
+    """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają.
+    skip: bryły, których operacja nie zmienia (np. bryła wskazana tylko jako wysokość przy wyciąganiu do elementu)."""
+    skip = set(skip or ())
     fade = lambda bodies: [replace(b, visible=False) if b.id in spent else b for b in bodies]
     if op == 'new':
         ids2 = pad_ids(ids, len(tools), list(ids)[0] if ids else None)
@@ -513,7 +515,7 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie'):
     for tool in tools:
         box = kernel.bounds(tool)
         for i, b in enumerate(bodies):
-            if b.kind != 'solid':
+            if b.kind != 'solid' or b.id in skip:
                 continue
             other = kernel.bounds(b.shape)
             if (box.xmin > other.xmax + 1e-3 or box.xmax < other.xmin - 1e-3 or box.ymin > other.ymax + 1e-3 or
@@ -582,7 +584,7 @@ def run_extrude(bodies, recipe):
         spent |= set(src.get('spent', ()))
     groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] == 'textgroup'}
     spent |= {b.id for b in bodies if text_group_of(b.id) in groups}      # wszystkie litery napisu (także nowe po zmianie treści)
-    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()))
+    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()))
 
 
 def profile_face(wire):

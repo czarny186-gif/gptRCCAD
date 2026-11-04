@@ -2821,9 +2821,19 @@ class StudioWindow(QMainWindow):
         else:
             self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}. Przeciągnij strzałkę albo wpisz odległość u góry.')
         self.hint('Przeciągnij pomarańczową strzałkę lub wpisz odległość, potem Zastosuj (Enter).')
-        self.ex_value.setFocus()
+        self._focus_ex_value()
         self._layout_overlays()
         self.update_extrude_preview()
+
+    def _focus_ex_value(self):
+        """Pole odległości gotowe do pisania: aktywne i z zaznaczoną wartością, więc wpisana liczba od razu ją zastępuje.
+        Odłożone do następnego obiegu pętli zdarzeń - zwolnienie przycisku myszy na widoku 3D oddaje mu fokus zaraz po kliknięciu."""
+        def go():
+            if self.mode == 'extrude' and self.ex_bar.isVisible():
+                self.ex_value.setFocus(Qt.OtherFocusReason)
+                self.ex_value.selectAll()
+        go()
+        QTimer.singleShot(0, go)
 
     def _mark_profiles(self):
         meshes = []
@@ -2881,7 +2891,7 @@ class StudioWindow(QMainWindow):
         n = n / max(np.linalg.norm(n), 1e-12)
         vertex = self.view.nearest_vertex(x, y, solids_only=False)
         if vertex is not None:
-            return dict(kind='vertex', point=np.asarray(vertex[1], float), label='punkt', edge=None)
+            return dict(kind='vertex', point=np.asarray(vertex[1], float), label='punkt', edge=None, body=vertex[0])
         edge = self.view.nearest_edge(x, y)
         if edge is not None:
             body = next((b for b in self.view.bodies if b.id == edge[0]), None)
@@ -2894,7 +2904,7 @@ class StudioWindow(QMainWindow):
                 else:
                     point = self._edge_point_near(self.view, pts, x, y)
                 if point is not None:
-                    return dict(kind='edge', point=np.asarray(point, float), label='krawędź', edge=edge)
+                    return dict(kind='edge', point=np.asarray(point, float), label='krawędź', edge=edge, body=edge[0])
         hit = self.view.pick_face(x, y)
         if hit is not None:
             point = np.asarray(hit[2], float)
@@ -2906,15 +2916,34 @@ class StudioWindow(QMainWindow):
                         point = np.asarray(face.Center().toTuple(), float)
                 except Exception:
                     pass
-            return dict(kind='face', point=point, label='ściana', edge=None)
+            return dict(kind='face', point=point, label='ściana', edge=None, body=hit[0])
         if self._planes_visible:
             name = self.view.plane_at(x, y)
             if name:
                 frame = kernel.frame_of(name)
                 hitp = self.view._plane_hit(name, x, y)
                 point = np.asarray(frame.origin, float) if abs(float(np.dot(np.asarray(frame.normal, float), n))) > 1 - 1e-6 or hitp is None else np.asarray(hitp[1], float)
-                return dict(kind='plane', point=point, label=f'płaszczyzna {name}', edge=None)
+                return dict(kind='plane', point=point, label=f'płaszczyzna {name}', edge=None, body=None)
         return None
+
+    def _extent_skip(self):
+        """Bryła wskazana przy wyciąganiu „Do elementu” wyznacza tylko wysokość: operacja jej nie łączy ani nie wycina.
+        Wyjątek: profil leży na tej samej bryle (np. wyrównanie schodka do wyższej ściany tej bryły) - wtedy to jej własna operacja."""
+        target = self.ex_target
+        body = self.document.get(target.get('body')) if target and target.get('body') else None
+        if body is None or body.kind != 'solid':
+            return []
+        for src in self.ex_profiles:
+            if src.get('kind') == 'face' and src.get('id') == body.id:
+                return []
+            try:
+                face = src.get('face') or profile_face(src['wire'])
+                point = hist._inner_point(face) if face is not None else np.array(src['center'], float)
+                if kernel.point_state(body.shape, point) != 'out':
+                    return []
+            except Exception:
+                return []
+        return [body.id]
 
     def _extent_distance(self, target):
         src = self.ex_profiles[0]
@@ -2967,6 +2996,7 @@ class StudioWindow(QMainWindow):
         self.view.hover_vertex = self.ex_target['point']
         self.view.overlay.update()
         self.ex_status.setText(f'Wyciągnięcie do elementu ({self.ex_target["label"]}): {d:g} mm. Kliknij inny element, aby zmienić, potem Zastosuj (Enter).')
+        self._focus_ex_value()
 
     def _ex_dir_changed(self, *_):
         two = self.ex_dir.currentData() == 'two'
@@ -3130,12 +3160,15 @@ class StudioWindow(QMainWindow):
         out = [uuid.uuid4().hex for _ in makers]
         target = self.ex_target
         upto = None if target is None else dict(kind=target['kind'], point=[float(c) for c in target['point']])
+        skip = self._extent_skip()
 
         def build():
-            bodies = hist.combine(existing, [m() for m in makers], op, spent, out)
+            bodies = hist.combine(existing, [m() for m in makers], op, spent, out, skip=skip)
             recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
             if upto is not None:
                 recipe['upto'] = upto      # skąd wzięła się odległość (wyciągnięcie do elementu)
+            if skip:
+                recipe['skip'] = list(skip)      # bryła-wysokość nie bierze udziału w operacji (także przy przeliczaniu historii)
             return bodies, recipe      # zapis kroku do historii liczy się w tle razem z operacją
 
         def apply(result):
