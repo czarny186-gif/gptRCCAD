@@ -59,7 +59,7 @@ jobs:
           }
           if ($process.ExitCode -ne 0) { throw "Self-test exited with $($process.ExitCode)" }
           $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
-          if ($result.passed -ne $true -or $result.platform -notlike 'Windows*' -or $result.checks.Count -lt 25) {
+          if ($result.passed -ne $true -or $result.platform -notlike 'Windows*' -or $result.checks.Count -lt 26) {
             throw 'Self-test report did not confirm Windows readiness'
           }
       - name: Package portable application

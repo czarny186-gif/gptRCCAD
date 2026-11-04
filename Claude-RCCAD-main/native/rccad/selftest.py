@@ -117,7 +117,7 @@ def run(report_path=None):
     old_source=she.state(parallel_recipe);old_source.pop('bend_engine');old_source['dirty']=True
     old_hole=cq.Solid.makeCylinder(1,5,cq.Vector(20,20,-1))
     migrated,migrated_state=she.rebuild(legacy_parallel.cut(old_hole),old_source,parallel_recipe)
-    assert migrated_state['bend_engine']==2 and k.point_state(migrated,(20,20,1))=='out'
+    assert migrated_state['bend_engine']==3 and k.point_state(migrated,(20,20,1))=='out'
     checks.append('legacy parallel sheet migration preserves edited holes')
     slim_base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=100,ly=50,lz=1)
     for slim_angle in (45,135):
@@ -128,6 +128,14 @@ def run(report_path=None):
         assert slim_result.isValid() and len(slim_result.Solids())==1
         assert abs(slim_result.BoundingBox().xmax-100-expected_reach)<2e-5
     checks.append('parallel inclined walls: 45 and 135 degree bends keep nominal extents')
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    relieved_specs=[dict(spec,r=.5) for spec in walls]
+    relieved_specs += [dict(kind='tip',parent=i+8,side='out',r=.5,angle=45,length=5) for i in range(4)]
+    relieved_recipe=dict(base=sheet['base'],t=2,flanges=relieved_specs,rules=dict(joint='parallel',gap=.3))
+    relieved=shm.build_sheet(relieved_recipe)
+    assert relieved.isValid() and len(relieved.Solids())==1
+    assert {round(BRepAdaptor_Surface(face.wrapped).Cylinder().Radius(),6) for face in relieved.Faces() if face.geomType()=='CYLINDER'}=={.5,2.5}
+    checks.append('parallel four-level seams: simple reliefs without additional rollover cylinders')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

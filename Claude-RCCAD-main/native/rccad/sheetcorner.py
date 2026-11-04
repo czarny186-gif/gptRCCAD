@@ -46,6 +46,30 @@ def _monotone_edges(edge):
         yield cq.Edge(BRepBuilderAPI_MakeEdge(curve,lo,hi).Edge())
 
 
+def _relief_edge(edge):
+    """A conservative straight relief in the radial/height plane.
+
+    Chords lie inside right-facing circular skins. For left-facing skins a
+    midpoint tangent lies outside the material. Both choices lower radial X:
+    the through end only loses material, and the terminating end gains relief.
+    This avoids tiny offset circles and hooks where successive bends meet.
+    The circular skins of the sheet itself are never approximated.
+    """
+    if edge.geomType()!='CIRCLE':return edge
+    a,b=edge.startPoint(),edge.endPoint()
+    if abs(a.y-b.y)<_TOL:return edge
+    middle=edge.positionAt(.5)
+    chord=a+(b-a)*((middle.y-a.y)/(b.y-a.y))
+    if middle.x>=chord.x-_TOL:
+        return cq.Edge.makeLine(a,b)
+    tangent=edge.tangentAt(.5)
+    if abs(tangent.y)<1e-12:
+        raise k.CadError('Nie można wyznaczyć prostego podcięcia narożnika gięcia.')
+    slope=tangent.x/tangent.y
+    return cq.Edge.makeLine(cq.Vector(middle.x+(a.y-middle.y)*slope,a.y,0),
+                            cq.Vector(middle.x+(b.y-middle.y)*slope,b.y,0))
+
+
 def _shadow(edge,far):
     a,b=edge.startPoint(),edge.endPoint()
     if abs(a.y-b.y)<_TOL:return None
@@ -61,7 +85,33 @@ def _union(faces):
     return result
 
 
-def _expand(region,gap):
+def _polygon_expand(region,gap):
+    """Conservative planar fallback for offsets at re-entrant corners.
+
+    Edge strips give the exact normal gap; square vertex pads contain the
+    radius-gap disk, so difficult joins gain clearance instead of colliding.
+    This is a polygonal Minkowski expansion, not an offset of a 3D bend.
+    """
+    faces=list(region.Faces())
+    for edge in region.Edges():
+        if edge.geomType()!='LINE':
+            raise k.CadError('Nie można wyznaczyć prostego luzu narożnika gięcia.')
+        a,b=edge.startPoint(),edge.endPoint()
+        delta=b-a
+        if delta.Length<_TOL:continue
+        n=cq.Vector(-delta.y,delta.x,0).normalized()*gap
+        wire=cq.Wire.makePolygon([a+n,b+n,b-n,a-n],close=True)
+        faces.append(_positive(cq.Face.makeFromWires(wire)))
+    for vertex in region.Vertices():
+        p=vertex.Center()
+        faces.append(_rectangle(p.x-gap,p.y-gap,p.x+gap,p.y+gap))
+    result=_union(faces)
+    if result.Area()<=region.Area() or region.cut(result).Area()>1e-5:
+        raise k.CadError('Nie można zachować szczeliny przy tym narożniku gięcia.')
+    return result
+
+
+def _expand(region,gap,kind='arc'):
     if gap<=_TOL:return region
     # Offset the entire filled region, not translated copies of separate walls.
     # The gap is a normal distance, including inclined and circular skins.
@@ -69,7 +119,7 @@ def _expand(region,gap):
         faces=[]
         try:
             for face in region.Faces():
-                for wire in _positive(face).outerWire().offset2D(sign*gap,'arc'):
+                for wire in _positive(face).outerWire().offset2D(sign*gap,kind):
                     faces.append(_positive(cq.Face.makeFromWires(wire)))
             if not faces:continue
             result=_union(faces)
@@ -77,6 +127,7 @@ def _expand(region,gap):
                 return result
         except Exception:
             continue
+    if kind=='intersection':return _polygon_expand(region,gap)
     raise k.CadError('Szczelina nie mieści się przy tym narożniku równoległym. Zmniejsz szczelinę lub promień sąsiednich gięć.')
 
 
@@ -86,7 +137,7 @@ def _extrude(region,reach):
     return k.valid(solids[0].fuse(*solids[1:]).clean()) if len(solids)>1 else k.valid(solids[0])
 
 
-def _curtains(root,family_parts,normal,reach,gap):
+def _curtains(root,family_parts,normal,reach,gap,planar=False):
     """Return local (far-skin cutter, offset near-skin cutter), in radial/Z axes."""
     radial=np.asarray(root['m'],float);normal=np.asarray(normal,float)
     axis=np.cross(radial,normal);axis/=np.linalg.norm(axis)
@@ -101,8 +152,9 @@ def _curtains(root,family_parts,normal,reach,gap):
     edges=[piece for face in profiles for edge in face.Edges() for piece in _monotone_edges(edge)]
     vertices=[point for edge in edges for point in (edge.startPoint(),edge.endPoint())]
     low,high=min(p.y for p in vertices),max(p.y for p in vertices)
-    left=[face for edge in edges if (face:=_shadow(edge,-reach)) is not None]
-    right=[face for edge in edges if (face:=_shadow(edge,reach)) is not None]
+    relief=[_relief_edge(edge) for edge in edges] if planar else edges
+    left=[face for edge in relief if (face:=_shadow(edge,-reach)) is not None]
+    right=[face for edge in relief if (face:=_shadow(edge,reach)) is not None]
     for height,bottom,top in ((low,-reach,low),(high,high,reach)):
         points=[p.x for p in vertices if abs(p.y-height)<1e-6]
         if top-bottom>_TOL:
@@ -110,20 +162,21 @@ def _curtains(root,family_parts,normal,reach,gap):
             right.append(_rectangle(min(points),bottom,reach,top))
     left_region=_union(left);right_region=_union(right)
     far=_rectangle(-reach,-reach,reach,reach).cut(left_region).clean()
-    near=_expand(right_region,gap)
+    near=_expand(right_region,gap,'intersection' if planar else 'arc')
     return _extrude(far,reach),_extrude(near,reach)
 
 
-def curtains(root,family_parts,normal,reach,gap,cache_key=None):
+def curtains(root,family_parts,normal,reach,gap,cache_key=None,planar=False):
     # The key contains thickness, reach, gap and the complete normalized chain;
     # opposite box walls can share templates regardless of world placement.
     if cache_key is not None:
+        cache_key=(planar,cache_key)
         with _CACHE_LOCK:
             found=_CACHE.get(cache_key)
             if found is not None:
                 _CACHE.move_to_end(cache_key)
                 return tuple(shape.copy() for shape in found)
-    result=_curtains(root,family_parts,normal,reach,gap)
+    result=_curtains(root,family_parts,normal,reach,gap,planar)
     if cache_key is not None:
         with _CACHE_LOCK:
             _CACHE[cache_key]=result

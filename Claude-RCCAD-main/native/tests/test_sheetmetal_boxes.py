@@ -47,7 +47,8 @@ class BoxCornerTests(unittest.TestCase):
     def test_inward_corner_has_material_in_both_rounded_transitions(self):
         for joint in ('parallel','diagonal'):
             shape = s.build_sheet(box_recipe('in',joint=joint))
-            for point in ((101.5,50.5,11.5), (100.5,51.5,11.5)):
+            # Sample inside the bend, away from the new straight relief face.
+            for point in ((101.5,50.5,11.5), (100.5,51.4,11.5)):
                 with self.subTest(joint=joint,point=point):
                     self.assertEqual(k.point_state(shape,point),'in')
 

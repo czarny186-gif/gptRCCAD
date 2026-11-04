@@ -16,7 +16,7 @@ from . import kernel as k, sheetmetal as s
 
 
 def state(recipe, flat=False):
-    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':2}
+    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':3}
 
 
 def _matrix(origin, axes):
@@ -175,7 +175,7 @@ def _bend_blank(piece, frame, work_frame, t, factor, flat_origin, outward, flat_
     return _faces_slab(developed,t)
 
 
-def _build_layout(recipe, require_blank=True, parallel_version=2):
+def _build_layout(recipe, require_blank=True, parallel_version=3):
     specs=recipe.get('flanges') or [];rules=recipe.get('rules') or {};t=float(recipe['t'])
     if any(spec.get('hem') for spec in specs):
         raise k.CadError('Rozkładanie zawinięć nie jest jeszcze obsługiwane. Zwykłe kołnierze można rozkładać i zginać ponownie.')
@@ -248,7 +248,7 @@ def _build_layout(recipe, require_blank=True, parallel_version=2):
 
 
 @lru_cache(maxsize=4)
-def _cached_layout(key, require_blank=True, parallel_version=2):
+def _cached_layout(key, require_blank=True, parallel_version=3):
     return _build_layout(json.loads(key),require_blank,parallel_version)
 
 
@@ -261,10 +261,10 @@ def layout(recipe):
 
 def _source_engine(source_state):
     version=source_state.get('bend_engine',1)
-    if version not in (1,2):
+    if version not in (1,2,3):
         raise k.CadError('Ten projekt używa nieobsługiwanej wersji konstrukcji gięć.')
     joint=(source_state['recipe'].get('rules') or {}).get('joint','parallel')
-    return version if joint=='parallel' else 2
+    return version if joint=='parallel' else 3
 
 
 def _source_layout(source_state):
@@ -402,7 +402,7 @@ def _apply(model, changes, flat):
 def _switch(actual, source_state, flat, sync=False):
     """Switch atomically, including all accumulated edits on straight panels."""
     model=layout(source_state['recipe'])
-    source_model=model if _source_engine(source_state)==2 else _source_layout(source_state)
+    source_model=model if _source_engine(source_state)==3 else _source_layout(source_state)
     changes=_changes(actual,source_model,source_state.get('flat',False))
     if sync:
         _apply(model,changes,not flat)  # Confirm edits survive the other state.

@@ -100,12 +100,12 @@ class SheetEditTests(unittest.TestCase):
         legacy=s.build_sheet(r,parallel_version=1);tool=cylinder(25,25)
         edited=legacy.cut(tool);source=e.state(r);source.pop('bend_engine');source['dirty']=True
         blank,st=e.switch(edited,source,True)
-        self.assertEqual(st['bend_engine'],2);self.assertEqual(len(blank.Solids()),1)
+        self.assertEqual(st['bend_engine'],3);self.assertEqual(len(blank.Solids()),1)
         folded,st=e.switch(blank,st,False)
         self.assertSame(folded,s.build_sheet(r).cut(tool),tol=1e-4)
         updated=copy.deepcopy(r);updated['rules']['gap']=.3
         rebuilt,st=e.rebuild(edited,source,updated)
-        self.assertEqual(st['bend_engine'],2)
+        self.assertEqual(st['bend_engine'],3)
         self.assertSame(rebuilt,s.build_sheet(updated).cut(tool),tol=1e-4)
 
     def test_holes_on_flat_base_and_flange_retain_positions_over_repeated_cycles(self):
@@ -220,3 +220,17 @@ class SheetEditTests(unittest.TestCase):
             path=Path(directory)/'laser.dxf';path.write_text('previous')
             with self.assertRaisesRegex(k.CadError,'gruboś'):e.export_dxf(modified,e.state(r,True),path)
             self.assertEqual(path.read_text(),'previous')
+
+
+class ParallelReliefMigrationTests(unittest.TestCase):
+    def test_four_level_blank_and_old_engine_edits_survive_refolding(self):
+        from test_sheetmetal_parallel import four_level_box
+        r=four_level_box();original=s.build_sheet(r)
+        model=e.layout(r)
+        self.assertTrue(model.flat.isValid());self.assertEqual(len(model.flat.Solids()),1)
+        tool=cylinder(25,25);legacy=s.build_sheet(r,parallel_version=2).cut(tool)
+        source=e.state(r);source.update(bend_engine=2,dirty=True)
+        flat,st=e.switch(legacy,source,True)
+        self.assertEqual(st['bend_engine'],3)
+        folded,st=e.switch(flat,st,False)
+        self.assertLess(folded.cut(original.cut(tool)).Volume(1e-9)+original.cut(tool).cut(folded).Volume(1e-9),1e-4)

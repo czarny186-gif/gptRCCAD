@@ -116,3 +116,56 @@ def small_box(angle=90,levels=1,turn='in'):
             spec['angle']=angle
             spec['p0'][2]=spec['p1'][2]=1
     return recipe
+
+
+class PlanarReliefTests(unittest.TestCase):
+    def test_four_levels_keep_nominal_cylinders_without_seam_rollovers(self):
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        recipe=four_level_box();shape=s.build_sheet(recipe)
+        self.assertTrue(shape.isValid());self.assertEqual(len(shape.Solids()),1)
+        radii={round(BRepAdaptor_Surface(face.wrapped).Cylinder().Radius(),6)
+               for face in shape.Faces() if face.geomType()=='CYLINDER'}
+        self.assertEqual(radii,{.5,1.5})
+        # The previous engine also created tiny gap-radius cylinders and
+        # concentric offset cylinders in the seam; these are no bend skins.
+        old=s.build_sheet(recipe,parallel_version=2)
+        self.assertGreater(len({round(BRepAdaptor_Surface(face.wrapped).Cylinder().Radius(),6)
+                                for face in old.Faces() if face.geomType()=='CYLINDER'}),2)
+        self.assertLess(shape.cut(old).Volume(1e-9),1e-4)
+        self.assertLess(old.cut(shape).Volume(1e-9),.005*old.Volume(1e-9))
+
+    def test_linear_relief_stays_on_the_safe_side_of_circular_skins(self):
+        import cadquery as cq
+        from rccad import sheetcorner as c
+        for begin,end in ((-90,0),(0,90),(90,180),(180,270)):
+            arc=cq.Edge.makeCircle(1.5,cq.Vector(),cq.Vector(0,0,1),begin,end)
+            line=c._relief_edge(arc)
+            self.assertEqual(line.geomType(),'LINE')
+            a,b=line.startPoint(),line.endPoint()
+            for fraction in (.1,.3,.5,.7,.9):
+                p=arc.positionAt(fraction)
+                x=a.x+(b.x-a.x)*(p.y-a.y)/(b.y-a.y)
+                self.assertLessEqual(x,p.x+1e-7)
+
+
+def four_level_box():
+    recipe=small_box(90,3)
+    recipe['rules']['gap']=.3
+    recipe['flanges'] += [dict(kind='tip',parent=i+8,side='out',r=.5,angle=45,length=5) for i in range(4)]
+    return recipe
+
+
+class ReliefOffsetFallbackTests(unittest.TestCase):
+    def test_failed_native_offset_retains_normal_gap_with_planar_joins(self):
+        import math
+        import cadquery as cq
+        from unittest.mock import patch
+        from rccad import sheetcorner as c,kernel as k
+        face=cq.Face.makeFromWires(cq.Wire.makePolygon([cq.Vector(0,0,0),cq.Vector(10,0,0),cq.Vector(0,10,0)],close=True))
+        with patch.object(cq.Wire,'offset2D',side_effect=ValueError('offset failure')):
+            expanded=c._expand(face,.3,'intersection')
+        self.assertTrue(expanded.isValid())
+        self.assertTrue(all(edge.geomType()=='LINE' for edge in expanded.Edges()))
+        slab=cq.Solid.extrudeLinear(expanded.Faces()[0].outerWire(),[],cq.Vector(0,0,1))
+        for distance,expected in ((.299,'in'),(.301,'out')):
+            self.assertEqual(k.point_state(slab,(5+distance/math.sqrt(2),5+distance/math.sqrt(2),.5)),expected)

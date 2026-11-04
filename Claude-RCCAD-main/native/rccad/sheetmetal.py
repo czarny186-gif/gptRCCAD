@@ -484,7 +484,7 @@ def _curved_endcut(solid, frame, t, point, direction, start, end, reach, vertica
     return kernel.boolean('subtract',solid,[cutter])
 
 
-def _corner_parts(recipe, eff, corners, parallel_version=2):
+def _corner_parts(recipe, eff, corners, parallel_version=3):
     """Trim each bend and leg before fusing; keep material pieces independently valid."""
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
@@ -509,7 +509,7 @@ def _corner_parts(recipe, eff, corners, parallel_version=2):
                                                           eff[j]['n']@root['m'],eff[j]['n']@normal,eff[j]['m']@root['m'],eff[j]['m']@normal)),
                          tuple(sorted((eff[j].get('hem') or {}).items()))) for j in family)
         if signature not in curtains_cache:
-            curtains_cache[signature]=sheetcorner.curtains(root,[piece for j in family for piece in raw[j]],normal,K,gap,cache_key=(round(t,10),round(K,10),round(gap,10),signature))
+            curtains_cache[signature]=sheetcorner.curtains(root,[piece for j in family for piece in raw[j]],normal,K,gap,cache_key=(round(t,10),round(K,10),round(gap,10),signature),planar=parallel_version>=3)
         key=(owner,corner,far)
         if key not in curtains_world:
             axis=_unit(np.cross(root['m'],normal))
@@ -729,7 +729,7 @@ def _corner_parts(recipe, eff, corners, parallel_version=2):
     return parts
 
 
-def _build_corner_sheet(base, recipe, eff, corners, parallel_version=2):
+def _build_corner_sheet(base, recipe, eff, corners, parallel_version=3):
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
     parts = _corner_parts(recipe, eff, corners,parallel_version)
@@ -749,9 +749,9 @@ def _build_corner_sheet(base, recipe, eff, corners, parallel_version=2):
     return shape
 
 
-def build_sheet(recipe, parallel_version=2):
+def build_sheet(recipe, parallel_version=3):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
-    if parallel_version not in (1,2):
+    if parallel_version not in (1,2,3):
         raise kernel.CadError('Nieobsługiwana wersja konstrukcji narożników równoległych.')
     base = base_solid(recipe['base'])
     t = float(recipe['t'])
