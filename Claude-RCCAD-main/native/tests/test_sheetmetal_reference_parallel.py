@@ -48,7 +48,7 @@ class ReferenceParallelTests(unittest.TestCase):
             for right in layout.flat_bends[:i]:
                 self.assertLess(abs(left.intersect(right).Volume(1e-9)),1e-7)
         folded,st=e.switch(layout.flat,e.state(r,True),False)
-        self.same(folded,s.build_sheet(r));self.assertEqual(st['bend_engine'],4)
+        self.same(folded,s.build_sheet(r));self.assertEqual(st['bend_engine'],5)
 
     def test_engine_three_migration_retains_holes_and_updates_rules(self):
         r=reference_box();tool=cq.Solid.makeCylinder(.5,4,cq.Vector(25,25,-1))
@@ -58,7 +58,7 @@ class ReferenceParallelTests(unittest.TestCase):
         self.same(folded,s.build_sheet(r).cut(tool))
         updated=copy.deepcopy(r);updated['rules']['gap']=.3
         rebuilt,st=e.rebuild(actual,source,updated)
-        self.same(rebuilt,s.build_sheet(updated).cut(tool));self.assertEqual(st['bend_engine'],4)
+        self.same(rebuilt,s.build_sheet(updated).cut(tool));self.assertEqual(st['bend_engine'],5)
 
     def test_rotated_reference_corner_has_the_same_geometry(self):
         r=reference_box();original=s.build_sheet(r);rotated=copy.deepcopy(r)

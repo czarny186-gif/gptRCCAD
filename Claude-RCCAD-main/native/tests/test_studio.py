@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication,QMessageBox
+from PySide6.QtWidgets import QApplication,QMessageBox,QCheckBox
 from rccad import kernel as k
 from rccad import history as hist
 from rccad.document import Body
@@ -324,7 +324,7 @@ class StudioTests(unittest.TestCase):
         w.tools['unfold_sheet'].click();self.wait()
         current=w.document.get(body.id)
         self.assertTrue(current.meta['sheet']['flat'])
-        self.assertEqual(current.meta['sheet']['bend_engine'],4)
+        self.assertEqual(current.meta['sheet']['bend_engine'],5)
         self.assertEqual(len(current.shape.Solids()),1)
 
     def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):
@@ -483,6 +483,23 @@ class StudioTests(unittest.TestCase):
 
     def test_four_bottom_sheet_hems_can_be_picked_unfolded_and_refolded(self):
         self._four_bottom_hems_and_refold('sheet')
+
+    def test_corner_fitting_is_automatic_and_the_old_toggle_is_absent(self):
+        from dataclasses import replace
+        from rccad import sheetedit
+        body=self.converted_sheet();w=self.w;current=w.document.get(body.id)
+        source=w._editable_sheet_state(body.id)
+        source['recipe']['rules'].update(miter=False,auto_corners=False)
+        source['bend_engine']=4
+        w.document.commit([replace(current,meta={'sheet':source})])
+        w.set_mode(None);w.selected=[body.id];w.toggle_mode('rules')
+        self.assertFalse(hasattr(w,'fl_miter'))
+        self.assertNotIn('Docinaj i przedłużaj narożniki',[box.text() for box in w.rules_panel.findChildren(QCheckBox)])
+        w.apply_sheet_rules();self.wait()
+        state=w._editable_sheet_state(body.id)
+        self.assertTrue(state['recipe']['rules']['auto_corners'])
+        self.assertTrue(state['recipe']['rules']['miter'])
+        self.assertEqual(state['bend_engine'],5)
 
     def test_hem_tool_is_separate_and_adds_hem(self):
         w=self.w;plate=Body('Blacha',k.box(100,50,2),'solid').prepared();w.document.commit([plate]);w.refresh()

@@ -100,12 +100,12 @@ class SheetEditTests(unittest.TestCase):
         legacy=s.build_sheet(r,parallel_version=1);tool=cylinder(25,25)
         edited=legacy.cut(tool);source=e.state(r);source.pop('bend_engine');source['dirty']=True
         blank,st=e.switch(edited,source,True)
-        self.assertEqual(st['bend_engine'],4);self.assertEqual(len(blank.Solids()),1)
+        self.assertEqual(st['bend_engine'],5);self.assertEqual(len(blank.Solids()),1)
         folded,st=e.switch(blank,st,False)
         self.assertSame(folded,s.build_sheet(r).cut(tool),tol=1e-4)
         updated=copy.deepcopy(r);updated['rules']['gap']=.3
         rebuilt,st=e.rebuild(edited,source,updated)
-        self.assertEqual(st['bend_engine'],4)
+        self.assertEqual(st['bend_engine'],5)
         self.assertSame(rebuilt,s.build_sheet(updated).cut(tool),tol=1e-4)
 
     def test_holes_on_flat_base_and_flange_retain_positions_over_repeated_cycles(self):
@@ -250,7 +250,7 @@ class ParallelReliefMigrationTests(unittest.TestCase):
         tool=cylinder(25,25);legacy=s.build_sheet(r,parallel_version=2).cut(tool)
         source=e.state(r);source.update(bend_engine=2,dirty=True)
         flat,st=e.switch(legacy,source,True)
-        self.assertEqual(st['bend_engine'],4)
+        self.assertEqual(st['bend_engine'],5)
         folded,st=e.switch(flat,st,False)
         self.assertLess(folded.cut(original.cut(tool)).Volume(1e-9)+original.cut(tool).cut(folded).Volume(1e-9),1e-4)
 

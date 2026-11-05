@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.27 — połączenia równoległe według wzorca CAD
+# RCCAD Desktop 0.4.28 — automatyczne dopasowanie narożników i zawinięć
+
+## Poprawki 0.4.28
+
+- Usunięty przełącznik **Docinaj i przedłużaj narożniki**. Nowe operacje i zastosowanie Reguł blach zawsze włączają automatyczne dopasowanie do sąsiadów; ręczna flaga ze starszych zapisów pozostaje obsługiwana tylko do odtworzenia ich pierwotnej geometrii.
+- Dopasowanie jest wybierane osobno dla narożników. Różne wysokości, długości i liczby gięć nie wyłączają prostych zakończeń, a jeden kołnierz na zewnątrz nie zmienia konstrukcji pozostałych narożników do wewnątrz.
+- Dla zgodnych i niepełnych łańcuchów skierowanych do wnętrza program stosuje proste płaszczyzny zakończeń i uwzględnia następne łuki. Pozostałe konfiguracje zachowują dopasowanie powierzchniowe lub blacharskie zgodne z wybranym stylem.
+- Długość zawinięcia jest teraz długością maksymalną. Odcinek powrotny dopasowuje się do dostępnej prostej części kołnierza, sąsiednich narożników blacharskich i przeciwległych zawinięć. Zapisany parametr maksymalny pozostaje zachowany, aby geometria mogła się ponownie wydłużyć po zwiększeniu miejsca.
+- Rozłożenie, ponowne gięcie, edycja i eksport DXF korzystają z tych samych dopasowanych części. Narożne fragmenty rozwinięcia nie są dublowane. Rzeczywiste kolizje zwykłych ścian nadal powodują bezpieczne odrzucenie operacji.
+
+**Starszy projekt:** wybierz blachę i zastosuj Reguły blach, aby przeliczyć ją automatycznie. Nie trzeba już włączać osobnego przełącznika narożników.
+
+## Wcześniejsze wydanie 0.4.27 — połączenia równoległe według wzorca CAD
 
 ## Poprawki 0.4.27
 

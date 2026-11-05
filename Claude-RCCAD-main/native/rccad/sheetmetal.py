@@ -313,12 +313,53 @@ def _child_bend(specs, i):
     return None
 
 
+def _auto_fit_returns(recipe):
+    """Treat automatic hem returns as maximum lengths, without mutating history."""
+    rules=recipe.get('rules') or {}
+    if not rules.get('auto_corners'):return recipe
+    rules=dict(rules,miter=True)
+    specs=[dict(f,hem=dict(f['hem'])) if f.get('hem') else dict(f) for f in recipe.get('flanges',[])]
+    t=float(recipe['t']);clear=max(float(rules.get('gap',0)),.1*t,1e-4)
+    roots=[i for i,f in enumerate(specs) if f['kind']=='base']
+    for i,f in enumerate(specs):
+        if f.get('hem'):_hem_of(f)
+    if rules.get('joint','parallel')=='sheet':
+        for i in roots:
+            f=specs[i]
+            if not f.get('hem'):continue
+            neighbors=sum(any(np.linalg.norm(_arr(p)-_arr(q))<_TOL for q in (specs[j]['p0'],specs[j]['p1']))
+                          for p in (f['p0'],f['p1']) for j in roots if j!=i and abs(float(_unit(f['m'])@_unit(specs[j]['m'])))<1e-6)
+            if neighbors:
+                available=np.linalg.norm(_arr(f['p1'])-_arr(f['p0']))/min(neighbors,2)-clear
+                if available<=1e-6:raise kernel.CadError('Za mało miejsca na zawinięcie przy sąsiednich narożnikach.')
+                f['hem']['ret']=min(float(f['hem']['ret']),available)
+    base=recipe['base']
+    for position,i in enumerate(roots):
+        a=specs[i]
+        if not a.get('hem'):continue
+        for j in roots[position+1:]:
+            b=specs[j]
+            if not b.get('hem') or float(_unit(a['m'])@_unit(b['m']))>-.999999 or float(_unit(a['n'])@_unit(b['n']))<.999999:continue
+            if 2*abs(_hem_R(a['r'],a['hem']['gap'])-_hem_R(b['r'],b['hem']['gap']))>=t:continue
+            width=sum(abs(float(_unit(a['m'])@_unit(base[key])))*float(base[dim]) for key,dim in (('x','lx'),('y','ly')))-clear
+            total=float(a['hem']['ret'])+float(b['hem']['ret'])
+            if width<=1e-6:raise kernel.CadError('Za mało miejsca między przeciwległymi zawinięciami.')
+            if total>width+1e-8:
+                scale=width/total;a['hem']['ret']=float(a['hem']['ret'])*scale;b['hem']['ret']=float(b['hem']['ret'])*scale
+    for f in specs:
+        if f.get('hem') and f['kind']=='tip':
+            parent=specs[f['parent']]
+            available=float(parent['hem']['ret']) if parent.get('hem') else _straight(parent,t,bool(rules.get('outside',False)))
+            f['hem']['ret']=min(float(f['hem']['ret']),available)
+    return dict(recipe,rules=rules,flanges=specs)
+
+
 def normalize(recipe):
     """Recepta z kołnierzami mierzonymi zewnętrznie / wewnętrznie -> recepta z prostymi częściami i przyciętą płytą.
-    Bez takich kołnierzy zwraca receptę bez zmian (starsze projekty zachowują swoje wymiary)."""
+    Następnie dopasowuje narożniki i maksymalne powroty zawinięć, jeśli włączono automatykę."""
     specs = recipe.get('flanges') or []
     if not any(sp.get('measure') for sp in specs):
-        return recipe
+        return _auto_fit_returns(recipe)
     t = float(recipe['t'])
     out = []
     for i, sp in enumerate(specs):
@@ -371,7 +412,7 @@ def normalize(recipe):
             ends.reverse()
         pts = [no + x * a + y * b + z * w for a, b in ends]
         out[i] = dict(out[i], p0=[float(v) for v in pts[0]], p1=[float(v) for v in pts[1]])
-    return dict(recipe, base=new_base, flanges=out)
+    return _auto_fit_returns(dict(recipe, base=new_base, flanges=out))
 
 
 def spec_datum(s, outside=False):
@@ -689,7 +730,7 @@ _PARTS_CACHE = {}
 _PARTS_ORDER = []
 
 
-def _corner_parts(recipe, eff, corners, parallel_version=4):
+def _corner_parts(recipe, eff, corners, parallel_version=5):
     """Przycięte części narożników z pamięcią: budowa blachy i jej rozwinięcie liczą te same części (kilka sekund),
     więc drugie wywołanie z identycznymi danymi bierze gotowy wynik. Kopia słownika chroni pamięć przed zmianami."""
     key = _recipe_key([_geometry(recipe), eff, corners], parallel_version)
@@ -704,15 +745,16 @@ def _corner_parts(recipe, eff, corners, parallel_version=4):
     return parts
 
 
-def _corner_parts_build(recipe, eff, corners, parallel_version=4):
+def _corner_parts_build(recipe, eff, corners, parallel_version=5):
     """Trim each bend and leg before fusing; keep material pieces independently valid."""
     if parallel_version>=4:
         from . import sheetparallel
-        if sheetparallel.eligible(recipe,eff,corners):
+        if sheetparallel.eligible(recipe,eff,corners,flexible=parallel_version>=5 and bool((recipe.get('rules') or {}).get('auto_corners'))):
             return sheetparallel.parts(recipe,eff,corners)
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
     gap = float(rules.get('gap', 0))
+    automatic=parallel_version>=5 and bool(rules.get('auto_corners'))
     frames, owners, depths, extension = _corner_layout(specs, eff, corners, t)
     lookup = {(owner, depth): i for i, (owner, depth) in enumerate(zip(owners, depths))}
     raw = {i: _flange_parts(f, t) for i, f in enumerate(frames)}
@@ -740,6 +782,12 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=4):
             plane=cq.Plane(origin=tuple(corners[corner][0]),xDir=tuple(root['m']),normal=tuple(axis))
             curtains_world[key]=curtains_cache[signature][0 if far else 1].transformShape(plane.rG)
         return curtains_world[key]
+    local_planes={}
+    if automatic and parallel:
+        from . import sheetparallel
+        local_planes={c:sheetparallel.eligible(recipe,eff,[corner],flexible=True,local=True)
+                      for c,corner in enumerate(corners)}
+    local_caps,local_bounds={},{}
     caps = {}
 
     def straight_end(i, corner):
@@ -825,6 +873,37 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=4):
                                              [peer_profile[:,0].min(),peer_profile[:,0].max()],atol=_TOL,rtol=0)
                              and min(profile[:,1].max(),peer_profile[:,1].max()) >
                                  max(profile[:,1].min(),peer_profile[:,1].min())+_TOL)
+            if local_planes.get(corner):
+                if depths[i]==0:
+                    stop=float(peer_profile[:,0].min())-gap
+                elif owner==a or peer is None:
+                    stop=local_caps[specs[i]['parent'],corner]
+                else:
+                    key=(peer,corner)
+                    if key not in local_bounds:
+                        pieces=list(raw[peer])+[raw[j][0] for j in raw if specs[j].get('parent')==peer]
+                        plane=cq.Plane(origin=tuple(P),xDir=tuple(eff[other]['m']),normal=tuple(np.cross(eff[other]['m'],normal)))
+                        local_bounds[key]=min(kernel.bounds(piece.transformShape(plane.fG)).xmin for piece in pieces)
+                    stop=local_bounds[key]-gap
+                local_caps[i,corner]=stop
+                parts[i]=[_endcut(piece,P+stop*eff[other]['m'],eff[other]['m'],K) for piece in parts[i]]
+                continue
+            if (automatic and depths[i]==0 and not f.get('hem') and not eff[other].get('hem')
+                    and abs(f['angle']-90)<1e-6 and abs(eff[other]['angle']-90)<1e-6):
+                # Fit the first walls directly to their neighbouring skins,
+                # even when later flanges differ in height or fold direction.
+                stop=float(peer_profile[:,0].min())-gap/(math.sqrt(2) if sheet_joint else 1)
+                parts[i][1]=_endcut(parts[i][1],P+stop*eff[other]['m'],eff[other]['m'],K)
+                parts[i][0]=_endcut(parts[i][0],P+(stop if parallel else 0)*eff[other]['m'],eff[other]['m'],K)
+                continue
+            if automatic and parallel and f.get('hem') and depths[i]>0:
+                # A folded-back lip must also clear the neighbouring first wall,
+                # not only the neighbouring lip at its own height.
+                root=eff[other]
+                if not root.get('hem') and abs(root['angle']-90)<1e-6:
+                    root_profile=_leg_profile(root,root,P,normal,t)
+                    stop=float(root_profile[:,0].min())-gap
+                    parts[i]=[_endcut(piece,P+stop*root['m'],root['m'],K) for piece in parts[i]]
             if parallel:
                 capped=straight_end(i,corner)
                 if not matching and capped is not None:
@@ -950,6 +1029,13 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=4):
                             candidates.append(tool)
                     trimmed.append(kernel.boolean('subtract',piece,candidates) if candidates else piece)
                 parts[i] = trimmed
+    if automatic and parallel:
+        for _,a,b,_ in corners:
+            if any(eff[j].get('hem') or abs(eff[j]['angle']-90)>1e-6 for j in (a,b)):continue
+            left,right=parts[a][0],parts[b][0]
+            key=('auto-root-partition',_sig(right),_sig(left))
+            if key[1] is None or key[2] is None:key=None
+            parts[b][0]=_ops_memo(key,lambda right=right,left=left:kernel.boolean('subtract',right,[left]))
     for i in parts:
         # Corner cuts must not silently shorten a flange until its requested
         # free end disappears (e.g. inward returns longer than the box opening).
@@ -962,7 +1048,7 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=4):
     return parts
 
 
-def _build_corner_sheet(base, recipe, eff, corners, parallel_version=4):
+def _build_corner_sheet(base, recipe, eff, corners, parallel_version=5):
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
     parts = _corner_parts(recipe, eff, corners,parallel_version)
@@ -1005,7 +1091,7 @@ def _recipe_key(recipe, parallel_version):
         return None
 
 
-def build_sheet(recipe, parallel_version=4):
+def build_sheet(recipe, parallel_version=5):
     """Blacha od podstaw (z pamięcią ostatnich wyników: ta sama recepta - np. przy rozkładaniu tuż po dodaniu kołnierza -
     nie jest budowana drugi raz; bryły OpenCascade są niezmienne, więc wynik można bezpiecznie współdzielić)."""
     key = _recipe_key(_geometry(recipe), parallel_version)
@@ -1020,10 +1106,10 @@ def build_sheet(recipe, parallel_version=4):
     return shape
 
 
-def _build_sheet(recipe, parallel_version=4):
+def _build_sheet(recipe, parallel_version=5):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
     recipe = normalize(recipe)
-    if parallel_version not in (1,2,3,4):
+    if parallel_version not in (1,2,3,4,5):
         raise kernel.CadError('Nieobsługiwana wersja konstrukcji narożników równoległych.')
     base = base_solid(recipe['base'])
     t = float(recipe['t'])

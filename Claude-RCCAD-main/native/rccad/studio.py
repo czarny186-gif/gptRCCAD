@@ -919,7 +919,8 @@ class StudioWindow(QMainWindow):
         self.hm_radius = _spin(2, .01, 1e5, 3, .5)
         self._field(lay, 'Promień gięcia (mm)', self.hm_radius)
         self.hm_length = _spin(10, .01, 1e5, 3, 1)
-        self._field(lay, 'Długość zawinięcia (mm)', self.hm_length)
+        self.hm_length.setToolTip('Program ogranicza odcinek powrotny do miejsca na kołnierzu i przy sąsiednich zawinięciach.')
+        self._field(lay, 'Maksymalna długość zawinięcia (mm)', self.hm_length)
         self.hm_gap = _spin(0.1, 0.1, 1e5, 3, .1)
         self._field(lay, 'Szczelina od powierzchni (mm, min 0,1)', self.hm_gap)
         self.hm_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
@@ -929,9 +930,7 @@ class StudioWindow(QMainWindow):
         # --- reguły blach: szczelina i wycięcia w narożnikach (osobny panel, dotyczy kołnierzy) ---
         self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True, scroll=True)
         lay.addWidget(_label('Reguły narożników przeliczają całą blachę przy dodaniu gięcia. Rozłóż blachę, aby edytować płaski model, także z zawinięciami. Rozwinięcie DXF uwzględnia aktualny obrys i linie gięć. Współczynnik K dobierz do materiału i prób gięcia.', 'small'))
-        self.fl_miter = QCheckBox('Docinaj i przedłużaj narożniki')
-        self.fl_miter.setChecked(True)
-        lay.addWidget(self.fl_miter)
+        lay.addWidget(_label('Narożniki są dopasowywane automatycznie do sąsiednich ścian, kołnierzy i zawinięć.', 'small'))
         self.fl_gap = _spin(0, 0, 1e5, 3, .5)
         self._field(lay, 'Szczelina między kołnierzami (mm)', self.fl_gap)
         self.fl_relief = ui.Segmented([('Brak', 'none', 'rl_none'), ('Kwadrat', 'square', 'rl_sq'), ('Okrąg', 'round', 'rl_round')], 30)
@@ -1580,7 +1579,6 @@ class StudioWindow(QMainWindow):
                 self.fl_relief.setCurrentIndex(self.fl_relief.findData(rules.get('relief','none')))
                 self.fl_relief_size.setValue(float(rules.get('relief_size',3)))
                 self.fl_kfactor.setValue(float(rules.get('kfactor',shm.K_DEFAULT)))
-                self.fl_miter.setChecked(bool(rules.get('miter',True)))
                 self.fl_outside.setChecked(bool(rules.get('outside',False)))
             self.rules_panel.show()
             self.view.setCursor(Qt.ArrowCursor)
@@ -3918,7 +3916,7 @@ class StudioWindow(QMainWindow):
 
     def _flange_rules(self):
         return dict(gap=float(self.fl_gap.value()), relief=self.fl_relief.currentData() or 'none',
-                    relief_size=float(self.fl_relief_size.value()), miter=self.fl_miter.isChecked(), joint=self.fl_joint.currentData() or 'parallel',
+                    relief_size=float(self.fl_relief_size.value()), miter=True, auto_corners=True, joint=self.fl_joint.currentData() or 'parallel',
                     outside=self.fl_outside.isChecked(), kfactor=float(self.fl_kfactor.value()))
 
     def _sheet_state(self, body_id):

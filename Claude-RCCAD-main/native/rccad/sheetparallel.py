@@ -20,13 +20,16 @@ def _families(specs):
     return owners,depths,families
 
 
-def eligible(recipe,eff,corners):
+def eligible(recipe,eff,corners,flexible=False,local=False):
     rules=recipe.get('rules') or {}
     if not corners or rules.get('joint','parallel')!='parallel':return False
-    if any(f.get('hem') or abs(float(f['angle'])-90)>1e-6 for f in eff):return False
     owners,depths,families=_families(recipe['flanges']);normal=np.asarray(recipe['base']['z'],float)
+    selected={i for _,a,b,_ in corners for i in (a,b)} if local else set(families)
+    if any(f.get('hem') or ((f['kind']=='base' or not flexible) and abs(float(f['angle'])-90)>1e-6)
+           for i,f in enumerate(eff) if owners[i] in selected):return False
     signatures={}
     for owner,indices in families.items():
+        if owner not in selected:continue
         root=eff[owner];signature=[]
         for i in indices:
             f=eff[i];direction=math.cos(math.radians(f['angle']))*f['m']+math.sin(math.radians(f['angle']))*f['n']
@@ -35,6 +38,7 @@ def eligible(recipe,eff,corners):
                 (f['r'],f['angle'],f['length'],(f['p0']-root['p0'])@root['m'],(f['p0']-root['p0'])@normal,
                  f['n']@root['m'],f['n']@normal,f['m']@root['m'],f['m']@normal)))
         signatures[owner]=signature
+    if flexible:return True
     return all(all(x==y for x,y in zip(signatures[a],signatures[b])) for _,a,b,_ in corners)
 
 

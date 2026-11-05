@@ -117,7 +117,7 @@ def run(report_path=None):
     old_source=she.state(parallel_recipe);old_source.pop('bend_engine');old_source['dirty']=True
     old_hole=cq.Solid.makeCylinder(1,5,cq.Vector(20,20,-1))
     migrated,migrated_state=she.rebuild(legacy_parallel.cut(old_hole),old_source,parallel_recipe)
-    assert migrated_state['bend_engine']==4 and k.point_state(migrated,(20,20,1))=='out'
+    assert migrated_state['bend_engine']==5 and k.point_state(migrated,(20,20,1))=='out'
     checks.append('legacy parallel sheet migration preserves edited holes')
     slim_base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=100,ly=50,lz=1)
     for slim_angle in (45,135):
@@ -159,6 +159,16 @@ def run(report_path=None):
     for i,left in enumerate(reference_layout.flat_bends[:4]):
         assert all(abs(left.intersect(right).Volume(1e-9))<1e-7 for right in reference_layout.flat_bends[:i])
     checks.append('reference parallel corners: square roots, constant return ends and non-overlapping developed root patches')
+    auto_specs=[dict(kind='base',p0=[a[0],a[1],1],p1=[b[0],b[1],1],n=[0,0,1],m=m,r=1,angle=90,length=5) for a,b,m in edges]
+    auto_specs.append(dict(kind='tip',parent=0,side='out',r=1,angle=90,length=10,hem=dict(gap=.2,ret=10)))
+    auto_recipe=dict(base=slim_base,t=1,flanges=auto_specs,rules=dict(joint='parallel',gap=.2,miter=False,auto_corners=True))
+    auto_normalized=shm.normalize(auto_recipe)
+    assert auto_normalized['rules']['miter'] and auto_normalized['flanges'][-1]['hem']['ret']==5
+    auto_body=shm.build_sheet(auto_recipe);auto_flat,auto_state=she.switch(auto_body,she.state(auto_recipe),True)
+    assert auto_flat.isValid() and len(auto_flat.Solids())==1
+    auto_folded,_=she.switch(auto_flat,auto_state,False)
+    assert auto_folded.isValid() and abs(auto_folded.Volume(1e-9)-auto_body.Volume(1e-9))<1e-4
+    checks.append('automatic corners: forced neighbour fitting and hem maximum limited by its supporting flange')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')
@@ -205,6 +215,7 @@ def run(report_path=None):
     app.processEvents()
     assert len(studio.document.bodies)==1 and studio.document.bodies[0].kind=='sketch'
     assert studio.fl_joint.findData('diagonal') == -1
+    assert not hasattr(studio,'fl_miter') and studio._flange_rules()['auto_corners']
     test_body=Body('Sheet selection',edit_model.folded,meta={'sheet':she.state(edit_recipe)}).prepared()
     studio.document.commit([test_body]);studio.selected=[test_body.id]
     studio.set_mode('flange')
