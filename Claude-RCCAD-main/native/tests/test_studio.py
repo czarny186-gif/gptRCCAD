@@ -900,6 +900,48 @@ class StudioTests(unittest.TestCase):
         self.pick_sketch_profile(w.document.bodies[0]);w.ex_value.setValue(5);w.apply_extrude();self.wait()
         self.assertFalse([b for b in w.document.bodies if b.kind=='solid'])
 
+    def _mate_pick(self,body,normal,point):
+        with patch.object(self.w.view,'pick_face',return_value=(body.id,np.array(normal,float),np.array(point,float))):
+            self.w.view_clicked(5,5,False,False)
+
+    def test_mate_puts_face_against_face_with_centres_together(self):
+        w=self.w
+        a=Body('A',k.box(10,20,30)).prepared();b=Body('B',k.box(40,40,10).translate(cq.Vector(100,50,0))).prepared()
+        w.document.commit([a,b]);w.refresh()
+        w.toggle_mode('mate');self.assertEqual(w._tab,'Bryła');self.assertTrue(w.mt_panels['mate'].isVisible())
+        self._mate_pick(a,(-1,0,0),(0,10,15))            # lewa ściana A
+        self.assertEqual(w.mt_pick['moving']['id'],a.id);self.assertNotIn('target',w.mt_pick)
+        self._mate_pick(b,(0,0,1),(120,70,10))           # góra B
+        self.preview();self.assertTrue(w.view.preview_items)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        moved=w.document.get(a.id).shape
+        self.assertAlmostEqual(moved.Volume(),6000,3);self.assertAlmostEqual(moved.BoundingBox().zmin,10,4)
+        self.assertLess(moved.intersect(w.document.get(b.id).shape).Volume(),1e-6)
+        touching=[f for f in moved.Faces() if np.allclose(f.Center().toTuple(),(120,70,10),atol=1e-5)]
+        self.assertEqual(len(touching),1);self.assertAlmostEqual(touching[0].Area(),20*30,4)       # ściana A leży na środku góry B
+        self.assertEqual(w.document.info['op']['type'],'mate');self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),16000,6)      # bryła docelowa bez zmian
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.BoundingBox().zmin,0,6)
+
+    def test_align_moves_body_along_reference_normal_only_and_replays(self):
+        w=self.w
+        a=Body('Niski',k.box(10,10,30)).prepared();c=Body('Wysoki',k.box(10,10,50).translate(cq.Vector(30,0,0))).prepared()
+        w.document.commit([a,c]);w.refresh();w.toggle_mode('align')
+        self._mate_pick(a,(0,0,1),(5,5,30));self._mate_pick(c,(0,0,1),(35,5,50))
+        w.apply_mate();self.wait()
+        bb=w.document.get(a.id).shape.BoundingBox()
+        self.assertAlmostEqual(bb.zmax,50,4);self.assertAlmostEqual(bb.zmin,20,4);self.assertAlmostEqual(bb.xmin,0,4);self.assertAlmostEqual(bb.ymin,0,4)
+        recipe=w.document.info['op'];self.assertEqual(recipe['mode'],'align')
+        taller=Body('Wysoki',k.box(10,10,70).translate(cq.Vector(30,0,0)),id=c.id).prepared()   # zmieniona bryła wzorcowa
+        again=hist.run_recipe((a,taller),recipe);self.assertAlmostEqual(next(x for x in again if x.id==a.id).shape.BoundingBox().zmax,70,4)
+        # w innej płaszczyźnie: ściany boczne (x) - bryła przesuwa się tylko w x
+        w.toggle_mode('align');side=w.document.get(a.id)
+        self._mate_pick(side,(1,0,0),(10,5,35));self._mate_pick(c,(1,0,0),(40,5,25))
+        w.apply_mate();self.wait();bb=w.document.get(a.id).shape.BoundingBox()
+        self.assertAlmostEqual(bb.xmax,40,4);self.assertAlmostEqual(bb.zmax,50,4)
+        # ta sama bryła dwa razy: druga ściana zmienia tylko ścianę przesuwanej bryły
+        w.toggle_mode('mate');self._mate_pick(c,(0,0,1),(35,5,50));self._mate_pick(c,(1,0,0),(40,5,25))
+        self.assertNotIn('target',w.mt_pick);self.assertEqual(w.mt_pick['moving']['normal'],(1.0,0.0,0.0))
+
     def test_two_sided_extrude(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
         w.ex_dir.setCurrentIndex(2);w.ex_value.setValue(10);w.ex_second.setValue(5);w.apply_extrude();self.wait()

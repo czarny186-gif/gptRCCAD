@@ -1,4 +1,10 @@
-# RCCAD Desktop 0.4.20 — wymiary zewnętrzne i wewnętrzne blachy
+# RCCAD Desktop 0.4.21 — dopasowanie i wyrównanie brył
+
+## Zmiany 0.4.21
+
+- **Bryła → Dopasowanie:** kliknij ścianę bryły do przesunięcia, potem ścianę drugiej bryły. Pierwsza bryła obraca się i przesuwa tak, że jej ściana przylega do ściany docelowej, a środki obu ścian się spotykają.
+- **Bryła → Wyrównanie:** kliknij ścianę bryły do przesunięcia, potem ścianę wzorcową. Cała pierwsza bryła przesuwa się bez obracania wzdłuż kierunku ściany wzorcowej, aż obie ściany leżą na tej samej wysokości - w każdej płaszczyźnie.
+- Oba narzędzia mają podgląd nowego położenia, zatwierdza się je Zastosuj albo Enter, trafiają do historii (cofanie, ponowne przeliczanie po zmianie wcześniejszych kroków).
 
 ## Zmiany 0.4.20
 

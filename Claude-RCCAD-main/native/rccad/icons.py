@@ -96,6 +96,26 @@ def _draw_datum(p, which, ink, acc, soft, pen):
         p.drawPolygon(QPolygonF([Q(tip), Q(tip + 3.4 * back + 1.6 * across), Q(tip + 3.4 * back - 1.6 * across)]))
 
 
+def _draw_mate(p, which, ink, acc, soft, pen, active=None):
+    """Dopasowanie: klocek nad podstawą, wybrane ściany (pomarańczowa przesuwana, zielona docelowa) i strzałka zbliżenia.
+    Wyrównanie: niski i wysoki klocek, strzałka podnosząca niższy do przerywanej linii wierzchu wyższego."""
+    green = active or GREEN
+    if which == 'mate':
+        p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(15, 5, 18, 13))
+        p.setBrush(soft); p.drawRect(QRectF(6, 32, 36, 11))
+        p.setPen(pen(acc, 3.0)); p.drawLine(QPointF(15, 18), QPointF(33, 18))
+        p.setPen(pen(green, 3.0)); p.drawLine(QPointF(15, 32), QPointF(33, 32))
+        p.setPen(pen(acc, 2.4)); p.drawLine(QPointF(24, 20), QPointF(24, 28))
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(24, 30), QPointF(20, 25), QPointF(28, 25)]))
+    else:
+        dash = pen(green, 2.0); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.6]); p.setPen(dash); p.drawLine(QPointF(4, 9), QPointF(44, 9))
+        p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(27, 9, 14, 33)); p.drawRect(QRectF(7, 24, 14, 18))
+        p.setPen(pen(green, 3.0)); p.drawLine(QPointF(27, 9), QPointF(41, 9))
+        p.setPen(pen(acc, 3.0)); p.drawLine(QPointF(7, 24), QPointF(21, 24))
+        p.setPen(pen(acc, 2.4)); p.drawLine(QPointF(14, 21), QPointF(14, 14))
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(14, 10), QPointF(10, 16), QPointF(18, 16)]))
+
+
 def _draw_sheet_drawing(p, ink, acc, soft, pen):
     """Rysunek blachy do gięcia: arkusz z rozwinięciem, linie gięcia (ciągła i przerywana) i wymiar między nimi."""
     p.setBrush(soft); p.setPen(pen(ink, 2.4))
@@ -286,6 +306,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_drawing(p, kind[2:], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('dl_leg', 'dl_outer', 'dl_inner', 'dl_tangent'):
         _draw_datum(p, kind[3:], INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind in ('x_mate', 'x_align'):
+        _draw_mate(p, kind[2:], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_sheetdrawing':
         _draw_sheet_drawing(p, BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('x_mdist', 'x_mangle', 'x_mrad', 'x_mprops'):
@@ -509,6 +531,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_drawing(p, name, ink, acc, soft, pen)
         elif name == 'sheetdrawing':
             _draw_sheet_drawing(p, ink, acc, soft, pen)
+        elif name in ('mate', 'align'):
+            _draw_mate(p, name, ink, acc, soft, pen, '#7be0a8' if white else None)
         elif name in ('mdist', 'mangle', 'mrad', 'mprops'):
             _draw_measure(p, name, ink, acc, soft, pen)
         elif name == 'bool':

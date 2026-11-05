@@ -176,7 +176,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
+TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft', 'mate', 'align'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek
@@ -375,6 +375,8 @@ class StudioWindow(QMainWindow):
                  ('revolve', ui.style_icon('revolve', 38), 'Obrót — profil wokół osi'),
                  ('sweep', ui.style_icon('sweep', 38), 'Przeciągnięcie — profil wzdłuż ścieżki'),
                  ('loft', ui.style_icon('loft', 38), 'Wyciągnięcie złożone — bryła przez kilka profili'),
+                 ('mate', ui.style_icon('mate', 38), 'Dopasowanie — ściana jednej bryły przylega do ściany drugiej, środkami ścian'),
+                 ('align', ui.style_icon('align', 38), 'Wyrównanie — ściana jednej bryły na tej samej wysokości co ściana drugiej'),
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
@@ -1064,6 +1066,25 @@ class StudioWindow(QMainWindow):
         self.mir_keep.toggled.connect(lambda *_: self._timers['mirror'].start())
         self.mir_join.toggled.connect(lambda *_: self._timers['mirror'].start())
 
+        # --- dopasowanie i wyrównanie: ściana przesuwanej bryły względem ściany innej bryły ---
+        self.mt_pick = {}
+        self.mt_panels, self.mt_steps, self.mt_status = {}, {}, {}
+        for key, title, sub, desc, second in (
+                ('mate', 'Dopasowanie', 'Ściana do ściany', 'Pierwsza bryła obraca się i przesuwa tak, że jej wskazana ściana przylega do wskazanej ściany drugiej bryły, a środki obu ścian się spotykają.', 'Ściana docelowa'),
+                ('align', 'Wyrównanie', 'Ściany na jednej wysokości', 'Pierwsza bryła przesuwa się bez obracania wzdłuż kierunku ściany wzorcowej, aż obie ściany leżą na tej samej wysokości - w każdej płaszczyźnie.', 'Ściana wzorcowa')):
+            panel, lay = self._panel(312, title, 'x_' + key, sub, plain=True)
+            lay.addWidget(_label(desc, 'small'))
+            steps = (ui.StepRow(1, 'x_wall', 'Ściana przesuwana', plain=True), ui.StepRow(2, 'x_wall', second, plain=True))
+            for st in steps:
+                lay.addWidget(st)
+            status = _label('', 'status')
+            lay.addWidget(status)
+            again = QPushButton('Wskaż ściany od nowa')
+            again.clicked.connect(lambda _=False: self._mt_reset())
+            lay.addWidget(again)
+            self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_mate, lambda: self.set_mode(None))
+            self.mt_panels[key], self.mt_steps[key], self.mt_status[key] = panel, steps, status
+
         # --- szyk (prostokątny / kołowy / wzdłuż linii) ---
         self.pat_id, self.pat_path = None, None
         self.pat_picking = False
@@ -1231,7 +1252,7 @@ class StudioWindow(QMainWindow):
         self.text_size.valueChanged.connect(lambda *_: self._text_spin_changed())
         self.text_angle.valueChanged.connect(lambda *_: self._text_spin_changed())
 
-        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.text_panel)
+        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.text_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1272,7 +1293,7 @@ class StudioWindow(QMainWindow):
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values()):
+        for p in (self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self.text_panel.adjustSize()
@@ -1308,7 +1329,7 @@ class StudioWindow(QMainWindow):
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
             focus = QApplication.focusWidget()
@@ -1457,6 +1478,7 @@ class StudioWindow(QMainWindow):
         self.bool_ids = []
         self.mirror_id = None
         self.mirror_frame = None
+        self.mt_pick = {}
         self.pat_id, self.pat_path = None, None
         self.mod_vertices = {}
         self.t_target = None
@@ -1568,6 +1590,10 @@ class StudioWindow(QMainWindow):
             self._mod_kind_changed()
             self.update_mod_status()
             self.hint('Edytuj bryłę: kliknij krawędź. Shift + klik dodaje kolejne.')
+        elif mode in ('mate', 'align'):
+            self.mt_panels[mode].show()
+            self.view.setCursor(Qt.PointingHandCursor)
+            self._mt_update()
         elif mode == 'mirror':
             self.mir_panel.show()
             self.update_mirror_status()
@@ -2521,6 +2547,8 @@ class StudioWindow(QMainWindow):
                 self.view.setCursor(Qt.SizeAllCursor if hit else Qt.ArrowCursor)
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
+            elif self.mode in ('mate', 'align') and not ('moving' in self.mt_pick and 'target' in self.mt_pick):
+                self._hover_face_only(x, y)
             elif self.mode == 'pattern' and self.pat_id is None:
                 self._pattern_hover(x, y)
             elif self.mode == 'pattern' and self.pat_id and self.pat_picking:
@@ -2661,6 +2689,8 @@ class StudioWindow(QMainWindow):
             self.pick_edge(x, y, shift, ctrl)
         elif self.mode == 'mirror':
             self.pick_mirror(x, y)
+        elif self.mode in ('mate', 'align'):
+            self.pick_mate(x, y)
         elif self.mode == 'pattern':
             self.pick_pattern(x, y)
         elif self.mode in ('move', 'rotate'):
@@ -4669,6 +4699,104 @@ class StudioWindow(QMainWindow):
         self.view.set_selection_meshes([kernel.display_mesh(face)], color=(.25, .75, .45, .55), line_color=(.1, .55, .3, 1))
         self.update_mirror_status()
 
+    # =====================================================================
+    # dopasowanie (ściana do ściany) i wyrównanie (ściany na jednej wysokości)
+    # =====================================================================
+    def _mt_reset(self):
+        self.mt_pick = {}
+        self.view.set_preview_mesh(None)
+        self._mt_update()
+
+    def pick_mate(self, x, y):
+        """Pierwsze kliknięcie: ściana przesuwanej bryły, drugie: ściana innej bryły. Kliknięcie ściany przesuwanej bryły
+        zmienia jej ścianę, kliknięcie ściany innej bryły - ścianę docelową."""
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid':
+            self.toast('Kliknij płaską ścianę bryły.')
+            return
+        try:
+            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+        except kernel.CadError:
+            self.toast('Wybierz płaską ścianę.')
+            return
+        normal = hist.outward_normal(body.shape, face, normal)
+        pick = dict(id=body.id, face=face, normal=tuple(float(c) for c in normal), point=tuple(float(c) for c in hit[2]))
+        moving = self.mt_pick.get('moving')
+        if moving is None or body.id == moving['id']:
+            self.mt_pick['moving'] = pick
+            if moving is not None and moving['id'] != body.id:
+                self.mt_pick.pop('target', None)
+        else:
+            self.mt_pick['target'] = pick
+        self._hover_key = None
+        self._mt_update()
+
+    def _mt_recipe(self):
+        mv, tg = self.mt_pick.get('moving'), self.mt_pick.get('target')
+        if mv is None or tg is None:
+            return None
+        a, b = self.document.get(mv['id']), self.document.get(tg['id'])
+        return dict(type='mate', mode=self.mode, id=a.id, target=b.id,
+                    face=hist.face_ref(mv['face'], mv['normal'], mv['point'], a.shape),
+                    tface=hist.face_ref(tg['face'], tg['normal'], tg['point'], b.shape))
+
+    def _mt_update(self):
+        if self.mode not in ('mate', 'align'):
+            return
+        mv, tg = self.mt_pick.get('moving'), self.mt_pick.get('target')
+        steps, status = self.mt_steps[self.mode], self.mt_status[self.mode]
+        a = self.document.get(mv['id']) if mv else None
+        b = self.document.get(tg['id']) if tg else None
+        steps[0].set_state('done' if a else 'active', a.name if a else 'Kliknij ścianę')
+        steps[1].set_state('done' if b else ('active' if a else 'pending'), b.name if b else ('Ściana innej bryły' if a else 'Najpierw krok 1'))
+        self.view.tints = {**({a.id: TINT_TOOL} if a else {}), **({b.id: TINT_BASE} if b else {})}
+        meshes = [kernel.display_mesh(p['face']) for p in (mv, tg) if p]
+        self.view.set_selection_meshes(meshes)
+        status.setText('Zastosuj (Enter) przesuwa pierwszą bryłę.' if b else ('Teraz kliknij ścianę innej bryły.' if a else 'Kliknij ścianę bryły, która ma się przesunąć.'))
+        self.refresh()
+        self.update_mate_preview()
+
+    def update_mate_preview(self):
+        recipe = self._mt_recipe() if self.mode in ('mate', 'align') else None
+        if recipe is None:
+            return
+        bodies = tuple(self.document.bodies)
+        mode = self.mode
+
+        def compute():
+            moved = next(b for b in hist.run_recipe(bodies, recipe) if b.id == recipe['id'])
+            return kernel.display_mesh(moved.shape, PREVIEW_TOL)
+
+        def show(mesh, error):
+            if self.mode != mode:
+                return
+            if error:
+                self.view.set_preview_mesh(None)
+                self.mt_status[mode].setText(error)
+                return
+            self.view.set_preview_mesh(mesh, color=(.3, .8, .5, .5), line_color=(.05, .4, .2, 1), width=2)
+
+        self.run_preview('mate', compute, show)
+
+    def apply_mate(self):
+        if self.busy or self.mode not in ('mate', 'align'):
+            return
+        recipe = self._mt_recipe()
+        if recipe is None:
+            self.toast('Kliknij ścianę bryły do przesunięcia, a potem ścianę drugiej bryły.')
+            return
+        existing = tuple(self.document.bodies)
+        label = 'Dopasowanie' if recipe['mode'] == 'mate' else 'Wyrównanie'
+
+        def apply(bodies):
+            self.document.pending_op = recipe
+            self.document.commit(list(bodies))
+            self.selected = [recipe['id']]
+
+        self.view.set_preview_mesh(None)
+        self.run_operation(label, lambda: hist.run_recipe(existing, recipe), apply, after=lambda: self.set_mode(None))
+
     def update_mirror_status(self):
         body = self.document.get(self.mirror_id) if self.mirror_id else None
         if body is None:
@@ -6463,7 +6591,7 @@ class StudioWindow(QMainWindow):
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
             if action:

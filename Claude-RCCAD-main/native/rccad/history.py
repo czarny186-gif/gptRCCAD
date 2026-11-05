@@ -37,7 +37,7 @@ def passes_filter(info, name):
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
-               'Zaokrąglanie': 'mod', 'Skorupa': 'shell', 'Fazowanie': 'mod', 'Odbicie lustrzane': 'mirror', 'Szyk': 'pattern', 'Przekształcenie': 'move',
+               'Zaokrąglanie': 'mod', 'Skorupa': 'shell', 'Fazowanie': 'mod', 'Odbicie lustrzane': 'mirror', 'Szyk': 'pattern', 'Przekształcenie': 'move', 'Dopasowanie': 'mate', 'Wyrównanie': 'align',
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file'}
 
 
@@ -836,6 +836,78 @@ def run_transform(bodies, recipe):
     return _replace(bodies, body.changed(shape))
 
 
+def outward_normal(shape, face, normal=None):
+    """Normalna płaskiej ściany skierowana na zewnątrz bryły."""
+    n = _unit(normal if normal is not None else face.normalAt(face.Center()).toTuple())
+    c = np.array(face.Center().toTuple(), float)
+    eps = 1e-3 * max(1.0, _scale(shape))
+    try:
+        if kernel.point_state(shape, c + n * eps) == 'in' and kernel.point_state(shape, c - n * eps) != 'in':
+            n = -n
+    except Exception:
+        pass
+    return n
+
+
+def _rotation_between(a, b):
+    """Macierz obrotu 3x3 przeprowadzająca wektor jednostkowy a na b (najkrótszy obrót; dla przeciwnych - 180° wokół prostopadłej)."""
+    a, b = _unit(a), _unit(b)
+    c = float(np.clip(a @ b, -1.0, 1.0))
+    if c > 1 - 1e-12:
+        return np.eye(3)
+    if c < -1 + 1e-12:
+        helper = np.array([1.0, 0, 0]) if abs(a[0]) < .9 else np.array([0, 1.0, 0])
+        axis = _unit(np.cross(a, helper))
+        return 2 * np.outer(axis, axis) - np.eye(3)
+    v = np.cross(a, b)
+    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx * (1 / (1 + c))
+
+
+def placement(mode, face, normal, target, tnormal):
+    """Macierz 3x4 przekształcenia przesuwanej bryły.
+    mate (Dopasowanie): ściana obraca się tak, by patrzeć wprost na ścianę docelową (normalne przeciwne), a jej środek trafia
+    w środek ściany docelowej - bryły stykają się tymi ścianami. align (Wyrównanie): bez obrotu, przesunięcie wzdłuż normalnej
+    ściany wzorcowej, aż obie ściany leżą na tej samej wysokości (w jednej płaszczyźnie)."""
+    ca, cb = (np.array(f.Center().toTuple(), float) for f in (face, target))
+    na, nb = _unit(normal), _unit(tnormal)
+    if mode == 'align':
+        R, t = np.eye(3), float((cb - ca) @ nb) * nb
+    elif mode == 'mate':
+        R = _rotation_between(na, -nb)
+        t = cb - R @ ca
+    else:
+        raise kernel.CadError('Nieznany rodzaj dopasowania.')
+    return np.hstack([R, t.reshape(3, 1)])
+
+
+def apply_placement(shape, matrix):
+    """Sztywne przekształcenie bryły (obrót + przesunięcie) macierzą 3x4; obrót ortonormalizowany przed użyciem."""
+    from OCP.gp import gp_Trsf
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    M = np.asarray(matrix, float)
+    u, _, vt = np.linalg.svd(M[:, :3])
+    R = u @ vt
+    if np.linalg.det(R) < 0:
+        raise kernel.CadError('Nieprawidłowe przekształcenie bryły.')
+    trsf = gp_Trsf()
+    trsf.SetValues(*[float(R[i, j]) if j < 3 else float(M[i, 3]) for i in range(3) for j in range(4)])
+    moved = cq.Shape.cast(BRepBuilderAPI_Transform(shape.wrapped, trsf, True).Shape())
+    return kernel.valid(moved, bool(shape.Solids()))
+
+
+def run_mate(bodies, recipe):
+    """Dopasowanie / Wyrównanie: przesuwana bryła ustawiana względem ściany innej bryły (ściany odszukiwane na nowo, więc krok
+    przeżywa zmianę wcześniejszych kroków)."""
+    body, target = _body(bodies, recipe['id']), _body(bodies, recipe['target'])
+    if body.id == target.id:
+        raise kernel.CadError('Wybierz ściany dwóch różnych brył.')
+    face, _ = match_face(body.shape, recipe['face'])
+    tface, _ = match_face(target.shape, recipe['tface'])
+    matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), tface, outward_normal(target.shape, tface))
+    return _replace(bodies, body.changed(apply_placement(body.shape, matrix)))
+
+
 def run_mirror(bodies, recipe):
     body = _body(bodies, recipe['id'])
     shape = kernel.mirror_plane(body.shape, recipe['normal'], recipe['origin'])
@@ -966,7 +1038,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode}
+RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1072,6 +1144,8 @@ def reads(recipe, current):
         return {recipe['id']}
     if kind == 'bool':
         return {recipe['base'], *recipe['tools']}
+    if kind == 'mate':
+        return {recipe['id'], recipe['target']}
     if kind == 'delete':
         return set(recipe['ids'])
     if kind == 'trim':
