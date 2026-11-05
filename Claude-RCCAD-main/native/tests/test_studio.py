@@ -566,8 +566,8 @@ class StudioTests(unittest.TestCase):
         edges=[([100,0,2],[100,50,2],[1,0,0]),([100,50,2],[0,50,2],[0,1,0]),([0,50,2],[0,0,2],[-1,0,0]),([0,0,2],[100,0,2],[0,-1,0])]
         for a,b,m in edges:
             w.fl_pick=dict(id=body.id,spec=dict(kind='base',p0=a,p1=b,n=[0,0,1],m=m));w.apply_flange();self.wait()
-        bb=w.document.get(body.id).shape.BoundingBox()
-        self.assertAlmostEqual(bb.xlen,100,1);self.assertAlmostEqual(bb.ylen,50,1);self.assertAlmostEqual(bb.zlen,10,1)
+        bb=k.bounds(w.document.get(body.id).shape)      # dokładne wymiary (zwykły BoundingBox obejmuje punkty kontrolne skośnych cięć narożników)
+        self.assertAlmostEqual(bb.xlen,100,4);self.assertAlmostEqual(bb.ylen,50,4);self.assertAlmostEqual(bb.zlen,10,4)
         self.assertEqual([s['measure'] for s in w._sheet_state(body.id)['specs']],['outer']*4)
         # starsze projekty (bez pola measure) zachowują dawne wymiary
         legacy=dict(kind='base',p0=[100,0,1],p1=[100,50,1],n=[0,0,1],m=[1,0,0],r=1,angle=90,length=5)
