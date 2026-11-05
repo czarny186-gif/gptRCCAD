@@ -1242,6 +1242,39 @@ class StudioTests(unittest.TestCase):
         with patch.object(w,'_trim_target',return_value=(body,pieces,0)):w.sketch_clicked('XY',0,0)
         self.wait();self.assertFalse(w.document.bodies[0].shape.IsClosed())
 
+    def test_sketch_offset_panel_side_value_and_arrow(self):
+        self.sketch('rect',(0,0),(20,10));w=self.w;src=w.document.bodies[0]
+        w.choose_tool('offset');self.assertTrue(w.off_panel.isVisible())
+        with patch.object(w,'_off_body_at_cursor',return_value=(src,(20.0,5.0,0.0))):w.sketch_clicked('XY',20,5)
+        self.assertIsNotNone(w.off);np.testing.assert_allclose(w.off['dir'],(1,0,0),atol=1e-9)
+        w.off_value.setValue(3)
+        h=w.view.handles[0];self.assertEqual(h['id'],'off');np.testing.assert_allclose(h['tip'],(23,5,0),atol=1e-9)
+        self.assertTrue(w.view.preview_items)
+        w.handle_dragged('off',-5);w.handle_released('off')      # przez kształt do środka: 3 - 5 = -2
+        self.assertEqual(w.off_side.currentData(),'in');self.assertAlmostEqual(w.off_value.value(),2)
+        np.testing.assert_allclose(w.view.handles[0]['tip'],(18,5,0),atol=1e-9)
+        w.apply_offset();self.wait()
+        self.assertEqual(len(w.document.bodies),2);new=w.document.bodies[1]
+        bb=new.shape.BoundingBox();self.assertAlmostEqual(bb.xlen,16,6);self.assertAlmostEqual(bb.ylen,6,6);self.assertTrue(new.shape.IsClosed())
+        self.assertIsNone(w.off);self.assertEqual(w.view.handles,[])
+        w.choose_tool('offset')
+        with patch.object(w,'_off_body_at_cursor',return_value=(src,(0.0,5.0,0.0))):w.sketch_clicked('XY',0,5)
+        w.off_side.setCurrentIndex(w.off_side._data.index('out'));w.off_value.setValue(1.5)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        bb=w.document.bodies[2].shape.BoundingBox();self.assertAlmostEqual(bb.xlen,23,6);self.assertAlmostEqual(bb.ylen,13,6)
+        with patch.object(w,'_off_body_at_cursor',return_value=(src,(0.0,5.0,0.0))):w.sketch_clicked('XY',0,5)
+        w.off_side.setCurrentIndex(w.off_side._data.index('in'));w.off_value.setValue(6)
+        self.assertIn('większy',w.off_status.text());w.apply_offset();self.wait();self.assertEqual(len(w.document.bodies),3)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertIsNone(w.off);self.assertEqual(w.mode,'sketch')
+
+    def test_sketch_offset_circle_on_xz(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XZ');w.choose_tool('circle');w.sketch_clicked('XZ',0,0);w.sketch_clicked('XZ',5,0);self.wait()
+        src=w.document.bodies[0];w.choose_tool('offset')
+        with patch.object(w,'_off_body_at_cursor',return_value=(src,k.to_world('XZ',3,4))):w.sketch_clicked('XZ',3,4)
+        np.testing.assert_allclose(w.off['dir'],np.array(k.to_world('XZ',3,4))/5,atol=1e-6)
+        w.off_value.setValue(2);w.apply_offset();self.wait()
+        bb=w.document.bodies[1].shape.BoundingBox();self.assertAlmostEqual(bb.xlen,14,5);self.assertAlmostEqual(bb.zlen,14,5);self.assertAlmostEqual(bb.ylen,0,6)
+
     def test_tangent_circle_between_two_lines(self):
         w=self.w;self.sketch('line',(0,0),(30,0),(30,0));self.sketch('line',(0,0),(0,30),(0,30))
         a,b=w.document.bodies;w.choose_tool('circleTangent2')

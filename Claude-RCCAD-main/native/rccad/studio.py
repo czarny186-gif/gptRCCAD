@@ -24,7 +24,7 @@ from . import sketchmeta as sm
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
-        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'line': 2, 'circleTangent2': 3}
+        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'line': 2, 'circleTangent2': 3}
 HINTS = {
     'rect': ['Kliknij pierwszy narożnik prostokąta.', 'Kliknij przeciwległy narożnik.'],
     'centerRect': ['Kliknij środek prostokąta.', 'Kliknij narożnik.'],
@@ -42,6 +42,7 @@ HINTS = {
     'measure': ['Kliknij pierwszy punkt pomiaru.', 'Kliknij drugi punkt.'],
     'text': ['Wybierz powierzchnię, przeciągnij obszar napisu i wpisz treść.'],
     'trim': ['Nożyczki: kliknij fragment szkicu, który ma zniknąć.'],
+    'offset': ['Ofset: kliknij kształt szkicu, który chcesz odsunąć.'],
     'line': ['Kliknij początek linii.', 'Kliknij kolejny punkt. Enter lub ponowne kliknięcie kończy, kliknięcie w pierwszy punkt zamyka obrys.'],
 }
 VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '3 punkty', 'circle': 'Środek + promień',
@@ -1268,7 +1269,23 @@ class StudioWindow(QMainWindow):
         self.text_size.valueChanged.connect(lambda *_: self._text_spin_changed())
         self.text_angle.valueChanged.connect(lambda *_: self._text_spin_changed())
 
-        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.text_panel, *self.mt_panels.values())
+        # --- ofset szkicu ---
+        self.off = None             # wybrany kształt: dict(body, base, dir)
+        self.off_panel, lay = self._panel(286, 'Ofset', 'x_offset', 'Kształt → strona → odległość', plain=True)
+        lay.addWidget(_label('Tworzy nowy kształt odsunięty o stałą odległość od wskazanego: do środka albo na zewnątrz. Strzałkę przy kształcie można przeciągać.', 'small'))
+        self.off_step = ui.StepRow(1, 'x_area', 'Kształt szkicu', plain=True)
+        lay.addWidget(self.off_step)
+        self.off_side = ui.Segmented([('Na zewnątrz', 'out', 'sh_out'), ('Do wewnątrz', 'in', 'sh_in')], 30)
+        self._field(lay, 'Strona', self.off_side)
+        self.off_value = _spin(2, .01, 1e5, 2, .5)
+        self._field(lay, 'Odległość (mm)', self.off_value)
+        self.off_status = _label('Kliknij kształt szkicu.', 'status')
+        lay.addWidget(self.off_status)
+        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_offset, self.cancel_offset)
+        self.off_side.currentIndexChanged.connect(lambda *_: self._off_update())
+        self.off_value.valueChanged.connect(lambda *_: self._off_update())
+
+        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1314,6 +1331,8 @@ class StudioWindow(QMainWindow):
             p.move(18, 88 + TOOLS_TOP - 18)
         self.text_panel.adjustSize()
         self.text_panel.move(92, 88 + TOOLS_TOP - 18)
+        self.off_panel.adjustSize()
+        self.off_panel.move(92, 88 + TOOLS_TOP - 18)
         self.ex_panel.adjustSize()
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
@@ -1495,6 +1514,7 @@ class StudioWindow(QMainWindow):
         self.mirror_id = None
         self.mirror_frame = None
         self.mt_pick = {}
+        self.off = None
         self.mt_spin = 0.0
         if hasattr(self, 'mt_angle'):
             self.mt_angle.setText('0°')
@@ -1658,6 +1678,8 @@ class StudioWindow(QMainWindow):
         self.points = []
         self.tangent_lines = []
         self.text_panel.setVisible(name == 'text')
+        self.off_panel.setVisible(name == 'offset' and self.mode == 'sketch')
+        self._off_clear()
         if name == 'text':
             self._text_begin()
         else:
@@ -1801,7 +1823,7 @@ class StudioWindow(QMainWindow):
             return kernel.polyline(self.sketch_plane, pts) if len(pts) >= 2 else None
         if t == 'measure':
             return kernel.polyline(self.sketch_plane, pts) if len(pts) == 2 else None
-        if t in ('text', 'trim', 'circleTangent2', 'point'):
+        if t in ('text', 'trim', 'offset', 'circleTangent2', 'point'):
             return None
         if len(pts) == need:
             return self._wire(pts)
@@ -2075,6 +2097,10 @@ class StudioWindow(QMainWindow):
         if self.tool == 'trim':
             self.trim_preview()
             return
+        if self.tool == 'offset':
+            if self.off is None:
+                self._off_hover()
+            return
         if self.tool == 'circleTangent2':
             if len(self.tangent_lines) == 2:
                 try:
@@ -2133,6 +2159,9 @@ class StudioWindow(QMainWindow):
         try:
             if t == 'trim':
                 self.trim_at_cursor()
+                return
+            if t == 'offset':
+                self.pick_offset()
                 return
             if t == 'circleTangent2':
                 if len(self.tangent_lines) < 2:
@@ -2283,6 +2312,113 @@ class StudioWindow(QMainWindow):
 
         self.view.set_preview_mesh(None)
         self.run_operation('Nożyczki', build, apply)
+    # ---------- ofset szkicu ----------
+    def _off_body_at_cursor(self):
+        """Szkic pod kursorem leżący w płaszczyźnie bieżącego szkicu i punkt kliknięcia na tej płaszczyźnie."""
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        hit = self.view.nearest_edge(pos.x(), pos.y())
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'sketch' or body.name.startswith('Punkt'):
+            return None, None
+        if self._plane_key(body.plane) != self._plane_key(self.sketch_plane):
+            return None, None
+        uv = self.view.plane_point(body.plane, pos.x(), pos.y())
+        point = kernel.to_world(body.plane, *uv) if uv is not None else body.shape.Center().toTuple()
+        return body, point
+
+    def _off_hover(self):
+        try:
+            body, _ = self._off_body_at_cursor()
+            mesh = kernel.display_mesh(body.shape, PREVIEW_TOL) if body is not None else None
+        except Exception:
+            mesh = None
+        self.view.set_preview_mesh(mesh, line_color=(.1, .45, .85, 1), width=5)
+
+    def pick_offset(self):
+        body, point = self._off_body_at_cursor()
+        if body is None:
+            raise kernel.CadError('Kliknij linię kształtu narysowanego w tym szkicu.')
+        base, direction = kernel.offset_anchor(body.shape, body.plane, point)
+        self.off = dict(id=body.id, base=base, dir=direction)
+        self.off_step.set_state('done', body.name)
+        self._off_update()
+        self.hint('Przeciągnij strzałkę albo wpisz odległość; Enter zatwierdza, Esc wybiera inny kształt.')
+        self.off_value.setFocus()
+        self.off_value.selectAll()
+
+    def _off_signed(self):
+        return self.off_value.value() * (1.0 if self.off_side.currentData() == 'out' else -1.0)
+
+    def _off_set_signed(self, value):
+        """Wartość ze strzałki: znak wybiera stronę (na zewnątrz / do wewnątrz), wartość bezwzględna - odległość."""
+        value = round(float(value), 1)
+        if abs(value) < .1:
+            value = .1 if value >= 0 else -.1
+        for w in (self.off_side, self.off_value):
+            w.blockSignals(True)
+        try:
+            self.off_side.setCurrentIndex(self.off_side._data.index('out' if value > 0 else 'in'))
+            self.off_value.setValue(abs(value))
+        finally:
+            for w in (self.off_side, self.off_value):
+                w.blockSignals(False)
+        self._off_update(handle=False)
+
+    def _off_result(self):
+        body = self.document.get(self.off['id']) if self.off else None
+        if body is None:
+            raise kernel.CadError('Kliknij kształt szkicu.')
+        return body, kernel.sketch_offset(body.shape, body.plane, self._off_signed())
+
+    def _off_update(self, handle=True):
+        if self.off is None:
+            return
+        import cadquery as cq
+        try:
+            _, wires = self._off_result()
+            self.view.set_preview_mesh(kernel.display_mesh(cq.Compound.makeCompound(wires), PREVIEW_TOL), line_color=SKETCH_ORANGE, width=2.6, dashed=True)
+            side = 'na zewnątrz' if self._off_signed() > 0 else 'do wewnątrz'
+            self.off_status.setText(f'{self.off_value.value():g} mm {side} · Enter zatwierdza'.replace('.', ','))
+        except kernel.CadError as exc:
+            self.view.set_preview_mesh(None)
+            self.off_status.setText(str(exc))
+        if handle:
+            self._off_place_handle()
+
+    def _off_place_handle(self):
+        if self.off is None or self.mode != 'sketch' or self.tool != 'offset':
+            self.view.set_handles([])
+            return
+        base, direction = np.asarray(self.off['base'], float), np.asarray(self.off['dir'], float)
+        self.view.set_handles([dict(id='off', start=base, tip=base + direction * self._off_signed(), dir=direction, color=(.94, .6, .13, 1), label='')])
+
+    def _off_clear(self):
+        if getattr(self, 'off', None) is not None:
+            self.off = None
+            self.view.set_handles([])
+            self.view.set_preview_mesh(None)
+        if hasattr(self, 'off_step'):
+            self.off_step.set_state('active', '')
+            self.off_status.setText('Kliknij kształt szkicu.')
+
+    def cancel_offset(self):
+        if self.off is not None:
+            self._off_clear()
+            self.show_sketch_hint()
+        else:
+            self.choose_tool(None)
+
+    def apply_offset(self):
+        if self.busy or self.off is None:
+            return
+        try:
+            body, wires = self._off_result()
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        self._off_clear()
+        self.create_sketch(wires, 'Ofset')
+
     # ---------- wymiary z klawiatury (panel jak #dimensionPanel, podgląd na żywo) ----------
     def open_dim_input(self, first=''):
         labels = DIM_LABELS.get(self.tool)
@@ -5261,6 +5397,10 @@ class StudioWindow(QMainWindow):
             if self._hv is None:
                 self._hv = self.ex_second.value()
             self.ex_second.setValue(max(0.0, round(self._hv + delta, 1)))
+        elif hid == 'off' and self.off is not None:
+            if self._hv is None:
+                self._hv = self._off_signed()
+            self._off_set_signed(self._hv + delta)
         elif hid == 'mod':
             if self._hv is None:
                 self._hv = self.mod_size.value()
@@ -5288,6 +5428,8 @@ class StudioWindow(QMainWindow):
         self._hv = None
         if hid in ('ex', 'ex2'):
             self._place_extrude_handle()
+        elif hid == 'off':
+            self._off_place_handle()
         elif hid == 'mod':
             self._place_mod_handle()
         else:
@@ -6655,6 +6797,8 @@ class StudioWindow(QMainWindow):
                       'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
+            if action is None and self.mode == 'sketch' and self.tool == 'offset' and self.off is not None:
+                action = self.apply_offset
             if action:
                 action()
                 event.accept()
@@ -6671,6 +6815,8 @@ class StudioWindow(QMainWindow):
                 self._update_grips()
             elif self.mode == 'sketch' and self.tool == 'text':
                 self.text_cancel()
+            elif self.mode == 'sketch' and self.tool == 'offset' and self.off is not None:
+                self.cancel_offset()
             elif self.mode is not None:
                 self.set_mode(None)
             else:

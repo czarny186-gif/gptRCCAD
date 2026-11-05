@@ -126,6 +126,13 @@
   "variant": false
  },
  {
+  "shape": "offset",
+  "title": "Ofset — kształt odsunięty do środka albo na zewnątrz",
+  "svg": "<svg viewBox=\"0 0 32 32\"><rect x=\"10\" y=\"11\" width=\"12\" height=\"10\"></rect><rect x=\"4\" y=\"5\" width=\"24\" height=\"22\" rx=\"3\" stroke-dasharray=\"3 2\"></rect></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
   "shape": "trim",
   "title": "Nożyczki — usuń fragment pomiędzy punktami przecięcia",
   "svg": "<svg viewBox=\"0 0 32 32\"><circle cx=\"8\" cy=\"24\" r=\"4\"></circle><circle cx=\"23\" cy=\"24\" r=\"4\"></circle><path d=\"M11 21L27 5M20 21L5 5M14 18l5-5\"></path></svg>",

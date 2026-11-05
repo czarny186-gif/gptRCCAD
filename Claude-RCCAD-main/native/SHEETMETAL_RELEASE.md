@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.24 — wyciąganie ścian walcowych
+# RCCAD Desktop 0.4.25 — ofset w szkicu
+
+## Zmiany 0.4.25
+
+- Nowe narzędzie szkicu **Ofset** (pod Wymiarem, nad Nożyczkami). Kliknij kształt szkicu: otwiera się okienko z wyborem **Na zewnątrz / Do wewnątrz** i polem odległości (od razu zaznaczonym do wpisania).
+- Przy kształcie pojawia się pomarańczowa strzałka do przeciągania, jak przy wyciąganiu. Przeciągnięcie przez kształt przełącza stronę. Przerywana linia pokazuje wynik na żywo.
+- Działa dla prostokątów, okręgów, owali, wielokątów, obrysów z linii, łuków i pojedynczych linii, na każdej płaszczyźnie i ściance. Narożniki zostają ostre, oryginał zostaje. Zastosuj / Enter dodaje kształt, Esc wybiera inny. Zbyt duży ofset do środka pokazuje komunikat.
+
+## RCCAD Desktop 0.4.24 — wyciąganie ścian walcowych
 
 ## Zmiany 0.4.24
 

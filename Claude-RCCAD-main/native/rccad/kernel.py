@@ -1515,3 +1515,124 @@ def cylinder_offset_tool(info, distance):
         wedge = wp.polyline(pts).close().extrude(h).val()
         ring = ring.intersect(wedge)
     return valid(ring.clean())
+
+
+# ---------------------------------------------------------------------------
+# ofset szkicu: kształt odsunięty o stałą odległość w płaszczyźnie szkicu
+# ---------------------------------------------------------------------------
+def _offset_wires_of(shape):
+    wires = list(shape.Wires()) if hasattr(shape, 'Wires') else []
+    if not wires:
+        edges = list(shape.Edges())
+        if not edges:
+            raise CadError("Ten element szkicu nie ma linii do odsunięcia.")
+        wires = [cq.Wire.assembleEdges(edges)]
+    return wires
+
+
+def _wire_area(wire):
+    try:
+        return abs(cq.Face.makeFromWires(wire).Area())
+    except Exception:
+        return 0.0
+
+
+def _raw_offset(wire, plane, d):
+    """Odsunięcie jednego obrysu o d (znak jak w OCCT). Zamknięty: wynik zamknięty; otwarty: linia po jednej stronie."""
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
+    from OCP.GeomAbs import GeomAbs_Intersection
+    if wire.IsClosed():
+        # przez ścianę: offset2D samego okręgu potrafi przenieść wynik na płaszczyznę XY
+        face = cq.Face.makeFromWires(wire)
+        maker = BRepOffsetAPI_MakeOffset(face.wrapped, GeomAbs_Intersection)
+        maker.Perform(d)
+        if not maker.IsDone():
+            return []
+        res = cq.Shape.cast(maker.Shape())
+        return [w for w in (res.Wires() if hasattr(res, 'Wires') else []) if w.Length() > 1e-6]
+    edges = wire.Edges()
+    if len(edges) == 1 and edges[0].geomType() == 'LINE':
+        # sama prosta nie wyznacza płaszczyzny - przesunięcie prostopadle w płaszczyźnie szkicu
+        f = frame_of(plane)
+        t = np.asarray(edges[0].tangentAt(0).toTuple(), float)
+        n = np.cross(np.asarray(f.normal, float), t)
+        n /= np.linalg.norm(n)
+        return [wire.translate(cq.Vector(*(n * d)))]
+    maker = BRepOffsetAPI_MakeOffset(wire.wrapped, GeomAbs_Intersection, True)
+    maker.Perform(d)
+    if not maker.IsDone():
+        raise CadError("Nie udało się odsunąć tej linii.")
+    res = cq.Shape.cast(maker.Shape())
+    return [w for w in (res.Wires() if hasattr(res, 'Wires') else []) if w.Length() > 1e-6]
+
+
+def _outside_sign(wire, plane):
+    """Znak odsunięcia OCCT, który daje stronę „na zewnątrz”: dla zamkniętego obrysu większe pole, dla otwartej linii
+    strona wypukła (dłuższa linia); dla pojedynczego odcinka - lewa strona względem kierunku rysowania."""
+    size = max(wire.BoundingBox().DiagonalLength, 1e-3)
+    probe = min(1.0, size * .02)
+    try:
+        if wire.IsClosed():
+            a = sum(_wire_area(w) for w in _raw_offset(wire, plane, probe))
+            return 1.0 if a >= _wire_area(wire) else -1.0
+        plus = sum(w.Length() for w in _raw_offset(wire, plane, probe))
+        minus = sum(w.Length() for w in _raw_offset(wire, plane, -probe))
+        return 1.0 if plus >= minus - 1e-9 else -1.0
+    except Exception:
+        return 1.0
+
+
+def sketch_offset(shape, plane, distance):
+    """Obrysy szkicu odsunięte o distance: > 0 na zewnątrz, < 0 do wewnątrz (lista nowych obrysów)."""
+    d = float(distance)
+    if not isfinite(d) or abs(d) < 1e-6:
+        raise CadError("Odległość ofsetu musi być większa od zera.")
+    # liczone w lokalnym układzie płaszczyzny (XY): OCCT gubi położenie okręgu umieszczonego przez Location
+    f = frame_of(plane)
+    cp = cq.Plane(origin=tuple(float(c) for c in f.origin), xDir=tuple(float(c) for c in f.xdir), normal=tuple(float(c) for c in f.normal))
+    local = shape.transformShape(cp.fG)
+    return [w.transformShape(cp.rG) for w in _sketch_offset_xy(local, d)]
+
+
+def _sketch_offset_xy(shape, d):
+    plane = 'XY'
+    out = []
+    for wire in _offset_wires_of(shape):
+        try:
+            res = _raw_offset(wire, plane, _outside_sign(wire, plane) * d)
+        except CadError:
+            raise
+        except Exception:
+            res = []
+        if not res:
+            raise CadError(f"Ofset {abs(d):g} mm do wewnątrz jest większy niż sam kształt." if d < 0 else "Nie udało się odsunąć kształtu.")
+        out.extend(res)
+    return out
+
+
+def offset_anchor(shape, plane, point):
+    """Punkt na kształcie najbliżej point i jednostkowy kierunek w płaszczyźnie szkicu, w którym rośnie ofset „na zewnątrz”
+    (do strzałki do przeciągania): od punktu do najbliższego miejsca kształtu odsuniętego o mały krok na zewnątrz."""
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+
+    def nearest(sh, p):
+        ext = BRepExtrema_DistShapeShape(sh.wrapped, cq.Vertex.makeVertex(*[float(c) for c in p]).wrapped)
+        ext.Perform()
+        return np.array(cq.Vector(ext.PointOnShape1(1)).toTuple(), float), ext.Value()
+
+    wires = _offset_wires_of(shape)
+    wire = min(wires, key=lambda w: nearest(w, point)[1])
+    base = nearest(wire, point)[0]
+    pn = np.asarray(frame_of(plane).normal, float)
+    probe = min(1.0, max(wire.BoundingBox().DiagonalLength, 1e-3) * .02)
+    n = None
+    try:
+        moved = sketch_offset(wire, plane, probe)
+        q = min((nearest(w, base) for w in moved), key=lambda r: r[1])[0]
+        n = q - base
+        n -= pn * float(np.dot(n, pn))
+    except CadError:
+        pass
+    if n is None or np.linalg.norm(n) < 1e-9:
+        n = np.asarray(frame_of(plane).xdir, float)
+    return base, n / np.linalg.norm(n)

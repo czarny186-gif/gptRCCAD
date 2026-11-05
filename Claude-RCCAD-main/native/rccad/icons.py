@@ -410,6 +410,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         for k in range(4):
             cx, cy = 10 + k * 9.5, 36 - k * 8.5
             p.setBrush(QColor(BLUE if k == 0 else BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawRoundedRect(QRectF(cx - 4.5, cy - 4.5, 9, 9), 2.2, 2.2)
+    elif kind == 'x_offset':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRoundedRect(QRectF(14, 16, 20, 16), 2, 2)
+        pn = pen(ORANGE, 2.6); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRoundedRect(QRectF(5, 7, 38, 34), 6, 6)
+        p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(25, 24), QPointF(43, 24)); p.drawPolyline(QPolygonF([QPointF(39, 20), QPointF(44, 24), QPointF(39, 28)]))
+        p.drawPolyline(QPolygonF([QPointF(29, 20), QPointF(24, 24), QPointF(29, 28)]))
     elif kind == 'x_text':
         p.setPen(pen(INK, 4.6)); p.drawLine(QPointF(10, 11), QPointF(34, 11)); p.drawLine(QPointF(22, 11), QPointF(22, 36))
         p.setPen(pen(BLUE, 2.4)); p.drawLine(QPointF(35, 20), QPointF(35, 36)); p.drawLine(QPointF(32, 20), QPointF(38, 20)); p.drawLine(QPointF(32, 36), QPointF(38, 36))
@@ -618,6 +623,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             elif sh == 'measure':
                 st(ink, 2.6); p.drawLine(QPointF(8, 31), QPointF(40, 31)); p.drawLine(QPointF(8, 24), QPointF(8, 38)); p.drawLine(QPointF(40, 24), QPointF(40, 38))
                 st(acc, 3.0); p.drawLine(QPointF(15, 17), QPointF(33, 17)); p.drawPolyline(poly([(19, 13), (14, 17), (19, 21)])); p.drawPolyline(poly([(29, 13), (34, 17), (29, 21)]))
+            elif sh == 'offset':
+                fl(_rounded(15, 17, 18, 14, 2), soft)
+                pn = pen(acc, 2.6); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRoundedRect(QRectF(6, 8, 36, 32), 5, 5)
+                st(acc, 2.4); p.drawLine(QPointF(33, 24), QPointF(41, 24)); p.drawPolyline(poly([(38, 21), (41.5, 24), (38, 27)]))
             elif sh == 'trim':
                 st(ink, 2.8); p.drawLine(QPointF(14, 14), QPointF(40, 36)); p.drawLine(QPointF(14, 34), QPointF(40, 12))
                 st(acc, 2.6); p.drawEllipse(QPointF(11, 12), 4.5, 4.5); p.drawEllipse(QPointF(11, 36), 4.5, 4.5)

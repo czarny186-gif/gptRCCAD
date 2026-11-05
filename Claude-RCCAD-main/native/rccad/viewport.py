@@ -1359,7 +1359,8 @@ class CadView(gl.GLViewWidget):
                 event.accept()
                 return
         if (not self.click_mode and self.sketch_plane and self.sketch_tool and event.button() == Qt.LeftButton
-                and not event.modifiers() & Qt.ShiftModifier):
+                and not event.modifiers() & Qt.ShiftModifier
+                and not (self.handles and self._grab_handle(event.position().x(), event.position().y()))):   # strzałka w szkicu (np. ofset) ma pierwszeństwo
             point = self.plane_point(self.sketch_plane, event.position().x(), event.position().y())
             if point:
                 self._sk_start = self._snap(point, event)
