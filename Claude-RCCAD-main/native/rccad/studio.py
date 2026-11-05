@@ -180,9 +180,11 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
+# narzędzia, które można dodać do Ulubionych (bez Pliku, Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu)
+FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for tool in tools if tool != 'surface']
 TAB_TOP = 14        # pasek zakładek
 TOOLS_TOP = 50      # przyciski narzędzi pod zakładkami
 MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
@@ -409,6 +411,7 @@ class StudioWindow(QMainWindow):
     def _build_overlays(self):
         v = self.view
         icons = [('file', ui.style_icon('file', 38), 'Plik'),
+                 ('toolbox', ui.style_icon('toolbox', 38), 'Przybornik — wybierz ulubione narzędzia do zakładki Ulubione'),
                  ('sketch', ui.style_icon('sketch', 38), 'Nowy szkic'),
                  ('extrude', ui.style_icon('extrude', 38), 'Wyciągnij'),
                  ('revolve', ui.style_icon('revolve', 38), 'Obrót — profil wokół osi'),
@@ -439,7 +442,7 @@ class StudioWindow(QMainWindow):
                  ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera')]
         self.tools = {}
         for key, icon, tip in icons:
-            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'importdrawing'))
+            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'importdrawing', 'toolbox'))
             button.setParent(v)
             ui.shadow(button, 12, 3, 36)
             self.tools[key] = button
@@ -449,9 +452,12 @@ class StudioWindow(QMainWindow):
                 button.clicked.connect(lambda _=False: self.import_drawing_file())
             elif key == 'surface':
                 button.clicked.connect(lambda _=False: self.pick_other_surface())
+            elif key == 'toolbox':
+                button.clicked.connect(lambda _=False: self.open_toolbox())
             elif key != 'file':
                 button.clicked.connect(lambda _=False, k=key: self.toggle_mode(k))
         self.tools['file'].clicked.connect(self.file_menu)
+        self.favorites = self._load_favorites()
         self.tab_buttons = {}
         for name in TABS:
             tab = QToolButton(v)
@@ -460,7 +466,7 @@ class StudioWindow(QMainWindow):
             tab.setCheckable(True)
             tab.setAutoExclusive(True)
             tab.setCursor(Qt.PointingHandCursor)
-            tab.setToolTip('Zakładka narzędzi: ' + ', '.join(self.tools[k].toolTip().split(' — ')[0] for k in TABS[name]))
+            tab.setToolTip('Zakładka narzędzi: ' + ', '.join(self._tool_name(k) for k in self._tab_tools(name)))
             tab.clicked.connect(lambda _=False, n=name: self.set_tab(n))
             self.tab_buttons[name] = tab
         self.tab_buttons[self._tab].setChecked(True)
@@ -1379,10 +1385,11 @@ class StudioWindow(QMainWindow):
             tab.move(x, TAB_TOP)
             x += tab.width() + 6
         self.tools['file'].move(18, TOOLS_TOP)
-        for key, tab in TAB_OF.items():
-            self.tools[key].setVisible(tab == self._tab)
+        shown = self._tab_tools(self._tab)
+        for key in TAB_OF:
+            self.tools[key].setVisible(key in shown)
         self._update_surface_button()
-        for i, key in enumerate(TABS[self._tab]):
+        for i, key in enumerate(shown):
             self.tools[key].move(78 + 60 * i, TOOLS_TOP)
         self.shape_bar.move(18, 80 + TOOLS_TOP - 18)
         self.clear_button.move(W - 446, 20)
@@ -1609,8 +1616,9 @@ class StudioWindow(QMainWindow):
                 button.setChecked(key == ('sketch' if mode == 'plane' else mode))
         for key, button in self.pad_buttons.items():
             button.setChecked(key == mode)
-        tab = TAB_OF.get('sketch' if mode in ('plane', 'sketch') else mode)
-        if tab:
+        key = 'sketch' if mode in ('plane', 'sketch') else mode
+        tab = TAB_OF.get(key)
+        if tab and not (self._tab == 'Ulubione' and key in self.favorites):     # narzędzie z Ulubionych zostaje w Ulubionych
             self.set_tab(tab)
         for p in (self.shape_bar, self.t_editor, self.sk_bar, *self.panels):
             p.hide()
@@ -1847,7 +1855,7 @@ class StudioWindow(QMainWindow):
         """Przycisk „Inna powierzchnia” obok Szkicu widać tylko w trakcie szkicowania."""
         button = self.tools.get('surface')
         if button is not None:
-            button.setVisible(self._tab == TAB_OF['surface'] and self.mode == 'sketch')
+            button.setVisible('surface' in self._tab_tools(self._tab) and self.mode == 'sketch')
 
     def pick_other_surface(self):
         """Z trybu szkicu wraca do wskazywania powierzchni, bez wychodzenia z szkicowania i ponownego włączania narzędzia."""
@@ -3725,6 +3733,40 @@ class StudioWindow(QMainWindow):
         self._tab = name
         self.tab_buttons[name].setChecked(True)
         self._layout_overlays()
+
+    # ---------- Ulubione: Przybornik i wybrane narzędzia ----------
+    def _tab_tools(self, name):
+        """Przyciski zakładki; Ulubione = Przybornik i wybrane narzędzia w ustalonej kolejności."""
+        if name == 'Ulubione':
+            return ['toolbox', *[k for k in getattr(self, 'favorites', []) if k in FAVORITE_TOOLS]]
+        return TABS[name]
+
+    def _tool_name(self, key):
+        return self.tools[key].toolTip().split(' — ')[0]
+
+    def _load_favorites(self):
+        values = self._read_settings('favorites') or {}
+        keys = values.get('tools') if isinstance(values, dict) else None
+        return [k for k in (keys or []) if k in FAVORITE_TOOLS and k in self.tools][:len(FAVORITE_TOOLS)]
+
+    def set_favorites(self, keys, save=True):
+        """Zapisuje wybrane narzędzia (kolejność = kolejność na pasku Ulubionych, zaraz po Pliku i Przyborniku)."""
+        seen = []
+        for k in keys:
+            if k in FAVORITE_TOOLS and k not in seen:
+                seen.append(k)
+        self.favorites = seen
+        if save:
+            self._write_settings('favorites', {'tools': seen})
+        self.tab_buttons['Ulubione'].setToolTip('Zakładka narzędzi: ' + ', '.join(self._tool_name(k) for k in self._tab_tools('Ulubione')))
+        self._layout_overlays()
+
+    def open_toolbox(self):
+        from .toolbox import ToolboxDialog
+        items = [(key, self._tool_name(key), TAB_OF[key], self.tools[key].icon()) for key in FAVORITE_TOOLS]
+        self.toolbox_dialog = ToolboxDialog(self, items, self.favorites, self.set_favorites)
+        self.toolbox_dialog.open()
+        return self.toolbox_dialog
 
     # =====================================================================
     # pomiary

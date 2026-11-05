@@ -228,6 +228,36 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_face',return_value=(body.id,(0,0,1),(50,25,2))):w.view_clicked(5,5,False,False)
         self.assertEqual((w.sheet_t.text(),w.sheet_dims.text()),('2 mm','100 × 50 mm'))
 
+    def test_favorites_tab_toolbox_choose_order_and_keep_tab(self):
+        import json
+        w=self.w;self.assertEqual(list(w.tab_buttons)[0],'Ulubione')
+        w.set_tab('Ulubione');w._layout_overlays()
+        self.assertTrue(w.tools['toolbox'].isVisible());self.assertFalse(w.tools['extrude'].isVisible())
+        self.assertEqual(w.tools['toolbox'].x(),78)                       # zaraz po dyskietce
+        d=w.open_toolbox();self.assertTrue(d.isVisible())
+        self.assertNotIn('toolbox',d.rows);self.assertNotIn('file',d.rows);self.assertIn('flange',d.rows);self.assertIn('drawing',d.rows)
+        for key in ('extrude','flange','mod'):d.rows[key].check.click();QApplication.processEvents()
+        self.assertEqual(d.chosen,['extrude','flange','mod'])
+        d.rows['mod'].up.click();QApplication.processEvents();self.assertEqual(d.chosen,['extrude','mod','flange'])
+        d.rows['extrude'].down.click();QApplication.processEvents();self.assertEqual(d.chosen,['mod','extrude','flange'])
+        self.assertFalse(d.rows['mod'].up.isEnabled());self.assertFalse(d.rows['flange'].down.isEnabled())
+        d.close_button.click();self.assertEqual(w.favorites,[])          # Zamknij nie zapisuje
+        d=w.open_toolbox()
+        for key in ('flange','extrude'):d.rows[key].check.click();QApplication.processEvents()
+        d.apply_button.click();self.assertFalse(d.isVisible())
+        self.assertEqual(w.favorites,['flange','extrude'])
+        self.assertEqual(json.loads(w._settings_file('favorites').read_text(encoding='utf-8')),{'tools':['flange','extrude']})
+        w._layout_overlays()
+        self.assertEqual([w.tools[k].x() for k in ('toolbox','flange','extrude')],[78,138,198])
+        self.assertTrue(w.tools['flange'].isVisible());self.assertFalse(w.tools['revolve'].isVisible())
+        w.tools['extrude'].click();self.assertEqual((w.mode,w._tab),('extrude','Ulubione'))   # narzędzie z Ulubionych nie przełącza zakładki
+        w.set_mode(None);w.tools['flange'].click();self.assertEqual(w._tab,'Ulubione')
+        w.set_mode(None);w.set_tab('Bryła');w._layout_overlays();self.assertTrue(w.tools['extrude'].isVisible());self.assertEqual(w.tools['extrude'].x(),78)
+        self.assertFalse(w.tools['toolbox'].isVisible())
+        self.assertEqual(w._load_favorites(),['flange','extrude'])
+        d=w.open_toolbox();d.reset_button.click();QApplication.processEvents();self.assertEqual(d.chosen,[]);d.apply_button.click()
+        self.assertEqual(w.favorites,[]);w.set_tab('Ulubione');w._layout_overlays();self.assertFalse(w.tools['flange'].isVisible())
+
     def test_tool_panels_have_close_no_cancel_no_small_print(self):
         from PySide6.QtWidgets import QPushButton
         w=self.w

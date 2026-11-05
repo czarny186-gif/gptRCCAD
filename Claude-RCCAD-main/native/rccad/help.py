@@ -9,6 +9,10 @@ TOPICS = [
         'Po uruchomieniu widzisz trzy płaszczyzny środkowe (XY, XZ, YZ). Obracaj widok lewym przyciskiem myszy, przesuwaj prawym lub Shift + lewy, zoom kółkiem.',
         'Pasek narzędzi u góry: Plik, Szkic, Wyciągnij, Obrót, Przeciągnięcie, Wyciągnięcie złożone, Skorupa, Połącz, Edytuj (zaokrąglanie, fazowanie), Lustro.',
         'Cofanie i ponawianie: strzałki w prawym górnym rogu albo Ctrl+Z / Ctrl+Y. Przycisk z warstwami pokazuje płaszczyzny, przycisk obok włącza przezroczyste bryły.']),
+    ('t_toolbox', 'Ulubione i Przybornik', 'Twoje najczęściej używane narzędzia w jednej zakładce', [
+        'Zakładka Ulubione (pierwsza od lewej) ma stały przycisk Przybornik, zaraz po Pliku (dyskietce). Kliknij Przybornik: otworzy się okno ze wszystkimi narzędziami ze wszystkich zakładek, pogrupowanymi według zakładek.',
+        'Kliknij kółko przy narzędziu - pojawi się zielony ptaszek i narzędzie trafi do listy Ulubione na górze okna. Strzałki ▲ ▼ zmieniają kolejność: pierwsze na liście stoi na pasku zaraz po Przyborniku. U góry okna widać podgląd paska tak, jak będzie wyglądał.',
+        'Zastosuj zapisuje wybór (zostaje także po ponownym uruchomieniu programu), Zamknij zamyka okno bez zmian, Reset odznacza wszystkie narzędzia. Narzędzie użyte z Ulubionych nie przełącza zakładki - zostajesz w Ulubionych.']),
     ('sketch', 'Szkic', 'Rysowanie na płaszczyźnie lub ścianie', [
         'Kliknij Szkic, potem płaszczyznę środkową albo dowolną płaską ścianę bryły (podświetli się na pomarańczowo). Można też kliknąć ścianę kostki widoku.',
         'Wybierz kształt: linia, prostokąt, okrąg, łuk, wielokąt, tekst. Rysuj klik–klik. Kursor w ruchu jest wolny; gdy zatrzymasz go na chwilę przy punkcie (także przed pierwszym kliknięciem, więc widać, gdzie kształt się zacznie), przyciąga się (znacznik pokazuje typ): narożniki kratek siatki, punkty i środki szkiców, krawędzie, okręgi, przecięcia oraz krawędzie i narożniki ścianki, na której rysujesz. Alt wyłącza przyciąganie.',

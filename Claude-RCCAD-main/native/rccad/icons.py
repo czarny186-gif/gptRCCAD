@@ -655,6 +655,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             else:
                 p.drawArc(QRectF(29,12,14,17),0,140*16)
                 p.drawPolyline(poly([(30,9),(28,15),(34,16)]))
+        elif name == 'toolbox':
+            # skrzynka narzędziowa: rączka, korpus, pomarańczowy zatrzask, w środku końcówki narzędzi
+            st(ink, 2.6); p.drawRoundedRect(QRectF(17, 7, 14, 9), 3, 3)
+            fl(_rounded(5, 15, 38, 26, 4), soft)
+            st(ink, 2.2); p.drawLine(QPointF(5, 25), QPointF(43, 25))
+            fl(_rounded(20, 21.5, 8, 7, 1.5), QColor(acc), acc, 1.2)
+            st(acc, 2.6); p.drawLine(QPointF(12, 31), QPointF(12, 37)); p.drawLine(QPointF(36, 31), QPointF(36, 37))
         elif name == 'file':
             body = QPainterPath(); body.moveTo(8, 8); body.lineTo(34, 8); body.lineTo(41, 15); body.lineTo(41, 41); body.lineTo(8, 41); body.closeSubpath()
             fl(body, soft)

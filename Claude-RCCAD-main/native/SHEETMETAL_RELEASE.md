@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.34 — narożniki bez niechcianych wycięć
+# RCCAD Desktop 0.4.35 — zakładka Ulubione i Przybornik
+
+## Zmiany 0.4.35
+
+- Nowa zakładka **Ulubione** (pierwsza od lewej) ze stałym narzędziem **Przybornik** zaraz po Pliku.
+- **Przybornik** otwiera okno ze wszystkimi narzędziami ze wszystkich zakładek (pogrupowanymi według zakładek, z ikonami). Kliknięcie kółka stawia zielony ptaszek i dodaje narzędzie do Ulubionych; strzałki ▲ ▼ ustawiają kolejność (pierwsze stoi zaraz po Przyborniku), numer pokazuje miejsce na pasku, a u góry widać podgląd paska.
+- **Zastosuj** zapisuje wybór na stałe (także po ponownym uruchomieniu), **Zamknij** zamyka bez zmian, **Reset** odznacza wszystko.
+- Narzędzie uruchomione z Ulubionych nie przełącza zakładki - zostajesz w Ulubionych.
+
+## RCCAD Desktop 0.4.34 — narożniki bez niechcianych wycięć
 
 ## Poprawki 0.4.34
 
