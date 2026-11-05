@@ -26,6 +26,14 @@ class Body:
     def prepared(self):
         return replace(self, mesh=display_mesh(self.shape))
 
+    def placed(self, shape, matrix):
+        """Bryła po sztywnym przesunięciu / obrocie (macierz 3x4): blacha przenosi swój przepis razem z kształtem
+        i dalej daje się rozkładać i zginać (zwykła zmiana kształtu - changed() - oznacza ją jako edytowaną)."""
+        if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
+            from .sheetedit import placed_state
+            return replace(self, shape=shape, mesh=display_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
+        return self.changed(shape)
+
     def changed(self, shape):
         meta = None
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):

@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.32 — nowy wygląd okien narzędzi
+# RCCAD Desktop 0.4.33 — przesunięta blacha dalej się rozkłada i zgina
+
+## Poprawki 0.4.33
+
+- Po **przesunięciu, obróceniu, Dopasowaniu albo Wyrównaniu** blachy nie dało się jej rozłożyć ani zgiąć (komunikat o zmianie na łuku). Ruch był traktowany jak edycja kształtu, a zapisany przepis blachy (płyta bazowa, krawędzie gięć) zostawał w starym miejscu.
+- Teraz przepis blachy przenosi się razem z bryłą tym samym przekształceniem, a ruch nie oznacza blachy jako edytowanej. Rozłożenie, zgięcie (blacha wraca dokładnie w nowe miejsce), kolejne kołnierze i odtwarzanie z historii działają po ruchu.
+- **Starsze projekty:** blachę przesuniętą w poprzedniej wersji cofnij do miejsca przed przesunięciem (Cofnij albo pasek historii) i przesuń ponownie.
+
+## RCCAD Desktop 0.4.32 — nowy wygląd okien narzędzi
 
 ## Zmiany 0.4.32
 

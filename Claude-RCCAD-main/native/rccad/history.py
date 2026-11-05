@@ -871,8 +871,9 @@ def run_shell(bodies, recipe):
 def run_transform(bodies, recipe):
     body = _body(bodies, recipe['id'])
     v = tuple(float(c) for c in recipe['v'])
-    shape = kernel.transform(body.shape, v, (0, 0, 0)) if recipe['mode'] == 'move' else kernel.transform(body.shape, (0, 0, 0), v)
-    return _replace(bodies, body.changed(shape))
+    tr, rot = (v, (0, 0, 0)) if recipe['mode'] == 'move' else ((0, 0, 0), v)
+    shape = kernel.transform(body.shape, tr, rot)
+    return _replace(bodies, body.placed(shape, kernel.transform_matrix(body.shape, tr, rot)))
 
 
 def outward_normal(shape, face, normal=None):
@@ -954,7 +955,7 @@ def run_mate(bodies, recipe):
     tface, _ = match_face(target.shape, recipe['tface'])
     matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), tface, outward_normal(target.shape, tface),
                        float(recipe.get('spin', 0.0)))
-    return _replace(bodies, body.changed(apply_placement(body.shape, matrix)))
+    return _replace(bodies, body.placed(apply_placement(body.shape, matrix), matrix))
 
 
 def run_mirror(bodies, recipe):

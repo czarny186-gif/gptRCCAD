@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import cadquery as cq
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
 from PySide6.QtGui import QKeyEvent
@@ -149,6 +150,49 @@ class StudioTests(unittest.TestCase):
         w._load_flange_settings();self.assertEqual((w.fl_radius.value(),w.fl_angle.value(),w.fl_length.value(),w.fl_datum.currentData()),(1.5,60,12,'inner'))
         w.fl_reset.click();w.fl_save.click()
         w.toggle_mode('rules');w.rl_ok.click();self.assertEqual(w.mode,'flange');self.assertTrue(w.fl_armed)    # Reguły → Zastosuj włącza wyginanie
+
+    def test_moved_and_rotated_sheet_still_unfolds_folds_and_takes_flanges(self):
+        w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()
+        volume=w.document.get(body.id).shape.Volume()
+        for mode,vals in (('move',(10,5,0)),('rotate',(0,0,30)),('move',(-3,0,7))):
+            w.selected=[body.id];w.set_mode(mode);w.select_transform_target(w.document.get(body.id))
+            for spin,v in zip(w.t_spins,vals):spin.setValue(v)
+            w.apply_transform();self.wait()
+            self.assertFalse(w.document.get(body.id).meta['sheet']['dirty'])      # ruch to nie edycja blachy
+        moved=w.document.get(body.id).shape;box=moved.BoundingBox()
+        state=w._sheet_state(body.id);self.assertAlmostEqual(state['base']['o'][2],7,6)    # przepis przeniesiony razem z bryłą
+        again=hist.run_transform([replace(w.document.states()[-2][0][0])],dict(id=body.id,mode='move',v=[-3,0,7]))[0]
+        self.assertEqual(again.meta['sheet']['recipe'],w.document.get(body.id).meta['sheet']['recipe'])   # odtworzenie z historii daje to samo
+        toasts=[]
+        with patch.object(w,'toast',side_effect=lambda m,*a:toasts.append(m)):
+            w.set_mode(None);w.selected=[body.id];w.tools['unfold_sheet'].click();self.wait()
+            self.assertTrue(w._sheet_state(body.id)['flat'])
+            w.selected=[body.id];w.tools['fold_sheet'].click();self.wait()
+        self.assertEqual(toasts,[]);self.assertFalse(w._sheet_state(body.id)['flat'])
+        folded=w.document.get(body.id).shape;fb=folded.BoundingBox()
+        self.assertAlmostEqual(folded.Volume(),volume,4)
+        for a,b in ((box.xmin,fb.xmin),(box.ymin,fb.ymin),(box.zmin,fb.zmin),(box.xmax,fb.xmax),(box.ymax,fb.ymax),(box.zmax,fb.zmax)):self.assertAlmostEqual(a,b,4)
+        # kolejny kołnierz na przesuniętej i obróconej blasze
+        st=w._sheet_state(body.id);base=st['base'];o=np.array(base['o']);x=np.array(base['x']);y=np.array(base['y']);z=np.array(base['z'])
+        far=o+x*base['lx']/2+z*base['lz']           # środek górnej krawędzi płyty po stronie o
+        edge=min(range(len(folded.Edges())),key=lambda i:np.linalg.norm(np.array(folded.Edges()[i].positionAt(.5).toTuple())-far))
+        w.set_mode('flange');w.fl_bend.click()
+        with patch.object(w.view,'nearest_edge',return_value=(body.id,edge,None)):w.view_clicked(5,5,False,False)
+        self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),2,w.fl_status.text())
+        self.assertGreater(w.document.get(body.id).shape.Volume(),volume)
+
+    def test_mated_sheet_still_unfolds(self):
+        w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()
+        block=Body('Kostka',k.box(10,10,10).translate((0,0,-40)),'solid').prepared();w.document.commit([*w.document.bodies,block]);w.refresh()
+        sheet=w.document.get(body.id)
+        face=next(f for f in sheet.shape.Faces() if f.geomType()=='PLANE' and abs(f.Center().z)<1e-6)
+        tface=next(f for f in block.shape.Faces() if abs(f.Center().z+30)<1e-6)
+        recipe=dict(type='mate',mode='align',id=body.id,target=block.id,face=hist.face_ref(face,(0,0,-1),face.Center().toTuple(),sheet.shape),
+                    tface=hist.face_ref(tface,(0,0,1),tface.Center().toTuple(),block.shape),spin=0.0)
+        w.document.commit(hist.run_recipe(w.document.bodies,recipe),label='Wyrównanie',op=recipe)
+        self.assertFalse(w.document.get(body.id).meta['sheet']['dirty'])
+        w.set_mode(None);w.selected=[body.id];w.tools['unfold_sheet'].click();self.wait()
+        self.assertTrue(w._sheet_state(body.id)['flat'])
 
     def test_unfold_and_fold_without_selection_ask_to_pick_sheet(self):
         w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()

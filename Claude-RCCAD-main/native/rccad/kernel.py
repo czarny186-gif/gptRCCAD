@@ -484,6 +484,20 @@ def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0)):
     return valid(result.translate(tuple(float(v) for v in translation)), bool(shape.Solids()))
 
 
+def transform_matrix(shape, translation=(0, 0, 0), rotation=(0, 0, 0)):
+    """Macierz 3x4 tego samego przekształcenia co transform(): obroty wokół osi X, Y, Z przez środek bryły
+    (kolejno), potem przesunięcie. Służy do przeniesienia razem z bryłą danych w niej zapisanych (np. przepisu blachy)."""
+    c = np.array(shape.Center().toTuple(), float)
+    R = np.eye(3)
+    for axis, angle in zip(np.eye(3), rotation):
+        if angle:
+            a = math.radians(float(angle))
+            K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+            R = (np.eye(3) + math.sin(a) * K + (1 - math.cos(a)) * (K @ K)) @ R
+    t = c - R @ c + np.array([float(v) for v in translation])
+    return np.column_stack([R, t])
+
+
 PATTERN_MAX = 400
 
 

@@ -19,6 +19,39 @@ def state(recipe, flat=False):
     return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':5}
 
 
+_POINT_KEYS = ('o', 'p0', 'p1')
+_DIR_KEYS = ('x', 'y', 'z', 'n', 'm')
+
+
+def placed_state(metadata, matrix):
+    """Stan blachy po sztywnym przesunięciu / obrocie całej bryły (macierz 3x4): punkty i kierunki przepisu
+    (płyta bazowa, krawędzie kołnierzy) przenoszą się razem z bryłą, a pozostałe dane - bez zmian. Ruch nie jest
+    edycją blachy, więc znacznik zmian (dirty) zostaje taki, jaki był."""
+    M = np.asarray(matrix, float)
+    u, _, vt = np.linalg.svd(M[:, :3])
+    R, t = u @ vt, M[:, 3]
+
+    def move(node):
+        if isinstance(node, dict):
+            out = {}
+            for key, value in node.items():
+                vec = isinstance(value, (list, tuple)) and len(value) == 3 and all(isinstance(c, (int, float)) for c in value)
+                if vec and key in _POINT_KEYS:
+                    out[key] = [float(c) for c in R @ np.asarray(value, float) + t]
+                elif vec and key in _DIR_KEYS:
+                    out[key] = [float(c) for c in R @ np.asarray(value, float)]
+                else:
+                    out[key] = move(value)
+            return out
+        if isinstance(node, list):
+            return [move(v) for v in node]
+        return copy.deepcopy(node)
+
+    result = copy.deepcopy(metadata)
+    result['recipe'] = move(metadata['recipe'])
+    return result
+
+
 def _matrix(origin, axes):
     q = np.column_stack(axes)
     from OCP.gp import gp_Trsf

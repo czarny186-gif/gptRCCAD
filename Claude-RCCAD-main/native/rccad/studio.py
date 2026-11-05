@@ -5755,8 +5755,8 @@ class StudioWindow(QMainWindow):
         self.override = {}
 
         def build():
-            shape = kernel.transform(target.shape, v, (0, 0, 0)) if mode == 'move' else kernel.transform(target.shape, (0, 0, 0), v)
-            return target.changed(shape)
+            tr, rot = (v, (0, 0, 0)) if mode == 'move' else ((0, 0, 0), v)
+            return target.placed(kernel.transform(target.shape, tr, rot), kernel.transform_matrix(target.shape, tr, rot))
 
         def apply(body):
             self.view.clear_body_matrices()
