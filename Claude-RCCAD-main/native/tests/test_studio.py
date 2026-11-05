@@ -619,7 +619,7 @@ class StudioTests(unittest.TestCase):
         c=top.Center();hit=(plate.id,(0,0,1),(c.x,c.y,c.z))
         with patch.object(w.view,'pick_face',return_value=hit):
             w.view_clicked(5,5,False,False)
-        self.assertIsNotNone(w.sheet_pick);self.assertIn('Blacha 2.00 mm',w.sheet_status.text())
+        self.assertIsNotNone(w.sheet_pick);self.assertEqual((w.sheet_t.text(),w.sheet_dims.text()),('2 mm','100 × 50 mm'))
         w.apply_sheet();self.wait()
         self.assertAlmostEqual(w._sheet_state(plate.id)['t'],2,6)
         infos,_=w.document.infos();self.assertEqual((infos[-1]['icon'],infos[-1]['op']['type']),('sheet','sheet'))
