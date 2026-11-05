@@ -1463,6 +1463,11 @@ def cylinder_info(face, shape=None):
     xdir = np.array([cyl.XAxis().Direction().X(), cyl.XAxis().Direction().Y(), cyl.XAxis().Direction().Z()], float)
     radius = float(cyl.Radius())
     u0, u1, v0, v1 = BRepTools.UVBounds_s(face.wrapped)
+    yd = cyl.YAxis().Direction()
+    if float(np.dot([yd.X(), yd.Y(), yd.Z()], np.cross(axis, xdir))) < 0:
+        # układ walca lewoskrętny: odwrócona oś daje prawoskrętny (kąty u bez zmian, wysokość v zmienia znak)
+        axis = -axis
+        v0, v1 = -v1, -v0
     # strona materiału: punkt tuż poza promieniem w środku ściany
     um, vm = (u0 + u1) / 2, (v0 + v1) / 2
     ydir = np.cross(axis, xdir)
@@ -1472,8 +1477,62 @@ def cylinder_info(face, shape=None):
     if shape is not None:
         eps = max(1e-3, radius * 1e-3)
         outward = 1 if point_state(shape, on - radial * eps) == 'in' else -1
+    full = (u1 - u0) >= 2 * math.pi - 1e-6
+    fillet = False
+    if shape is not None and not full and (u1 - u0) < math.pi - 1e-3:
+        fillet = _is_fillet(face, shape, origin, axis, xdir, ydir, radius, float(u0), float(u1), vm)
     return dict(origin=origin, axis=axis, xdir=xdir, radius=radius, u0=float(u0), u1=float(u1), v0=float(v0), v1=float(v1),
-                outward=outward, full=(u1 - u0) >= 2 * math.pi - 1e-6)
+                outward=outward, full=full, fillet=fillet)
+
+
+def _is_fillet(face, shape, origin, axis, xdir, ydir, radius, u0, u1, vm):
+    """Wycinek walca styczny na obu brzegach do płaskich ścian (zaokrąglenie krawędzi, wypukłe albo wklęsłe)."""
+    tol = max(1e-4, radius * 1e-4)
+    for u in (u0, u1):
+        radial = math.cos(u) * xdir + math.sin(u) * ydir
+        p = origin + axis * vm + radial * radius
+        vp = cq.Vertex.makeVertex(*[float(c) for c in p])
+        ok = False
+        for other in shape.Faces():
+            if other.isSame(face) or other.geomType() != 'PLANE':
+                continue
+            try:
+                if other.distance(vp) > tol:
+                    continue
+                n = np.asarray(other.normalAt(cq.Vector(*p)).toTuple(), float)
+            except Exception:
+                continue
+            if abs(float(n @ radial)) > 1 - 1e-6:
+                ok = True
+                break
+        if not ok:
+            return False
+    return True
+
+
+def _fillet_corner(info, rho, h):
+    """Obszar między narożnikiem stycznych płaszczyzn a łukiem zaokrąglenia o promieniu rho (bryła o wysokości h)."""
+    if rho <= 1e-6:
+        return None
+    u0, u1, r = info['u0'], info['u1'], info['radius']
+    half = (u1 - u0) / 2
+    b = np.array([math.cos(u0 + half), math.sin(u0 + half)])
+    K = b * r / math.cos(half)
+    C = K - b * rho / math.cos(half)
+    T1 = C + rho * np.array([math.cos(u0), math.sin(u0)])
+    T2 = C + rho * np.array([math.cos(u1), math.sin(u1)])
+    base = info['origin'] + info['axis'] * info['v0']
+    plane = cq.Plane(origin=tuple(float(c) for c in base), xDir=tuple(float(c) for c in info['xdir']), normal=tuple(float(c) for c in info['axis']))
+    wp = cq.Workplane(plane)
+    kite = wp.polyline([tuple(map(float, q)) for q in (K, T1, C, T2)]).close().extrude(h).val()
+    disc = wp.center(float(C[0]), float(C[1])).circle(rho).extrude(h).val()
+    return kite.cut(disc)
+
+
+def fillet_radius_after(info, distance):
+    """Nowy promień zaokrąglenia, gdy środek jego łuku przesuwa się o distance wzdłuż normalnej (+ dodaje materiał)."""
+    k = 1 / math.cos((info['u1'] - info['u0']) / 2) - 1
+    return info['radius'] - info['outward'] * float(distance) / k
 
 
 def cylinder_normal(info, point):
@@ -1492,6 +1551,8 @@ def cylinder_offset_tool(info, distance):
     if not isfinite(d) or abs(d) < 1e-5:
         raise CadError("Odległość musi być różna od zera.")
     r = info['radius']
+    if info.get('fillet'):
+        return _fillet_offset_tool(info, d)
     new = r + info['outward'] * d
     lo, hi = min(r, new), max(r, new)
     if info['outward'] > 0 and new <= 1e-6:
@@ -1538,7 +1599,18 @@ def _wire_area(wire):
 
 
 def _raw_offset(wire, plane, d):
-    """Odsunięcie jednego obrysu o d (znak jak w OCCT). Zamknięty: wynik zamknięty; otwarty: linia po jednej stronie."""
+    """Odsunięcie jednego obrysu o d (znak jak w OCCT). Położenie (Location) obrysu jest zdejmowane na czas liczenia
+    i nakładane z powrotem na wynik - BRepOffsetAPI_MakeOffset nakłada je inaczej dwa razy (okrąg poza środkiem
+    układu lądował w podwójnej odległości)."""
+    from OCP.TopLoc import TopLoc_Location
+    loc = wire.wrapped.Location()
+    if loc.IsIdentity():
+        return _raw_offset_bare(wire, plane, d)
+    bare = cq.Wire(wire.wrapped.Located(TopLoc_Location()))
+    return [cq.Wire(w.wrapped.Moved(loc)) for w in _raw_offset_bare(bare, plane, d)]
+
+
+def _raw_offset_bare(wire, plane, d):
     from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
     from OCP.GeomAbs import GeomAbs_Intersection
     if wire.IsClosed():
@@ -1636,3 +1708,21 @@ def offset_anchor(shape, plane, point):
     if n is None or np.linalg.norm(n) < 1e-9:
         n = np.asarray(frame_of(plane).xdir, float)
     return base, n / np.linalg.norm(n)
+
+
+def _fillet_offset_tool(info, d):
+    """Zaokrąglenie krawędzi: zmienia się jego promień, a łuk zostaje styczny do sąsiednich ścian (nic nie wystaje).
+    Wypukłe: dodanie materiału = mniejszy promień (do ostrego narożnika), wycięcie = większy. Wklęsłe odwrotnie."""
+    r = info['radius']
+    new = fillet_radius_after(info, d)
+    if new < -max(1e-3, r * 1e-3):
+        k = 1 / math.cos((info['u1'] - info['u0']) / 2) - 1
+        limit = f'{r * k:.2f}'.replace('.', ',')
+        raise CadError(f"Do zaokrąglenia R{r:g} można dodać najwyżej {limit} mm - wtedy narożnik jest ostry.")
+    h = info['v1'] - info['v0']
+    if h <= 1e-6:
+        raise CadError("Ściana walcowa ma zerową wysokość.")
+    lo, hi = min(r, max(new, 0.0)), max(r, new)
+    big, small = _fillet_corner(info, hi, h), _fillet_corner(info, lo, h)
+    tool = big.cut(small) if small is not None else big
+    return valid(tool.clean())

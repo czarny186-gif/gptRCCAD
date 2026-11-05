@@ -990,6 +990,35 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(self._cyl_radii(w.document.get(plate.id).shape),[6.0])
         self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),1)
 
+    def _pick_face_at(self,body,face):
+        w=self.w;p=face.positionAt(.5,.5);n=np.array(face.normalAt(p).toTuple())
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_profile',return_value=None),\
+             patch.object(w.view,'pick_face',return_value=(body.id,n,np.array(p.toTuple()))):
+            w.view_clicked(5,5,False,False)
+
+    def test_extrude_fillet_face_changes_radius_and_stays_one_body(self):
+        w=self.w
+        for shape,r,add_r,cut_r in ((cq.Workplane('XY').box(40,40,20,centered=(True,True,False)).edges('|Z').fillet(6).val(),6,3.5858,8.4142),
+                                    (cq.Workplane('XY').polyline([(0,0),(40,0),(40,10),(10,10),(10,40),(0,40)]).close().extrude(20)
+                                     .edges('|Z').edges(cq.selectors.NearestToPointSelector((10,10,10))).fillet(5).val(),5,7.4142,2.5858),
+                                    (cq.Workplane('XY').box(30,30,30).edges('>Z and |X').fillet(4).val(),4,1.5858,6.4142)):
+            w.set_mode(None);w.document.commit([]);w.refresh()
+            body=Body('Z',shape).prepared();w.document.commit([body]);w.refresh()
+            for d,op,want in ((1,'join',add_r),(-1,'cut',cut_r)):
+                w.set_mode('extrude');cur=w.document.get(body.id)
+                face=min((f for f in cur.shape.Faces() if f.geomType()=='CYLINDER'),key=lambda f:abs(k.cylinder_info(f,cur.shape)['radius']-r))
+                self._pick_face_at(cur,face);self.assertTrue(w.ex_profiles[0]['cyl']['fillet'])
+                w.ex_value.setValue(d);self.assertEqual(w.ex_op.currentData(),op)
+                before=cur.shape.Volume();w.apply_extrude();self.wait()
+                solids=[b for b in w.document.bodies if b.kind=='solid'];self.assertEqual(len(solids),1);self.assertEqual(len(solids[0].shape.Solids()),1)
+                self.assertIn(round(want,3),[round(x,3) for x in self._cyl_radii(solids[0].shape)])
+                self.assertEqual(solids[0].shape.Volume()>before,d>0)
+                w.undo();self.wait()
+        w.set_mode('extrude');cur=w.document.get(body.id)
+        self._pick_face_at(cur,next(f for f in cur.shape.Faces() if f.geomType()=='CYLINDER'))
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()          # ponad ostry narożnik: komunikat, bez zmian
+        self.assertEqual(len(w.document.bodies),1);self.assertAlmostEqual(w.document.bodies[0].shape.Volume(),cur.shape.Volume(),6)
+
     def test_extrude_outer_cylinder_grows_or_shrinks(self):
         w=self.w
         rod=Body('Wałek',cq.Workplane('XY').circle(10).extrude(30).val()).prepared()
@@ -1268,12 +1297,18 @@ class StudioTests(unittest.TestCase):
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertIsNone(w.off);self.assertEqual(w.mode,'sketch')
 
     def test_sketch_offset_circle_on_xz(self):
-        w=self.w;w.set_mode('plane');w.plane_picked('XZ');w.choose_tool('circle');w.sketch_clicked('XZ',0,0);w.sketch_clicked('XZ',5,0);self.wait()
+        w=self.w;w.set_mode('plane');w.plane_picked('XZ');w.choose_tool('circle');w.sketch_clicked('XZ',10,6);w.sketch_clicked('XZ',15,6);self.wait()
         src=w.document.bodies[0];w.choose_tool('offset')
-        with patch.object(w,'_off_body_at_cursor',return_value=(src,k.to_world('XZ',3,4))):w.sketch_clicked('XZ',3,4)
-        np.testing.assert_allclose(w.off['dir'],np.array(k.to_world('XZ',3,4))/5,atol=1e-6)
-        w.off_value.setValue(2);w.apply_offset();self.wait()
-        bb=w.document.bodies[1].shape.BoundingBox();self.assertAlmostEqual(bb.xlen,14,5);self.assertAlmostEqual(bb.zlen,14,5);self.assertAlmostEqual(bb.ylen,0,6)
+        with patch.object(w,'_off_body_at_cursor',return_value=(src,k.to_world('XZ',13,10))):w.sketch_clicked('XZ',13,10)
+        np.testing.assert_allclose(w.off['base'],k.to_world('XZ',13,10),atol=1e-6)
+        np.testing.assert_allclose(w.off['dir'],(np.array(k.to_world('XZ',13,10))-k.to_world('XZ',10,6))/5,atol=1e-6)
+        for value,side,size in ((2,'out',14),(1.5,'in',7)):        # okrąg poza środkiem układu: ofset współśrodkowy (był przesunięty o drugie tyle)
+            w.choose_tool('offset')
+            with patch.object(w,'_off_body_at_cursor',return_value=(src,k.to_world('XZ',13,10))):w.sketch_clicked('XZ',13,10)
+            w.off_side.setCurrentIndex(w.off_side._data.index(side));w.off_value.setValue(value);w.apply_offset();self.wait()
+            bb=w.document.bodies[-1].shape.BoundingBox();c=bb.center.toTuple()
+            self.assertAlmostEqual(bb.xlen,size,5);self.assertAlmostEqual(bb.zlen,size,5);self.assertAlmostEqual(bb.ylen,0,6)
+            np.testing.assert_allclose(c,k.to_world('XZ',10,6),atol=1e-6)
 
     def test_tangent_circle_between_two_lines(self):
         w=self.w;self.sketch('line',(0,0),(30,0),(30,0));self.sketch('line',(0,0),(0,30),(0,30))

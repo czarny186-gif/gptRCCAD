@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.25 — ofset w szkicu
+# RCCAD Desktop 0.4.26 — poprawki ofsetu okręgu i wyciągania zaokrągleń
+
+## Zmiany 0.4.26
+
+- **Ofset okręgu**: okrąg narysowany poza środkiem układu dawał ofset przesunięty daleko od siebie (środek w podwójnej odległości). Teraz ofset jest współśrodkowy. Dotyczyło to też innych kształtów odsuwanych przez ofset.
+- **Wyciągnij na zaokrągleniu krawędzi**: zaokrąglenie zmienia promień i zostaje styczne do ścian, zamiast doklejać pierścień, który wystawał jak osobna bryła. Wypukłe: Połącz zmniejsza promień (do ostrego narożnika), Wytnij zwiększa. Wklęsłe: odwrotnie.
+- Poprawione wycinki walców zapisane w odwrotnym układzie (np. wklęsłe zaokrąglenia), które przy łączeniu dawały drugą, oddzielną bryłę.
+
+## RCCAD Desktop 0.4.25 — ofset w szkicu
 
 ## Zmiany 0.4.25
 
