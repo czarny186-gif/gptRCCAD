@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.23 — porządki w zakładkach i nowe ikony blachy
+# RCCAD Desktop 0.4.24 — wyciąganie ścian walcowych
+
+## Zmiany 0.4.24
+
+- **Wyciągnij** pozwala teraz wskazać ścianę walcową: wewnętrzną ściankę otworu albo zewnętrzną powierzchnię walca. Najechanie podświetla ścianę, kliknięcie ją wybiera, bez nowych przycisków i opcji.
+- Wartość dodatnia dodaje materiał (walec grubszy, otwór mniejszy). Wartość ujemna wycina (walec cieńszy, otwór większy). Operacja Połącz / Wytnij dobiera się sama.
+- Działa także na wycinkach walca (np. zaokrągleniach). Krok trafia do historii i przelicza się po zmianie wcześniejszych kroków. Zbyt duże zmniejszenie walca pokazuje komunikat zamiast usuwać bryłę.
+
+## RCCAD Desktop 0.4.23 — porządki w zakładkach i nowe ikony blachy
 
 ## Zmiany 0.4.23
 

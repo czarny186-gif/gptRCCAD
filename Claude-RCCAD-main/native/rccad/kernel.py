@@ -1440,3 +1440,78 @@ def trim_result(pieces, index):
     """Druty po usunięciu kawałka `index`."""
     rest = [p for i, p in enumerate(pieces) if i != index]
     return _chains(rest) if rest else []
+
+
+# ---------------------------------------------------------------------------
+# Wyciąganie ściany walcowej (ścianka otworu albo zewnętrzna powierzchnia walca): zmiana promienia o odległość
+# ---------------------------------------------------------------------------
+import math
+
+
+def cylinder_info(face, shape=None):
+    """Dane ściany walcowej: oś (punkt, kierunek), promień, zakres kąta i wysokości oraz strona materiału.
+    outward = +1, gdy materiał jest wewnątrz promienia (zewnętrzna powierzchnia walca), -1 dla ścianki otworu."""
+    if face.geomType() != 'CYLINDER':
+        raise CadError("To nie jest ściana walcowa.")
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepTools import BRepTools
+    ad = BRepAdaptor_Surface(face.wrapped)
+    cyl = ad.Cylinder()
+    ax = cyl.Axis()
+    origin = np.array([ax.Location().X(), ax.Location().Y(), ax.Location().Z()], float)
+    axis = np.array([ax.Direction().X(), ax.Direction().Y(), ax.Direction().Z()], float)
+    xdir = np.array([cyl.XAxis().Direction().X(), cyl.XAxis().Direction().Y(), cyl.XAxis().Direction().Z()], float)
+    radius = float(cyl.Radius())
+    u0, u1, v0, v1 = BRepTools.UVBounds_s(face.wrapped)
+    # strona materiału: punkt tuż poza promieniem w środku ściany
+    um, vm = (u0 + u1) / 2, (v0 + v1) / 2
+    ydir = np.cross(axis, xdir)
+    radial = math.cos(um) * xdir + math.sin(um) * ydir
+    on = origin + axis * vm + radial * radius
+    outward = 1
+    if shape is not None:
+        eps = max(1e-3, radius * 1e-3)
+        outward = 1 if point_state(shape, on - radial * eps) == 'in' else -1
+    return dict(origin=origin, axis=axis, xdir=xdir, radius=radius, u0=float(u0), u1=float(u1), v0=float(v0), v1=float(v1),
+                outward=outward, full=(u1 - u0) >= 2 * math.pi - 1e-6)
+
+
+def cylinder_normal(info, point):
+    """Normalna ściany walcowej w punkcie, skierowana od materiału na zewnątrz."""
+    p = np.asarray(point, float) - info['origin']
+    radial = p - float(p @ info['axis']) * info['axis']
+    radial /= max(np.linalg.norm(radial), 1e-12)
+    return radial * info['outward']
+
+
+def cylinder_offset_tool(info, distance):
+    """Pierścień (albo jego wycinek) między promieniem ściany a promieniem zmienionym o distance wzdłuż normalnej ściany:
+    distance > 0 - materiał do dodania (walec grubszy, otwór mniejszy), distance < 0 - materiał do wycięcia
+    (walec cieńszy, otwór większy). Wysokość i zakres kąta jak ściana."""
+    d = float(distance)
+    if not isfinite(d) or abs(d) < 1e-5:
+        raise CadError("Odległość musi być różna od zera.")
+    r = info['radius']
+    new = r + info['outward'] * d
+    lo, hi = min(r, new), max(r, new)
+    if info['outward'] > 0 and new <= 1e-6:
+        raise CadError(f"Walec ma promień {r:g} mm - nie da się zmniejszyć go o {abs(d):g} mm.")
+    lo = max(lo, 0.0)
+    h = info['v1'] - info['v0']
+    if h <= 1e-6:
+        raise CadError("Ściana walcowa ma zerową wysokość.")
+    base = info['origin'] + info['axis'] * info['v0']
+    plane = cq.Plane(origin=tuple(float(c) for c in base), xDir=tuple(float(c) for c in info['xdir']), normal=tuple(float(c) for c in info['axis']))
+    wp = cq.Workplane(plane)
+    ring = wp.circle(hi).extrude(h).val()
+    if lo > 1e-6:
+        ring = ring.cut(wp.circle(lo).extrude(h).val())
+    if not info['full']:
+        # wycinek kąta [u0, u1]: wielokąt-klin (z zapasem promienia) wyciągnięty na całą wysokość
+        reach = hi * 2 + 1
+        steps = max(2, int(math.ceil((info['u1'] - info['u0']) / (math.pi / 8))))
+        pts = [(0.0, 0.0)] + [(reach * math.cos(info['u0'] + (info['u1'] - info['u0']) * k / steps),
+                                reach * math.sin(info['u0'] + (info['u1'] - info['u0']) * k / steps)) for k in range(steps + 1)]
+        wedge = wp.polyline(pts).close().extrude(h).val()
+        ring = ring.intersect(wedge)
+    return valid(ring.clean())

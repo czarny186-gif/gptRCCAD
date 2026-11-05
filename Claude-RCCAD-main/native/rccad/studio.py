@@ -2643,13 +2643,15 @@ class StudioWindow(QMainWindow):
             src = self._profile_at(x, y)
         except kernel.CadError:
             src = None
+        if src is not None and src.get('kind') == 'cyl' and self.mode != 'extrude':
+            src = None
         if src is None:
             if self._hover_key is not None:
                 self._hover_key = None
                 self.view.set_preview_mesh(None)
             return
         face = src.get('face') or profile_face(src['wire'])
-        key = (src['kind'], src.get('id'), tuple(round(c, 3) for c in src['center']))
+        key = src['cluster'] if src.get('kind') == 'cyl' else (src['kind'], src.get('id'), tuple(round(c, 3) for c in src['center']))
         if key != self._hover_key:
             self._hover_key = key
             self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
@@ -2824,6 +2826,19 @@ class StudioWindow(QMainWindow):
                 picked = kernel.face_at(body.shape, hit[1], hit[2], curved=True)
             except kernel.CadError:
                 picked = None
+        if picked is not None and picked[0].geomType() == 'CYLINDER':
+            # ścianka otworu albo zewnętrzna powierzchnia walca: wyciąganie zmienia promień (+ dodaje materiał, - wycina)
+            try:
+                info = kernel.cylinder_info(picked[0], body.shape)
+                p = tuple(float(c) for c in hit[2])
+                n = kernel.cylinder_normal(info, p)
+                ray = self.view._ray(x, y)
+                t = float(np.linalg.norm(np.asarray(hit[2], float) - ray[0])) if ray else 0.0
+                solid = (t, dict(kind='cyl', id=body.id, face=picked[0], cyl=info, wire=None, plane=None, normal=tuple(float(c) for c in n),
+                                 center=p, hit=p, cluster=(body.id, 'cyl', round(info['radius'], 6), tuple(np.round(info['origin'], 4)))))
+            except kernel.CadError:
+                solid = None
+            picked = None
         if picked is not None:
             face, normal = picked
             ray = self.view._ray(x, y)
@@ -3028,7 +3043,7 @@ class StudioWindow(QMainWindow):
         if body is None or body.kind != 'solid':
             return []
         for src in self.ex_profiles:
-            if src.get('kind') == 'face' and src.get('id') == body.id:
+            if src.get('kind') in ('face', 'cyl') and src.get('id') == body.id:
                 return []
             try:
                 face = src.get('face') or profile_face(src['wire'])
@@ -3121,7 +3136,7 @@ class StudioWindow(QMainWindow):
         n = np.array(src['normal'], float)
         c = np.array(src['center'], float)
         solids = [b for b in self.document.bodies if b.kind == 'solid']
-        touching = src.get('kind') == 'face'
+        touching = src.get('kind') in ('face', 'cyl')
         sample = c + n * (.05 if value > 0 else -.05)
         inside = False
         try:
@@ -3179,6 +3194,9 @@ class StudioWindow(QMainWindow):
         out = []
         for src in self.ex_profiles:
             wire, normal, plane, face = src['wire'], src['normal'], src['plane'], src.get('face')
+            if src.get('kind') == 'cyl':          # ściana walcowa: zmiana promienia o d1 (+ dodaje, - wycina materiał)
+                out.append(lambda info=src['cyl'], a=d1: kernel.cylinder_offset_tool(info, a))
+                continue
             if face is not None:
                 out.append(lambda f=face, n=normal, a=d1, b=d2 if mode == 'two' else 0.0, s=mode == 'symmetric': kernel.extrude_face(f, n, a, b, s))
             elif mode == 'two':
@@ -3294,6 +3312,8 @@ class StudioWindow(QMainWindow):
         except Exception as exc:
             self.toast(str(exc) or 'Nie udało się wybrać profilu.')
             return
+        if src is not None and src.get('kind') == 'cyl':
+            src = None
         if src is None:
             self.toast('Kliknij zamknięty profil szkicu albo płaską ścianę bryły.')
             return
@@ -4110,6 +4130,8 @@ class StudioWindow(QMainWindow):
         except Exception as exc:
             self.toast(str(exc) or 'Nie udało się wybrać profilu.')
             return None
+        if src is not None and src.get('kind') == 'cyl':
+            src = None      # ściana walcowa zmienia promień tylko w Wyciągnij
         if src is None:
             self.toast('Kliknij zamknięty profil szkicu albo płaską ścianę bryły.')
         return src
@@ -5255,6 +5277,8 @@ class StudioWindow(QMainWindow):
         base = getattr(self, '_ex_mesh_value', 0.0)
         if len({p.get('cluster', id(p)) for p in self.ex_profiles}) != 1 or self.ex_dir.currentData() != 'one' or abs(base) < 1e-6:
             return
+        if any(p.get('kind') == 'cyl' for p in self.ex_profiles):
+            return          # pierścień walca nie skaluje się wzdłuż jednej normalnej - podgląd liczy się na nowo
         factor = self.ex_value.value() / base
         if factor > .02:
             src = self.ex_profiles[0]

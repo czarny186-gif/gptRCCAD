@@ -325,6 +325,10 @@ def describe_profiles(profiles, bodies=(), merge=True):
             if best is not None:
                 spec['anchor'] = {'id': best[1], 'offset': [float(c) for c in best[2]]}
             out.append(spec)
+        elif src['kind'] == 'cyl':      # ściana walcowa: oś, promień i punkt kliknięcia - odnajdywana po osi i promieniu
+            info = src['cyl']
+            out.append({'k': 'cyl', 'id': src['id'], 'origin': [float(c) for c in info['origin']], 'axis': [float(c) for c in info['axis']],
+                        'radius': float(info['radius']), 'hit': [float(c) for c in src.get('hit', src['center'])], 'outward': int(info['outward'])})
         else:
             owner = next((b for b in bodies if b.id == src.get('id')), None)
             whole = src.get('whole') or src.get('face')
@@ -361,9 +365,42 @@ def _merge_text_groups(out, profiles, bodies):
     return [x for n, x in enumerate(out) if n not in drop] + extra
 
 
+def match_cylinder(shape, spec):
+    """Ściana walcowa bryły odpowiadająca zapisanej: ta sama oś (kierunek i położenie) i strona materiału; przy kilku -
+    najbliższy promień, a potem najbliższa klikniętemu punktowi."""
+    axis, origin = _unit(spec['axis']), np.array(spec['origin'], float)
+    hit = np.array(spec['hit'], float)
+    best = None
+    for face in shape.Faces():
+        if face.geomType() != 'CYLINDER':
+            continue
+        try:
+            info = kernel.cylinder_info(face, shape)
+        except Exception:
+            continue
+        if abs(abs(float(info['axis'] @ axis)) - 1) > 1e-6 or info['outward'] != int(spec.get('outward', info['outward'])):
+            continue
+        d = info['origin'] - origin
+        if np.linalg.norm(d - float(d @ axis) * axis) > 1e-4 * max(1.0, _scale(shape)):
+            continue
+        score = (abs(info['radius'] - float(spec['radius'])), float(face.distance(cq.Vertex.makeVertex(*hit))))
+        if best is None or score < best[0]:
+            best = (score, face, info)
+    if best is None:
+        raise kernel.CadError('Ściana walcowa użyta w tym kroku już nie istnieje.')
+    return best[1], best[2]
+
+
 def resolve_profile(bodies, spec):
     """Odtwarza profil (wire, normal, plane, face) w podanym stanie albo rzuca CadError."""
     by_id = {b.id: b for b in bodies}
+    if spec['k'] == 'cyl':
+        body = by_id.get(spec['id'])
+        if body is None or body.kind != 'solid':
+            raise kernel.CadError('Bryła użyta w tym kroku już nie istnieje.')
+        face, info = match_cylinder(body.shape, spec)
+        normal = kernel.cylinder_normal(info, spec['hit'])
+        return dict(wire=None, normal=tuple(float(c) for c in normal), plane=None, face=face, cyl=info)
     if spec['k'] == 'sketch':
         body = by_id.get(spec['id'])
         if body is None or body.kind != 'sketch':
@@ -426,6 +463,8 @@ def resolve_profiles(bodies, spec):
 
 
 def make_tool(src, d1, d2, mode):
+    if src.get('cyl') is not None:          # ściana walcowa: pierścień zmieniający promień (kierunek obustronny nie ma sensu)
+        return kernel.cylinder_offset_tool(src['cyl'], d1)
     face, wire, normal, plane = src['face'], src['wire'], src['normal'], src['plane']
     if face is not None:
         return kernel.extrude_face(face, normal, d1, d2 if mode == 'two' else 0.0, mode == 'symmetric')

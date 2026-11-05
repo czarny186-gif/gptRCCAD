@@ -960,6 +960,52 @@ class StudioTests(unittest.TestCase):
         w.toggle_mode('mate');self._mate_pick(c,(0,0,1),(35,5,50));self._mate_pick(c,(1,0,0),(40,5,25))
         self.assertNotIn('target',w.mt_pick);self.assertEqual(w.mt_pick['moving']['normal'],(1.0,0.0,0.0))
 
+    def _pick_cyl(self,body,point,hole=False):
+        w=self.w
+        n=np.array([point[0],point[1],0.0]);n/=np.linalg.norm(n)
+        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_profile',return_value=None),\
+             patch.object(w.view,'pick_face',return_value=(body.id,-n if hole else n,np.array(point,float))):
+            w.view_clicked(5,5,False,False)
+
+    def _cyl_radii(self,shape):
+        return sorted(round(k.cylinder_info(f,shape)['radius'],4) for f in shape.Faces() if f.geomType()=='CYLINDER')
+
+    def test_extrude_hole_wall_cuts_bigger_or_adds_smaller(self):
+        w=self.w
+        plate=Body('Płyta',cq.Workplane('XY').box(60,60,10,centered=(True,True,False)).faces('>Z').workplane().hole(20).val()).prepared()
+        w.document.commit([plate]);w.refresh();w.set_mode('extrude')
+        self._pick_cyl(plate,(10,0,5),True)                                   # ścianka otworu ⌀20
+        src=w.ex_profiles[0];self.assertEqual(src['kind'],'cyl');self.assertEqual(src['cyl']['outward'],-1)
+        np.testing.assert_allclose(src['normal'],(-1,0,0),atol=1e-9)     # normalna od materiału - do środka otworu
+        w.ex_value.setValue(-3);self.assertEqual(w.ex_op.currentData(),'cut')     # do materiału: wycięcie, otwór większy
+        self.preview();self.assertTrue(w.view.preview_items)
+        w.apply_extrude();self.wait()
+        self.assertEqual(self._cyl_radii(w.document.get(plate.id).shape),[13.0])
+        recipe=w.document.info['op'];self.assertEqual(recipe['profiles'][0]['k'],'cyl')
+        again=hist.run_extrude([plate],recipe);self.assertEqual(self._cyl_radii(next(b for b in again if b.id==plate.id).shape),[13.0])
+        w.undo();self.wait()
+        w.set_mode('extrude');self._pick_cyl(plate,(0,10,5),True)
+        w.ex_value.setValue(4);self.assertEqual(w.ex_op.currentData(),'join')      # od materiału: dodanie, otwór mniejszy
+        w.apply_extrude();self.wait()
+        self.assertEqual(self._cyl_radii(w.document.get(plate.id).shape),[6.0])
+        self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),1)
+
+    def test_extrude_outer_cylinder_grows_or_shrinks(self):
+        w=self.w
+        rod=Body('Wałek',cq.Workplane('XY').circle(10).extrude(30).val()).prepared()
+        w.document.commit([rod]);w.refresh();w.set_mode('extrude')
+        self._pick_cyl(rod,(10,0,15))
+        self.assertEqual(w.ex_profiles[0]['cyl']['outward'],1)
+        w.ex_value.setValue(2.5);self.assertEqual(w.ex_op.currentData(),'join')
+        w.apply_extrude();self.wait()
+        shape=w.document.get(rod.id).shape;self.assertEqual(self._cyl_radii(shape),[12.5]);self.assertAlmostEqual(shape.BoundingBox().zlen,30,delta=.05)
+        w.set_mode('extrude');self._pick_cyl(w.document.get(rod.id),(0,12.5,15))
+        w.ex_value.setValue(-6.5);self.assertEqual(w.ex_op.currentData(),'cut')
+        w.apply_extrude();self.wait();self.assertEqual(self._cyl_radii(w.document.get(rod.id).shape),[6.0])
+        w.set_mode('extrude');self._pick_cyl(w.document.get(rod.id),(6,0,15))
+        w.ex_value.setValue(-7);w.apply_extrude();self.wait()                # więcej niż promień: komunikat, model bez zmian
+        self.assertEqual(self._cyl_radii(w.document.get(rod.id).shape),[6.0])
+
     def test_two_sided_extrude(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
         w.ex_dir.setCurrentIndex(2);w.ex_value.setValue(10);w.ex_second.setValue(5);w.apply_extrude();self.wait()
