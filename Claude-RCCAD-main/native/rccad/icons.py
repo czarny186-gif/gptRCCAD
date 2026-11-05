@@ -42,7 +42,7 @@ def _draw_datum(p, which, ink, acc, soft, pen):
     """Sposób mierzenia długości kołnierza: płyta bazowa, gięcie i nowy kołnierz z wymiarem długości (pomarańczowy)
     od odniesienia (przerywane linie): prosta część / przecięcie zewnętrznych lub wewnętrznych powierzchni / styczna do zagięcia."""
     import numpy as np
-    alpha = math.radians(120.0 if which == 'tangent' else 60.0)
+    alpha = math.radians(120.0 if which == 'tangent' else (90.0 if which in ('outer', 'inner') else 60.0))
     t, r, L, base = 4.0, 4.0, 22.0, 20.0
     d = np.array([-math.cos(alpha), math.sin(alpha)])
     C = np.array([0.0, t + r])

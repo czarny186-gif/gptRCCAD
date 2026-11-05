@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.19 — odniesienie długości kołnierza
+# RCCAD Desktop 0.4.20 — wymiary zewnętrzne i wewnętrzne blachy
+
+## Zmiany 0.4.20
+
+- **Blacha → Kołnierz → Długość mierzona od strony:** zostały dwie opcje (zamiast czterech z 0.4.19):
+  - **Zewnętrzna** (domyślna) - długość od wierzchołka kołnierza do zewnętrznej strony blachy; gdy na końcu kołnierza jest kolejne gięcie - od zewnętrznej do zewnętrznej strony. Przykład: blacha 1 mm, 5 mm: w środku 4 mm, między dwoma gięciami 3 mm.
+  - **Wewnętrzna** - od wierzchołka do wewnętrznej strony, przy kolejnym gięciu od wewnętrznej do wewnętrznej. Przykład: 5 mm, z grubością 6 mm, przy dwóch gięciach 7 mm.
+- **Płyta też:** wymiar płyty jest wymiarem zewnętrznym albo wewnętrznym gotowej blachy - np. pudełko z płyty 100 × 50 mm z wymiarami zewnętrznymi ma na zewnątrz dokładnie 100 × 50 mm.
+- **Kąty:** dla kąta prostego i ostrego między ściankami wymiar sięga do przecięcia przedłużonych powierzchni, dla rozwartego - do środka łuku gięcia, zawsze wzdłuż kołnierza.
+- Dołożenie gięcia na końcu kołnierza nie wydłuża go: jego wymiar obejmuje już nowe gięcie.
+- Starsze projekty (także z 0.4.19) zachowują swoje wymiary.
 
 ## Zmiany 0.4.19
 

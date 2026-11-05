@@ -277,6 +277,103 @@ def datum_setback(datum, r, t, angle):
     raise kernel.CadError("Nieznany sposób mierzenia długości kołnierza.")
 
 
+# ---------------------------------------------------------------------------
+# Mierzenie długości (od 0.4.20): wymiar zewnętrzny albo wewnętrzny gotowej blachy, także płyty bazowej.
+# Kołnierz z polem 'measure' ('outer' | 'inner') ma długość mierzoną wzdłuż kołnierza:
+#  - od odniesienia gięcia na początku do wierzchołka kołnierza, a gdy na jego końcu jest kolejne gięcie - do odniesienia
+#    tego gięcia (zewn.: zewnętrzna strona - zewnętrzna strona; wewn.: wewnętrzna - wewnętrzna),
+#  - odniesienie gięcia o kącie prostym i ostrym między ściankami (kąt gięcia >= 90°): przecięcie przedłużonych powierzchni
+#    (zewnętrznych albo wewnętrznych), naddatek rho*tg(a/2); kąt rozwarty (gięcie < 90°): środek łuku gięcia,
+#    naddatek rho*sin(a/2); rho = R + t (zewn.) albo R (wewn.); zawinięcie 180°: szczyt łuku, rho.
+# Płyta bazowa: boki z takim kołnierzem są przycinane o naddatek gięcia, więc wymiar płyty jest wymiarem gotowej blachy.
+# Recepta jest przeliczana (normalize) na postać z samymi prostymi częściami - dalsza konstrukcja jej nie rozróżnia.
+# ---------------------------------------------------------------------------
+MEASURES = ('outer', 'inner')
+
+
+def measure_setback(mode, r, t, angle):
+    """Odległość (wzdłuż kołnierza) od końca prostej części do odniesienia wymiaru dla gięcia o promieniu r i kącie angle."""
+    rho = float(r) + float(t) if mode == 'outer' else float(r)
+    a = float(angle)
+    if a >= 180 - 1e-9:
+        return rho
+    if a >= 90 - 1e-9:
+        return rho * math.tan(math.radians(a) / 2)
+    return rho * math.sin(math.radians(a) / 2)
+
+
+def _child_bend(specs, i):
+    """Promień i kąt gięcia na końcu kołnierza i (kolejny kołnierz albo zawinięcie) albo None."""
+    for c in specs:
+        if c.get('kind') == 'tip' and int(c['parent']) == i:
+            if c.get('hem'):
+                h = c['hem']
+                return _hem_R(float(c['r']), float(h['gap'])), 180.0
+            return float(c['r']), float(c['angle'])
+    return None
+
+
+def normalize(recipe):
+    """Recepta z kołnierzami mierzonymi zewnętrznie / wewnętrznie -> recepta z prostymi częściami i przyciętą płytą.
+    Bez takich kołnierzy zwraca receptę bez zmian (starsze projekty zachowują swoje wymiary)."""
+    specs = recipe.get('flanges') or []
+    if not any(sp.get('measure') for sp in specs):
+        return recipe
+    t = float(recipe['t'])
+    out = []
+    for i, sp in enumerate(specs):
+        mode = sp.get('measure')
+        if not mode or sp.get('hem'):
+            out.append(dict(sp))
+            continue
+        if mode not in MEASURES:
+            raise kernel.CadError("Nieznany sposób mierzenia długości kołnierza.")
+        start = measure_setback(mode, sp['r'], t, sp['angle'])
+        child = _child_bend(specs, i)
+        end = measure_setback(mode, child[0], t, child[1]) if child else 0.0
+        L = float(sp['length'])
+        leg = L - start - end
+        if not math.isfinite(leg) or leg <= 1e-6:
+            name = 'zewnętrzny' if mode == 'outer' else 'wewnętrzny'
+            raise kernel.CadError(f"Wymiar {name} kołnierza ({L:g} mm) jest za mały dla promienia, kąta i grubości "
+                                  f"- musi być większy niż {start + end:.3f} mm.")
+        clean = {k: v for k, v in sp.items() if k not in ('measure', 'datum')}
+        out.append(dict(clean, length=leg, outside=False))
+    base = recipe['base']
+    o = _arr(base['o']); x, y, z = (_unit(base[k]) for k in ('x', 'y', 'z'))
+    lx, ly = float(base['lx']), float(base['ly'])
+    trim = {'+x': 0.0, '-x': 0.0, '+y': 0.0, '-y': 0.0}
+    side_of = lambda m: ('+x' if m @ x > 0 else '-x') if abs(float(m @ x)) > .5 else ('+y' if m @ y > 0 else '-y')
+    for sp in specs:
+        if sp['kind'] == 'base' and sp.get('measure') and not sp.get('hem'):
+            key = side_of(_unit(sp['m']))
+            trim[key] = max(trim[key], measure_setback(sp['measure'], sp['r'], t, sp['angle']))
+    nlx, nly = lx - trim['+x'] - trim['-x'], ly - trim['+y'] - trim['-y']
+    if nlx <= 1e-6 or nly <= 1e-6:
+        raise kernel.CadError("Płyta jest za mała dla tych gięć mierzonych od zewnętrznej / wewnętrznej strony blachy.")
+    no = o + x * trim['-x'] + y * trim['-y']
+    new_base = dict(base, o=[float(v) for v in no], lx=float(nlx), ly=float(nly))
+    for i, sp in enumerate(specs):
+        if sp['kind'] != 'base':
+            continue
+        # krawędź płyty na nowo: pełny bok przyciętej płyty (dla kołnierzy mierzonych - w przyciętym położeniu)
+        p0, p1, m = _arr(sp['p0']), _arr(sp['p1']), _unit(sp['m'])
+        key = side_of(m)
+        w = float((p0 - o) @ z)
+        along = float((p1 - p0) @ (y if key in ('+x', '-x') else x))
+        if key in ('+x', '-x'):
+            u = (nlx if key == '+x' else 0.0) if sp.get('measure') else (float((p0 - no) @ x))
+            ends = [(u, 0.0), (u, nly)]
+        else:
+            v = (nly if key == '+y' else 0.0) if sp.get('measure') else (float((p0 - no) @ y))
+            ends = [(0.0, v), (nlx, v)]
+        if along < 0:
+            ends.reverse()
+        pts = [no + x * a + y * b + z * w for a, b in ends]
+        out[i] = dict(out[i], p0=[float(v) for v in pts[0]], p1=[float(v) for v in pts[1]])
+    return dict(recipe, base=new_base, flanges=out)
+
+
 def spec_datum(s, outside=False):
     """Odniesienie długości kołnierza z jego opisu; starsze projekty: znacznik 'outside' oznacza powierzchnie zewnętrzne."""
     datum = s.get('datum')
@@ -921,6 +1018,7 @@ def build_sheet(recipe, parallel_version=3):
 
 def _build_sheet(recipe, parallel_version=3):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
+    recipe = normalize(recipe)
     if parallel_version not in (1,2,3):
         raise kernel.CadError('Nieobsługiwana wersja konstrukcji narożników równoległych.')
     base = base_solid(recipe['base'])
@@ -979,6 +1077,8 @@ def _build_sheet(recipe, parallel_version=3):
 def spec_for_edge(base, t, specs, rules, mid, tol):
     """Kołnierz na wybranej krawędzi: krawędź końca istniejącego kołnierza („tip”) albo krawędź płyty („base”)."""
     rules = rules or {}
+    normal = normalize(dict(base=base, t=t, flanges=specs, rules=rules))      # geometria taka, jak widać na ekranie
+    base, specs = normal['base'], normal['flanges']
     _validate_specs(specs, t)
     eff, corners = _effective(specs, t, bool(rules.get('miter', True)), bool(rules.get('outside', False)))
     if corners:
@@ -1027,6 +1127,7 @@ def flat_pattern(recipe):
     The returned solid has unit height solely for robust planar Boolean operations.
     """
     build_sheet(recipe)  # Includes connectivity and self-intersection checks.
+    recipe = normalize(recipe)
     base, t = recipe['base'], float(recipe['t'])
     specs, rules = recipe.get('flanges') or [], recipe.get('rules') or {}
     kfactor = float(rules.get('kfactor', K_DEFAULT))

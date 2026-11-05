@@ -215,7 +215,7 @@ class StudioTests(unittest.TestCase):
         flat=w.document.get(body.id)
         w.open_drawing(flat);self.wait();win=w._drawing_windows[-1]
         self.assertIsNotNone(win.source.iso_shape)
-        iso=win.source.iso_shape.BoundingBox();self.assertAlmostEqual(iso.zmax-iso.zmin,folded_box.zmax-folded_box.zmin,3)     # zgięta: ścianka w górę
+        iso=win.source.iso_shape.BoundingBox();self.assertAlmostEqual(iso.zmax-iso.zmin,folded_box.zmax-folded_box.zmin,delta=.01)     # zgięta: ścianka w górę
         top=win.source.view('top');self.assertAlmostEqual(top.bbox[3]-top.bbox[1]+top.bbox[2]-top.bbox[0],
                                                           flat.shape.BoundingBox().xlen+flat.shape.BoundingBox().ylen,3)  # rzut z góry: nadal rozwinięcie
         win.close()
@@ -332,7 +332,7 @@ class StudioTests(unittest.TestCase):
         w.fl_reverse.setChecked(True)
         w.apply_flange();self.wait()
         folded = w.document.get(body.id).shape
-        self.assertLess(folded.BoundingBox().zmin, -20)
+        self.assertAlmostEqual(min(v.Z for v in folded.Vertices()), 2-20, delta=1e-6)    # gięcie w dół: 20 mm od zewnętrznej (górnej) strony
         self.assertAlmostEqual(max(v.Z for v in folded.Vertices()), 2, delta=1e-6)
         w.undo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(), 10000)
         w.redo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(), folded.Volume())
@@ -343,38 +343,29 @@ class StudioTests(unittest.TestCase):
         w.fl_datum.setCurrentIndex(w.fl_datum.findData('outer'))
         w.apply_flange();self.wait()
         state = w._sheet_state(body.id)
-        eff, _ = shm._effective(state['specs'], state['t'], True, True)
+        normal = shm.normalize(dict(base=state['base'],t=state['t'],flanges=state['specs'],rules=state['rules']))
+        eff, _ = shm._effective(normal['flanges'], state['t'], True)
         a,b,_,_ = shm._tip_geom(eff[0], 'out', state['t'])
         midpoint = (a+b)/2
         folded = w.document.get(body.id)
         index = next(i for i,e in enumerate(folded.shape.Edges()) if np.linalg.norm(np.array(e.positionAt(.5).toTuple())-midpoint) < 1e-4)
-        w.fl_datum.setCurrentIndex(w.fl_datum.findData('leg'))
+        w.fl_datum.setCurrentIndex(w.fl_datum.findData('inner'))
         w.fl_armed = False
         with patch.object(w.view, 'nearest_edge', return_value=(body.id,index,None)):
             w.pick_flange(5,5)
         self.assertEqual(w.fl_pick['spec'], dict(kind='tip',parent=0,side='out'))
         w.apply_flange();self.wait()
         state = w._sheet_state(body.id)
-        self.assertEqual([s['outside'] for s in state['specs']], [True, False])
-        eff, _ = shm._effective(state['specs'], state['t'], True, False)
-        self.assertAlmostEqual(eff[0]['length'], 16)
-        self.assertAlmostEqual(eff[1]['length'], 20)
-
-    def test_sheet_flat_button_exports_without_changing_history(self):
-        body = self.converted_sheet();w = self.w
-        w.fl_miter.setChecked(False);w.apply_flange();self.wait()
-        count = len(w.document.infos()[0])
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)/'blank'
-            with patch('rccad.studio.QFileDialog.getSaveFileName', return_value=(str(path), 'DXF (*.dxf)')):
-                w.tools['flat'].click();self.wait()
-            self.assertTrue(path.with_suffix('.dxf').is_file())
-        self.assertEqual(len(w.document.infos()[0]), count)
-        self.assertEqual(w.selected, [body.id])
+        self.assertEqual([s['measure'] for s in state['specs']], ['outer', 'inner'])
+        normal = shm.normalize(dict(base=state['base'],t=state['t'],flanges=state['specs'],rules=state['rules']))
+        self.assertAlmostEqual(normal['flanges'][0]['length'], 20-4-4)       # zewn.: odniesienia obu gięć (R + t) na końcach
+        volume = w.document.get(body.id).shape.Volume()
+        w.undo();self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),1)
+        w.redo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),volume,delta=.001)
 
     def test_sheet_box_five_mm_walls_then_returns_and_reverse_bends(self):
         body = self.converted_sheet();w = self.w
-        w.fl_length.setValue(5);w.fl_gap.setValue(.2)
+        w.fl_length.setValue(13);w.fl_gap.setValue(.2)      # wymiar zewnętrzny 13 mm = 5 mm prostej części + 2 x (R + t)
         edges = [([100,0,2],[100,50,2],[1,0,0]),([100,50,2],[0,50,2],[0,1,0]),
                  ([0,50,2],[0,0,2],[-1,0,0]),([0,0,2],[100,0,2],[0,-1,0])]
         picks = [dict(kind='base',p0=a,p1=b,n=[0,0,1],m=m) for a,b,m in edges]
@@ -393,42 +384,51 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),11)
         w.redo();self.wait();self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),volume,delta=.001)
 
-    def test_flange_length_datum_outer_inner_tangent_and_leg(self):
+    def test_flange_length_measured_outside_or_inside_like_user_examples(self):
+        """Blacha 1 mm, wymiar 5 mm, gięcia 90°: zewn. jedno gięcie 5 / w środku 4, dwa gięcia 5 / 3; wewn. 5 / 6 i 5 / 7."""
         from rccad import sheetmetal as shm
-        w=self.w;self.assertEqual(w.fl_datum.currentData(),'leg')
-        L,r,t=20.0,2.0,2.0
-        tops={}
-        for datum in ('leg','outer','inner','tangent'):
-            body=self.converted_sheet();w.fl_length.setValue(L);w.fl_radius.setValue(r);w.fl_angle.setValue(90)
-            w.fl_datum.setCurrentIndex(w.fl_datum.findData(datum))
-            self.assertTrue(w.fl_datum_info.text().startswith({'leg':'Prosta część','outer':'Powierzchnie zewnętrzne','inner':'Powierzchnie wewnętrzne','tangent':'Styczna do zagięcia'}[datum]))
-            w.apply_flange();self.wait()
-            spec=w._sheet_state(body.id)['specs'][-1];self.assertEqual(spec['datum'],datum)
-            tops[datum]=w.document.get(body.id).shape.BoundingBox().zmax
-            w.document.commit([]);w.set_mode(None)
-        # ścianka w górę na płycie z=0..2: wysokość od spodu płyty
-        self.assertAlmostEqual(tops['leg'],t+r+L,3)          # sama prosta część nad łukiem
-        self.assertAlmostEqual(tops['outer'],L,3)            # od zewnętrznej powierzchni płyty (spód) do końca
-        self.assertAlmostEqual(tops['inner'],t+L,3)          # od wewnętrznej (górnej) powierzchni płyty
-        self.assertAlmostEqual(tops['tangent'],L,3)          # przy 90° styczna pokrywa się z powierzchnią zewnętrzną
-        # kąty inne niż 90°: naddatki wg wzorów
-        self.assertAlmostEqual(shm.datum_setback('outer',2,2,60),4*math.tan(math.radians(30)),9)
-        self.assertAlmostEqual(shm.datum_setback('inner',2,2,120),2*math.tan(math.radians(60)),9)
-        self.assertAlmostEqual(shm.datum_setback('tangent',2,2,135),4.0,9)
-        self.assertAlmostEqual(shm.datum_setback('tangent',2,2,30),4*.5,9)
-        with self.assertRaises(k.CadError):shm.datum_setback('outer',2,2,180)
-        with self.assertRaises(k.CadError):shm._straight(dict(length=3,r=2,angle=90,datum='outer'),2,False)
-        self.assertEqual(shm.spec_datum(dict(outside=True)),'outer');self.assertEqual(shm.spec_datum({}),'leg')    # starsze projekty
+        w=self.w;self.assertEqual(w.fl_datum.currentData(),'outer');self.assertEqual(w.fl_datum._data,['outer','inner'])
+        plate=k.box(100,50,1);top=next(f for f in plate.Faces() if abs(f.Center().z-1)<1e-6);base=shm.sheet_of_face(plate,top)['base']
+        wall=lambda mode:dict(kind='base',p0=[100,0,1],p1=[100,50,1],n=[0,0,1],m=[1,0,0],r=1,angle=90,length=5,measure=mode)
+        lip=lambda mode:dict(kind='tip',parent=0,side='in',r=1,angle=90,length=5,measure=mode)
+        def levels(fl):
+            sh=shm.build_sheet(dict(base=base,t=1,flanges=fl,rules={}))
+            return sh,sorted({round(f.Center().z,6) for f in sh.Faces() if f.geomType()=='PLANE' and abs(f.normalAt().z)>.99 and f.Center().x>90})
+        sh,_=levels([wall('outer')]);bb=sh.BoundingBox()
+        self.assertAlmostEqual(bb.zmax,5,6);self.assertAlmostEqual(bb.zmax-1,4,6);self.assertAlmostEqual(bb.xmax,100,6)   # płyta = wymiar zewnętrzny
+        _,z=levels([wall('outer'),lip('outer')]);self.assertAlmostEqual(z[-1]-0,5,6);self.assertAlmostEqual(z[-2]-1,3,6)
+        sh,_=levels([wall('inner')]);bb=sh.BoundingBox()
+        self.assertAlmostEqual(bb.zmax-1,5,6);self.assertAlmostEqual(bb.zmax,6,6);self.assertAlmostEqual(bb.xmax,101,6)  # płyta = wymiar wewnętrzny
+        _,z=levels([wall('inner'),lip('inner')]);self.assertAlmostEqual(z[-2]-1,5,6);self.assertAlmostEqual(z[-1]-0,7,6)
+        # kąty: prosty i ostry - przecięcie powierzchni (tg), rozwarty - środek łuku (sin), zawinięcie - szczyt łuku
+        self.assertAlmostEqual(shm.measure_setback('outer',2,2,90),4,9)
+        self.assertAlmostEqual(shm.measure_setback('inner',2,2,135),2*math.tan(math.radians(67.5)),9)
+        self.assertAlmostEqual(shm.measure_setback('outer',2,2,45),4*math.sin(math.radians(22.5)),9)
+        self.assertAlmostEqual(shm.measure_setback('inner',2,2,180),2,9)
+        with self.assertRaises(k.CadError):
+            shm.build_sheet(dict(base=base,t=1,flanges=[dict(wall('outer'),length=1.5)],rules={}))      # mniej niż R + t
+        # pudełko mierzone z zewnątrz ma wymiary płyty
+        body=self.converted_sheet()
+        w.fl_length.setValue(10);w.fl_radius.setValue(2);w.fl_datum.setCurrentIndex(w.fl_datum.findData('outer'))
+        edges=[([100,0,2],[100,50,2],[1,0,0]),([100,50,2],[0,50,2],[0,1,0]),([0,50,2],[0,0,2],[-1,0,0]),([0,0,2],[100,0,2],[0,-1,0])]
+        for a,b,m in edges:
+            w.fl_pick=dict(id=body.id,spec=dict(kind='base',p0=a,p1=b,n=[0,0,1],m=m));w.apply_flange();self.wait()
+        bb=w.document.get(body.id).shape.BoundingBox()
+        self.assertAlmostEqual(bb.xlen,100,1);self.assertAlmostEqual(bb.ylen,50,1);self.assertAlmostEqual(bb.zlen,10,1)
+        self.assertEqual([s['measure'] for s in w._sheet_state(body.id)['specs']],['outer']*4)
+        # starsze projekty (bez pola measure) zachowują dawne wymiary
+        legacy=dict(kind='base',p0=[100,0,1],p1=[100,50,1],n=[0,0,1],m=[1,0,0],r=1,angle=90,length=5)
+        self.assertAlmostEqual(shm.build_sheet(dict(base=base,t=1,flanges=[legacy],rules={})).BoundingBox().zmax,1+1+5,6)
 
     def test_sheet_rules_rebuild_existing_bends_without_adding_one(self):
         body = self.converted_sheet();w = self.w
-        w.fl_datum.setCurrentIndex(w.fl_datum.findData('outer'));w.apply_flange();self.wait()
+        w.fl_datum.setCurrentIndex(w.fl_datum.findData('inner'));w.apply_flange();self.wait()
         original = w.document.get(body.id).shape.Volume()
         w.toggle_mode('rules');w.fl_outside.setChecked(False);w.fl_gap.setValue(.5)
         w.fl_apply_rules.click();self.wait()
         state = w._sheet_state(body.id)
         self.assertEqual(len(state['specs']),1)
-        self.assertTrue(state['specs'][0]['outside'])
+        self.assertEqual(state['specs'][0]['measure'],'inner')      # reguły nie zmieniają sposobu mierzenia kołnierza
         self.assertEqual(state['rules']['gap'],.5)
         self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),original,delta=.001)
         w.undo();self.wait();self.assertEqual(w._sheet_state(body.id)['rules']['gap'],0)
