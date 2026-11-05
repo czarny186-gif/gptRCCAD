@@ -6,6 +6,7 @@
 - **Przybornik** otwiera okno ze wszystkimi narzędziami ze wszystkich zakładek (pogrupowanymi według zakładek, z ikonami). Kliknięcie kółka stawia zielony ptaszek i dodaje narzędzie do Ulubionych; strzałki ▲ ▼ ustawiają kolejność (pierwsze stoi zaraz po Przyborniku), numer pokazuje miejsce na pasku, a u góry widać podgląd paska.
 - **Zastosuj** zapisuje wybór na stałe (także po ponownym uruchomieniu), **Zamknij** zamyka bez zmian, **Reset** odznacza wszystko.
 - Narzędzie uruchomione z Ulubionych nie przełącza zakładki - zostajesz w Ulubionych.
+- Ustawienia programu (Ulubione, zapamiętane ustawienia Kołnierza i Zawinięcia, kolejne w przyszłości) są w folderze **Ustawienia** obok `RCCAD Desktop.exe`. Po aktualizacji przenieś ten folder do nowej wersji - stare ustawienia wrócą. Ustawienia zapisane przez poprzednie wersje w profilu użytkownika są przenoszone do tego folderu automatycznie.
 
 ## RCCAD Desktop 0.4.34 — narożniki bez niechcianych wycięć
 

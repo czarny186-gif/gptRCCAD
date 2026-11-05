@@ -4287,28 +4287,17 @@ class StudioWindow(QMainWindow):
     # ---------- Kołnierz: Zatwierdź / Zaginaj / Reset ----------
     @staticmethod
     def _settings_file(name='flange'):
-        import os
-        from PySide6.QtCore import QStandardPaths
-        base = os.environ.get('RCCAD_CONFIG_DIR') or QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        return Path(base or '.') / f'{name}.json'
+        """Plik ustawienia w folderze „Ustawienia” obok programu (do przeniesienia przy aktualizacji)."""
+        from . import settings
+        return settings.path(name)
 
     def _read_settings(self, name):
-        import json
-        try:
-            values = json.loads(self._settings_file(name).read_text(encoding='utf-8'))
-            return values if isinstance(values, dict) else None
-        except Exception:
-            return None
+        from . import settings
+        return settings.read(name)
 
     def _write_settings(self, name, values):
-        import json
-        try:
-            path = self._settings_file(name)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(values), encoding='utf-8')
-            return True
-        except Exception:
-            return False
+        from . import settings
+        return settings.write(name, values)
 
     # ---------- Zawinięcie: Zatwierdź / Reset ----------
     def _hem_values(self):
