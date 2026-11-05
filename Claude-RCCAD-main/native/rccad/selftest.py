@@ -151,8 +151,10 @@ def run(report_path=None):
     reference_specs += [dict(kind='tip',parent=i+4,side='in',r=.5,angle=90,length=5) for i in range(4)]
     reference_recipe=dict(base=slim_base,t=1,flanges=reference_specs,rules=dict(joint='parallel',gap=.2))
     reference_frames,reference_corners=shm._effective(reference_specs,1,True)
+    old_parts=shm._corner_parts(reference_recipe,reference_frames,reference_corners,parallel_version=5)
+    assert abs(k.bounds(old_parts[0][1]).ymax-50.3)<1e-6           # wersja 5 (starsze projekty): szczelina przed sąsiadem
     reference_parts=shm._corner_parts(reference_recipe,reference_frames,reference_corners)
-    assert abs(k.bounds(reference_parts[0][1]).ymax-50.3)<1e-6
+    assert abs(k.bounds(reference_parts[0][1]).ymax-51.5)<1e-6     # zamknięty narożnik: styk z zewnętrzną powierzchnią sąsiada
     assert abs(k.bounds(reference_parts[1][1]).xmax-100.3)<1e-6
     reference_layout=she.layout(reference_recipe)
     assert reference_layout.flat.isValid() and len(reference_layout.flat.Solids())==1
