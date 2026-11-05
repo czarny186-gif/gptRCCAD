@@ -310,6 +310,26 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     elif kind == 'x_flange':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(4, 32, 28, 9), 2, 2); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2)
         p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(42, 20), QPointF(42, 6)); p.drawPolyline(QPolygonF([QPointF(37, 11), QPointF(42, 5), QPointF(47, 11)]))
+    elif kind in ('fl_radius', 'fl_angle', 'fl_length'):
+        # przekrój blachy z kołnierzem: poziom + łuk gięcia + pionowa ściana; akcent pokazuje parametr
+        body = QPainterPath()
+        body.moveTo(4, 40); body.lineTo(22, 40); body.arcTo(QRectF(10, 16, 24, 24), 270, 90); body.lineTo(34, 6)
+        body.lineTo(40, 6); body.lineTo(40, 28); body.arcTo(QRectF(4, 10, 36, 36), 0, -90); body.lineTo(4, 46); body.closeSubpath()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawPath(body)
+        if kind == 'fl_radius':
+            p.setPen(pen(ORANGE, 2.4)); p.drawLine(QPointF(22, 28), QPointF(30.5, 36.5))
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(31.5, 37.5), QPointF(25.8, 35.6), QPointF(29.6, 31.8)]))
+            p.drawEllipse(QPointF(22, 28), 2.2, 2.2)
+        elif kind == 'fl_angle':
+            p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 2.4)); p.drawArc(QRectF(16, 18, 30, 30), 90 * 16, 90 * 16)
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(25.5, 27), 2.0, 2.0)
+        else:
+            p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(44, 7), QPointF(44, 39))
+            p.drawLine(QPointF(41, 6), QPointF(47, 6)); p.drawLine(QPointF(41, 40), QPointF(47, 40))
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(44, 7), QPointF(41.6, 12), QPointF(46.4, 12)]))
+            p.drawPolygon(QPolygonF([QPointF(44, 39), QPointF(41.6, 34), QPointF(46.4, 34)]))
     elif kind == 'rl_gap':
         # widok z góry na narożnik: dwa kołnierze, między końcami szczelina z wymiarem
         p.setBrush(QColor('#eef3f8')); p.setPen(Qt.NoPen); p.drawRect(QRectF(13, 5, 31, 30))

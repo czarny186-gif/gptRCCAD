@@ -4,6 +4,7 @@ faulthandler.dump_traceback_later(600, exit=True, file=open(os.environ.get("DIAG
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
 import tempfile
+os.environ['RCCAD_CONFIG_DIR']=tempfile.mkdtemp(prefix='rccad-cfg-')     # zapamiętane ustawienia (Kołnierz → Zatwierdź) nie trafiają do prawdziwego profilu
 from pathlib import Path
 import numpy as np
 import cadquery as cq
@@ -123,6 +124,32 @@ class StudioTests(unittest.TestCase):
         self.assertFalse(w.flange_panel.isVisible())
         w.toggle_mode('rules');self.assertIsNone(w.mode)
 
+    def test_flange_panel_icons_defaults_save_bend_toggle_and_reset(self):
+        import json
+        w=self.w;w.toggle_mode('flange');self.assertTrue(w.flange_panel.isVisible())
+        texts=[l.text() for l in w.flange_panel.findChildren(QLabel)]
+        self.assertFalse(any(t.startswith('Krawędź górnej ściany wychodzi') or t.startswith('Zewnętrzna: długość') for t in texts))
+        self.assertFalse(hasattr(w,'fl_step1'))
+        self.assertEqual((w.fl_radius.value(),w.fl_angle.value(),w.fl_length.value(),w.fl_datum.currentData()),(.5,90,5,'outer'))
+        for pic in (w.fl_radius_pic,w.fl_angle_pic,w.fl_length_pic):self.assertFalse(pic.pixmap().isNull())
+        self.assertEqual([b.text() for b in (w.fl_save,w.fl_bend,w.fl_reset)],['Zatwierdź','Zaginaj','Reset'])
+        self.assertFalse(w.fl_armed);self.assertIn('#2fa56d',w.fl_bend.styleSheet())           # zielony: wyginanie wyłączone
+        body=self.converted_sheet();w.set_mode('flange');self.assertFalse(w.fl_armed)
+        edge=next(i for i,e in enumerate(w.document.get(body.id).shape.Edges()) if abs(e.positionAt(.5).x-100)<1e-6 and abs(e.positionAt(.5).z-2)<1e-6)
+        with patch.object(w.view,'nearest_edge',return_value=(body.id,edge,None)):w.view_clicked(5,5,False,False)
+        self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),0);self.assertIn('Zaginaj',w.fl_status.text())
+        w.fl_bend.click();self.assertTrue(w.fl_armed);self.assertIn('#e5484d',w.fl_bend.styleSheet())   # czerwony: kliknięcie krawędzi wygina
+        with patch.object(w.view,'nearest_edge',return_value=(body.id,edge,None)):w.view_clicked(5,5,False,False)
+        self.wait();self.assertEqual(len(w._sheet_state(body.id)['specs']),1,w.fl_status.text());self.assertEqual(w._sheet_state(body.id)['specs'][0]['length'],20)
+        w.fl_bend.click();self.assertFalse(w.fl_armed);self.assertIn('#2fa56d',w.fl_bend.styleSheet())
+        w.fl_radius.setValue(1.5);w.fl_angle.setValue(60);w.fl_length.setValue(12);w.fl_datum.setCurrentIndex(1);w.fl_save.click()
+        saved=json.loads(w._settings_file().read_text(encoding='utf-8'))
+        self.assertEqual(saved,dict(radius=1.5,angle=60.0,length=12.0,measure='inner'));self.assertIn('Zapamiętano',w.fl_status.text())
+        w.fl_reset.click();self.assertEqual((w.fl_radius.value(),w.fl_angle.value(),w.fl_length.value(),w.fl_datum.currentData()),(.5,90,5,'outer'))
+        w._load_flange_settings();self.assertEqual((w.fl_radius.value(),w.fl_angle.value(),w.fl_length.value(),w.fl_datum.currentData()),(1.5,60,12,'inner'))
+        w.fl_reset.click();w.fl_save.click()
+        w.toggle_mode('rules');w.rl_ok.click();self.assertEqual(w.mode,'flange');self.assertTrue(w.fl_armed)    # Reguły → Zastosuj włącza wyginanie
+
     def test_sheet_rules_panel_layout_reset_confirm_and_pick(self):
         w=self.w;w.toggle_mode('rules')
         texts=[l.text() for l in w.rules_panel.findChildren(QLabel)]
@@ -149,6 +176,7 @@ class StudioTests(unittest.TestCase):
     def converted_sheet(self):
         from rccad import sheetmetal as shm
         w = self.w
+        w.fl_radius.setValue(2);w.fl_length.setValue(20)      # geometria testów blachy: R2, kołnierz 20 mm (domyślne w programie: R0,5 i 5 mm)
         body = Body('Test blachy', k.box(100, 50, 2), 'solid').prepared()
         w.document.commit([body])
         face = next(f for f in body.shape.Faces() if abs(f.Center().z-2) < 1e-6)

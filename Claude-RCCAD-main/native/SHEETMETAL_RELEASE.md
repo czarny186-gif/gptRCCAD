@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.29 — nowe okno Reguł blach
+# RCCAD Desktop 0.4.30 — nowe okno Kołnierza
+
+## Zmiany 0.4.30
+
+- Okno **Kołnierz** bez opisu drobnym drukiem i bez okienka „Krawędź blachy”.
+- Obok pól **Promień gięcia**, **Kąt** i **Długość kołnierza** obrazki pokazujące dane ustawienie. Domyślnie: R 0,5 mm, 90°, 5 mm.
+- „Długość mierzona od strony” zostaje, bez opisu pod spodem (opisy są w podpowiedziach przycisków).
+- Na dole: **Zatwierdź** (zapamiętuje ustawienia także po ponownym uruchomieniu), **Zaginaj** (czerwony - kliknięcie krawędzi dodaje kołnierz, zielony - wyginanie wyłączone) i **Reset** (ustawienia domyślne).
+- **Zastosuj** w Regułach blach włącza Kołnierz od razu z wyginaniem (czerwony Zaginaj).
+
+## RCCAD Desktop 0.4.29 — nowe okno Reguł blach
 
 ## Zmiany 0.4.29
 

@@ -53,7 +53,8 @@ TOPICS = [
         'Współczynnik K określa położenie warstwy obojętnej rozwinięcia. Zakres 0–0,5, domyślnie 0,44; dobierz go do materiału i prób na giętarce.']),
     ('t_flange', 'Kołnierz', 'Blacha: wyciągnięcie krawędzi w kołnierz', [
         'Wyciąga krawędź blachy w kołnierz z zadanym promieniem gięcia (promień stempla), kątem i długością prostej części.',
-        'Wybierz KOŁNIERZ, kliknij krawędź. Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Ustaw promień, kąt i długość, potem Dodaj kołnierz.',
+        'Wybierz KOŁNIERZ i ustaw promień gięcia, kąt i długość kołnierza (domyślnie R 0,5 mm, 90°, 5 mm) - obrazki obok pól pokazują, co oznacza każde ustawienie. Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół.',
+        'Przyciski na dole: Zatwierdź zapamiętuje ustawienia (zostają także po ponownym uruchomieniu programu). Zaginaj włącza wyginanie - przycisk robi się czerwony i każde kliknięcie krawędzi blachy dodaje kołnierz; ponowne kliknięcie wyłącza wyginanie (zielony), wtedy kliknięcie krawędzi tylko ją pokazuje. Reset przywraca ustawienia domyślne.',
         'Odwróć kierunek gięcia zmienia stronę bez wybierania drugiej krawędzi grubości. Można kontynuować gięcia na końcach kolejnych kołnierzy, z różnymi kątami i kierunkami.',
         'Długość mierzona od strony (zapisane osobno dla każdego gięcia): Zewnętrzna - wymiar od wierzchołka kołnierza do zewnętrznej strony blachy, a przy kolejnym gięciu od zewnętrznej do zewnętrznej strony (blacha 1 mm, 5 mm: w środku 4 mm, między dwoma gięciami 3 mm); Wewnętrzna - od wierzchołka do wewnętrznej strony, przy kolejnym gięciu od wewnętrznej do wewnętrznej (z grubością 6 i 7 mm). Płyta ma wtedy wymiar zewnętrzny albo wewnętrzny gotowej blachy. Kąt prosty i ostry: do przecięcia przedłużonych powierzchni; kąt rozwarty: do środka łuku gięcia.']),
     ('t_unfold_sheet', 'Rozłóż blachę', 'Blacha: edytowalne rozwinięcie', [

@@ -50,6 +50,7 @@ VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '
 DIM_LABELS = {'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
               'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Ilość kątów'), 'circle2': ('Średnica (mm)',),
               'line': ('Długość (mm)', 'Kąt (°)'), 'construction': ('Długość (mm)', 'Kąt (°)'), 'measure': ('Długość (mm)', 'Kąt (°)')}
+FLANGE_DEFAULT = dict(radius=0.5, angle=90.0, length=5.0, measure='outer')     # Kołnierz: wartości przycisku Reset
 RULES_DEFAULT = dict(gap=0.1, relief='none', relief_size=3.0, joint='sheet')     # Reguły blach: wartości przycisku Reset
 AXES = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 AXIS_COLORS = ((.89, .31, .33, 1), (.14, .64, .42, 1), (.2, .5, .9, 1))
@@ -888,32 +889,54 @@ class StudioWindow(QMainWindow):
         self._buttons(self.sheet_panel.footer, 'Zamień na blachę', 'Anuluj', self.apply_sheet, lambda: self.set_mode(None))
 
         self.flange_panel, lay = self._panel(312, 'Kołnierz', 'x_flange', 'Wyciągnij krawędź blachy', plain=True, scroll=True)
-        lay.addWidget(_label('Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół. Podajesz promień gięcia (promień stempla), kąt i długość kołnierza mierzoną od zewnętrznej albo wewnętrznej strony blachy.', 'small'))
-        self.fl_step1 = ui.StepRow(1, 'x_area', 'Krawędź blachy', plain=True)
-        lay.addWidget(self.fl_step1)
-        self.fl_radius = _spin(2, .01, 1e5, 3, .5)
-        self._field(lay, 'Promień gięcia (mm)', self.fl_radius)
-        self.fl_angle = _spin(90, .1, 180, 2, 1)
-        self._field(lay, 'Kąt (°)', self.fl_angle)
-        self.fl_length = _spin(20, .01, 1e5, 3, 1)
-        self._field(lay, 'Długość kołnierza (mm)', self.fl_length)
+
+        def pic_field(text, kind, widget, tip):
+            lay.addWidget(_label(text))
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            pic = QLabel()
+            pic.setFixedSize(48, 48)
+            pic.setPixmap(ui.icons.pixmap(kind, 48))
+            pic.setToolTip(tip)
+            row.addWidget(pic)
+            row.addWidget(widget, 1)
+            lay.addLayout(row)
+            return pic
+
+        self.fl_radius = _spin(FLANGE_DEFAULT['radius'], .01, 1e5, 3, .5)
+        self.fl_radius_pic = pic_field('Promień gięcia (mm)', 'fl_radius', self.fl_radius, 'Wewnętrzny promień gięcia (promień stempla).')
+        self.fl_angle = _spin(FLANGE_DEFAULT['angle'], .1, 180, 2, 1)
+        self.fl_angle_pic = pic_field('Kąt (°)', 'fl_angle', self.fl_angle, 'Kąt gięcia kołnierza względem blachy.')
+        self.fl_length = _spin(FLANGE_DEFAULT['length'], .01, 1e5, 3, 1)
+        self.fl_length_pic = pic_field('Długość kołnierza (mm)', 'fl_length', self.fl_length, 'Długość kołnierza mierzona od wybranej strony blachy do jego końca.')
         self.fl_datum = ui.Segmented([('Zewnętrzna', 'outer', 'dl_outer'), ('Wewnętrzna', 'inner', 'dl_inner')], 40)
         self._field(lay, 'Długość mierzona od strony', self.fl_datum)
-        self.fl_datum_info = _label('', 'small')
-        lay.addWidget(self.fl_datum_info)
         tips = {'outer': 'Zewnętrzna: długość od wierzchołka kołnierza do zewnętrznej strony blachy (z grubością); przy kolejnym gięciu '
                          'od zewnętrznej do zewnętrznej strony. Płyta ma wymiar zewnętrzny gotowej blachy. Kąt rozwarty: do środka zewnętrznego łuku.',
                 'inner': 'Wewnętrzna: długość od wierzchołka kołnierza do wewnętrznej strony blachy (bez grubości); przy kolejnym gięciu '
                          'od wewnętrznej do wewnętrznej strony. Płyta ma wymiar wewnętrzny gotowej blachy. Kąt rozwarty: do środka wewnętrznego łuku.'}
         for button, key in zip(self.fl_datum._buttons, self.fl_datum._data):
             button.setToolTip(tips[key])
-        self.fl_datum.currentIndexChanged.connect(lambda *_: self.fl_datum_info.setText(tips[self.fl_datum.currentData()]))
-        self.fl_datum_info.setText(tips['outer'])
         self.fl_reverse = QCheckBox('Odwróć kierunek gięcia')
         lay.addWidget(self.fl_reverse)
-        self.fl_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
+        self.fl_status = _label('Kliknij Zaginaj, potem klikaj krawędzie blachy.', 'status')
         lay.addWidget(self.fl_status)
-        self._buttons3(self.flange_panel.footer, self.apply_flange, self.cancel_edge, lambda: self.set_mode(None))
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.fl_save, self.fl_bend, self.fl_reset = QPushButton('Zatwierdź'), QPushButton('Zaginaj'), QPushButton('Reset')
+        self.fl_save.setObjectName('primary')
+        self.fl_save.setToolTip('Zapamiętuje ustawienia kołnierza (zostają także po ponownym uruchomieniu programu).')
+        self.fl_bend.setToolTip('Czerwony: wyginanie włączone - kliknięcie krawędzi blachy dodaje kołnierz. Zielony: wyłączone.')
+        self.fl_reset.setToolTip('Przywraca ustawienia domyślne: R 0,5 mm, 90°, 5 mm, od strony zewnętrznej.')
+        self.fl_save.clicked.connect(lambda _=False: self.save_flange_settings())
+        self.fl_bend.clicked.connect(lambda _=False: self.toggle_bending())
+        self.fl_reset.clicked.connect(lambda _=False: self.reset_flange_settings())
+        for b in (self.fl_save, self.fl_bend, self.fl_reset):
+            row.addWidget(b, 1)
+        self.flange_panel.footer.addLayout(row)
+        self.fl_armed = False
+        self._load_flange_settings()
+        self._style_bend_button()
 
         self.hem_panel, lay = self._panel(312, 'Zawinięcie', 'x_hem', 'Zawija krawędź blachy o 180°', plain=True, scroll=True)
         lay.addWidget(_label('Krawędź zawija się od razu o 180° i przylega do powierzchni. Szczelina to odstęp od powierzchni do odcinka powrotnego; promień jest zmniejszany do połowy szczeliny. Zatwierdź ustawienia, potem klikaj krawędzie.', 'small'))
@@ -1609,9 +1632,10 @@ class StudioWindow(QMainWindow):
         elif mode == 'flange':
             self.flange_panel.show()
             self.fl_armed = False
+            self._style_bend_button()
             self.fl_pick = None
             self.view.set_picked_edge(None)
-            self.fl_status.setText('Kliknij krawędź blachy.')
+            self.fl_status.setText('Kliknij Zaginaj, potem klikaj krawędzie blachy.')
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Kołnierz: kliknij krawędź blachy (górna w górę, dolna w dół).')
         elif mode == 'hem':
@@ -4054,10 +4078,13 @@ class StudioWindow(QMainWindow):
         self.apply_sheet_rules()
 
     def confirm_sheet_rules(self):
-        """Zastosuj: ustawienia zostają w polach (używa ich każde następne gięcie) i włącza się Kołnierz."""
+        """Zastosuj: ustawienia zostają w polach (używa ich każde następne gięcie) i włącza się Kołnierz z wyginaniem."""
         if self.busy:
             return
         self.set_mode('flange')
+        self.fl_armed = True
+        self._style_bend_button()
+        self.fl_status.setText('Wyginanie włączone: kliknij krawędź blachy.')
         self.toast('Reguły blach zatwierdzone - kliknij krawędź, aby dodać gięcie.', 3000)
 
     def reset_sheet_rules(self):
@@ -4101,11 +4128,12 @@ class StudioWindow(QMainWindow):
         if getattr(self, 'fl_armed', False):
             self._add_pick()
             return
+        more = ' Kliknij Zaginaj (zielony), aby wyginać.' if self.mode == 'flange' else ''
         if spec['kind'] == 'tip':
-            self._edge_status().setText('Krawędź końca kołnierza: nowy kołnierz wychodzi z tego końca.')
+            self._edge_status().setText('Krawędź końca kołnierza: nowy kołnierz wychodzi z tego końca.' + more)
         else:
             up = float(spec['n'][2])
-            self._edge_status().setText('Krawędź górnej ściany: kołnierz w górę.' if up > .5 else 'Krawędź dolnej ściany: kołnierz w dół.' if up < -.5 else 'Kołnierz na zewnątrz tej ściany.')
+            self._edge_status().setText(('Krawędź górnej ściany: kołnierz w górę.' if up > .5 else 'Krawędź dolnej ściany: kołnierz w dół.' if up < -.5 else 'Kołnierz na zewnątrz tej ściany.') + more)
 
     def apply_flange(self):
         """Zatwierdź: zapisuje ustawienia kołnierza i dodaje wcześniej wskazaną krawędź. Potem klikanie krawędzi dodaje kolejne."""
@@ -4115,15 +4143,83 @@ class StudioWindow(QMainWindow):
         """Zatwierdź: zapisuje ustawienia zawinięcia i dodaje wcześniej wskazaną krawędź. Potem klikanie krawędzi dodaje kolejne."""
         self._arm()
 
+    # ---------- Kołnierz: Zatwierdź / Zaginaj / Reset ----------
+    @staticmethod
+    def _settings_file():
+        import os
+        from PySide6.QtCore import QStandardPaths
+        base = os.environ.get('RCCAD_CONFIG_DIR') or QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+        return Path(base or '.') / 'flange.json'
+
+    def _flange_values(self):
+        return dict(radius=float(self.fl_radius.value()), angle=float(self.fl_angle.value()), length=float(self.fl_length.value()),
+                    measure=self.fl_datum.currentData())
+
+    def _set_flange_values(self, values):
+        self.fl_radius.setValue(float(values.get('radius', FLANGE_DEFAULT['radius'])))
+        self.fl_angle.setValue(float(values.get('angle', FLANGE_DEFAULT['angle'])))
+        self.fl_length.setValue(float(values.get('length', FLANGE_DEFAULT['length'])))
+        index = self.fl_datum.findData(values.get('measure', FLANGE_DEFAULT['measure']))
+        self.fl_datum.setCurrentIndex(index if index >= 0 else 0)
+
+    def _load_flange_settings(self):
+        import json
+        try:
+            values = json.loads(self._settings_file().read_text(encoding='utf-8'))
+            if isinstance(values, dict):
+                self._set_flange_values(values)
+        except Exception:
+            pass
+
+    def save_flange_settings(self):
+        """Zatwierdź: utrwala ustawienia kołnierza (także po ponownym uruchomieniu programu)."""
+        import json
+        values = self._flange_values()
+        try:
+            path = self._settings_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(values), encoding='utf-8')
+        except Exception:
+            self.fl_status.setText('Nie udało się zapisać ustawień na dysku - obowiązują do zamknięcia programu.')
+            return
+        side = 'zewnętrznej' if values['measure'] == 'outer' else 'wewnętrznej'
+        nums = [f'{values[k]:g}'.replace('.', ',') for k in ('radius', 'angle', 'length')]
+        self.fl_status.setText(f'Zapamiętano: R {nums[0]} mm · {nums[1]}° · {nums[2]} mm od strony {side}.')
+
+    def reset_flange_settings(self):
+        """Reset: ustawienia domyślne kołnierza (zapamiętane zostają dopiero po Zatwierdź)."""
+        self._set_flange_values(FLANGE_DEFAULT)
+        self.fl_reverse.setChecked(False)
+        self.fl_status.setText('Przywrócono ustawienia domyślne. Zatwierdź, aby je zapamiętać.')
+
+    def toggle_bending(self):
+        """Zaginaj: czerwony = kliknięcie krawędzi dodaje kołnierz, zielony = wyginanie wyłączone."""
+        self.fl_armed = not self.fl_armed
+        self.fl_pick = None
+        self.view.set_picked_edge(None)
+        self._style_bend_button()
+        self.fl_status.setText('Wyginanie włączone: kliknij krawędź blachy.' if self.fl_armed else 'Wyginanie wyłączone. Kliknij Zaginaj, aby znów wyginać.')
+
+    def _style_bend_button(self):
+        if not hasattr(self, 'fl_bend'):
+            return
+        on = bool(getattr(self, 'fl_armed', False))
+        color, hover = ('#e5484d', '#cf3a3f') if on else ('#2fa56d', '#26905e')
+        self.fl_bend.setStyleSheet(f'QPushButton{{background:{color};color:white;border:none;border-radius:8px;font-weight:700;padding:7px 10px;}}'
+                                   f'QPushButton:hover{{background:{hover};}}')
+        self.fl_bend.setProperty('armed', on)
+
     def cancel_edge(self):
         """Anuluj: wyłącza dodawanie kliknięciem i czyści wskazanie. Okno zostaje otwarte."""
         self.fl_armed = False
+        self._style_bend_button()
         self.fl_pick = None
         self.view.set_picked_edge(None)
         self._edge_status().setText('Anulowano. Zatwierdź ustawienia, aby znów dodawać krawędzie kliknięciem.')
 
     def _arm(self):
         self.fl_armed = True
+        self._style_bend_button()
         if self.fl_pick:
             self._add_pick()
         else:
@@ -4154,7 +4250,8 @@ class StudioWindow(QMainWindow):
         self._commit_edge(spec, 'Zawinięcie' if self.mode == 'hem' else 'Kołnierz')
 
     def _after_commit(self):
-        self._edge_status().setText('Dodano. Kliknij kolejną krawędź albo Zamknij.')
+        self._edge_status().setText('Dodano. Kliknij kolejną krawędź; Zaginaj wyłącza wyginanie.' if self.mode == 'flange'
+                                    else 'Dodano. Kliknij kolejną krawędź albo Zamknij.')
 
     def _commit_edge(self, spec, label):
         pick = self.fl_pick
