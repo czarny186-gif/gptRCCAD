@@ -16,7 +16,7 @@ from . import kernel as k, sheetmetal as s
 
 
 def state(recipe, flat=False):
-    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':5}
+    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':s.ENGINE}
 
 
 _POINT_KEYS = ('o', 'p0', 'p1')
@@ -208,7 +208,7 @@ def _bend_blank(piece, frame, work_frame, t, factor, flat_origin, outward, flat_
     return _faces_slab(developed,t)
 
 
-def _build_layout(recipe, require_blank=True, parallel_version=5):
+def _build_layout(recipe, require_blank=True, parallel_version=s.ENGINE):
     recipe=s.normalize(recipe)      # wymiary zewnętrzne / wewnętrzne -> proste części i przycięta płyta
     specs=recipe.get('flanges') or [];rules=recipe.get('rules') or {};t=float(recipe['t'])
     factor=float(rules.get('kfactor',s.K_DEFAULT))
@@ -284,7 +284,7 @@ def _build_layout(recipe, require_blank=True, parallel_version=5):
 
 
 @lru_cache(maxsize=4)
-def _cached_layout(key, require_blank=True, parallel_version=5):
+def _cached_layout(key, require_blank=True, parallel_version=s.ENGINE):
     return _build_layout(json.loads(key),require_blank,parallel_version)
 
 
@@ -297,10 +297,10 @@ def layout(recipe):
 
 def _source_engine(source_state):
     version=source_state.get('bend_engine',1)
-    if version not in (1,2,3,4,5):
+    if version not in (1,2,3,4,5,6):
         raise k.CadError('Ten projekt używa nieobsługiwanej wersji konstrukcji gięć.')
     joint=(source_state['recipe'].get('rules') or {}).get('joint','parallel')
-    return version if joint=='parallel' else 5
+    return version if joint=='parallel' else max(version,5)
 
 
 def _source_layout(source_state):
@@ -453,7 +453,7 @@ def _unchanged(actual, baseline):
 def _switch(actual, source_state, flat, sync=False):
     """Switch atomically, including all accumulated edits on straight panels."""
     model=layout(source_state['recipe'])
-    source_model=model if _source_engine(source_state)==5 else _source_layout(source_state)
+    source_model=model if _source_engine(source_state)==s.ENGINE else _source_layout(source_state)
     source_flat=source_state.get('flat',False)
     if not source_state.get('dirty') and not source_state.get('edited') and _unchanged(actual,source_model.flat if source_flat else source_model.folded):
         changes={p.key:{'removed':[],'added':[]} for p in [*source_model.panels,*source_model.bends]}      # blacha bez zmian: bez kosztownego porównania brył

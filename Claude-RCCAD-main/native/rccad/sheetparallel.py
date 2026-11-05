@@ -42,7 +42,7 @@ def eligible(recipe,eff,corners,flexible=False,local=False):
     return all(all(x==y for x,y in zip(signatures[a],signatures[b])) for _,a,b,_ in corners)
 
 
-def parts(recipe,eff,corners):
+def parts(recipe,eff,corners,closed=False):
     from . import sheetmetal as s
     specs,t=recipe['flanges'],float(recipe['t']);gap=float((recipe.get('rules') or {}).get('gap',0))
     frames,owners,depths,extension=s._corner_layout(specs,eff,corners,t)
@@ -68,6 +68,15 @@ def parts(recipe,eff,corners):
                     bounds[key]=min(k.bounds(piece.transformShape(plane.fG)).xmin for piece in pieces)
                 stop=bounds[key]-gap
             caps[i,c]=stop
+            if closed and depths[i]==0 and peer is not None:
+                # zamknięty narożnik (styk): pierwsza ściana a dochodzi do zewnętrznej powierzchni sąsiada, ściana b kończy się
+                # szczeliną przed nią; łuki kończą się skosem od narożnika płyty do końca swojej ściany - kwadrat wspólny obu
+                # stref gięcia jest podzielony, a nie wycięty. Kolejne poziomy dziedziczą dotychczasowy koniec (caps).
+                end=float(profile[:,0].max()) if owner==a else stop
+                result[i][1]=s._endcut(result[i][1],point+end*direction,direction,reach)
+                d=s._unit(direction);start=float((s._arr(frames[peer]['p0'])-point)@d)-gap/2
+                result[i][0]=s._curved_endcut(result[i][0],frames[i],t,point,d,start,end,reach,vertical_end=True)
+                continue
             result[i]=[s._endcut(piece,point+stop*direction,direction,reach) for piece in result[i]]
     # Root sectors meet in a small shared corner, as in the reference solid.
     # Partition that material rather than relaxing global collision checks.

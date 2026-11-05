@@ -117,7 +117,7 @@ def run(report_path=None):
     old_source=she.state(parallel_recipe);old_source.pop('bend_engine');old_source['dirty']=True
     old_hole=cq.Solid.makeCylinder(1,5,cq.Vector(20,20,-1))
     migrated,migrated_state=she.rebuild(legacy_parallel.cut(old_hole),old_source,parallel_recipe)
-    assert migrated_state['bend_engine']==5 and k.point_state(migrated,(20,20,1))=='out'
+    assert migrated_state['bend_engine']==shm.ENGINE and k.point_state(migrated,(20,20,1))=='out'
     checks.append('legacy parallel sheet migration preserves edited holes')
     slim_base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=100,ly=50,lz=1)
     for slim_angle in (45,135):

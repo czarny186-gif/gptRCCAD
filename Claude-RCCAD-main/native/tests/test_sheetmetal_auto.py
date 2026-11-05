@@ -37,9 +37,11 @@ class AutomaticSheetTests(unittest.TestCase):
         normalized=s.normalize(r);self.assertEqual(normalized,s.normalize(normalized));self.assertEqual(r,before)
         self.assertTrue(normalized['rules']['miter']);self.assertFalse(r['rules']['miter'])
         frames,corners=s._effective(normalized['flanges'],1,True)
-        parts=s._corner_parts(normalized,frames,corners)
-        for i in (0,4,7):
-            bounds=k.bounds(parts[i][1]);self.assertAlmostEqual(bounds.ymin,1.2,delta=1e-6);self.assertAlmostEqual(bounds.ymax,98.8,delta=1e-6)
+        for version,first in ((5,(1.2,98.8)),(s.ENGINE,(0,100))):      # 6: pierwsza ściana przechodzi do zewnętrznej powierzchni (zamknięty narożnik)
+            parts=s._corner_parts(normalized,frames,corners,parallel_version=version)
+            bounds=k.bounds(parts[0][1]);self.assertAlmostEqual(bounds.ymin,first[0],delta=1e-6);self.assertAlmostEqual(bounds.ymax,first[1],delta=1e-6)
+            for i in (4,7):
+                bounds=k.bounds(parts[i][1]);self.assertAlmostEqual(bounds.ymin,1.2,delta=1e-6);self.assertAlmostEqual(bounds.ymax,98.8,delta=1e-6)
         bounds=k.bounds(self.roundtrip(r));self.assertAlmostEqual(bounds.xlen,100,delta=1e-5);self.assertAlmostEqual(bounds.zmax,9,delta=1e-5)
 
     def test_hem_returns_fit_the_parent_for_both_sides_and_styles(self):
@@ -83,10 +85,33 @@ class AutomaticSheetTests(unittest.TestCase):
         source=e.state(old);source.update(bend_engine=4,dirty=True)
         tool=cq.Solid.makeCylinder(.5,3,cq.Vector(50,50,-1));actual=s.build_sheet(old,parallel_version=4).cut(tool)
         target=partial_box();updated,st=e.rebuild(actual,source,target)
-        self.same(updated,s.build_sheet(target).cut(tool));self.assertEqual(st['bend_engine'],5)
+        self.same(updated,s.build_sheet(target).cut(tool));self.assertEqual(st['bend_engine'],s.ENGINE)
         flat,fs=e.switch(updated,st,True);folded,_=e.switch(flat,fs,False);self.same(folded,updated)
 
     def test_real_self_collision_remains_an_error(self):
         r=box_recipe('in','in');r['rules']['auto_corners']=True
         for f in r['flanges'][8:]:f['length']=20
         with self.assertRaises(k.CadError):s.build_sheet(r)
+
+    def test_corner_relief_comes_only_from_the_rule(self):
+        """Wycięcie w narożniku tylko z Reguł blach: przy „Brak” narożnik jest zamknięty (zostaje szczelina), a kwadrat daje jedno wycięcie."""
+        t=1.0
+        base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=60,ly=40,lz=t)
+        def wall(p0,p1,m):return dict(kind='base',p0=p0,p1=p1,n=[0,0,1],m=m,r=.5,angle=90,length=5,measure='outer')
+        walls=[wall([60,0,t],[60,40,t],[1,0,0]),wall([60,40,t],[0,40,t],[0,1,0]),wall([0,40,t],[0,0,t],[-1,0,0]),wall([0,0,t],[60,0,t],[0,-1,0])]
+        corner=(59.6,39.6,.45)       # punkt w łuku narożnika, poza szczeliną między ścianami
+        volumes={}
+        for joint in ('parallel','sheet'):
+            for relief in ('none','square'):
+                r=dict(base=base,t=t,flanges=walls,rules=dict(gap=.1,relief=relief,relief_size=3,joint=joint,miter=True,auto_corners=True,kfactor=.44))
+                folded=s.build_sheet(r);old=s.build_sheet(r,parallel_version=5)
+                volumes[joint,relief]=folded.Volume()
+                if relief=='none':
+                    self.assertGreater(folded.Volume(),old.Volume()+1)              # mniej materiału usuniętego niż dawniej (brak samoczynnego wycięcia)
+                else:
+                    self.assertEqual(k.point_state(folded,corner),'out')         # wycięcie kwadratowe z reguły
+                state=e.state(r);self.assertEqual(state['bend_engine'],s.ENGINE)
+                flat,flat_state=e.switch(folded,state,True)
+                self.assertEqual(len(flat.Solids()),1)
+                back,_=e.switch(flat,flat_state,False);self.same(back,folded)
+        self.assertAlmostEqual(volumes['parallel','square'],volumes['sheet','square'],3)     # jedno, to samo wycięcie dla obu łączeń

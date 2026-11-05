@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.33 — przesunięta blacha dalej się rozkłada i zgina
+# RCCAD Desktop 0.4.34 — narożniki bez niechcianych wycięć
+
+## Poprawki 0.4.34
+
+- Narożnik dwóch kołnierzy miał zawsze automatyczne wycięcie, także przy **Wycięcie w narożniku: Brak** (Równolegle: szczelina w łuku do płyty, Blacharskie: otwór w miejscu spotkania łuków). Przy ustawionym kwadracie lub okręgu wychodziły dwa wycięcia.
+- Teraz wycięcie zależy tylko od ustawienia. **Brak**: narożnik zamknięty - łuki gięć spotykają się po skosie, zostaje tylko szczelina między kołnierzami. Na rozwinięciu wspólny kwadrat stref gięcia jest podzielony skosem zamiast wycięty, więc blacha nadal się rozkłada, zgina i eksportuje do DXF. **Kwadrat / Okrąg**: jedno wycięcie o zadanej wielkości.
+- **Równolegle**: pierwsza ściana dochodzi do zewnętrznej powierzchni sąsiedniej (styk), druga kończy się ustawioną szczeliną - bez otwartej kolumny w rogu. **Blacharskie**: obie ściany z prostymi końcami i szczeliną, łuki zamknięte.
+- Dotyczy narożników pierwszego poziomu kołnierzy; kolejne poziomy gięć mają końce jak dotąd.
+- **Starsze projekty**: zapisane blachy zachowują swój kształt; przy pierwszym rozłożeniu albo zgięciu (albo Reguły blach → Zastosuj do blachy) przechodzą na nową konstrukcję narożników razem z wykonanymi otworami.
+
+## RCCAD Desktop 0.4.33 — przesunięta blacha dalej się rozkłada i zgina
 
 ## Poprawki 0.4.33
 

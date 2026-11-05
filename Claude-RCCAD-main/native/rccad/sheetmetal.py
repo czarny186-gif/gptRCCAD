@@ -16,6 +16,11 @@ RELIEFS = ('none', 'square', 'round')
 _TOL = 1e-4
 
 
+
+# Wersja konstrukcji gięć i narożników: 6 - narożniki pierwszego poziomu zamknięte (jedyne wycięcie to to z Reguł blach).
+# Starsze projekty liczą się w swojej wersji, a przy pierwszym rozłożeniu / zgięciu przechodzą na bieżącą.
+ENGINE = 6
+
 def _unit(v):
     v = np.asarray(v, float)
     n = float(np.linalg.norm(v))
@@ -730,7 +735,7 @@ _PARTS_CACHE = {}
 _PARTS_ORDER = []
 
 
-def _corner_parts(recipe, eff, corners, parallel_version=5):
+def _corner_parts(recipe, eff, corners, parallel_version=ENGINE):
     """Przycięte części narożników z pamięcią: budowa blachy i jej rozwinięcie liczą te same części (kilka sekund),
     więc drugie wywołanie z identycznymi danymi bierze gotowy wynik. Kopia słownika chroni pamięć przed zmianami."""
     key = _recipe_key([_geometry(recipe), eff, corners], parallel_version)
@@ -745,12 +750,12 @@ def _corner_parts(recipe, eff, corners, parallel_version=5):
     return parts
 
 
-def _corner_parts_build(recipe, eff, corners, parallel_version=5):
+def _corner_parts_build(recipe, eff, corners, parallel_version=ENGINE):
     """Trim each bend and leg before fusing; keep material pieces independently valid."""
     if parallel_version>=4:
         from . import sheetparallel
         if sheetparallel.eligible(recipe,eff,corners,flexible=parallel_version>=5 and bool((recipe.get('rules') or {}).get('auto_corners'))):
-            return sheetparallel.parts(recipe,eff,corners)
+            return sheetparallel.parts(recipe,eff,corners,closed=parallel_version>=6)
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
     gap = float(rules.get('gap', 0))
@@ -894,7 +899,14 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=5):
                 # even when later flanges differ in height or fold direction.
                 stop=float(peer_profile[:,0].min())-gap/(math.sqrt(2) if sheet_joint else 1)
                 parts[i][1]=_endcut(parts[i][1],P+stop*eff[other]['m'],eff[other]['m'],K)
-                parts[i][0]=_endcut(parts[i][0],P+(stop if parallel else 0)*eff[other]['m'],eff[other]['m'],K)
+                if parallel_version>=6:
+                    # Zamknięty narożnik (bez wycięcia, gdy reguła go nie żąda): kwadrat wspólny dla obu stref gięcia
+                    # dzielony jest skosem od narożnika płyty do końca ściany, więc nic nie zostaje usunięte.
+                    direction=_unit(eff[other]['m'])
+                    start=float((_arr(frames[peer]['p0'])-P)@direction)-gap/2
+                    parts[i][0]=_curved_endcut(parts[i][0],frames[i],t,P,direction,start,stop,K,vertical_end=True)
+                else:
+                    parts[i][0]=_endcut(parts[i][0],P+(stop if parallel else 0)*eff[other]['m'],eff[other]['m'],K)
                 continue
             if automatic and parallel and f.get('hem') and depths[i]>0:
                 # A folded-back lip must also clear the neighbouring first wall,
@@ -1048,7 +1060,7 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=5):
     return parts
 
 
-def _build_corner_sheet(base, recipe, eff, corners, parallel_version=5):
+def _build_corner_sheet(base, recipe, eff, corners, parallel_version=ENGINE):
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
     parts = _corner_parts(recipe, eff, corners,parallel_version)
@@ -1091,7 +1103,7 @@ def _recipe_key(recipe, parallel_version):
         return None
 
 
-def build_sheet(recipe, parallel_version=5):
+def build_sheet(recipe, parallel_version=ENGINE):
     """Blacha od podstaw (z pamięcią ostatnich wyników: ta sama recepta - np. przy rozkładaniu tuż po dodaniu kołnierza -
     nie jest budowana drugi raz; bryły OpenCascade są niezmienne, więc wynik można bezpiecznie współdzielić)."""
     key = _recipe_key(_geometry(recipe), parallel_version)
@@ -1106,10 +1118,10 @@ def build_sheet(recipe, parallel_version=5):
     return shape
 
 
-def _build_sheet(recipe, parallel_version=5):
+def _build_sheet(recipe, parallel_version=ENGINE):
     """Blacha od podstaw: płyta bazowa + kołnierze z listy + ukosy i szczeliny w narożach + wycięcia w narożnikach."""
     recipe = normalize(recipe)
-    if parallel_version not in (1,2,3,4,5):
+    if parallel_version not in (1,2,3,4,5,6):
         raise kernel.CadError('Nieobsługiwana wersja konstrukcji narożników równoległych.')
     base = base_solid(recipe['base'])
     t = float(recipe['t'])

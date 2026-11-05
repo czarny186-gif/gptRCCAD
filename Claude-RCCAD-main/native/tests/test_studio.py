@@ -477,7 +477,7 @@ class StudioTests(unittest.TestCase):
         w.tools['unfold_sheet'].click();self.wait()
         current=w.document.get(body.id)
         self.assertTrue(current.meta['sheet']['flat'])
-        self.assertEqual(current.meta['sheet']['bend_engine'],5)
+        self.assertEqual(current.meta['sheet']['bend_engine'],shm.ENGINE)
         self.assertEqual(len(current.shape.Solids()),1)
 
     def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):
@@ -652,7 +652,7 @@ class StudioTests(unittest.TestCase):
         state=w._editable_sheet_state(body.id)
         self.assertTrue(state['recipe']['rules']['auto_corners'])
         self.assertTrue(state['recipe']['rules']['miter'])
-        self.assertEqual(state['bend_engine'],5)
+        self.assertEqual(state['bend_engine'],shm.ENGINE)
 
     def test_hem_tool_is_separate_and_adds_hem(self):
         w=self.w;plate=Body('Blacha',k.box(100,50,2),'solid').prepared();w.document.commit([plate]);w.refresh()

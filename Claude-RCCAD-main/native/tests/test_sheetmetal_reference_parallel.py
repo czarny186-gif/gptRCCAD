@@ -19,22 +19,27 @@ class ReferenceParallelTests(unittest.TestCase):
         self.assertLess(left.cut(right).Volume(1e-9)+right.cut(left).Volume(1e-9),1e-4)
 
     def test_both_first_walls_have_square_near_skin_ends(self):
-        r=reference_box();frames,corners=s._effective(r['flanges'],1,True);parts=s._corner_parts(r,frames,corners)
-        right=k.bounds(parts[0][1]);back=k.bounds(parts[1][1])
-        self.assertAlmostEqual(right.ymin,-.3,delta=1e-6)
-        self.assertAlmostEqual(right.ymax,50.3,delta=1e-6)
-        self.assertAlmostEqual(back.xmin,-.3,delta=1e-6)
-        self.assertAlmostEqual(back.xmax,100.3,delta=1e-6)
-        for i in (4,8):
-            bounds=k.bounds(parts[i][1])
-            self.assertAlmostEqual(bounds.ymin,-.3,delta=1e-6)
-            self.assertAlmostEqual(bounds.ymax,50.3,delta=1e-6)
-        for i in (5,9):
-            self.assertAlmostEqual(k.bounds(parts[i][1]).xmax,93.3,delta=1e-6)
-        shape=s.build_sheet(r)
-        self.assertTrue(shape.isValid());self.assertEqual(len(shape.Solids()),1)
-        material=s.base_solid(r['base']).Volume(1e-9)+sum(piece.Volume(1e-9) for pieces in parts.values() for piece in pieces)
-        self.assertAlmostEqual(material,shape.Volume(1e-9),delta=1e-4)
+        r=reference_box();frames,corners=s._effective(r['flanges'],1,True)
+        # wersja 5 (wzorzec, starsze projekty): obie pierwsze ściany kończą się szczeliną przed sąsiadem;
+        # wersja 6: zamknięty narożnik - pierwsza ściana właściciela narożnika dochodzi do zewnętrznej powierzchni sąsiada (styk)
+        for version,(right_ends,back_min) in ((5,((-.3,50.3),-.3)),(s.ENGINE,((-1.5,51.5),-1.5))):
+            with self.subTest(version=version):
+                parts=s._corner_parts(r,frames,corners,parallel_version=version)
+                right=k.bounds(parts[0][1]);back=k.bounds(parts[1][1])
+                self.assertAlmostEqual(right.ymin,right_ends[0],delta=1e-6)
+                self.assertAlmostEqual(right.ymax,right_ends[1],delta=1e-6)
+                self.assertAlmostEqual(back.xmin,back_min,delta=1e-6)
+                self.assertAlmostEqual(back.xmax,100.3,delta=1e-6)
+                for i in (4,8):         # kolejne poziomy bez zmian
+                    bounds=k.bounds(parts[i][1])
+                    self.assertAlmostEqual(bounds.ymin,-.3,delta=1e-6)
+                    self.assertAlmostEqual(bounds.ymax,50.3,delta=1e-6)
+                for i in (5,9):
+                    self.assertAlmostEqual(k.bounds(parts[i][1]).xmax,93.3,delta=1e-6)
+                shape=s.build_sheet(r,parallel_version=version)
+                self.assertTrue(shape.isValid());self.assertEqual(len(shape.Solids()),1)
+                material=s.base_solid(r['base']).Volume(1e-9)+sum(piece.Volume(1e-9) for pieces in parts.values() for piece in pieces)
+                self.assertAlmostEqual(material,shape.Volume(1e-9),delta=1e-4)
 
     def test_straight_return_wall_has_the_requested_butt_clearance(self):
         shape=s.build_sheet(reference_box());point=np.array([93.5,44,4]);normal=np.array([-1,0,0])
@@ -48,7 +53,7 @@ class ReferenceParallelTests(unittest.TestCase):
             for right in layout.flat_bends[:i]:
                 self.assertLess(abs(left.intersect(right).Volume(1e-9)),1e-7)
         folded,st=e.switch(layout.flat,e.state(r,True),False)
-        self.same(folded,s.build_sheet(r));self.assertEqual(st['bend_engine'],5)
+        self.same(folded,s.build_sheet(r));self.assertEqual(st['bend_engine'],s.ENGINE)
 
     def test_engine_three_migration_retains_holes_and_updates_rules(self):
         r=reference_box();tool=cq.Solid.makeCylinder(.5,4,cq.Vector(25,25,-1))
@@ -58,7 +63,7 @@ class ReferenceParallelTests(unittest.TestCase):
         self.same(folded,s.build_sheet(r).cut(tool))
         updated=copy.deepcopy(r);updated['rules']['gap']=.3
         rebuilt,st=e.rebuild(actual,source,updated)
-        self.same(rebuilt,s.build_sheet(updated).cut(tool));self.assertEqual(st['bend_engine'],5)
+        self.same(rebuilt,s.build_sheet(updated).cut(tool));self.assertEqual(st['bend_engine'],s.ENGINE)
 
     def test_rotated_reference_corner_has_the_same_geometry(self):
         r=reference_box();original=s.build_sheet(r);rotated=copy.deepcopy(r)
