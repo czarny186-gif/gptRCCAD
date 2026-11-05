@@ -150,6 +150,40 @@ class StudioTests(unittest.TestCase):
         w.fl_reset.click();w.fl_save.click()
         w.toggle_mode('rules');w.rl_ok.click();self.assertEqual(w.mode,'flange');self.assertTrue(w.fl_armed)    # Reguły → Zastosuj włącza wyginanie
 
+    def test_unfold_and_fold_without_selection_ask_to_pick_sheet(self):
+        w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()
+        other=Body('Kostka',k.box(5,5,5)).prepared();w.document.commit([*w.document.bodies,other]);w.refresh()
+        w.set_mode(None);w.selected=[];w.tools['unfold_sheet'].click()
+        self.assertEqual((w.mode,w._sheet_cmd),('sheetpick','unfold_sheet'));self.assertTrue(w.tools['unfold_sheet'].isChecked())
+        with patch.object(w.view,'pick_body',return_value=other.id):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.mode,'sheetpick')                       # zwykła bryła: dalej czeka na blachę
+        with patch.object(w.view,'pick_body',return_value=body.id):w.view_clicked(5,5,False,False)
+        self.wait();self.assertTrue(w._sheet_state(body.id)['flat']);self.assertFalse(w.tools['unfold_sheet'].isChecked())
+        w.selected=[];w.tools['fold_sheet'].click();self.assertEqual(w.mode,'sheetpick')
+        w.tools['fold_sheet'].click();self.assertIsNone(w.mode)   # ponowne kliknięcie anuluje
+        w.selected=[body.id];w.tools['fold_sheet'].click();self.wait()   # zaznaczona blacha: od razu
+        self.assertFalse(w._sheet_state(body.id)['flat'])
+
+    def test_hem_and_sheet_panels_icons_buttons_and_settings(self):
+        import json
+        w=self.w;w.toggle_mode('hem')
+        texts=[l.text() for l in w.hem_panel.findChildren(QLabel)]
+        self.assertFalse(any(t.startswith('Krawędź zawija się od razu') for t in texts))
+        for pic in (w.hm_radius_pic,w.hm_length_pic,w.hm_gap_pic):self.assertFalse(pic.pixmap().isNull())
+        self.assertEqual([b.text() for b in (w.hm_save,w.hm_bend,w.hm_reset,w.hm_close)],['Zatwierdź','Zaginaj','Reset','Zamknij'])
+        self.assertIn('#2fa56d',w.hm_bend.styleSheet());w.hm_bend.click();self.assertTrue(w.fl_armed);self.assertIn('#e5484d',w.hm_bend.styleSheet())
+        w.hm_radius.setValue(1);w.hm_length.setValue(7);w.hm_gap.setValue(.3);w.hm_save.click()
+        self.assertEqual(json.loads(w._settings_file('hem').read_text(encoding='utf-8')),dict(radius=1.0,length=7.0,gap=.3))
+        w.hm_reset.click();self.assertEqual((w.hm_radius.value(),w.hm_length.value(),w.hm_gap.value()),(2,10,.1))
+        w._load_hem_settings();self.assertEqual(w.hm_length.value(),7);w.hm_reset.click();w.hm_save.click()
+        w.hm_close.click();self.assertIsNone(w.mode)
+        w.toggle_mode('flange');self.assertEqual(w.fl_close.text(),'Zamknij');w.fl_close.click();self.assertIsNone(w.mode)
+        w.toggle_mode('sheet');texts=[l.text() for l in w.sheet_panel.findChildren(QLabel)]
+        self.assertFalse(any(t.startswith('Zamienia prostopadłościan') for t in texts));self.assertFalse(hasattr(w,'sheet_step1'))
+        body=Body('Płyta',k.box(100,50,2),'solid').prepared();w.document.commit([body]);w.refresh()
+        with patch.object(w.view,'pick_face',return_value=(body.id,(0,0,1),(50,25,2))):w.view_clicked(5,5,False,False)
+        self.assertEqual((w.sheet_t.text(),w.sheet_dims.text()),('2 mm','100 × 50 mm'))
+
     def test_sheet_rules_panel_layout_reset_confirm_and_pick(self):
         w=self.w;w.toggle_mode('rules')
         texts=[l.text() for l in w.rules_panel.findChildren(QLabel)]
@@ -221,7 +255,7 @@ class StudioTests(unittest.TestCase):
                 profiles=[dict(k='sketch',id=sketch.id)],spent=[sketch.id],out=[])
         w.document.commit(hist.run_recipe([sheet,sketch],op),label='Wycięcie',op=op)
         w.selected=[body.id];w.refresh()
-        w.tools['sheet_sync'].click();self.wait()
+        self.assertNotIn('sheet_sync',w.tools)
         self.assertTrue(w._sheet_state(body.id)['flat'])
         w.tools['fold_sheet'].click();self.wait()
         self.assertFalse(w._sheet_state(body.id)['flat'])
@@ -250,7 +284,10 @@ class StudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path=os.path.join(tmp,'blacha.dxf')
             with patch('rccad.studio.QFileDialog.getSaveFileName',return_value=(path,'DXF')):
-                w.selected=[body.id];w.tools['flat'].click();self.wait()
+                w.selected=[body.id];w.tools['flat'].click()          # DXF: zawsze najpierw wskazanie blachy
+                self.assertEqual(w.mode,'sheetpick');self.assertFalse(os.path.exists(path))
+                with patch.object(w.view,'pick_body',return_value=body.id):w.view_clicked(5,5,False,False)
+                self.wait();self.assertIsNone(w.mode)
             doc=ezdxf.readfile(path)
             self.assertIn('GIECIE_DOL',doc.linetypes)
             for line in doc.modelspace().query('LINE[layer=="BEND_UP"]'):self.assertEqual(line.dxf.linetype,'CONTINUOUS')

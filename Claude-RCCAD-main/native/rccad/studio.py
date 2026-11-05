@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QIcon, QKeySequence, QMatrix4x4, QShortcut
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFontComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFontComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
 from .objects import ObjectsPanel, category
 from . import kernel
@@ -50,6 +50,7 @@ VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '
 DIM_LABELS = {'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
               'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Ilość kątów'), 'circle2': ('Średnica (mm)',),
               'line': ('Długość (mm)', 'Kąt (°)'), 'construction': ('Długość (mm)', 'Kąt (°)'), 'measure': ('Długość (mm)', 'Kąt (°)')}
+HEM_DEFAULT = dict(radius=2.0, length=10.0, gap=0.1)     # Zawinięcie: wartości przycisku Reset
 FLANGE_DEFAULT = dict(radius=0.5, angle=90.0, length=5.0, measure='outer')     # Kołnierz: wartości przycisku Reset
 RULES_DEFAULT = dict(gap=0.1, relief='none', relief_size=3.0, joint='sheet')     # Reguły blach: wartości przycisku Reset
 AXES = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
@@ -179,7 +180,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
+TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek
@@ -358,6 +359,41 @@ class StudioWindow(QMainWindow):
         return a, b
 
     @staticmethod
+    def _pic_field(lay, text, kind, widget, tip, size=48):
+        """Pole z obrazkiem: podpis, a pod nim obrazek ustawienia i pole do wpisania obok."""
+        lay.addWidget(_label(text))
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        pic = QLabel()
+        pic.setFixedSize(size, size)
+        pic.setPixmap(ui.icons.pixmap(kind, size))
+        pic.setToolTip(tip)
+        row.addWidget(pic)
+        row.addWidget(widget, 1)
+        lay.addLayout(row)
+        return pic
+
+    def _bend_buttons(self, footer, prefix, on_save, on_reset, save_tip, reset_tip):
+        """Przyciski Kołnierza / Zawinięcia: Zatwierdź, Zaginaj (czerwony = wyginanie włączone), Reset, Zamknij."""
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        save, bend, reset, close = QPushButton('Zatwierdź'), QPushButton('Zaginaj'), QPushButton('Reset'), QPushButton('Zamknij')
+        save.setObjectName('primary')
+        save.setToolTip(save_tip)
+        bend.setToolTip('Czerwony: wyginanie włączone - kliknięcie krawędzi blachy dodaje gięcie. Zielony: wyłączone.')
+        reset.setToolTip(reset_tip)
+        save.clicked.connect(lambda _=False: on_save())
+        bend.clicked.connect(lambda _=False: self.toggle_bending())
+        reset.clicked.connect(lambda _=False: on_reset())
+        close.clicked.connect(lambda _=False: self.set_mode(None))
+        for i, b in enumerate((save, bend, reset, close)):
+            grid.addWidget(b, i // 2, i % 2)
+        footer.addLayout(grid)
+        for name, b in zip(('save', 'bend', 'reset', 'close'), (save, bend, reset, close)):
+            setattr(self, f'{prefix}_{name}', b)
+
+    @staticmethod
     def _buttons3(layout, on_confirm, on_cancel, on_close):
         """Trzy przyciski panelu: Zatwierdź (ustawienia i dodawanie kliknięciem), Anuluj, Zamknij."""
         row = QHBoxLayout()
@@ -390,7 +426,6 @@ class StudioWindow(QMainWindow):
                  ('rules', ui.style_icon('rules', 38), 'Reguły blach — szczelina i wycięcia w narożnikach'),
                  ('unfold_sheet', ui.style_icon('unfold_sheet',38), 'Rozłóż blachę — edytuj płaskie rozwinięcie'),
                  ('fold_sheet', ui.style_icon('fold_sheet',38), 'Zegnij blachę — przywróć gięcia z wykonanymi zmianami'),
-                 ('sheet_sync', ui.style_icon('sheet_sync',38), 'Aktualizuj blachę — utrwal i sprawdź zmiany bez przełączania widoku'),
                  ('flat', ui.style_icon('flat', 38), 'Rozwinięcie DXF — zaznacz jedną blachę w drzewie obiektów'),
                  ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
                  ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii'),
@@ -404,14 +439,12 @@ class StudioWindow(QMainWindow):
                  ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera')]
         self.tools = {}
         for key, icon, tip in icons:
-            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'flat', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'importdrawing'))
+            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'importdrawing'))
             button.setParent(v)
             ui.shadow(button, 12, 3, 36)
             self.tools[key] = button
-            if key in ('unfold_sheet','fold_sheet','sheet_sync'):
-                button.clicked.connect(lambda _=False,k=key:self.switch_sheet(k))
-            elif key == 'flat':
-                button.clicked.connect(lambda _=False: self.export_flat_pattern())
+            if key in ('unfold_sheet', 'fold_sheet', 'flat'):
+                button.clicked.connect(lambda _=False, k=key: self.sheet_command(k))
             elif key == 'importdrawing':
                 button.clicked.connect(lambda _=False: self.import_drawing_file())
             elif key == 'surface':
@@ -878,37 +911,35 @@ class StudioWindow(QMainWindow):
 
         # --- blacha: konwersja i kołnierz ---
         self.sheet_meta = {}        # id bryły -> normalna i grubość blachy (z konwersji), potrzebne do kołnierzy
+        self._sheet_cmd = None      # Rozłóż / Zegnij / DXF czekające na wskazanie blachy (tryb 'sheetpick')
         self.sheet_pick = None
         self.fl_pick = None
         self.sheet_panel, lay = self._panel(312, 'Konwertuj na blachę', 'x_sheet', 'Płaski prostokąt → blacha do gięcia', plain=True, scroll=True)
-        lay.addWidget(_label('Zamienia prostopadłościan na blachę. Wybrana ściana staje się górą blachy, a grubość to odległość od ściany przeciwnej. Tylko prostokąt albo kwadrat.', 'small'))
-        self.sheet_step1 = ui.StepRow(1, 'x_area', 'Płaska ściana prostokątna', plain=True)
-        lay.addWidget(self.sheet_step1)
-        self.sheet_status = _label('Kliknij płaską ścianę prostopadłościanu.', 'status')
+        self.sheet_pic = QLabel()
+        self.sheet_pic.setFixedHeight(84)
+        self.sheet_pic.setAlignment(Qt.AlignCenter)
+        self.sheet_pic.setPixmap(ui.icons.pixmap('sh_convert', 170))       # rysunek zajmuje środkowy pas kwadratu - widoczny pas 84 px
+        self.sheet_pic.setToolTip('Kliknięta ściana staje się górą blachy, grubość to odległość do ściany przeciwnej.')
+        lay.addWidget(self.sheet_pic)
+        self.sheet_t = QLabel('—')
+        self.sheet_dims = QLabel('—')
+        for text, kind, value, tip in (('Grubość blachy', 'sh_thick', self.sheet_t, 'Odległość od klikniętej ściany do ściany przeciwnej.'),
+                                       ('Wymiary płyty', 'sh_dims', self.sheet_dims, 'Wymiary klikniętej prostokątnej ściany.')):
+            value.setObjectName('readout')
+            value.setStyleSheet('QLabel#readout{background:#f3f6fa;border:1.4px solid #d6e0ea;border-radius:8px;padding:7px 10px;font-weight:700;color:#27415a;}')
+            self._pic_field(lay, text, kind, value, tip)
+        self.sheet_status = _label('Kliknij płaską prostokątną ścianę bryły.', 'status')
         lay.addWidget(self.sheet_status)
-        self._buttons(self.sheet_panel.footer, 'Zamień na blachę', 'Anuluj', self.apply_sheet, lambda: self.set_mode(None))
+        self._buttons(self.sheet_panel.footer, 'Zamień na blachę', 'Zamknij', self.apply_sheet, lambda: self.set_mode(None))
 
         self.flange_panel, lay = self._panel(312, 'Kołnierz', 'x_flange', 'Wyciągnij krawędź blachy', plain=True, scroll=True)
 
-        def pic_field(text, kind, widget, tip):
-            lay.addWidget(_label(text))
-            row = QHBoxLayout()
-            row.setSpacing(12)
-            pic = QLabel()
-            pic.setFixedSize(48, 48)
-            pic.setPixmap(ui.icons.pixmap(kind, 48))
-            pic.setToolTip(tip)
-            row.addWidget(pic)
-            row.addWidget(widget, 1)
-            lay.addLayout(row)
-            return pic
-
         self.fl_radius = _spin(FLANGE_DEFAULT['radius'], .01, 1e5, 3, .5)
-        self.fl_radius_pic = pic_field('Promień gięcia (mm)', 'fl_radius', self.fl_radius, 'Wewnętrzny promień gięcia (promień stempla).')
+        self.fl_radius_pic = self._pic_field(lay, 'Promień gięcia (mm)', 'fl_radius', self.fl_radius, 'Wewnętrzny promień gięcia (promień stempla).')
         self.fl_angle = _spin(FLANGE_DEFAULT['angle'], .1, 180, 2, 1)
-        self.fl_angle_pic = pic_field('Kąt (°)', 'fl_angle', self.fl_angle, 'Kąt gięcia kołnierza względem blachy.')
+        self.fl_angle_pic = self._pic_field(lay, 'Kąt (°)', 'fl_angle', self.fl_angle, 'Kąt gięcia kołnierza względem blachy.')
         self.fl_length = _spin(FLANGE_DEFAULT['length'], .01, 1e5, 3, 1)
-        self.fl_length_pic = pic_field('Długość kołnierza (mm)', 'fl_length', self.fl_length, 'Długość kołnierza mierzona od wybranej strony blachy do jego końca.')
+        self.fl_length_pic = self._pic_field(lay, 'Długość kołnierza (mm)', 'fl_length', self.fl_length, 'Długość kołnierza mierzona od wybranej strony blachy do jego końca.')
         self.fl_datum = ui.Segmented([('Zewnętrzna', 'outer', 'dl_outer'), ('Wewnętrzna', 'inner', 'dl_inner')], 40)
         self._field(lay, 'Długość mierzona od strony', self.fl_datum)
         tips = {'outer': 'Zewnętrzna: długość od wierzchołka kołnierza do zewnętrznej strony blachy (z grubością); przy kolejnym gięciu '
@@ -921,35 +952,29 @@ class StudioWindow(QMainWindow):
         lay.addWidget(self.fl_reverse)
         self.fl_status = _label('Kliknij Zaginaj, potem klikaj krawędzie blachy.', 'status')
         lay.addWidget(self.fl_status)
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        self.fl_save, self.fl_bend, self.fl_reset = QPushButton('Zatwierdź'), QPushButton('Zaginaj'), QPushButton('Reset')
-        self.fl_save.setObjectName('primary')
-        self.fl_save.setToolTip('Zapamiętuje ustawienia kołnierza (zostają także po ponownym uruchomieniu programu).')
-        self.fl_bend.setToolTip('Czerwony: wyginanie włączone - kliknięcie krawędzi blachy dodaje kołnierz. Zielony: wyłączone.')
-        self.fl_reset.setToolTip('Przywraca ustawienia domyślne: R 0,5 mm, 90°, 5 mm, od strony zewnętrznej.')
-        self.fl_save.clicked.connect(lambda _=False: self.save_flange_settings())
-        self.fl_bend.clicked.connect(lambda _=False: self.toggle_bending())
-        self.fl_reset.clicked.connect(lambda _=False: self.reset_flange_settings())
-        for b in (self.fl_save, self.fl_bend, self.fl_reset):
-            row.addWidget(b, 1)
-        self.flange_panel.footer.addLayout(row)
+        self._bend_buttons(self.flange_panel.footer, 'fl', self.save_flange_settings, self.reset_flange_settings,
+                           'Zapamiętuje ustawienia kołnierza (zostają także po ponownym uruchomieniu programu).',
+                           'Przywraca ustawienia domyślne: R 0,5 mm, 90°, 5 mm, od strony zewnętrznej.')
         self.fl_armed = False
         self._load_flange_settings()
-        self._style_bend_button()
 
         self.hem_panel, lay = self._panel(312, 'Zawinięcie', 'x_hem', 'Zawija krawędź blachy o 180°', plain=True, scroll=True)
-        lay.addWidget(_label('Krawędź zawija się od razu o 180° i przylega do powierzchni. Szczelina to odstęp od powierzchni do odcinka powrotnego; promień jest zmniejszany do połowy szczeliny. Zatwierdź ustawienia, potem klikaj krawędzie.', 'small'))
-        self.hm_radius = _spin(2, .01, 1e5, 3, .5)
-        self._field(lay, 'Promień gięcia (mm)', self.hm_radius)
-        self.hm_length = _spin(10, .01, 1e5, 3, 1)
-        self.hm_length.setToolTip('Program ogranicza odcinek powrotny do miejsca na kołnierzu i przy sąsiednich zawinięciach.')
-        self._field(lay, 'Maksymalna długość zawinięcia (mm)', self.hm_length)
-        self.hm_gap = _spin(0.1, 0.1, 1e5, 3, .1)
-        self._field(lay, 'Szczelina od powierzchni (mm, min 0,1)', self.hm_gap)
-        self.hm_status = _label('Najpierw KONWERTUJ NA BLACHĘ, potem kliknij krawędź.', 'status')
+        self.hm_radius = _spin(HEM_DEFAULT['radius'], .01, 1e5, 3, .5)
+        self.hm_radius_pic = self._pic_field(lay, 'Promień gięcia (mm)', 'hm_radius', self.hm_radius,
+                                             'Promień zawinięcia; program zmniejsza go do połowy szczeliny, gdy szczelina jest mniejsza.')
+        self.hm_length = _spin(HEM_DEFAULT['length'], .01, 1e5, 3, 1)
+        self.hm_length_pic = self._pic_field(lay, 'Maksymalna długość zawinięcia (mm)', 'hm_length', self.hm_length,
+                                             'Długość odcinka powrotnego; program skraca ją do miejsca na kołnierzu i przy sąsiednich zawinięciach.')
+        self.hm_gap = _spin(HEM_DEFAULT['gap'], 0.1, 1e5, 3, .1)
+        self.hm_gap_pic = self._pic_field(lay, 'Szczelina od powierzchni (mm, min 0,1)', 'hm_gap', self.hm_gap,
+                                          'Odstęp między powierzchnią blachy a odcinkiem powrotnym zawinięcia.')
+        self.hm_status = _label('Kliknij Zaginaj, potem klikaj krawędzie blachy.', 'status')
         lay.addWidget(self.hm_status)
-        self._buttons3(self.hem_panel.footer, self.apply_hem, self.cancel_edge, lambda: self.set_mode(None))
+        self._bend_buttons(self.hem_panel.footer, 'hm', self.save_hem_settings, self.reset_hem_settings,
+                           'Zapamiętuje ustawienia zawinięcia (zostają także po ponownym uruchomieniu programu).',
+                           'Przywraca ustawienia domyślne: R 2 mm, długość 10 mm, szczelina 0,1 mm.')
+        self._load_hem_settings()
+        self._style_bend_button()
 
         # --- reguły blach: szczelina i wycięcia w narożnikach (osobny panel, dotyczy kołnierzy) ---
         self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True, scroll=True)
@@ -1610,7 +1635,9 @@ class StudioWindow(QMainWindow):
             self.sheet_panel.show()
             self.sheet_pick = None
             self.view.set_selection_meshes(None)
-            self.sheet_status.setText('Kliknij płaską ścianę prostopadłościanu (prostokąt albo kwadrat).')
+            self.sheet_t.setText('—')
+            self.sheet_dims.setText('—')
+            self.sheet_status.setText('Kliknij płaską prostokątną ścianę bryły.')
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Konwersja na blachę: kliknij płaską ścianę prostopadłościanu.')
         elif mode == 'rules':
@@ -1641,9 +1668,10 @@ class StudioWindow(QMainWindow):
         elif mode == 'hem':
             self.hem_panel.show()
             self.fl_armed = False
+            self._style_bend_button()
             self.fl_pick = None
             self.view.set_picked_edge(None)
-            self.hm_status.setText('Kliknij krawędź blachy.')
+            self.hm_status.setText('Kliknij Zaginaj, potem klikaj krawędzie blachy.')
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Zawinięcie: kliknij krawędź blachy. Krawędź zawija się do środka o 180°.')
         elif mode == 'shell':
@@ -2776,7 +2804,7 @@ class StudioWindow(QMainWindow):
                 self.view.overlay.update()
             elif self.mode == 'mrad':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
-            elif self.mode == 'mprops' or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
+            elif self.mode in ('mprops', 'sheetpick') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
@@ -2861,6 +2889,9 @@ class StudioWindow(QMainWindow):
         if self.mode == 'rules':
             if self.rl_pick:
                 self.pick_rules_sheet(x, y)
+            return
+        if self.mode == 'sheetpick':
+            self.pick_sheet_command(x, y)
             return
         if self.mode == 'plane':
             plane, _ = self.pick_surface(x, y, True)
@@ -3942,12 +3973,17 @@ class StudioWindow(QMainWindow):
         except kernel.CadError as exc:
             self.sheet_pick = None
             self.view.set_selection_meshes(None)
+            self.sheet_t.setText('—')
+            self.sheet_dims.setText('—')
             self.sheet_status.setText(str(exc))
             return
         self.sheet_pick = dict(id=body.id, face=face, normal=tuple(float(c) for c in normal), point=tuple(float(c) for c in hit[2]), info=info)
         self.view.set_selection_meshes([kernel.display_mesh(face)], color=(1, .55, .1, .55), line_color=SKETCH_ORANGE)
         a, b = info['dims']
-        self.sheet_status.setText(f'Blacha {info["t"]:.2f} mm, wymiary {a:.2f} × {b:.2f} mm. Kliknij „Zamień na blachę”.')
+        num = lambda v: f'{v:.2f}'.rstrip('0').rstrip('.').replace('.', ',')
+        self.sheet_t.setText(f'{num(info["t"])} mm')
+        self.sheet_dims.setText(f'{num(max(a, b))} × {num(min(a, b))} mm')
+        self.sheet_status.setText('Kliknij „Zamień na blachę”.')
 
     def apply_sheet(self):
         pick = self.sheet_pick
@@ -4006,11 +4042,57 @@ class StudioWindow(QMainWindow):
         metadata.update(dirty=source.get('dirty',False),edited=source.get('edited',False),bend_engine=source.get('bend_engine',1))
         return metadata
 
-    def switch_sheet(self, command):
+    SHEET_COMMANDS = {'unfold_sheet': 'Rozłóż blachę', 'fold_sheet': 'Zegnij blachę', 'flat': 'Rozwinięcie DXF'}
+
+    def _selected_sheet(self):
+        chosen = [b for b in self.document.bodies if b.id in self.selected and b.kind == 'solid']
+        if len(chosen) == 1 and self._sheet_state(chosen[0].id) is not None:
+            return chosen[0]
+        return None
+
+    def sheet_command(self, command):
+        """Rozłóż / Zegnij: od razu na zaznaczonej blasze, a bez zaznaczenia - po wskazaniu jej kliknięciem.
+        Rozwinięcie DXF: zawsze najpierw wskazanie blachy do zapisania."""
         if self.busy:
             return
-        chosen=[b for b in self.document.bodies if b.id in self.selected and b.kind=='solid']
-        body=chosen[0] if len(chosen)==1 else None
+        if self.mode == 'sheetpick' and self._sheet_cmd == command:
+            self.set_mode(None)          # ponowne kliknięcie narzędzia anuluje wskazywanie
+            return
+        body = None if command == 'flat' else self._selected_sheet()
+        if body is not None:
+            self.tools[command].setChecked(False)
+            self.switch_sheet(command, body)
+            return
+        self.set_mode('sheetpick')
+        self._sheet_cmd = command
+        self.tools[command].setChecked(True)
+        self.view.setCursor(Qt.PointingHandCursor)
+        what = {'unfold_sheet': 'rozłożyć', 'fold_sheet': 'zgiąć', 'flat': 'zapisać jako rozwinięcie DXF'}[command]
+        self.hint(f'{self.SHEET_COMMANDS[command]}: kliknij blachę, którą chcesz {what}. Esc anuluje.')
+        self.toast(f'Kliknij blachę, którą chcesz {what}.', 3000)
+
+    def pick_sheet_command(self, x, y):
+        bid = self.view.pick_body(x, y)
+        body = self.document.get(bid) if bid else None
+        if body is None or body.kind != 'solid' or self._sheet_state(body.id) is None:
+            self.toast('To nie jest blacha. Kliknij blachę (najpierw KONWERTUJ NA BLACHĘ).')
+            return
+        command = self._sheet_cmd
+        self.set_mode(None)
+        self.tools[command].setChecked(False)
+        self.selected = [body.id]
+        self.refresh()
+        if command == 'flat':
+            self.export_flat_pattern(body)
+        else:
+            self.switch_sheet(command, body)
+
+    def switch_sheet(self, command, body=None):
+        if self.busy:
+            return
+        if body is None:
+            chosen=[b for b in self.document.bodies if b.id in self.selected and b.kind=='solid']
+            body=chosen[0] if len(chosen)==1 else None
         metadata=self._editable_sheet_state(body.id) if body else None
         if metadata is None:
             self.toast('Zaznacz jedną blachę z zapisaną historią gięć.')
@@ -4128,7 +4210,7 @@ class StudioWindow(QMainWindow):
         if getattr(self, 'fl_armed', False):
             self._add_pick()
             return
-        more = ' Kliknij Zaginaj (zielony), aby wyginać.' if self.mode == 'flange' else ''
+        more = ' Kliknij Zaginaj (zielony), aby wyginać.'
         if spec['kind'] == 'tip':
             self._edge_status().setText('Krawędź końca kołnierza: nowy kołnierz wychodzi z tego końca.' + more)
         else:
@@ -4145,11 +4227,56 @@ class StudioWindow(QMainWindow):
 
     # ---------- Kołnierz: Zatwierdź / Zaginaj / Reset ----------
     @staticmethod
-    def _settings_file():
+    def _settings_file(name='flange'):
         import os
         from PySide6.QtCore import QStandardPaths
         base = os.environ.get('RCCAD_CONFIG_DIR') or QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        return Path(base or '.') / 'flange.json'
+        return Path(base or '.') / f'{name}.json'
+
+    def _read_settings(self, name):
+        import json
+        try:
+            values = json.loads(self._settings_file(name).read_text(encoding='utf-8'))
+            return values if isinstance(values, dict) else None
+        except Exception:
+            return None
+
+    def _write_settings(self, name, values):
+        import json
+        try:
+            path = self._settings_file(name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(values), encoding='utf-8')
+            return True
+        except Exception:
+            return False
+
+    # ---------- Zawinięcie: Zatwierdź / Reset ----------
+    def _hem_values(self):
+        return dict(radius=float(self.hm_radius.value()), length=float(self.hm_length.value()), gap=float(self.hm_gap.value()))
+
+    def _set_hem_values(self, values):
+        for key, spin in (('radius', self.hm_radius), ('length', self.hm_length), ('gap', self.hm_gap)):
+            spin.setValue(float(values.get(key, HEM_DEFAULT[key])))
+
+    def _load_hem_settings(self):
+        values = self._read_settings('hem')
+        if values:
+            self._set_hem_values(values)
+
+    def save_hem_settings(self):
+        """Zatwierdź: utrwala ustawienia zawinięcia (także po ponownym uruchomieniu programu)."""
+        values = self._hem_values()
+        if not self._write_settings('hem', values):
+            self.hm_status.setText('Nie udało się zapisać ustawień na dysku - obowiązują do zamknięcia programu.')
+            return
+        nums = [f'{values[k]:g}'.replace('.', ',') for k in ('radius', 'length', 'gap')]
+        self.hm_status.setText(f'Zapamiętano: R {nums[0]} mm · długość do {nums[1]} mm · szczelina {nums[2]} mm.')
+
+    def reset_hem_settings(self):
+        """Reset: ustawienia domyślne zawinięcia (zapamiętane zostają dopiero po Zatwierdź)."""
+        self._set_hem_values(HEM_DEFAULT)
+        self.hm_status.setText('Przywrócono ustawienia domyślne. Zatwierdź, aby je zapamiętać.')
 
     def _flange_values(self):
         return dict(radius=float(self.fl_radius.value()), angle=float(self.fl_angle.value()), length=float(self.fl_length.value()),
@@ -4163,23 +4290,14 @@ class StudioWindow(QMainWindow):
         self.fl_datum.setCurrentIndex(index if index >= 0 else 0)
 
     def _load_flange_settings(self):
-        import json
-        try:
-            values = json.loads(self._settings_file().read_text(encoding='utf-8'))
-            if isinstance(values, dict):
-                self._set_flange_values(values)
-        except Exception:
-            pass
+        values = self._read_settings('flange')
+        if values:
+            self._set_flange_values(values)
 
     def save_flange_settings(self):
         """Zatwierdź: utrwala ustawienia kołnierza (także po ponownym uruchomieniu programu)."""
-        import json
         values = self._flange_values()
-        try:
-            path = self._settings_file()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(values), encoding='utf-8')
-        except Exception:
+        if not self._write_settings('flange', values):
             self.fl_status.setText('Nie udało się zapisać ustawień na dysku - obowiązują do zamknięcia programu.')
             return
         side = 'zewnętrznej' if values['measure'] == 'outer' else 'wewnętrznej'
@@ -4198,16 +4316,17 @@ class StudioWindow(QMainWindow):
         self.fl_pick = None
         self.view.set_picked_edge(None)
         self._style_bend_button()
-        self.fl_status.setText('Wyginanie włączone: kliknij krawędź blachy.' if self.fl_armed else 'Wyginanie wyłączone. Kliknij Zaginaj, aby znów wyginać.')
+        self._edge_status().setText('Wyginanie włączone: kliknij krawędź blachy.' if self.fl_armed else 'Wyginanie wyłączone. Kliknij Zaginaj, aby znów wyginać.')
 
     def _style_bend_button(self):
-        if not hasattr(self, 'fl_bend'):
-            return
         on = bool(getattr(self, 'fl_armed', False))
         color, hover = ('#e5484d', '#cf3a3f') if on else ('#2fa56d', '#26905e')
-        self.fl_bend.setStyleSheet(f'QPushButton{{background:{color};color:white;border:none;border-radius:8px;font-weight:700;padding:7px 10px;}}'
-                                   f'QPushButton:hover{{background:{hover};}}')
-        self.fl_bend.setProperty('armed', on)
+        for button in (getattr(self, 'fl_bend', None), getattr(self, 'hm_bend', None)):
+            if button is None:
+                continue
+            button.setStyleSheet(f'QPushButton{{background:{color};color:white;border:none;border-radius:8px;font-weight:700;padding:7px 10px;}}'
+                                 f'QPushButton:hover{{background:{hover};}}')
+            button.setProperty('armed', on)
 
     def cancel_edge(self):
         """Anuluj: wyłącza dodawanie kliknięciem i czyści wskazanie. Okno zostaje otwarte."""
@@ -4250,8 +4369,7 @@ class StudioWindow(QMainWindow):
         self._commit_edge(spec, 'Zawinięcie' if self.mode == 'hem' else 'Kołnierz')
 
     def _after_commit(self):
-        self._edge_status().setText('Dodano. Kliknij kolejną krawędź; Zaginaj wyłącza wyginanie.' if self.mode == 'flange'
-                                    else 'Dodano. Kliknij kolejną krawędź albo Zamknij.')
+        self._edge_status().setText('Dodano. Kliknij kolejną krawędź; Zaginaj wyłącza wyginanie.')
 
     def _commit_edge(self, spec, label):
         pick = self.fl_pick
@@ -4276,14 +4394,12 @@ class StudioWindow(QMainWindow):
         self.view.set_picked_edge(None)
         self.run_operation(label, build, apply, after=self._after_commit)
 
-    def export_flat_pattern(self):
+    def export_flat_pattern(self, body=None):
         if self.busy:
             return
-        bodies = [b for b in self.document.bodies if b.id in self.selected and b.kind == 'solid']
-        if len(bodies) != 1:
-            self.toast('Zaznacz jedną blachę w drzewie obiektów, potem wybierz Rozwinięcie DXF.')
+        if body is None:
+            self.sheet_command('flat')       # najpierw wskazanie blachy do zapisania
             return
-        body = bodies[0]
         state = self._sheet_state(body.id)
         if state is None:
             self.toast('Wybrana bryła nie ma aktualnej historii blachy.')

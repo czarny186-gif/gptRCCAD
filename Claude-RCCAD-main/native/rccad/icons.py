@@ -310,6 +310,49 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     elif kind == 'x_flange':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(4, 32, 28, 9), 2, 2); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2)
         p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(42, 20), QPointF(42, 6)); p.drawPolyline(QPolygonF([QPointF(37, 11), QPointF(42, 5), QPointF(47, 11)]))
+    elif kind in ('hm_radius', 'hm_length', 'hm_gap'):
+        # przekrój zawinięcia: blacha, łuk 180° i odcinek powrotny nad nią (ze szczeliną)
+        p.save(); p.translate(24, 24); p.scale(1.22, 1.22); p.translate(-24, -22)
+        hem = QPainterPath()
+        hem.moveTo(3, 32); hem.lineTo(34, 32); hem.arcTo(QRectF(28, 20, 12, 12), 270, 180); hem.lineTo(12, 20); hem.lineTo(12, 15)
+        hem.lineTo(34, 15); hem.arcTo(QRectF(23, 15, 22, 22), 90, -180); hem.lineTo(3, 37); hem.closeSubpath()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawPath(hem)
+        head = lambda pts: (p.setBrush(QColor(ORANGE)), p.setPen(Qt.NoPen), p.drawPolygon(QPolygonF([QPointF(*q) for q in pts])))
+        if kind == 'hm_radius':
+            p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(34, 26), QPointF(43, 26)); head([(45, 26), (40, 23.4), (40, 28.6)])
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(34, 26), 2.2, 2.2)
+        elif kind == 'hm_length':
+            p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(12, 5), QPointF(12, 12)); p.drawLine(QPointF(34, 5), QPointF(34, 12)); p.drawLine(QPointF(13, 8.5), QPointF(33, 8.5))
+            head([(12.5, 8.5), (17, 6.2), (17, 10.8)]); head([(33.5, 8.5), (29, 6.2), (29, 10.8)])
+        else:
+            p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(20, 21), QPointF(20, 31))
+            head([(20, 20.5), (17.6, 24.6), (22.4, 24.6)]); head([(20, 31.5), (17.6, 27.4), (22.4, 27.4)])
+        p.restore()
+    elif kind == 'sh_convert':
+        # prostopadłościan z wybraną (pomarańczową) górną ścianą → blacha z kołnierzem
+        p.save()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 1.6))
+        p.drawPolygon(QPolygonF([QPointF(3, 24), QPointF(9, 19), QPointF(23, 19), QPointF(17, 24)]))
+        p.drawPolygon(QPolygonF([QPointF(3, 24), QPointF(17, 24), QPointF(17, 30), QPointF(3, 30)]))
+        p.drawPolygon(QPolygonF([QPointF(17, 24), QPointF(23, 19), QPointF(23, 25), QPointF(17, 30)]))
+        p.setBrush(QColor(ORANGE)); p.setPen(pen(ORANGE, 1.2)); p.drawPolygon(QPolygonF([QPointF(3, 24), QPointF(9, 19), QPointF(23, 19), QPointF(17, 24)]))
+        p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(25, 25), QPointF(31, 25)); p.drawPolyline(QPolygonF([QPointF(28.5, 22.5), QPointF(31.2, 25), QPointF(28.5, 27.5)]))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 1.6))
+        p.drawPolygon(QPolygonF([QPointF(33, 30), QPointF(39, 25), QPointF(45, 25), QPointF(45, 26.5), QPointF(39.6, 31.5), QPointF(33, 31.5)]))
+        p.drawPolygon(QPolygonF([QPointF(42.5, 31.5), QPointF(45, 26.5), QPointF(45, 14), QPointF(42.5, 19)]))
+        p.restore()
+    elif kind == 'sh_thick':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(4, 18, 30, 12), 1.5, 1.5)
+        p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(36, 18), QPointF(46, 18)); p.drawLine(QPointF(36, 30), QPointF(46, 30)); p.drawLine(QPointF(42, 8), QPointF(42, 40))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(42, 18), QPointF(39.6, 13), QPointF(44.4, 13)])); p.drawPolygon(QPolygonF([QPointF(42, 30), QPointF(39.6, 35), QPointF(44.4, 35)]))
+    elif kind == 'sh_dims':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(13, 6, 32, 24), 1.5, 1.5)
+        p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(14, 37), QPointF(44, 37)); p.drawLine(QPointF(13, 33), QPointF(13, 41)); p.drawLine(QPointF(45, 33), QPointF(45, 41))
+        p.drawLine(QPointF(6, 7), QPointF(6, 29)); p.drawLine(QPointF(2, 6), QPointF(10, 6)); p.drawLine(QPointF(2, 30), QPointF(10, 30))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(14, 37), QPointF(18.5, 34.6), QPointF(18.5, 39.4)])); p.drawPolygon(QPolygonF([QPointF(44, 37), QPointF(39.5, 34.6), QPointF(39.5, 39.4)]))
+        p.drawPolygon(QPolygonF([QPointF(6, 7), QPointF(3.6, 11.5), QPointF(8.4, 11.5)])); p.drawPolygon(QPolygonF([QPointF(6, 29), QPointF(3.6, 24.5), QPointF(8.4, 24.5)]))
     elif kind in ('fl_radius', 'fl_angle', 'fl_length'):
         # przekrój blachy z kołnierzem: poziom + łuk gięcia + pionowa ściana; akcent pokazuje parametr
         body = QPainterPath()

@@ -40,6 +40,7 @@ TOPICS = [
     ('t_sheet', 'Konwertuj na blachę', 'Blacha: zamiana prostopadłościanu na blachę do gięcia', [
         'Zamienia prostopadłościan na blachę. Wybrana płaska ściana staje się górą blachy, a grubość to odległość od ściany przeciwnej.',
         'Najpierw zrób szkic prostokąta albo kwadratu i wyciągnij go na grubość blachy. Potem wybierz KONWERTUJ NA BLACHĘ i kliknij płaską ścianę (prostokąt albo kwadrat). Inne kształty są odrzucane.',
+        'Okno pokazuje odczytaną grubość blachy i wymiary płyty. Zamień na blachę zatwierdza, Zamknij zamyka okno bez zmian.',
         'Po konwersji można dodawać kołnierze. Program zapamiętuje blachę w historii, więc zmiana wcześniejszych kroków przelicza ją ponownie.']),
     ('t_rules', 'Reguły blach', 'Szczelina i wycięcia w narożnikach', [
         'Blacharskie: pionowe ściany mają proste zakończenia, a sąsiednie poziome kołnierze są przycinane skośnie. Wycięcie na łuku przechodzi płynnie między zakończeniami obu ścian. Okrągłe powierzchnie gięcia zachowują promień i grubość.',
@@ -54,26 +55,24 @@ TOPICS = [
     ('t_flange', 'Kołnierz', 'Blacha: wyciągnięcie krawędzi w kołnierz', [
         'Wyciąga krawędź blachy w kołnierz z zadanym promieniem gięcia (promień stempla), kątem i długością prostej części.',
         'Wybierz KOŁNIERZ i ustaw promień gięcia, kąt i długość kołnierza (domyślnie R 0,5 mm, 90°, 5 mm) - obrazki obok pól pokazują, co oznacza każde ustawienie. Krawędź górnej ściany wychodzi w górę, krawędź dolnej w dół.',
-        'Przyciski na dole: Zatwierdź zapamiętuje ustawienia (zostają także po ponownym uruchomieniu programu). Zaginaj włącza wyginanie - przycisk robi się czerwony i każde kliknięcie krawędzi blachy dodaje kołnierz; ponowne kliknięcie wyłącza wyginanie (zielony), wtedy kliknięcie krawędzi tylko ją pokazuje. Reset przywraca ustawienia domyślne.',
+        'Przyciski na dole: Zatwierdź zapamiętuje ustawienia (zostają także po ponownym uruchomieniu programu). Zaginaj włącza wyginanie - przycisk robi się czerwony i każde kliknięcie krawędzi blachy dodaje kołnierz; ponowne kliknięcie wyłącza wyginanie (zielony), wtedy kliknięcie krawędzi tylko ją pokazuje. Reset przywraca ustawienia domyślne, Zamknij zamyka okno.',
         'Odwróć kierunek gięcia zmienia stronę bez wybierania drugiej krawędzi grubości. Można kontynuować gięcia na końcach kolejnych kołnierzy, z różnymi kątami i kierunkami.',
         'Długość mierzona od strony (zapisane osobno dla każdego gięcia): Zewnętrzna - wymiar od wierzchołka kołnierza do zewnętrznej strony blachy, a przy kolejnym gięciu od zewnętrznej do zewnętrznej strony (blacha 1 mm, 5 mm: w środku 4 mm, między dwoma gięciami 3 mm); Wewnętrzna - od wierzchołka do wewnętrznej strony, przy kolejnym gięciu od wewnętrznej do wewnętrznej (z grubością 6 i 7 mm). Płyta ma wtedy wymiar zewnętrzny albo wewnętrzny gotowej blachy. Kąt prosty i ostry: do przecięcia przedłużonych powierzchni; kąt rozwarty: do środka łuku gięcia.']),
     ('t_unfold_sheet', 'Rozłóż blachę', 'Blacha: edytowalne rozwinięcie', [
-        'Zaznacz jedną blachę z historią kołnierzy i kliknij Rozłóż blachę. Powstaje płaska bryła o rzeczywistej grubości; promienie, kąty, kierunki i reguły pozostają zapisane.',
+        'Kliknij Rozłóż blachę: zaznaczona blacha rozkłada się od razu, a gdy żadna nie jest zaznaczona, kliknij blachę w widoku (Esc albo ponowne kliknięcie narzędzia anuluje). Powstaje płaska bryła o rzeczywistej grubości; promienie, kąty, kierunki i reguły pozostają zapisane.',
         'Na prostych obszarach używaj zwykłych szkiców, wycinania, łączenia wyciągnięć i zaokrąglania krawędzi. Na łukach można przenosić wykonane na płasko wycięcia przez całą grubość, także przez granicę ściany i łuku. Kieszenie i zaokrąglenia zmieniające grubość samego łuku oraz nakładające się lub rozdzielone rozwinięcia nie są obsługiwane. Nieudana operacja nie usuwa zmian.']),
     ('t_fold_sheet', 'Zegnij blachę', 'Blacha: powrót do zapisanych gięć', [
-        'Zaznacz rozłożoną blachę i kliknij Zegnij blachę. Program odtwarza poprzednie gięcia i przenosi zmiany z prostych ścian.',
+        'Kliknij Zegnij blachę: zaznaczona rozłożona blacha zgina się od razu, a gdy żadna nie jest zaznaczona, kliknij blachę w widoku. Program odtwarza poprzednie gięcia i przenosi zmiany z prostych ścian.',
         'Można edytować także zgiętą blachę, po czym ponownie ją rozłożyć. Kolejne przełączenia zachowują wykonane otwory i inne obsługiwane zmiany. Historia, cofanie i zapis projektu obejmują oba stany.']),
-    ('t_sheet_sync', 'Aktualizuj blachę', 'Blacha: utrwalenie zmian w bieżącym stanie', [
-        'Zaznacz blachę i kliknij Aktualizuj blachę, aby sprawdzić przenoszenie bieżących zmian i przebudować model bez zmiany stanu płaskiego/zgiętego.',
-        'Jeśli zmiana dotyka strefy gięcia, tworzy kolizję po zgięciu lub nie daje się dokładnie przenieść, program pozostawia bieżący model i zgłasza przyczynę.']),
     ('t_flat', 'Rozwinięcie DXF', 'Blacha: rozwinięcie 1:1 do cięcia laserowego', [
-        'Zaznacz jedną blachę w drzewie obiektów, ustaw współczynnik K w Regułach blach i kliknij Rozwinięcie DXF. Eksport wykonuje się w tle, bez zmiany modelu ani historii.',
+        'Ustaw współczynnik K w Regułach blach, kliknij Rozwinięcie DXF, a potem kliknij w widoku blachę, która ma być zapisana; następnie wybierz plik. Eksport wykonuje się w tle, bez zmiany modelu ani historii.',
         'Długość naddatku gięcia BA = kąt w radianach × (R + K × grubość). DXF jest w milimetrach, w skali 1:1. Tnij tylko zamknięte kontury warstwy CUT. BEND_UP i BEND_DOWN to linie środka gięcia, nie linie cięcia; są przycięte do obrysu blachy, więc nie wychodzą poza kontur przy wycięciach i ukosach w narożnikach. Gięcie w górę to linia ciągła, w dół - przerywana (typ linii GIECIE_DOL).',
         'Edytowalne rozwinięcie uwzględnia także docinane narożniki, jeśli powstaje jedna część bez nakładania materiału. Układy wymagające innego rozcięcia są odrzucane. Dodatkowe otwory są zachowywane w nowym edytowalnym rozwinięciu. Eksport wymaga jednej części o jednakowej grubości.',
         'Kontury nie zawierają kompensacji szerokości szczeliny lasera; ustawia się ją w CAM. Przed produkcją sprawdź parametry materiału, K, kierunki i technologię gięcia.']),
     ('t_hem', 'Zawinięcie', 'Blacha: zawinięcie krawędzi o 180°', [
         'Krawędź zawija się od razu o 180° i odcinek powrotny przylega do powierzchni blachy, bez dodatkowego kołnierza.',
-        'Wybierz ZAWINIĘCIE, kliknij krawędź (płyty, kołnierza albo wolny koniec zawinięcia). Ustaw promień, maksymalną długość zawinięcia (dopasowywaną do dostępnego miejsca) i szczelinę (min 0,1 mm), potem Dodaj zawinięcie.',
+        'Wybierz ZAWINIĘCIE i ustaw promień, maksymalną długość zawinięcia (dopasowywaną do dostępnego miejsca) i szczelinę (min 0,1 mm) - obrazki obok pól pokazują, co oznacza każde ustawienie.',
+        'Przyciski na dole jak w Kołnierzu: Zatwierdź zapamiętuje ustawienia (także po ponownym uruchomieniu programu), Zaginaj włącza wyginanie (czerwony - każde kliknięcie krawędzi płyty, kołnierza albo wolnego końca zawinięcia dodaje zawinięcie; zielony - wyłączone), Reset przywraca ustawienia domyślne, Zamknij zamyka okno.',
         'Szczelina to odstęp ponad średnicę gięcia (2 × promień). Zawinięcie działa tylko dla gięcia 90° na krawędzi.']),
     ('t_drawing', 'Rysunek', 'Rysunek techniczny z bryły', [
         'Zakładka Rysunek tworzy rysunek techniczny wybranej bryły: rzuty z przodu, z tyłu, z lewej, z prawej, z góry, z dołu i izometryczny, z wymiarami i tabelką rysunkową.',

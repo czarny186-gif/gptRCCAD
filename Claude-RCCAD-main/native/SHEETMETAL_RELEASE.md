@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.4.30 — nowe okno Kołnierza
+# RCCAD Desktop 0.4.31 — okna blachy: Zawinięcie, Konwersja, wskazywanie blachy
+
+## Zmiany 0.4.31
+
+- **Zawinięcie** w stylu Kołnierza: bez opisu drobnym drukiem, obrazki przy polach (promień, maksymalna długość, szczelina), przyciski **Zatwierdź** (zapamiętuje ustawienia), **Zaginaj** (czerwony = wyginanie włączone, zielony = wyłączone), **Reset** i **Zamknij**.
+- **Kołnierz**: dodany przycisk **Zamknij** (przyciski w dwóch rzędach: Zatwierdź · Zaginaj / Reset · Zamknij).
+- **Konwertuj na blachę**: nowe okno z ilustracją, bez opisu drobnym drukiem, z odczytem **grubości blachy** i **wymiarów płyty** po kliknięciu ściany; przyciski Zamień na blachę i Zamknij.
+- **Rozłóż blachę / Zegnij blachę**: gdy żadna blacha nie jest zaznaczona, po wybraniu narzędzia klikasz blachę w widoku (bryły podświetlają się pod kursorem).
+- **Rozwinięcie DXF**: po wybraniu zawsze najpierw wskazujesz blachę do zapisania, potem plik.
+- Usunięte narzędzie **Aktualizuj blachę**.
+
+## RCCAD Desktop 0.4.30 — nowe okno Kołnierza
 
 ## Zmiany 0.4.30
 
