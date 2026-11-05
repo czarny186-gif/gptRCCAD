@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.4.31 — okna blachy: Zawinięcie, Konwersja, wskazywanie blachy
+# RCCAD Desktop 0.4.32 — nowy wygląd okien narzędzi
+
+## Zmiany 0.4.32
+
+- Okna w zakładkach **Bryła, Edycja, Wzory i Rysunek** oraz okno **Ofset** w szkicu: bez opisów drobnym drukiem (opisy są w podpowiedziach), bez przycisku **Anuluj**, każde ma **Zamknij**.
+- Obrazki przy polach: kąt obrotu (Obrót), grubość ścianki (Skorupa), promień zaokrąglenia / odległość fazy (Edytuj bryłę - obrazek zmienia się z operacją), odległość (Ofset).
+- **Szyk**: kolorowe strzałki osi przy wierszach X/Y/Z, oś obrotu wybierana trzema ikonami (Oś Z / X / Y) zamiast listy.
+- Okna **Rysunku** (techniczny, automatyczny, blachy) mają ilustrację arkusza zamiast opisu.
+- Pasek **Wyciągnięcia**: Zamknij zamiast Anuluj.
+- **Przesuń / Obróć**: zamiast paska na dole prostokątne okno po lewej, z nagłówkiem, kolorowymi ikonami osi X/Y/Z (strzałki dla przesunięcia, łuki dla obrotu) i przyciskami Zastosuj / Zamknij.
+
+## RCCAD Desktop 0.4.31 — okna blachy: Zawinięcie, Konwersja, wskazywanie blachy
 
 ## Zmiany 0.4.31
 

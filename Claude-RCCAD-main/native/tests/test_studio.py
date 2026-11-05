@@ -184,6 +184,26 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_face',return_value=(body.id,(0,0,1),(50,25,2))):w.view_clicked(5,5,False,False)
         self.assertEqual((w.sheet_t.text(),w.sheet_dims.text()),('2 mm','100 × 50 mm'))
 
+    def test_tool_panels_have_close_no_cancel_no_small_print(self):
+        from PySide6.QtWidgets import QPushButton
+        w=self.w
+        panels=[w.rev_panel,w.sweep_panel,w.loft_panel,w.shell_panel,w.bool_panel,w.mod_panel,w.mir_panel,w.pat_panel,w.off_panel,w.t_editor,
+                *w.mt_panels.values(),*w.dr_panels.values()]
+        for panel in panels:
+            texts=[b.text() for b in panel.findChildren(QPushButton)]
+            self.assertIn('Zamknij',texts);self.assertNotIn('Anuluj',texts)
+            self.assertEqual([l for l in panel.findChildren(QLabel) if l.objectName()=='small'],[])
+        self.assertNotIn('Anuluj',[b.text() for b in w.ex_bar.findChildren(QPushButton)])
+        for pic in (w.rev_angle_pic,w.sh_thick_pic,w.mod_size_pic,w.off_value_pic):self.assertFalse(pic.pixmap().isNull())
+        w.set_mode('mod');w.mod_kind.setCurrentIndex(w.mod_kind.findData('chamfer'));self.assertEqual(w.mod_label.text(),'Odległość fazy (mm)')
+        self.assertEqual(w.pat_axis._data,['Z','X','Y'])
+        for mode,unit in (('move','mm'),('rotate','°')):
+            w.set_mode(mode);self.assertEqual(w.t_editor.objectName(),'panel');self.assertTrue(w.t_editor.isVisible())
+            self.assertTrue(w.t_heads[mode].isVisible());self.assertFalse(w.t_heads['rotate' if mode=='move' else 'move'].isVisible())
+            self.assertEqual([l.text() for l in w.t_axis_labels],[f'{a} ({unit})' for a in 'XYZ'])
+            self.assertTrue(all(not p.pixmap().isNull() for p in w.t_axis_pics))
+            close=next(b for b in w.t_editor.findChildren(QPushButton) if b.text()=='Zamknij');close.click();self.assertIsNone(w.mode)
+
     def test_sheet_rules_panel_layout_reset_confirm_and_pick(self):
         w=self.w;w.toggle_mode('rules')
         texts=[l.text() for l in w.rules_panel.findChildren(QLabel)]

@@ -105,7 +105,8 @@ TOPICS = [
         'Kopie widać na bieżąco i zmieniają się razem z wartościami. Połącz kopie w jedną bryłę skleja wynik. Enter zatwierdza.']),
     ('sym', 'Przesuń i obróć', 'Transformacje', [
         'Zaznacz bryłę lub szkic. Przesuwanie: pociągnij kolorową strzałkę osi, kwadrat płaszczyzny albo złap samą bryłę lewym przyciskiem.',
-        'Obrót: pociągnij kolorowy pierścień wokół osi. Wartości można też wpisać. Strzałki dopasowują się do ustawienia kamery.']),
+        'Obrót: pociągnij kolorowy pierścień wokół osi. Wartości można też wpisać. Strzałki dopasowują się do ustawienia kamery.',
+        'Okno Przesuń / Obróć (po lewej) ma pola X, Y, Z z kolorowymi ikonami osi (przesunięcie w mm, obrót w stopniach). Zastosuj zatwierdza, Zamknij zamyka okno bez zmian.']),
     ('one', 'Widok', 'Kostka i skróty', [
         'Kostka w prawym górnym rogu: klik w ścianę ustawia widok z tej strony, klik w krawędź lub róg widok ukośny. Domek wraca do widoku głównego.',
         'Skróty: Ctrl+N nowy, Ctrl+O otwórz, Ctrl+S zapisz, Ctrl+Z cofnij, Ctrl+Y ponów, Enter zatwierdź, Esc anuluj.']),

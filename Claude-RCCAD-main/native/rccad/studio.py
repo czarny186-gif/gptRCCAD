@@ -653,32 +653,41 @@ class StudioWindow(QMainWindow):
         ui.shadow(self.hist_bar, 19, 5, 43)
         self.pad.adjustSize()
 
-        # edytor transformacji nad paskiem
+        # okno Przesuń / Obróć: prostokątny panel z grafiką osi (jak pozostałe okna narzędzi)
         self.t_editor = QFrame(v)
-        self.t_editor.setObjectName('bar')
-        tl = QHBoxLayout(self.t_editor)
-        tl.setContentsMargins(12, 10, 12, 10)
-        tl.setSpacing(8)
-        self.t_status = QLabel('Kliknij obiekt, aby go zaznaczyć')
-        self.t_status.setMinimumWidth(175)
+        self.t_editor.setObjectName('panel')
+        self.t_editor.setFixedWidth(286)
+        tl = QVBoxLayout(self.t_editor)
+        tl.setContentsMargins(16, 15, 16, 15)
+        tl.setSpacing(10)
+        self.t_heads = {'move': ui.panel_header('x_move', 'Przesuń', 'Przesunięcie wzdłuż osi X, Y, Z', ui.icons.BLUE, True),
+                        'rotate': ui.panel_header('x_rotate', 'Obróć', 'Obrót wokół osi X, Y, Z', ui.icons.BLUE, True)}
+        for head in self.t_heads.values():
+            tl.addWidget(head)
+        self.t_status = _label('Kliknij obiekt, aby go zaznaczyć', 'status')
         tl.addWidget(self.t_status)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
         self.t_spins = []
         self.t_axis_labels = []
-        for axis in 'XYZ':
-            label = QLabel(axis)
+        self.t_axis_pics = []
+        for i, axis in enumerate('XYZ'):
+            pic = QLabel()
+            pic.setFixedSize(40, 40)
+            label = _label(axis, 'label')
             spin = _spin(0, -1e6, 1e6, 3, 1.0)
-            spin.setFixedWidth(78)
             spin.valueChanged.connect(lambda *_: self._transform_changed())
-            tl.addWidget(label)
-            tl.addWidget(spin)
+            grid.addWidget(pic, i, 0)
+            grid.addWidget(label, i, 1)
+            grid.addWidget(spin, i, 2)
+            self.t_axis_pics.append(pic)
             self.t_axis_labels.append(label)
             self.t_spins.append(spin)
-        for text, cb in (('Zastosuj', self.apply_transform), ('Anuluj', lambda: self.set_mode(None))):
-            b = QPushButton(text)
-            b.setObjectName('primary' if text == 'Zastosuj' else 'ghost')
-            b.clicked.connect(lambda _=False, f=cb: f())
-            tl.addWidget(b)
-        ui.shadow(self.t_editor, 20, 5, 45)
+        grid.setColumnStretch(2, 1)
+        tl.addLayout(grid)
+        self._buttons(tl, 'Zastosuj', 'Zamknij', self.apply_transform, lambda: self.set_mode(None))
+        ui.shadow(self.t_editor, 26, 7, 46)
         self.t_editor.hide()
         self.t_editor.adjustSize()
 
@@ -856,7 +865,7 @@ class StudioWindow(QMainWindow):
         self.ex_second = _spin(10, 0, 1e5, 3, 1.0)
         self.ex_second.setFixedWidth(105)
         bar.addWidget(self.ex_second)
-        for text, cb in (('Zastosuj', self.apply_extrude), ('Anuluj', lambda: self.set_mode(None))):
+        for text, cb in (('Zastosuj', self.apply_extrude), ('Zamknij', lambda: self.set_mode(None))):
             b = QPushButton(text)
             b.setObjectName('primary' if text == 'Zastosuj' else 'ghost')
             b.clicked.connect(lambda _=False, f=cb: f())
@@ -873,39 +882,38 @@ class StudioWindow(QMainWindow):
 
         # --- obrót ---
         self.rev_panel, lay = self._panel(312, 'Obrót', 'x_revolve', 'Profil wokół osi → bryła obrotowa', plain=True)
-        lay.addWidget(_label('Obraca profil szkicu wokół osi, tworząc okrągłą bryłę. Służy do wałków, gałek, misek i wszystkich części okrągłych względem osi.', 'small'))
         self.rev_step1 = ui.StepRow(1, 'x_area', 'Profil (szkic lub ściana)', plain=True)
         self.rev_step2 = ui.StepRow(2, 'x_axis', 'Oś obrotu', plain=True)
         lay.addWidget(self.rev_step1)
         lay.addWidget(self.rev_step2)
         self.rev_axis = ui.Segmented([('Pozioma', 'u', 'ax_u'), ('Pionowa', 'v', 'ax_v'), ('Wskaż', 'line', 'ax_line')], 30)
         self.rev_axis.setCurrentIndex(1)
-        self._field(lay, 'Oś (przez początek szkicu albo wskazana linia)', self.rev_axis)
+        self._field(lay, 'Oś obrotu', self.rev_axis)
+        self.rev_axis.setToolTip('Pozioma / pionowa oś przez początek szkicu albo Wskaż - prosta linia szkicu lub krawędź bryły.')
         self.rev_op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 32)
         self._field(lay, 'Operacja', self.rev_op)
         self.rev_angle = _spin(360, 1, 360, 1, 15)
-        self._field(lay, 'Kąt obrotu (°)', self.rev_angle)
+        self.rev_angle_pic = self._pic_field(lay, 'Kąt obrotu (°)', 'rv_angle', self.rev_angle, '360° - pełna bryła, mniej - wycinek.')
         self.rev_status = _label('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.', 'status')
         lay.addWidget(self.rev_status)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_revolve, lambda: self.set_mode(None))
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_revolve, lambda: self.set_mode(None))
         self.rev_axis.currentIndexChanged.connect(self._rev_axis_changed)
         self.rev_op.currentIndexChanged.connect(lambda *_: self._timers['revolve'].start())
         self.rev_angle.valueChanged.connect(lambda *_: self._timers['revolve'].start())
 
         # --- skorupa ---
         self.shell_panel, lay = self._panel(312, 'Skorupa', 'x_shell', 'Wydrąż bryłę · otwórz ściany', plain=True)
-        lay.addWidget(_label('Wydrąża bryłę, pozostawiając ścianki o zadanej grubości, i może otworzyć wybrane ściany. Służy do pudełek, pokryw i innych części cienkościennych.', 'small'))
         self.sh_step1 = ui.StepRow(1, 'x_object', 'Bryła', plain=True)
         self.sh_step2 = ui.StepRow(2, 'x_area', 'Ściany do otwarcia (opcjonalnie)', plain=True)
         lay.addWidget(self.sh_step1)
         lay.addWidget(self.sh_step2)
         self.sh_thick = _spin(2, .01, 1e5, 3, .5)
-        self._field(lay, 'Grubość ścianki (mm)', self.sh_thick)
+        self.sh_thick_pic = self._pic_field(lay, 'Grubość ścianki (mm)', 'sh_wall', self.sh_thick, 'Grubość ścianek, które zostają po wydrążeniu.')
         self.sh_dir = ui.Segmented([('Do wewnątrz', 'in', 'sh_in'), ('Na zewnątrz', 'out', 'sh_out')], 30)
         self._field(lay, 'Kierunek', self.sh_dir)
         self.sh_status = _label('Kliknij bryłę, którą chcesz wydrążyć.', 'status')
         lay.addWidget(self.sh_status)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_shell, lambda: self.set_mode(None))
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_shell, lambda: self.set_mode(None))
         self.sh_thick.valueChanged.connect(lambda *_: self._timers['shell'].start())
         self.sh_dir.currentIndexChanged.connect(lambda *_: self._timers['shell'].start())
 
@@ -1024,7 +1032,6 @@ class StudioWindow(QMainWindow):
         self.rules_panel.footer.addLayout(row)
         # --- przeciągnięcie ---
         self.sweep_panel, lay = self._panel(312, 'Przeciągnięcie', 'x_sweep', 'Profil wzdłuż ścieżki → bryła', plain=True)
-        lay.addWidget(_label('Przeciąga profil szkicu wzdłuż ścieżki, tworząc bryłę. Służy do rur, prowadnic, uchwytów i każdej części o stałym przekroju biegnącej wzdłuż krzywej.', 'small'))
         self.sw_step1 = ui.StepRow(1, 'x_area', 'Profil (szkic lub ściana)', plain=True)
         self.sw_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia, łuk lub krawędź)', plain=True)
         lay.addWidget(self.sw_step1)
@@ -1037,12 +1044,11 @@ class StudioWindow(QMainWindow):
         self.sw_again.setObjectName('chip')
         self.sw_again.clicked.connect(lambda _=False: self._sw_reset_path())
         lay.addWidget(self.sw_again)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_sweep, lambda: self.set_mode(None))
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_sweep, lambda: self.set_mode(None))
         self.sw_op.currentIndexChanged.connect(lambda *_: self._timers['sweep'].start())
 
         # --- wyciągnięcie złożone ---
         self.loft_panel, lay = self._panel(312, 'Wyciągnięcie złożone', 'x_loft', 'Bryła przez kilka profili', plain=True)
-        lay.addWidget(_label('Tworzy gładką bryłę przechodzącą przez dwa lub więcej profili szkicu albo od profilu do punktu. Służy do przejść, lejków, uchwytów i każdego kształtu, którego przekrój zmienia się na długości.', 'small'))
         self.lf_step1 = ui.StepRow(1, 'x_area', 'Profile (kolejno)', plain=True)
         self.lf_step2 = ui.StepRow(2, 'x_object', 'Punkt końcowy', plain=True)
         lay.addWidget(self.lf_step1)
@@ -1059,7 +1065,7 @@ class StudioWindow(QMainWindow):
         self.lf_last.setObjectName('chip')
         self.lf_last.clicked.connect(lambda _=False: self._lf_drop_last())
         lay.addWidget(self.lf_last)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_loft, lambda: self.set_mode(None))
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_loft, lambda: self.set_mode(None))
         self.lf_kind.currentIndexChanged.connect(lambda *_: self._lf_kind_changed())
         self.lf_ruled.currentIndexChanged.connect(lambda *_: self._timers['loft'].start())
         self.lf_op.currentIndexChanged.connect(lambda *_: self._timers['loft'].start())
@@ -1086,9 +1092,16 @@ class StudioWindow(QMainWindow):
                 ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę', 'Kliknij bryłę. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.'),
                 ('sheetdrawing', 'Rysunek blachy do gięcia', 'x_sheetdrawing', 'Wskaż blachę', 'Kliknij blachę (zgiętą albo rozłożoną). Powstanie rozwinięcie widziane od góry blachy: wymiary całości, odległości linii gięcia od krawędzi i między sobą, kierunek, kąt i promień każdego gięcia oraz grubość blachy.')):
             panel, lay = self._panel(312, title, kind, sub, plain=True)
-            lay.addWidget(_label(desc, 'small'))
-            lay.addWidget(_label('Kliknij bryłę na polu roboczym.', 'status'))
-            self._buttons(lay, 'Zamknij', 'Anuluj', lambda: self.set_mode(None), lambda: self.set_mode(None))
+            pic = QLabel()
+            pic.setFixedHeight(96)
+            pic.setAlignment(Qt.AlignCenter)
+            pic.setPixmap(ui.icons.pixmap('dr_' + key, 96))
+            pic.setToolTip(desc)
+            lay.addWidget(pic)
+            lay.addWidget(_label('Kliknij ' + ('blachę' if key == 'sheetdrawing' else 'bryłę') + ' na polu roboczym.', 'status'))
+            close = QPushButton('Zamknij')
+            close.clicked.connect(lambda _=False: self.set_mode(None))
+            lay.addWidget(close)
             self.dr_panels[key] = panel
         self._drawing_windows = []
 
@@ -1100,17 +1113,16 @@ class StudioWindow(QMainWindow):
         lay.addWidget(self.bool_status)
         self.bool_keep = QCheckBox('Zachowaj bryły-narzędzia')
         lay.addWidget(self.bool_keep)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_bool, lambda: self.set_mode(None))
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_bool, lambda: self.set_mode(None))
         self.bool_op.currentIndexChanged.connect(lambda *_: self._timers['bool'].start())
 
         # --- edytuj bryłę ---
         self.mod_panel, lay = self._panel(312, 'Edytuj bryłę', 'x_mod', 'Zaokrąglenie i fazowanie krawędzi', plain=True)
         self.mod_kind = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 36)
         self._field(lay, 'Operacja', self.mod_kind)
-        self.mod_label = _label('Promień zaokrąglenia (mm)')
         self.mod_size = _spin(3, .01, 1e5, 3, .5)
-        lay.addWidget(self.mod_label)
-        lay.addWidget(self.mod_size)
+        self.mod_size_pic = self._pic_field(lay, 'Promień zaokrąglenia (mm)', 'md_fillet', self.mod_size, 'Promień zaokrąglenia albo szerokość fazy.')
+        self.mod_label = lay.itemAt(lay.count() - 2).widget()
         self.mod_status = _label('Kliknij krawędź lub narożnik; dwuklik w ścianę zaznacza cały jej obwód.', 'status')
         lay.addWidget(self.mod_status)
         self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_mod, lambda: self.set_mode(None))
@@ -1142,7 +1154,7 @@ class StudioWindow(QMainWindow):
                 ('mate', 'Dopasowanie', 'Ściana do ściany', 'Pierwsza bryła obraca się i przesuwa tak, że jej wskazana ściana przylega do wskazanej ściany drugiej bryły, a środki obu ścian się spotykają.', 'Ściana docelowa'),
                 ('align', 'Wyrównanie', 'Ściany na jednej wysokości', 'Pierwsza bryła przesuwa się bez obracania wzdłuż kierunku ściany wzorcowej, aż obie ściany leżą na tej samej wysokości - w każdej płaszczyźnie.', 'Ściana wzorcowa')):
             panel, lay = self._panel(312, title, 'x_' + key, sub, plain=True)
-            lay.addWidget(_label(desc, 'small'))
+            panel.setToolTip(desc)
             steps = (ui.StepRow(1, 'x_wall', 'Ściana przesuwana', plain=True), ui.StepRow(2, 'x_wall', second, plain=True))
             for st in steps:
                 lay.addWidget(st)
@@ -1191,6 +1203,10 @@ class StudioWindow(QMainWindow):
         for i, axis in enumerate('XYZ'):
             row = QHBoxLayout()
             row.setSpacing(8)
+            pic = QLabel()
+            pic.setFixedSize(30, 30)
+            pic.setPixmap(ui.icons.pixmap('tr_m' + axis.lower(), 30))
+            row.addWidget(pic, 0, Qt.AlignBottom)
             c1, c2 = QVBoxLayout(), QVBoxLayout()
             c1.addWidget(_label(f'Ilość {axis}'))
             c1.addWidget(self.pat_counts[i])
@@ -1204,9 +1220,7 @@ class StudioWindow(QMainWindow):
         cl = QVBoxLayout(self.pat_circ)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(6)
-        self.pat_axis = QComboBox()
-        for label, key in (('Oś Z (pionowa)', 'Z'), ('Oś X', 'X'), ('Oś Y', 'Y')):
-            self.pat_axis.addItem(label, key)
+        self.pat_axis = ui.Segmented([('Oś Z', 'Z', 'tr_rz'), ('Oś X', 'X', 'tr_rx'), ('Oś Y', 'Y', 'tr_ry')], 30)
         self._field(cl, 'Oś obrotu', self.pat_axis)
         crow = QHBoxLayout()
         crow.setSpacing(8)
@@ -1340,16 +1354,15 @@ class StudioWindow(QMainWindow):
         # --- ofset szkicu ---
         self.off = None             # wybrany kształt: dict(body, base, dir)
         self.off_panel, lay = self._panel(286, 'Ofset', 'x_offset', 'Kształt → strona → odległość', plain=True)
-        lay.addWidget(_label('Tworzy nowy kształt odsunięty o stałą odległość od wskazanego: do środka albo na zewnątrz. Strzałkę przy kształcie można przeciągać.', 'small'))
         self.off_step = ui.StepRow(1, 'x_area', 'Kształt szkicu', plain=True)
         lay.addWidget(self.off_step)
         self.off_side = ui.Segmented([('Na zewnątrz', 'out', 'sh_out'), ('Do wewnątrz', 'in', 'sh_in')], 30)
         self._field(lay, 'Strona', self.off_side)
         self.off_value = _spin(2, .01, 1e5, 2, .5)
-        self._field(lay, 'Odległość (mm)', self.off_value)
+        self.off_value_pic = self._pic_field(lay, 'Odległość (mm)', 'of_dist', self.off_value, 'Odstęp nowego kształtu od wskazanego; strzałkę przy kształcie można też przeciągać.')
         self.off_status = _label('Kliknij kształt szkicu.', 'status')
         lay.addWidget(self.off_status)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_offset, self.cancel_offset)
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_offset, lambda: self.choose_tool(None))
         self.off_side.currentIndexChanged.connect(lambda *_: self._off_update())
         self.off_value.valueChanged.connect(lambda *_: self._off_update())
 
@@ -1384,7 +1397,7 @@ class StudioWindow(QMainWindow):
         self.pad.adjustSize()
         self.pad.move((W - self.pad.width()) // 2, H - 113 - self.pad.height())
         self.t_editor.adjustSize()
-        self.t_editor.move(max(10, (W - self.t_editor.width()) // 2), H - 166 - self.t_editor.height())
+        self.t_editor.move(18, 88 + TOOLS_TOP - 18)
         self.hist_bar.setFixedWidth(max(300, min(W - 460, 1100)))
         self.hist_bar.adjustSize()
         self.hist_bar.move((W - self.hist_bar.width()) // 2, H - 18 - self.hist_bar.height())
@@ -1718,8 +1731,12 @@ class StudioWindow(QMainWindow):
         elif mode in ('move', 'rotate'):
             self.t_editor.show()
             self.t_status.setText('Kliknij obiekt, aby go zaznaczyć')
-            for label, axis in zip(self.t_axis_labels, 'XYZ'):
-                label.setText(axis + ('°' if mode == 'rotate' else ''))
+            for key, head in self.t_heads.items():
+                head.setVisible(key == mode)
+            for label, pic, axis in zip(self.t_axis_labels, self.t_axis_pics, 'XYZ'):
+                label.setText(f'{axis} (°)' if mode == 'rotate' else f'{axis} (mm)')
+                pic.setPixmap(ui.icons.pixmap(('tr_r' if mode == 'rotate' else 'tr_m') + axis.lower(), 40))
+            self.t_editor.adjustSize()
             for spin in self.t_spins:
                 spin.blockSignals(True)
                 spin.setValue(0)
@@ -4893,7 +4910,9 @@ class StudioWindow(QMainWindow):
     # edytuj bryłę: zaokrąglenia i fazy z uchwytem-strzałką
     # =====================================================================
     def _mod_kind_changed(self, *_):
-        self.mod_label.setText('Promień zaokrąglenia (mm)' if self.mod_kind.currentData() == 'fillet' else 'Odległość fazy (mm)')
+        fillet = self.mod_kind.currentData() == 'fillet'
+        self.mod_label.setText('Promień zaokrąglenia (mm)' if fillet else 'Odległość fazy (mm)')
+        self.mod_size_pic.setPixmap(ui.icons.pixmap('md_fillet' if fillet else 'md_chamfer', 48))
         self._timers['mod'].start()
 
     def _mod_value_changed(self):

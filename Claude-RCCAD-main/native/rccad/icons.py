@@ -310,6 +310,83 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     elif kind == 'x_flange':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(4, 32, 28, 9), 2, 2); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2)
         p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(42, 20), QPointF(42, 6)); p.drawPolyline(QPolygonF([QPointF(37, 11), QPointF(42, 5), QPointF(47, 11)]))
+    elif kind == 'rv_angle':
+        # profil przy osi i łuk obrotu ze strzałką
+        dash = pen(INK, 1.6); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(10, 4), QPointF(10, 44))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(13, 12, 10, 24), 1.5, 1.5)
+        p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 2.6)); p.drawArc(QRectF(-8, 6, 36, 36), 30 * 16, -240 * 16)
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(27, 13), QPointF(20.5, 11.5), QPointF(25.5, 7.5)]))
+    elif kind == 'sh_wall':
+        cup = QPainterPath(); cup.moveTo(6, 8); cup.lineTo(6, 42); cup.lineTo(42, 42); cup.lineTo(42, 8); cup.lineTo(35, 8); cup.lineTo(35, 35); cup.lineTo(13, 35); cup.lineTo(13, 8); cup.closeSubpath()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawPath(cup)
+        p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(6, 22), QPointF(13, 22))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(6, 22), QPointF(9.5, 19.8), QPointF(9.5, 24.2)])); p.drawPolygon(QPolygonF([QPointF(13, 22), QPointF(9.5, 19.8), QPointF(9.5, 24.2)]))
+    elif kind in ('md_fillet', 'md_chamfer'):
+        body = QPainterPath(); body.moveTo(6, 42); body.lineTo(6, 8)
+        if kind == 'md_fillet':
+            body.lineTo(20, 8); body.arcTo(QRectF(8, 8, 32, 32), 90, -90)
+        else:
+            body.lineTo(24, 8); body.lineTo(40, 24)
+        body.lineTo(40, 42); body.closeSubpath()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawPath(body)
+        dash = pen('#9fb4c8', 1.4); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(24, 8), QPointF(40, 8)); p.drawLine(QPointF(40, 8), QPointF(40, 24))
+        if kind == 'md_fillet':
+            p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(24, 24), QPointF(33.5, 14.5))
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(24, 24), 2.2, 2.2)
+            p.drawPolygon(QPolygonF([QPointF(35, 13), QPointF(29.4, 14.6), QPointF(33.4, 18.6)]))
+        else:
+            p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(24, 3.5), QPointF(40, 3.5)); p.drawLine(QPointF(44.5, 8), QPointF(44.5, 24))
+            p.drawLine(QPointF(24, 1.5), QPointF(24, 6)); p.drawLine(QPointF(42.5, 24), QPointF(46.5, 24))
+    elif kind == 'of_dist':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(14, 16, 20, 16), 2, 2)
+        dash = pen(ORANGE, 2.2); dash.setStyle(Qt.DashLine); p.setPen(dash); p.setBrush(Qt.NoBrush); p.drawRoundedRect(QRectF(5, 7, 38, 34), 6, 6)
+        p.setPen(pen(ORANGE, 2.0)); p.drawLine(QPointF(34, 24), QPointF(43, 24))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(34, 24), QPointF(37.5, 21.8), QPointF(37.5, 26.2)])); p.drawPolygon(QPolygonF([QPointF(43, 24), QPointF(39.5, 21.8), QPointF(39.5, 26.2)]))
+    elif kind in ('x_move', 'x_rotate'):
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(15, 15, 18, 18), 3, 3)
+        if kind == 'x_move':
+            p.setPen(pen(ORANGE, 2.6))
+            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                a = QPointF(24 + dx * 11, 24 + dy * 11); b = QPointF(24 + dx * 21, 24 + dy * 21)
+                p.drawLine(a, b)
+                p.drawPolyline(QPolygonF([QPointF(b.x() - dx * 5 - dy * 4, b.y() - dy * 5 + dx * 4), b, QPointF(b.x() - dx * 5 + dy * 4, b.y() - dy * 5 - dx * 4)]))
+        else:
+            p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 2.8)); p.drawArc(QRectF(5, 5, 38, 38), 60 * 16, 280 * 16)
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(36, 4), QPointF(36, 13), QPointF(28, 8)]))
+    elif kind in ('tr_mx', 'tr_my', 'tr_mz', 'tr_rx', 'tr_ry', 'tr_rz'):
+        color = {'x': '#e35054', 'y': '#24a36b', 'z': '#3380e6'}[kind[-1]]
+        if kind.startswith('tr_m'):
+            ang = {'x': 0.0, 'y': 45.0, 'z': 90.0}[kind[-1]]
+            dx, dy = math.cos(math.radians(ang)), -math.sin(math.radians(ang))
+            a, b = QPointF(24 - dx * 15, 24 - dy * 15), QPointF(24 + dx * 16, 24 + dy * 16)
+            p.setPen(pen(color, 3.2)); p.drawLine(a, b)
+            p.setBrush(QColor(color)); p.setPen(Qt.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(b.x() + dx * 4, b.y() + dy * 4), QPointF(b.x() - dx * 5 - dy * 5, b.y() - dy * 5 + dx * 5), QPointF(b.x() - dx * 5 + dy * 5, b.y() - dy * 5 - dx * 5)]))
+        else:
+            p.setBrush(Qt.NoBrush); p.setPen(pen(color, 3.0)); p.drawArc(QRectF(8, 8, 32, 32), 70 * 16, 290 * 16)
+            p.setBrush(QColor(color)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(33, 6), QPointF(33.5, 15), QPointF(25.5, 10)]))
+            p.setPen(pen(INK, 1.6)); dash = pen(INK, 1.4); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(24, 18), QPointF(24, 30)); p.drawLine(QPointF(18, 24), QPointF(30, 24))
+        f = p.font(); f.setPixelSize(11); f.setBold(True); p.setFont(f); p.setPen(QColor(color))
+        p.drawText(QRectF(30, 30, 18, 18), Qt.AlignCenter, kind[-1].upper())
+    elif kind in ('dr_drawing', 'dr_autodrawing', 'dr_sheetdrawing'):
+        # arkusz rysunku z rzutami
+        p.setBrush(QColor('#ffffff')); p.setPen(pen(BLUE, 1.6)); p.drawRect(QRectF(5, 9, 38, 30))
+        p.setPen(pen('#9fb4c8', 1.0)); p.drawRect(QRectF(31, 33, 12, 6))
+        if kind == 'dr_sheetdrawing':
+            p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 1.6))
+            p.drawPolygon(QPolygonF([QPointF(9, 18), QPointF(15, 18), QPointF(15, 13), QPointF(29, 13), QPointF(29, 18), QPointF(35, 18), QPointF(35, 29), QPointF(9, 29)]))
+            dash = pen(ORANGE, 1.4); dash.setStyle(Qt.DashLine); p.setPen(dash)
+            p.drawLine(QPointF(15, 18), QPointF(29, 18)); p.drawLine(QPointF(15, 18), QPointF(15, 29)); p.drawLine(QPointF(29, 18), QPointF(29, 29))
+        else:
+            p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 1.6)); p.drawRect(QRectF(9, 16, 12, 12)); p.drawRect(QRectF(25, 16, 8, 12))
+            p.setPen(pen(ORANGE, 1.4)); p.drawLine(QPointF(9, 31), QPointF(21, 31)); p.drawLine(QPointF(9, 29.5), QPointF(9, 32.5)); p.drawLine(QPointF(21, 29.5), QPointF(21, 32.5))
+        if kind == 'dr_autodrawing':
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+            star = [QPointF(39 + (5 if k % 2 == 0 else 2) * math.cos(math.radians(90 * (k // 2) + (0 if k % 2 == 0 else 45))),
+                            12 - (5 if k % 2 == 0 else 2) * math.sin(math.radians(90 * (k // 2) + (0 if k % 2 == 0 else 45)))) for k in range(8)]
+            p.drawPolygon(QPolygonF(star))
     elif kind in ('hm_radius', 'hm_length', 'hm_gap'):
         # przekrój zawinięcia: blacha, łuk 180° i odcinek powrotny nad nią (ze szczeliną)
         p.save(); p.translate(24, 24); p.scale(1.22, 1.22); p.translate(-24, -22)
