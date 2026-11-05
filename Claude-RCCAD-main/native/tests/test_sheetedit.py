@@ -270,3 +270,40 @@ class BendDirectionFromPickedFaceTests(unittest.TestCase):
             folded=s.build_sheet(r);self.assertGreater(folded.BoundingBox().zmax,10,size)      # ścianka w górę
             flat,fs=e.switch(folded,e.state(r,False),True)
             self.assertEqual([l['direction'] for l in e.flat_bend_lines(flat,fs)],['UP'],size)
+
+
+class FastChangeDetectionTests(unittest.TestCase):
+    """Szukanie zmian tylko w obszarze różniących się krawędzi daje to samo co pełne porównanie brył."""
+    def box(self):
+        t=2.0
+        base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=100,ly=50,lz=t)
+        edges=[([100,0,2],[100,50,2],[1,0,0]),([100,50,2],[0,50,2],[0,1,0]),([0,50,2],[0,0,2],[-1,0,0]),([0,0,2],[100,0,2],[0,-1,0])]
+        fl=[dict(kind='base',p0=a,p1=b,n=[0,0,1],m=m,r=2,angle=90,length=20,measure='outer') for a,b,m in edges]
+        return dict(base=base,t=t,flanges=fl,rules=dict(gap=.1,relief='none',relief_size=3,joint='sheet',miter=True,auto_corners=True,kfactor=.44))
+
+    def test_local_diff_matches_full_boolean(self):
+        import cadquery as cq
+        r=self.box();folded=s.build_sheet(r)
+        tools=[cq.Solid.makeCylinder(3,10,cq.Vector(50,25,-1)),                     # otwór w płycie
+               cq.Solid.makeBox(8,10,6,cq.Vector(96,20,8)),                         # wycięcie w ścianie
+               cq.Solid.makeCylinder(2,10,cq.Vector(20,10,-1)).fuse(cq.Solid.makeBox(4,4,10,cq.Vector(70,30,-1)))]
+        for tool in tools:
+            actual=folded.cut(tool)
+            removed,added=e._diff(folded,actual)
+            full_removed=folded.cut(actual)
+            self.assertAlmostEqual(e._volume(removed),e._volume(full_removed),5)
+            self.assertAlmostEqual(e._volume(added),0,6)
+            self.assertAlmostEqual(e._volume(full_removed.cut(removed)),0,5)
+        removed,added=e._diff(folded,folded)                                         # bez zmian - nic do przeniesienia
+        self.assertEqual((e._volume(removed),e._volume(added)),(0.,0.))
+        grown=folded.fuse(cq.Solid.makeBox(10,10,3,cq.Vector(40,20,2)))             # dodany materiał
+        removed,added=e._diff(folded,grown)
+        self.assertAlmostEqual(e._volume(added),e._volume(grown.cut(folded)),5);self.assertAlmostEqual(e._volume(removed),0,6)
+
+    def test_background_warm_layout_is_reused(self):
+        r=self.box()
+        e._WARM.discard(e._layout_key(r));e._cached_layout.cache_clear()
+        self.assertFalse(e.is_warm(r))
+        self.assertTrue(e.warm(r));self.assertTrue(e.is_warm(r))
+        import time
+        a=time.perf_counter();e.layout(r);self.assertLess(time.perf_counter()-a,.05)      # gotowe z pamięci

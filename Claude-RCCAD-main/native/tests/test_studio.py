@@ -228,6 +228,24 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_face',return_value=(body.id,(0,0,1),(50,25,2))):w.view_clicked(5,5,False,False)
         self.assertEqual((w.sheet_t.text(),w.sheet_dims.text()),('2 mm','100 × 50 mm'))
 
+    def test_flange_click_shows_instant_preview_then_exact_result(self):
+        w=self.w;body=self.converted_sheet();w.set_mode('flange')
+        w.fl_pick=dict(id=body.id,spec=dict(kind='base',p0=[100,0,2],p1=[100,50,2],n=[0,0,1],m=[1,0,0]))
+        w.apply_flange()
+        self.assertTrue(w.busy);self.assertTrue(w.view.preview_items)                 # podgląd od razu, wynik jeszcze się liczy
+        self.wait();self.assertFalse(w.view.preview_items);self.assertEqual(len(w._sheet_state(body.id)['specs']),1)
+
+    def test_sheet_layout_is_prepared_in_background(self):
+        from rccad import sheetedit as she
+        w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()
+        recipe=w.document.get(body.id).meta['sheet']['recipe']
+        she._WARM.discard(she._layout_key(recipe));she._cached_layout.cache_clear()
+        w._warm_sheets();t0=time.time()
+        while not she.is_warm(recipe) and time.time()-t0<30:
+            QApplication.processEvents();time.sleep(.01)
+        self.assertTrue(she.is_warm(recipe))
+        w.warm_pool.waitForDone(30000)
+
     def test_favorites_tab_toolbox_choose_order_and_keep_tab(self):
         import json
         w=self.w;self.assertEqual(list(w.tab_buttons)[0],'Ulubione')

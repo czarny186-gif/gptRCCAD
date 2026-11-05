@@ -196,6 +196,13 @@ class StudioWindow(QMainWindow):
         super().__init__()
         self.document = Document()
         self.pool = QThreadPool.globalInstance()
+        self.warm_pool = QThreadPool(self)            # osobny wątek na rozwinięcia liczone w tle (nie blokuje operacji)
+        self.warm_pool.setMaxThreadCount(1)
+        self._warming = set()
+        self._warm_timer = QTimer(self)
+        self._warm_timer.setSingleShot(True)
+        self._warm_timer.setInterval(400)
+        self._warm_timer.timeout.connect(lambda: self._warm_sheets())
         self.busy = False
         self.selected: list[str] = []
         self.hidden_ids: set[str] = set()
@@ -4440,7 +4447,22 @@ class StudioWindow(QMainWindow):
 
         self.fl_pick = None
         self.view.set_picked_edge(None)
+        self._quick_flange_preview(recipe)
         self.run_operation(label, build, apply, after=self._after_commit)
+
+    def _quick_flange_preview(self, recipe):
+        """Natychmiastowy podgląd nowego kołnierza / zawinięcia (sama jego bryła, bez narożników): widać go od razu po
+        kliknięciu krawędzi, a dokładna blacha z narożnikami pojawia się po przeliczeniu w tle."""
+        try:
+            import cadquery as cq
+            normal = shm.normalize(dict(base=recipe['base'], t=recipe['t'], flanges=recipe['flanges'], rules=recipe['rules']))
+            eff, _ = shm._effective(normal['flanges'], float(normal['t']), True)
+            pieces = shm._flange_parts(eff[-1], float(normal['t']))
+            mesh = kernel.display_mesh(cq.Compound.makeCompound(pieces))
+        except Exception:
+            return
+        self.view.set_preview_mesh(mesh, color=(.95, .6, .15, .55), line_color=SKETCH_ORANGE, width=2)
+        self._quick_preview = True
 
     def export_flat_pattern(self, body=None):
         if self.busy:
@@ -5802,6 +5824,11 @@ class StudioWindow(QMainWindow):
     # model, odświeżanie
     # =====================================================================
     def refresh(self, fit=False):
+        if getattr(self, '_quick_preview', False) and not self.busy:
+            self._quick_preview = False                     # dokładny wynik (albo komunikat) zastępuje szybki podgląd kołnierza
+            self.view.set_preview_mesh(None)
+        if hasattr(self, '_warm_timer') and not self.busy:
+            self._warm_timer.start()       # cofnij / ponów / otwarcie projektu: rozwinięcia blach przygotują się w tle
         live = {b.id for b in self.document.bodies}
         self.selected = [i for i in self.selected if i in live]
         self.edges = {i: es for i, es in self.edges.items() if i in live}
@@ -6706,6 +6733,7 @@ class StudioWindow(QMainWindow):
                 self.refresh(fit)
                 if after:
                     after()
+                self._warm_timer.start()       # po zmianie modelu rozwinięcia blach przygotowują się w tle
 
         def failed(message):
             finish()
@@ -6715,6 +6743,28 @@ class StudioWindow(QMainWindow):
         work.signals.done.connect(done)
         work.signals.failed.connect(failed)
         self.pool.start(work)
+
+    def _warm_sheets(self):
+        """Rozwinięcia blach liczone w tle, gdy nic się nie dzieje - kliknięcie Rozłóż / Zegnij jest potem prawie natychmiastowe."""
+        if self.busy:
+            self._warm_timer.start()
+            return
+        for body in self.document.bodies:
+            meta = (body.meta or {}).get('sheet') if body.kind == 'solid' else None
+            recipe = meta.get('recipe') if meta else None
+            if not recipe or not (recipe.get('flanges')):
+                continue
+            try:
+                key = she._layout_key(recipe)
+            except Exception:
+                continue
+            if key in self._warming or she.is_warm(recipe):
+                continue
+            self._warming.add(key)
+            work = _Work(lambda r=recipe: she.warm(r))
+            work.signals.done.connect(lambda _=None, k=key: self._warming.discard(k))
+            work.signals.failed.connect(lambda _=None, k=key: self._warming.discard(k))
+            self.warm_pool.start(work, -1)
 
     # ---------- podglądy liczone w tle (GUI nigdy nie czeka na OpenCascade) ----------
     def run_preview(self, key, compute, show):

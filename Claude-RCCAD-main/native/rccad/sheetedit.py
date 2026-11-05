@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import math
 import copy
 import json
+import threading
 from functools import lru_cache
 import numpy as np
 import cadquery as cq
@@ -288,11 +289,42 @@ def _cached_layout(key, require_blank=True, parallel_version=s.ENGINE):
     return _build_layout(json.loads(key),require_blank,parallel_version)
 
 
+_LAYOUT_LOCKS={}
+_LOCKS_GUARD=threading.Lock()
+_WARM=set()
+
+
+def _layout_key(recipe):
+    return json.dumps(state(recipe)['recipe'],sort_keys=True,allow_nan=False)
+
+
 def layout(recipe):
     # Geometry is immutable: repeated mode switches and previews reuse the
     # same validated maps. Edits remain in the document, never in this cache.
-    key=json.dumps(state(recipe)['recipe'],sort_keys=True,allow_nan=False)
-    return _cached_layout(key)
+    key=_layout_key(recipe)
+    with _LOCKS_GUARD:
+        lock=_LAYOUT_LOCKS.setdefault(key,threading.Lock())
+    with lock:          # rozwinięcie liczone właśnie w tle: zamiast liczyć drugi raz, poczekaj na gotowy wynik
+        model=_cached_layout(key)
+    _WARM.add(key)
+    return model
+
+
+def is_warm(recipe):
+    try:
+        return _layout_key(recipe) in _WARM
+    except Exception:
+        return True
+
+
+def warm(recipe):
+    """Rozwinięcie przygotowane w tle (po zmianie blachy, gdy nic się nie dzieje): Rozłóż / Zegnij, DXF i rysunek
+    blachy biorą je potem gotowe z pamięci. Błędy są tu pomijane - pokaże je dopiero właściwa operacja."""
+    try:
+        layout(recipe)
+        return True
+    except Exception:
+        return False
 
 
 def _source_engine(source_state):
@@ -355,9 +387,51 @@ def _volume(shape):
     return abs(shape.Volume(1e-9)) if shape.Solids() else 0.
 
 
+def _edge_keys(shape):
+    """Krawędzie pogrupowane według geometrii (rodzaj, długość, środek, końce) - do szybkiego porównania dwóch brył."""
+    out={}
+    for edge in shape.Edges():
+        try:
+            ends=sorted(tuple(round(v,5) for v in p.toTuple()) for p in (edge.startPoint(),edge.endPoint()))
+            key=(edge.geomType(),round(edge.Length(),5),*[round(v,5) for v in edge.positionAt(.5).toTuple()],*ends)
+        except Exception:
+            key=('?',id(edge))
+        out.setdefault(key,[]).append(edge)
+    return out
+
+
+def _diff(baseline, actual):
+    """Materiał usunięty i dodany względem wzorca. Szybko: tylko w obszarze krawędzi, które się różnią (np. wokół otworu) -
+    poza tym obszarem obie bryły są identyczne, a porównanie całych, prawie takich samych brył trwa sekundy.
+    Wynik jest sprawdzany bilansem objętości; przy jakiejkolwiek niezgodności liczony jest dawnym, pełnym sposobem."""
+    def full():
+        return baseline.cut(actual).clean(),actual.cut(baseline).clean()
+    try:
+        keys_a,keys_b=_edge_keys(actual),_edge_keys(baseline)
+        differing=[edge for key in set(keys_a)^set(keys_b) for edge in (keys_a.get(key) or keys_b.get(key))]
+        total=_volume(actual)-_volume(baseline)
+        if not differing:
+            if abs(total)>1e-6:
+                return full()
+            empty=cq.Compound.makeCompound([])
+            return empty,empty
+        boxes=[edge.BoundingBox() for edge in differing]
+        lo=np.min([[b.xmin,b.ymin,b.zmin] for b in boxes],axis=0);hi=np.max([[b.xmax,b.ymax,b.zmax] for b in boxes],axis=0)
+        size=float(np.linalg.norm(hi-lo));margin=0.0123+0.0371*size+1.37*max(1e-3,min(hi-lo))
+        lo,hi=lo-margin,hi+margin
+        box=cq.Solid.makeBox(*(float(v) for v in hi-lo),cq.Vector(*(float(v) for v in lo)))
+        local_a,local_b=actual.intersect(box),baseline.intersect(box)
+        removed,added=local_b.cut(local_a).clean(),local_a.cut(local_b).clean()
+        if abs((_volume(added)-_volume(removed))-total)>max(1e-5,abs(total)*1e-6):
+            return full()
+        return removed,added
+    except Exception:
+        return full()
+
+
 def _changes(actual, model, flat):
     baseline=model.flat if flat else model.folded
-    removed=baseline.cut(actual).clean();added=actual.cut(baseline).clean()
+    removed,added=_diff(baseline,actual)
     changes={p.key:{'removed':[], 'added':[]} for p in [*model.panels,*model.bends]}
     covered=0.
     for panel in model.panels:

@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.35 — zakładka Ulubione i Przybornik
+# RCCAD Desktop 0.4.36 — szybsze gięcie blach
+
+## Zmiany 0.4.36
+
+- **Szybsze szukanie zmian** przy Rozłóż / Zegnij (i przy dodawaniu kołnierzy do blachy z otworami): program porównuje bryłę ze wzorcem tylko w obszarze, gdzie krawędzie się różnią (np. wokół otworu), a nie całe, prawie identyczne bryły. Wynik jest sprawdzany bilansem objętości, a przy niezgodności liczony dawnym sposobem. Pudełko z otworem: szukanie zmian 3,4 s → 0,05 s.
+- **Rozwinięcie przygotowywane w tle**: po zmianie blachy (kołnierz, wycięcie, cofnij, otwarcie projektu), gdy nic się nie dzieje, program po cichu liczy rozwinięcie w osobnym wątku. Rozłóż, DXF i rysunek blachy biorą je potem gotowe. Pudełko z otworem: Rozłóż 3,5 s → 0,3 s, Zegnij 0,7 s → 0,3 s.
+- **Natychmiastowy podgląd kołnierza / zawinięcia**: po kliknięciu krawędzi przy włączonym Zaginaj nowy kołnierz widać od razu (ok. 0,03 s, pomarańczowy), a dokładna blacha z narożnikami zastępuje go po przeliczeniu.
+- Sprawdzona i odrzucona: pamięć jednakowych narożników - zysk ok. 10%, nie wart komplikacji.
+
+## RCCAD Desktop 0.4.35 — zakładka Ulubione i Przybornik
 
 ## Zmiany 0.4.35
 
