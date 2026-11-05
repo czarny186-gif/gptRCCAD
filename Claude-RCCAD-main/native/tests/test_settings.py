@@ -9,7 +9,7 @@ class SettingsFolderTests(unittest.TestCase):
     def setUp(self):
         self.env = os.environ.pop('RCCAD_CONFIG_DIR', None)
         st._DIR = None
-        self.program = Path(tempfile.mkdtemp());self.profile = Path(tempfile.mkdtemp())
+        self.program = Path(tempfile.mkdtemp()).resolve();self.profile = Path(tempfile.mkdtemp()).resolve()      # Windows: pełna ścieżka zamiast krótkiej (RUNNER~1)
 
     def tearDown(self):
         st._DIR = None
@@ -24,7 +24,7 @@ class SettingsFolderTests(unittest.TestCase):
             self.assertTrue(st.write('favorites', {'tools': ['flange', 'extrude']}))
             self.assertTrue((self.program / 'Ustawienia' / 'favorites.json').exists())
             # nowa wersja programu: skopiowany folder Ustawienia daje te same ulubione
-            new = Path(tempfile.mkdtemp())
+            new = Path(tempfile.mkdtemp()).resolve()
             (new / 'Ustawienia').mkdir()
             (new / 'Ustawienia' / 'favorites.json').write_text((self.program / 'Ustawienia' / 'favorites.json').read_text(encoding='utf-8'), encoding='utf-8')
             st._DIR = None
