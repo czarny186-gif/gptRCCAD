@@ -908,7 +908,7 @@ class StudioTests(unittest.TestCase):
         w=self.w
         a=Body('A',k.box(10,20,30)).prepared();b=Body('B',k.box(40,40,10).translate(cq.Vector(100,50,0))).prepared()
         w.document.commit([a,b]);w.refresh()
-        w.toggle_mode('mate');self.assertEqual(w._tab,'Bryła');self.assertTrue(w.mt_panels['mate'].isVisible())
+        w.toggle_mode('mate');self.assertEqual(w._tab,'Edycja');self.assertTrue(w.mt_panels['mate'].isVisible())
         self._mate_pick(a,(-1,0,0),(0,10,15))            # lewa ściana A
         self.assertEqual(w.mt_pick['moving']['id'],a.id);self.assertNotIn('target',w.mt_pick)
         self._mate_pick(b,(0,0,1),(120,70,10))           # góra B

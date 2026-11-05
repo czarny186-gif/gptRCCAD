@@ -176,7 +176,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft', 'mate', 'align'], 'Edycja': ['mod', 'shell', 'bool'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
+TABS = {'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'sheet_sync', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 TAB_TOP = 14        # pasek zakładek

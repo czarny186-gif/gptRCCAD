@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.22 — obrót w dopasowaniu
+# RCCAD Desktop 0.4.23 — porządki w zakładkach i nowe ikony blachy
+
+## Zmiany 0.4.23
+
+- **Dopasowanie i Wyrównanie** przeniesione z zakładki Bryła do zakładki **Edycja**.
+- **Nowe ikony w zakładce Blacha** (na przyciskach i w nagłówkach okienek):
+  - Konwertuj na blachę - klocek zamieniający się w cienką blachę z gięciem,
+  - Reguły blach - narożnik pudełka ze szczeliną i wycięciem oraz zębatka ustawień (zamiast „linijki”),
+  - Zawinięcie - koniec blachy zawinięty o 180° nad siebie ze strzałką wokół zagięcia.
 
 ## Zmiany 0.4.22
 

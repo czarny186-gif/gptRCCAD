@@ -96,6 +96,60 @@ def _draw_datum(p, which, ink, acc, soft, pen):
         p.drawPolygon(QPolygonF([Q(tip), Q(tip + 3.4 * back + 1.6 * across), Q(tip + 3.4 * back - 1.6 * across)]))
 
 
+def _gear(p, cx, cy, r, color, pen, fill):
+    """Mała zębatka (ustawienia): koło z sześcioma zębami i otworem."""
+    path = QPainterPath()
+    teeth = 6
+    for i in range(teeth * 2):
+        a0 = math.pi * i / teeth
+        rr = r if i % 2 == 0 else r * 0.72
+        for a in (a0 - math.pi / teeth * 0.45, a0 + math.pi / teeth * 0.45):
+            pt = QPointF(cx + rr * math.cos(a), cy + rr * math.sin(a))
+            path.lineTo(pt) if path.elementCount() else path.moveTo(pt)
+    path.closeSubpath()
+    hole = QPainterPath(); hole.addEllipse(QPointF(cx, cy), r * 0.32, r * 0.32)
+    p.setBrush(fill); p.setPen(pen(color, 1.6)); p.drawPath(path.subtracted(hole))
+
+
+def _draw_sheet_ops(p, which, ink, acc, soft, pen):
+    """Ikony blachy (pasek narzędzi i nagłówki okienek):
+    sheet - pełny klocek zamienia się (strzałka) w cienką blachę z gięciem,
+    rules - narożnik pudełka z góry: dwa kołnierze, szczelina i wycięcie w narożniku oraz zębatka (ustawienia),
+    hem - blacha z boku, której koniec zawija się o 180° nad siebie, ze strzałką wokół zagięcia."""
+    if which == 'sheet':
+        p.setBrush(soft); p.setPen(pen(ink, 2.2))
+        p.drawPolygon(QPolygonF([QPointF(4, 20), QPointF(10, 14), QPointF(20, 14), QPointF(14, 20)]))
+        p.drawPolygon(QPolygonF([QPointF(14, 20), QPointF(20, 14), QPointF(20, 32), QPointF(14, 38)]))
+        p.drawRect(QRectF(4, 20, 10, 18))
+        p.setPen(pen(acc, 2.6)); p.drawLine(QPointF(22, 27), QPointF(29, 27))
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(32, 27), QPointF(27, 23), QPointF(27, 31)]))
+        sheet = QPainterPath(); sheet.moveTo(30, 39); sheet.lineTo(39, 39); sheet.arcTo(QRectF(33, 30, 9, 9), 270, 90)
+        sheet.lineTo(42, 14); sheet.lineTo(44.5, 14); sheet.lineTo(44.5, 34.5); sheet.arcTo(QRectF(30.5, 27.5, 14, 14), 0, -90)
+        sheet.lineTo(30, 41.5); sheet.closeSubpath()
+        p.setBrush(soft); p.setPen(pen(ink, 1.8)); p.drawPath(sheet)
+    elif which == 'rules':
+        p.setBrush(soft); p.setPen(pen(ink, 2.2))
+        p.drawRect(QRectF(5, 17, 27, 26))                       # dno
+        p.drawRect(QRectF(5, 7, 25, 8))                         # kołnierz górny
+        p.drawRect(QRectF(34, 19, 8, 24))                       # kołnierz prawy
+        dash = pen(acc, 1.8); dash.setStyle(Qt.DashLine); dash.setDashPattern([1.6, 1.4]); p.setPen(dash)
+        p.drawLine(QPointF(30, 15), QPointF(34, 19))            # szczelina / ukos w narożniku
+        p.setBrush(Qt.NoBrush); p.setPen(pen(acc, 2.2)); p.drawEllipse(QPointF(32, 17), 3.0, 3.0)    # wycięcie w narożniku
+        _gear(p, 40, 9, 6.5, acc, pen, QColor('#ffffff') if soft.alpha() == 255 else QColor(255, 255, 255, 70))
+    elif which == 'hem':
+        body = QPainterPath()
+        body.moveTo(4, 33); body.lineTo(33, 33)
+        body.arcTo(QRectF(29, 27, 8, 6), 270, 180)              # wewnętrzna strona zagięcia (szczelina)
+        body.lineTo(14, 27); body.lineTo(14, 22); body.lineTo(33, 22)
+        body.arcTo(QRectF(22.5, 22, 21, 16), 90, -180)          # zewnętrzna strona zagięcia
+        body.lineTo(4, 38); body.closeSubpath()
+        p.setBrush(soft); p.setPen(pen(ink, 2.0)); p.drawPath(body)
+        p.setBrush(Qt.NoBrush); p.setPen(pen(acc, 2.6))
+        p.drawArc(QRectF(19, 12, 30, 30), -70 * 16, 160 * 16)
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(26, 12.5), QPointF(33, 8.5), QPointF(33, 16.5)]))
+
+
 def _draw_mate(p, which, ink, acc, soft, pen, active=None):
     """Dopasowanie: klocek nad podstawą, wybrane ściany (pomarańczowa przesuwana, zielona docelowa) i strzałka zbliżenia.
     Wyrównanie: niski i wysoki klocek, strzałka podnosząca niższy do przerywanej linii wierzchu wyższego."""
@@ -251,9 +305,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         cup = QPainterPath(); cup.moveTo(6, 8); cup.lineTo(6, 42); cup.lineTo(42, 42); cup.lineTo(42, 8); cup.lineTo(33, 8); cup.lineTo(33, 33); cup.lineTo(15, 33); cup.lineTo(15, 8); cup.closeSubpath()
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawPath(cup)
         p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(17, 25), QPointF(31, 25)); p.drawPolyline(QPolygonF([QPointF(20, 20), QPointF(24, 25), QPointF(28, 20)]))
-    elif kind == 'x_sheet':
-        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(4, 30, 30, 9), 2, 2)
-        p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 3.2)); p.drawPolyline(QPolygonF([QPointF(30, 35), (QPointF(38, 35)), QPointF(42, 10)]))
+    elif kind in ('x_sheet', 'x_rules', 'x_hem'):
+        _draw_sheet_ops(p, kind[2:], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_flange':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(4, 32, 28, 9), 2, 2); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2)
         p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(42, 20), QPointF(42, 6)); p.drawPolyline(QPolygonF([QPointF(37, 11), QPointF(42, 5), QPointF(47, 11)]))
@@ -270,14 +323,6 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.drawRoundedRect(QRectF(7,8,10,32),1,1)
         p.drawRoundedRect(QRectF(22,30,20,10),1,1)
         p.setPen(pen(ORANGE,2.8)); p.drawArc(QRectF(12,16,22,22),90*16,-90*16)
-    elif kind == 'x_hem':
-        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2); p.drawRoundedRect(QRectF(8, 6, 27, 8), 2, 2)
-        p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(12, 20), QPointF(12, 32)); p.drawPolyline(QPolygonF([QPointF(7, 27), QPointF(12, 33), QPointF(17, 27)]))
-    elif kind == 'x_rules':
-        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(5, 14, 38, 22), 3, 3)
-        p.setPen(pen(ORANGE, 3.0))
-        for x in (13, 21, 29, 37):
-            p.drawLine(QPointF(x, 14), QPointF(x, 24 if x % 16 else 29))
     elif kind == 'x_sweep':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawEllipse(QPointF(11, 36), 8, 8)
         path = QPainterPath(); path.moveTo(11, 36); path.cubicTo(11, 10, 36, 40, 39, 12)
@@ -464,10 +509,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             cup = QPainterPath(); cup.moveTo(8, 9); cup.lineTo(8, 42); cup.lineTo(40, 42); cup.lineTo(40, 9); cup.lineTo(33, 9); cup.lineTo(33, 34); cup.lineTo(15, 34); cup.lineTo(15, 9); cup.closeSubpath()
             fl(cup, soft)
             st(acc, 3.0); p.drawLine(QPointF(16, 27), QPointF(32, 27)); p.drawPolyline(poly([(20, 22), (24, 27), (28, 22)]))
-        elif name == 'sheet':
-            fl(_rounded(6, 30, 24, 7, 1.5), soft)
-            st(acc, 3.0); p.drawPolyline(poly([(26, 33), (34, 33), (40, 12)]))
-            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(37, 6), (32, 15), (43, 15)]))
+        elif name in ('sheet', 'rules', 'hem'):
+            _draw_sheet_ops(p, name, ink, acc, soft, pen)
         elif name == 'flat':
             # rozwinięcie pudełka: dno z czterema ściankami (krzyż z wycięciami w narożnikach), linie gięcia tylko wewnątrz obrysu
             cross = QPainterPath(); cross.moveTo(15, 4); cross.lineTo(33, 4); cross.lineTo(33, 13); cross.lineTo(35, 15); cross.lineTo(44, 15)
@@ -489,17 +532,6 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             fl(_rounded(24, 8, 7, 29, 1.5), soft)
             st(acc, 3.0); p.drawLine(QPointF(40, 14), QPointF(40, 4))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(40, 2), (35, 9), (45, 9)]))
-        elif name == 'hem':
-            fl(_rounded(4, 32, 22, 7, 1.5), soft)
-            fl(_rounded(14, 9, 14, 7, 1.5), soft)
-            st(ink, 2.2); p.setBrush(Qt.NoBrush); p.drawArc(QRectF(14, 9, 24, 24), 270 * 16, 180 * 16)
-            st(acc, 3.0); p.drawLine(QPointF(14, 14), QPointF(14, 20))
-            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(14, 25), (9, 18), (19, 18)]))
-        elif name == 'rules':
-            fl(_rounded(6, 14, 36, 20, 2), soft)
-            st(acc, 2.6)
-            for x in (12, 20, 28, 36):
-                p.drawLine(QPointF(x, 14), QPointF(x, 22 if x % 16 else 26))
         elif name == 'sweep':
             fl(_circle(12, 35, 7.5), soft)
             path = QPainterPath(); path.moveTo(12, 35); path.cubicTo(12, 12, 36, 38, 38, 11)
