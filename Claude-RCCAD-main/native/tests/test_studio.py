@@ -324,7 +324,7 @@ class StudioTests(unittest.TestCase):
         w.tools['unfold_sheet'].click();self.wait()
         current=w.document.get(body.id)
         self.assertTrue(current.meta['sheet']['flat'])
-        self.assertEqual(current.meta['sheet']['bend_engine'],3)
+        self.assertEqual(current.meta['sheet']['bend_engine'],4)
         self.assertEqual(len(current.shape.Solids()),1)
 
     def test_sheet_reverse_creates_downward_bend_and_undo_redo(self):

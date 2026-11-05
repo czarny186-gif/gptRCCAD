@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.26 — poprawki ofsetu okręgu i wyciągania zaokrągleń
+# RCCAD Desktop 0.4.27 — połączenia równoległe według wzorca CAD
+
+## Poprawki 0.4.27
+
+- Zgodne, prostopadłe łańcuchy skierowane do wnętrza blachy otrzymują proste zakończenia: oba pierwsze boki kończą się przed wewnętrzną powierzchnią sąsiada, a kolejne poziomy zachowują stały koniec strony przechodzącej i prostą płaszczyznę końca drugiej strony. Docinanie uwzględnia także miejsce na następujący łuk.
+- Konstrukcja została odtworzona z dostarczonego wzorca STEP i porównana bryłowo w obu kierunkach. Nie stosuje falistego obrysu sąsiedniego łańcucha do końców prostych ścian.
+- Wspólny materiał w samym narożniku pierwszych łuków jest przypisany do jednego gięcia. Po rozłożeniu narożne fragmenty także mają jedno przypisanie i nie nakładają się przy współczynniku K mniejszym od 0,5. Ogólna kontrola kolizji pozostaje aktywna.
+- Zachowana obsługa innych kątów, rozbieżnych łańcuchów i zawinięć. W takich konfiguracjach pozostaje poprzednia konstrukcja narożników. Jak dotychczas kolejność dodawania ścian wyznacza stronę przechodzącą.
+- Starsze projekty rozpoznają poprzednią wersję konstrukcji, aby przenieść wykonane otwory i obsługiwane edycje podczas przeliczania. Zachowano nowsze usprawnienia szkicu, ofsetu, promieni i pamięci podręcznej.
+
+**Starszy projekt:** zaznacz blachę → **Reguły blach → Równolegle → Zastosuj do zaznaczonej blachy**.
+
+## Wcześniejsze wydanie 0.4.26 — poprawki ofsetu okręgu i wyciągania zaokrągleń
 
 ## Zmiany 0.4.26
 

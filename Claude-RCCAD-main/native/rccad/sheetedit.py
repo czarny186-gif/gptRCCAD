@@ -16,7 +16,7 @@ from . import kernel as k, sheetmetal as s
 
 
 def state(recipe, flat=False):
-    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':3}
+    return {'recipe': copy.deepcopy({key:recipe[key] for key in ('base','t','flanges','rules') if key in recipe}), 'flat':bool(flat), 'dirty':False, 'edited':False, 'bend_engine':4}
 
 
 def _matrix(origin, axes):
@@ -175,7 +175,7 @@ def _bend_blank(piece, frame, work_frame, t, factor, flat_origin, outward, flat_
     return _faces_slab(developed,t)
 
 
-def _build_layout(recipe, require_blank=True, parallel_version=3):
+def _build_layout(recipe, require_blank=True, parallel_version=4):
     recipe=s.normalize(recipe)      # wymiary zewnętrzne / wewnętrzne -> proste części i przycięta płyta
     specs=recipe.get('flanges') or [];rules=recipe.get('rules') or {};t=float(recipe['t'])
     factor=float(rules.get('kfactor',s.K_DEFAULT))
@@ -228,6 +228,10 @@ def _build_layout(recipe, require_blank=True, parallel_version=3):
         bend_frame=_matrix(np.r_[flat_origin,t if direction>0 else 0],
                            [np.r_[outward,0],np.r_[flat_axis,0],np.array([0,0,-direction])])
         bend_maps.append(Bend('b'+str(i),bend,bend_blank,f,work[i],bend_frame,flat_origin,outward,flat_axis,t,factor))
+    if parallel_version>=4 and corners:
+        from . import sheetparallel
+        if sheetparallel.eligible(recipe,eff,corners):
+            sheetparallel.partition_flat_roots(flat_bent,bend_maps,corners)
     all_flat=[p.flat for p in panels]+flat_bent
     blank=k.valid(all_flat[0].fuse(*all_flat[1:]).clean()) if len(all_flat)>1 else all_flat[0]
     expected=sum(p.Volume(1e-9) for p in all_flat)
@@ -247,7 +251,7 @@ def _build_layout(recipe, require_blank=True, parallel_version=3):
 
 
 @lru_cache(maxsize=4)
-def _cached_layout(key, require_blank=True, parallel_version=3):
+def _cached_layout(key, require_blank=True, parallel_version=4):
     return _build_layout(json.loads(key),require_blank,parallel_version)
 
 
@@ -260,10 +264,10 @@ def layout(recipe):
 
 def _source_engine(source_state):
     version=source_state.get('bend_engine',1)
-    if version not in (1,2,3):
+    if version not in (1,2,3,4):
         raise k.CadError('Ten projekt używa nieobsługiwanej wersji konstrukcji gięć.')
     joint=(source_state['recipe'].get('rules') or {}).get('joint','parallel')
-    return version if joint=='parallel' else 3
+    return version if joint=='parallel' else 4
 
 
 def _source_layout(source_state):
@@ -416,7 +420,7 @@ def _unchanged(actual, baseline):
 def _switch(actual, source_state, flat, sync=False):
     """Switch atomically, including all accumulated edits on straight panels."""
     model=layout(source_state['recipe'])
-    source_model=model if _source_engine(source_state)==3 else _source_layout(source_state)
+    source_model=model if _source_engine(source_state)==4 else _source_layout(source_state)
     source_flat=source_state.get('flat',False)
     if not source_state.get('dirty') and not source_state.get('edited') and _unchanged(actual,source_model.flat if source_flat else source_model.folded):
         changes={p.key:{'removed':[],'added':[]} for p in [*source_model.panels,*source_model.bends]}      # blacha bez zmian: bez kosztownego porównania brył

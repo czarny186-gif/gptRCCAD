@@ -117,7 +117,7 @@ def run(report_path=None):
     old_source=she.state(parallel_recipe);old_source.pop('bend_engine');old_source['dirty']=True
     old_hole=cq.Solid.makeCylinder(1,5,cq.Vector(20,20,-1))
     migrated,migrated_state=she.rebuild(legacy_parallel.cut(old_hole),old_source,parallel_recipe)
-    assert migrated_state['bend_engine']==3 and k.point_state(migrated,(20,20,1))=='out'
+    assert migrated_state['bend_engine']==4 and k.point_state(migrated,(20,20,1))=='out'
     checks.append('legacy parallel sheet migration preserves edited holes')
     slim_base=dict(o=[0,0,0],x=[1,0,0],y=[0,1,0],z=[0,0,1],lx=100,ly=50,lz=1)
     for slim_angle in (45,135):
@@ -146,6 +146,19 @@ def run(report_path=None):
         assert hem_folded.isValid() and len(hem_folded.Solids())==1
         assert abs(hem_folded.Volume(1e-9)-hem_body.Volume(1e-9))<1e-4
     checks.append('four underside hems: parallel and sheet joints unfold and refold with zero corner gap')
+    reference_specs=[dict(kind='base',p0=[a[0],a[1],1],p1=[b[0],b[1],1],n=[0,0,1],m=m,r=.5,angle=90,length=20) for a,b,m in edges]
+    reference_specs += [dict(kind='tip',parent=i,side='in',r=.5,angle=90,length=5) for i in range(4)]
+    reference_specs += [dict(kind='tip',parent=i+4,side='in',r=.5,angle=90,length=5) for i in range(4)]
+    reference_recipe=dict(base=slim_base,t=1,flanges=reference_specs,rules=dict(joint='parallel',gap=.2))
+    reference_frames,reference_corners=shm._effective(reference_specs,1,True)
+    reference_parts=shm._corner_parts(reference_recipe,reference_frames,reference_corners)
+    assert abs(k.bounds(reference_parts[0][1]).ymax-50.3)<1e-6
+    assert abs(k.bounds(reference_parts[1][1]).xmax-100.3)<1e-6
+    reference_layout=she.layout(reference_recipe)
+    assert reference_layout.flat.isValid() and len(reference_layout.flat.Solids())==1
+    for i,left in enumerate(reference_layout.flat_bends[:4]):
+        assert all(abs(left.intersect(right).Volume(1e-9))<1e-7 for right in reference_layout.flat_bends[:i])
+    checks.append('reference parallel corners: square roots, constant return ends and non-overlapping developed root patches')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

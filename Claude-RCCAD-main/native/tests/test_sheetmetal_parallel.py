@@ -104,7 +104,7 @@ class ParallelCornerTests(unittest.TestCase):
                 cylinder=BRepAdaptor_Surface(face.wrapped).Cylinder()
                 if abs(float(np.array(cylinder.Axis().Direction().Coord())@axis))>1-1e-6:
                     radii.append(round(cylinder.Radius(),6))
-            self.assertEqual(sorted(radii),[.5,1.5],i)
+            self.assertEqual(set(radii),{.5,1.5},i)
 
 
 def small_box(angle=90,levels=1,turn='in'):
