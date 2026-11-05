@@ -310,6 +310,30 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     elif kind == 'x_flange':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawRoundedRect(QRectF(4, 32, 28, 9), 2, 2); p.drawRoundedRect(QRectF(26, 6, 9, 35), 2, 2)
         p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(42, 20), QPointF(42, 6)); p.drawPolyline(QPolygonF([QPointF(37, 11), QPointF(42, 5), QPointF(47, 11)]))
+    elif kind == 'rl_gap':
+        # widok z góry na narożnik: dwa kołnierze, między końcami szczelina z wymiarem
+        p.setBrush(QColor('#eef3f8')); p.setPen(Qt.NoPen); p.drawRect(QRectF(13, 5, 31, 30))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2))
+        p.drawRoundedRect(QRectF(5, 5, 8, 38), 1.5, 1.5); p.drawRoundedRect(QRectF(21, 35, 23, 8), 1.5, 1.5)
+        p.setPen(pen(ORANGE, 1.6)); p.drawLine(QPointF(13, 24), QPointF(13, 33)); p.drawLine(QPointF(21, 24), QPointF(21, 33))
+        p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(13.5, 28), QPointF(20.5, 28))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(13.2, 28), QPointF(16.6, 25.6), QPointF(16.6, 30.4)]))
+        p.drawPolygon(QPolygonF([QPointF(20.8, 28), QPointF(17.4, 25.6), QPointF(17.4, 30.4)]))
+    elif kind in ('rl_none', 'rl_sq', 'rl_round'):
+        # rozwinięty narożnik: płyta, dwa kołnierze i linie gięć; wycięcie w miejscu przecięcia linii gięć
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2))
+        p.drawPolygon(QPolygonF([QPointF(4, 14), QPointF(34, 14), QPointF(34, 44), QPointF(4, 44)]))
+        p.drawPolygon(QPolygonF([QPointF(4, 4), QPointF(34, 4), QPointF(34, 14), QPointF(4, 14)]))
+        p.drawPolygon(QPolygonF([QPointF(34, 14), QPointF(44, 14), QPointF(44, 44), QPointF(34, 44)]))
+        dash = pen(INK, 1.4); dash.setStyle(Qt.DashLine); p.setPen(dash)
+        p.drawLine(QPointF(4, 14), QPointF(34, 14)); p.drawLine(QPointF(34, 14), QPointF(34, 44))
+        if kind == 'rl_sq':
+            p.setBrush(QColor('#ffffff')); p.setPen(pen(ORANGE, 2.4)); p.drawRect(QRectF(29, 9, 10, 10))
+        elif kind == 'rl_round':
+            p.setBrush(QColor('#ffffff')); p.setPen(pen(ORANGE, 2.4)); p.drawEllipse(QPointF(34, 14), 5.5, 5.5)
+        else:
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(34, 14), 2.4, 2.4)
     elif kind == 'rl_par':
         # łączenie równoległe: dwie ściany, każda kończy się prostopadle (pionowa linia cięcia)
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRoundedRect(QRectF(6, 8, 14, 32), 2, 2); p.drawRoundedRect(QRectF(28, 8, 14, 32), 2, 2)

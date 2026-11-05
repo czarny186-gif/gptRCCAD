@@ -43,12 +43,13 @@ TOPICS = [
         'Po konwersji można dodawać kołnierze. Program zapamiętuje blachę w historii, więc zmiana wcześniejszych kroków przelicza ją ponownie.']),
     ('t_rules', 'Reguły blach', 'Szczelina i wycięcia w narożnikach', [
         'Blacharskie: pionowe ściany mają proste zakończenia, a sąsiednie poziome kołnierze są przycinane skośnie. Wycięcie na łuku przechodzi płynnie między zakończeniami obu ścian. Okrągłe powierzchnie gięcia zachowują promień i grubość.',
-        'Blacharskie jest domyślne dla nowych konwersji. Starsze projekty zachowują zapisany sposób łączenia. Aby zmienić istniejącą blachę, zaznacz ją, wybierz Blacharskie i kliknij Zastosuj do zaznaczonej blachy. Zapisane szczeliny i wycięcia są odczytywane przy otwieraniu reguł.',
-        'Ustawienia kołnierzy blachy: szczelina między kołnierzami w narożniku oraz wycięcie w rogu (brak, kwadrat albo okrąg) o zadanej wielkości.',
-        'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia lub po wybraniu Zastosuj do zaznaczonej blachy. Zwykłe kołnierze obsługują także kąty ostre i rozwarte; narożniki i zawinięcia dopasowują się automatycznie do sąsiednich ścian.',
+        'Blacharskie jest domyślne dla nowych konwersji. Starsze projekty zachowują zapisany sposób łączenia. Aby zmienić istniejącą blachę, wybierz Blacharskie i kliknij Zastosuj do blachy (gdy żadna blacha nie jest zaznaczona, program poprosi o jej wskazanie kliknięciem). Zapisane szczeliny i wycięcia są odczytywane przy otwieraniu reguł.',
+        'Ustawienia kołnierzy blachy: szczelina między kołnierzami w narożniku (obrazek obok pola pokazuje, który to odstęp; domyślnie 0,1 mm) oraz wycięcie w rogu - kliknij jedną z trzech ikon: brak, kwadrat albo okrąg - o zadanej wielkości.',
+        'Przyciski na dole: Zastosuj do blachy przelicza wskazaną blachę z bieżącymi regułami. Zastosuj zatwierdza ustawienia i od razu włącza Kołnierz (kolejne gięcia dostaną te reguły). Zamknij zamyka okno. Reset przywraca ustawienia domyślne.',
+        'Reguły narożników przeliczają całą blachę przy następnym dodaniu gięcia lub po wybraniu Zastosuj do blachy. Zwykłe kołnierze obsługują także kąty ostre i rozwarte; narożniki i zawinięcia dopasowują się automatycznie do sąsiednich ścian.',
         'Równolegle: jedna ściana dochodzi do rzeczywistej powierzchni sąsiada, także na kolejnych poziomach gięć. Łuki i szczelina są dopasowywane do sąsiedniego materiału bez wymuszania ukosu 45°.',
         'Gdy kolejne kołnierze rozchodzą się w różne strony i nie przecinają się, ich końce pozostają proste. Wspólna krawędź podstawy nie wymusza ukosu na wszystkich późniejszych poziomach.',
-        'Zastosuj do zaznaczonej blachy przelicza narożniki istniejącego modelu, także w projekcie zapisanym w starszej wersji. Nie dodaje kołnierza i zachowuje sposób wymiarowania każdego istniejącego gięcia. Przeliczenie można cofnąć.',
+        'Zastosuj do blachy przelicza narożniki istniejącego modelu, także w projekcie zapisanym w starszej wersji. Nie dodaje kołnierza i zachowuje sposób wymiarowania każdego istniejącego gięcia. Przeliczenie można cofnąć.',
         'Współczynnik K określa położenie warstwy obojętnej rozwinięcia. Zakres 0–0,5, domyślnie 0,44; dobierz go do materiału i prób na giętarce.']),
     ('t_flange', 'Kołnierz', 'Blacha: wyciągnięcie krawędzi w kołnierz', [
         'Wyciąga krawędź blachy w kołnierz z zadanym promieniem gięcia (promień stempla), kątem i długością prostej części.',

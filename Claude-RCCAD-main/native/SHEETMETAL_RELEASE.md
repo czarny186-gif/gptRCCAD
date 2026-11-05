@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.28 — automatyczne dopasowanie narożników i zawinięć
+# RCCAD Desktop 0.4.29 — nowe okno Reguł blach
+
+## Zmiany 0.4.29
+
+- Okno **Reguły blach** bez opisu drobnym drukiem na górze.
+- **Szczelina między kołnierzami**: obok pola obrazek pokazujący tę szczelinę. Domyślna szczelina to **0,1 mm**.
+- **Wycięcie w narożniku**: trzy ikony do wyboru (brak, kwadrat, okrąg) na rozwiniętym narożniku.
+- **Zastosuj do blachy**: gdy żadna blacha nie jest zaznaczona, program prosi o jej wskazanie kliknięciem (podświetla bryły pod kursorem) i przelicza ją po kliknięciu.
+- Na dole: **Zastosuj** (zatwierdza ustawienia i włącza Kołnierz), **Zamknij** oraz **Reset** (zamiast Anuluj) - przywraca ustawienia domyślne.
+
+## RCCAD Desktop 0.4.28 — automatyczne dopasowanie narożników i zawinięć
 
 ## Poprawki 0.4.28
 

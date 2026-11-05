@@ -11,9 +11,10 @@ import unittest
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication,QMessageBox,QCheckBox
+from PySide6.QtWidgets import QApplication,QMessageBox,QCheckBox,QLabel
 from rccad import kernel as k
 from rccad import history as hist
+from rccad import sheetmetal as shm
 from rccad.document import Body
 from rccad.studio import StudioWindow
 
@@ -121,6 +122,29 @@ class StudioTests(unittest.TestCase):
         self.assertIn(w.fl_relief.currentData(),('none','square','round'))
         self.assertFalse(w.flange_panel.isVisible())
         w.toggle_mode('rules');self.assertIsNone(w.mode)
+
+    def test_sheet_rules_panel_layout_reset_confirm_and_pick(self):
+        w=self.w;w.toggle_mode('rules')
+        texts=[l.text() for l in w.rules_panel.findChildren(QLabel)]
+        self.assertFalse(any(t.startswith('Reguły narożników przeliczają') or t.startswith('Narożniki są dopasowywane') for t in texts))
+        self.assertAlmostEqual(w.fl_gap.value(),.1);self.assertFalse(w.fl_gap_pic.pixmap().isNull())
+        self.assertEqual([b.text() for b in (w.rl_ok,w.rl_close,w.rl_reset)],['Zastosuj','Zamknij','Reset'])
+        self.assertEqual(w.fl_relief._data,['none','square','round'])
+        w.fl_gap.setValue(2);w.fl_relief.setCurrentIndex(2);w.fl_relief_size.setValue(7);w.fl_kfactor.setValue(.3);w.fl_joint.setCurrentIndex(0)
+        w.rl_reset.click()
+        self.assertEqual((w.fl_gap.value(),w.fl_relief.currentData(),w.fl_relief_size.value(),w.fl_joint.currentData()),(.1,'none',3.0,'sheet'))
+        self.assertAlmostEqual(w.fl_kfactor.value(),shm.K_DEFAULT);self.assertEqual(w.mode,'rules')
+        body=self.converted_sheet();w.selected=[];w.toggle_mode('rules');self.assertEqual(w.mode,'rules')
+        w.fl_gap.setValue(.4);w.fl_apply_rules.click()          # nic nie zaznaczono: trzeba wskazać blachę
+        self.assertTrue(w.rl_pick);self.assertIn('Kliknij blachę',w.rl_status.text())
+        with patch.object(w.view,'pick_body',return_value=None):w.view_clicked(5,5,False,False)
+        self.assertTrue(w.rl_pick);self.assertIn('nie jest blacha',w.rl_status.text())
+        with patch.object(w.view,'pick_body',return_value=body.id):w.view_clicked(5,5,False,False)
+        self.wait();self.assertFalse(w.rl_pick);self.assertEqual(w.selected,[body.id])
+        self.assertAlmostEqual(w._sheet_state(body.id)['rules']['gap'],.4)
+        w.fl_gap.setValue(.6);w.rl_ok.click()                    # Zastosuj: ustawienia zostają, włącza się gięcie
+        self.assertEqual(w.mode,'flange');self.assertTrue(w.flange_panel.isVisible());self.assertAlmostEqual(w._flange_rules()['gap'],.6)
+        w.toggle_mode('rules');w.rl_close.click();self.assertIsNone(w.mode)
 
     def converted_sheet(self):
         from rccad import sheetmetal as shm
@@ -431,7 +455,7 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(state['specs'][0]['measure'],'inner')      # reguły nie zmieniają sposobu mierzenia kołnierza
         self.assertEqual(state['rules']['gap'],.5)
         self.assertAlmostEqual(w.document.get(body.id).shape.Volume(),original,delta=.001)
-        w.undo();self.wait();self.assertEqual(w._sheet_state(body.id)['rules']['gap'],0)
+        w.undo();self.wait();self.assertAlmostEqual(w._sheet_state(body.id)['rules']['gap'],.1)      # domyślna szczelina 0,1 mm
 
     def test_sheet_joint_default_and_saved_rules_are_preserved(self):
         body = self.converted_sheet();w = self.w

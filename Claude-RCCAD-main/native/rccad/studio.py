@@ -50,6 +50,7 @@ VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '
 DIM_LABELS = {'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
               'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Ilość kątów'), 'circle2': ('Średnica (mm)',),
               'line': ('Długość (mm)', 'Kąt (°)'), 'construction': ('Długość (mm)', 'Kąt (°)'), 'measure': ('Długość (mm)', 'Kąt (°)')}
+RULES_DEFAULT = dict(gap=0.1, relief='none', relief_size=3.0, joint='sheet')     # Reguły blach: wartości przycisku Reset
 AXES = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 AXIS_COLORS = ((.89, .31, .33, 1), (.14, .64, .42, 1), (.2, .5, .9, 1))
 TINT_BASE = (.30, .55, .95, 1)
@@ -929,11 +930,18 @@ class StudioWindow(QMainWindow):
 
         # --- reguły blach: szczelina i wycięcia w narożnikach (osobny panel, dotyczy kołnierzy) ---
         self.rules_panel, lay = self._panel(312, 'Reguły blach', 'x_rules', 'Szczelina i wycięcia w narożnikach', plain=True, scroll=True)
-        lay.addWidget(_label('Reguły narożników przeliczają całą blachę przy dodaniu gięcia. Rozłóż blachę, aby edytować płaski model, także z zawinięciami. Rozwinięcie DXF uwzględnia aktualny obrys i linie gięć. Współczynnik K dobierz do materiału i prób gięcia.', 'small'))
-        lay.addWidget(_label('Narożniki są dopasowywane automatycznie do sąsiednich ścian, kołnierzy i zawinięć.', 'small'))
-        self.fl_gap = _spin(0, 0, 1e5, 3, .5)
-        self._field(lay, 'Szczelina między kołnierzami (mm)', self.fl_gap)
-        self.fl_relief = ui.Segmented([('Brak', 'none', 'rl_none'), ('Kwadrat', 'square', 'rl_sq'), ('Okrąg', 'round', 'rl_round')], 30)
+        self.fl_gap = _spin(RULES_DEFAULT['gap'], 0, 1e5, 3, .1)
+        lay.addWidget(_label('Szczelina między kołnierzami (mm)'))
+        gap_row = QHBoxLayout()
+        gap_row.setSpacing(12)
+        self.fl_gap_pic = QLabel()
+        self.fl_gap_pic.setFixedSize(64, 64)
+        self.fl_gap_pic.setPixmap(ui.icons.pixmap('rl_gap', 64))
+        self.fl_gap_pic.setToolTip('Odstęp między końcami dwóch kołnierzy spotykających się w narożniku.')
+        gap_row.addWidget(self.fl_gap_pic)
+        gap_row.addWidget(self.fl_gap, 1)
+        lay.addLayout(gap_row)
+        self.fl_relief = ui.Segmented([('Brak', 'none', 'rl_none'), ('Kwadrat', 'square', 'rl_sq'), ('Okrąg', 'round', 'rl_round')], 34)
         self._field(lay, 'Wycięcie w narożniku', self.fl_relief)
         self.fl_relief_size = _spin(3, 0, 1e5, 3, .5)
         self._field(lay, 'Wielkość wycięcia (mm)', self.fl_relief_size)
@@ -948,11 +956,24 @@ class StudioWindow(QMainWindow):
         self.fl_outside = QCheckBox('Długość kołnierza jako wymiar zewnętrzny')      # starsze projekty; nowe kołnierze mają odniesienie w panelu Kołnierz
         self.fl_outside.setToolTip('Podajesz długość od zewnętrznej powierzchni blachy do końca kołnierza. Program odejmuje część gięcia.')
         self.fl_outside.setVisible(False)
-        self.fl_apply_rules = QPushButton('Zastosuj do zaznaczonej blachy')
-        self.fl_apply_rules.setObjectName('primary')
+        self.rl_status = _label('Zaznacz blachę albo kliknij „Zastosuj do blachy” i wskaż ją.', 'status')
+        lay.addWidget(self.rl_status)
+        self.rl_pick = False         # „Zastosuj do blachy” bez zaznaczenia: następne kliknięcie wskazuje blachę
+        self.fl_apply_rules = QPushButton('Zastosuj do blachy')
         self.fl_apply_rules.clicked.connect(lambda _=False: self.apply_sheet_rules())
         self.rules_panel.footer.addWidget(self.fl_apply_rules)
-        self._buttons(self.rules_panel.footer, 'Zamknij', 'Anuluj', lambda: self.set_mode(None), lambda: self.set_mode(None))
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.rl_ok, self.rl_close, self.rl_reset = QPushButton('Zastosuj'), QPushButton('Zamknij'), QPushButton('Reset')
+        self.rl_ok.setObjectName('primary')
+        self.rl_ok.setToolTip('Zatwierdza ustawienia i włącza gięcie (Kołnierz): kolejne gięcia dostaną te reguły.')
+        self.rl_reset.setToolTip('Przywraca ustawienia domyślne.')
+        self.rl_ok.clicked.connect(lambda _=False: self.confirm_sheet_rules())
+        self.rl_close.clicked.connect(lambda _=False: self.set_mode(None))
+        self.rl_reset.clicked.connect(lambda _=False: self.reset_sheet_rules())
+        for b in (self.rl_ok, self.rl_close, self.rl_reset):
+            row.addWidget(b, 1)
+        self.rules_panel.footer.addLayout(row)
         # --- przeciągnięcie ---
         self.sweep_panel, lay = self._panel(312, 'Przeciągnięcie', 'x_sweep', 'Profil wzdłuż ścieżki → bryła', plain=True)
         lay.addWidget(_label('Przeciąga profil szkicu wzdłuż ścieżki, tworząc bryłę. Służy do rur, prowadnic, uchwytów i każdej części o stałym przekroju biegnącej wzdłuż krzywej.', 'small'))
@@ -1580,6 +1601,8 @@ class StudioWindow(QMainWindow):
                 self.fl_relief_size.setValue(float(rules.get('relief_size',3)))
                 self.fl_kfactor.setValue(float(rules.get('kfactor',shm.K_DEFAULT)))
                 self.fl_outside.setChecked(bool(rules.get('outside',False)))
+            self.rl_pick = False
+            self.rl_status.setText('Ustawienia wzięte z zaznaczonej blachy.' if state is not None else 'Zaznacz blachę albo kliknij „Zastosuj do blachy” i wskaż ją.')
             self.rules_panel.show()
             self.view.setCursor(Qt.ArrowCursor)
             self.hint('Reguły blach: szczelina i wycięcia w narożnikach dla nowych kołnierzy.')
@@ -2729,7 +2752,7 @@ class StudioWindow(QMainWindow):
                 self.view.overlay.update()
             elif self.mode == 'mrad':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
-            elif self.mode == 'mprops' or self.mode in DRAWING_MODES:
+            elif self.mode == 'mprops' or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
@@ -2810,6 +2833,10 @@ class StudioWindow(QMainWindow):
                 self.refresh()
                 self._update_grips()
                 self.sk_hint.setText('Wybierz kształt do rysowania')
+            return
+        if self.mode == 'rules':
+            if self.rl_pick:
+                self.pick_rules_sheet(x, y)
             return
         if self.mode == 'plane':
             plane, _ = self.pick_surface(x, y, True)
@@ -3995,16 +4022,53 @@ class StudioWindow(QMainWindow):
         body = bodies[0] if len(bodies) == 1 else None
         state = self._sheet_state(body.id) if body else None
         if state is None:
-            self.toast('Zaznacz jedną blachę w drzewie obiektów, aby zastosować reguły narożników.')
+            if self.mode == 'rules':
+                self.rl_pick = True          # nic nie zaznaczono: wskaż blachę kliknięciem
+                self.view.setCursor(Qt.PointingHandCursor)
+                self.rl_status.setText('Kliknij blachę, do której zastosować reguły.')
+                self.hint('Reguły blach: kliknij blachę.')
+            else:
+                self.toast('Zaznacz jedną blachę w drzewie obiektów, aby zastosować reguły narożników.')
             return
+        self.rl_pick = False
+        self.view.setCursor(Qt.ArrowCursor)
         specs = [dict(spec, outside=spec.get('outside', state['rules'].get('outside',False))) for spec in state['specs']]
         recipe = dict(type='sheetbuild',id=body.id,base=state['base'],t=state['t'],flanges=specs,rules=self._flange_rules())
         def apply(result):
             self.document.commit([result if b.id == body.id else b for b in self.document.bodies],
                                  label='Narożniki blachy',icon='flange',op=recipe)
             self.selected = [body.id]
+            if self.mode == 'rules':
+                self.rl_status.setText(f'Reguły zastosowane do: {body.name}.')
         source=replace(body,meta={'sheet':self._editable_sheet_state(body.id)})
         self.run_operation('Narożniki blachy',lambda:hist.run_sheetbuild([source],recipe)[0],apply)
+
+    def pick_rules_sheet(self, x, y):
+        bid = self.view.pick_body(x, y)
+        body = self.document.get(bid) if bid else None
+        if body is None or body.kind != 'solid' or self._sheet_state(body.id) is None:
+            self.rl_status.setText('To nie jest blacha. Kliknij blachę (najpierw KONWERTUJ NA BLACHĘ).')
+            return
+        self.selected = [body.id]
+        self.refresh()
+        self.apply_sheet_rules()
+
+    def confirm_sheet_rules(self):
+        """Zastosuj: ustawienia zostają w polach (używa ich każde następne gięcie) i włącza się Kołnierz."""
+        if self.busy:
+            return
+        self.set_mode('flange')
+        self.toast('Reguły blach zatwierdzone - kliknij krawędź, aby dodać gięcie.', 3000)
+
+    def reset_sheet_rules(self):
+        """Reset: domyślne ustawienia reguł blach."""
+        self.fl_gap.setValue(RULES_DEFAULT['gap'])
+        self.fl_relief.setCurrentIndex(self.fl_relief.findData(RULES_DEFAULT['relief']))
+        self.fl_relief_size.setValue(RULES_DEFAULT['relief_size'])
+        self.fl_kfactor.setValue(shm.K_DEFAULT)
+        self.fl_joint.setCurrentIndex(self.fl_joint.findData(RULES_DEFAULT['joint']))
+        self.fl_outside.setChecked(False)
+        self.rl_status.setText('Przywrócono ustawienia domyślne.')
 
     def pick_flange(self, x, y):
         hit = self.view.nearest_edge(x, y, True)
