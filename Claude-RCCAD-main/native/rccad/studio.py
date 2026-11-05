@@ -1077,6 +1077,22 @@ class StudioWindow(QMainWindow):
             steps = (ui.StepRow(1, 'x_wall', 'Ściana przesuwana', plain=True), ui.StepRow(2, 'x_wall', second, plain=True))
             for st in steps:
                 lay.addWidget(st)
+            if key == 'mate':
+                # obrót przesuwanej bryły wokół osi prostopadłej do ścian, co 45° - animowane strzałki
+                lay.addWidget(_label('Obrót wokół osi ścian', 'label'))
+                spin_row = QHBoxLayout()
+                spin_row.setSpacing(8)
+                self.mt_left = ui.SpinArrow(1, 'w lewo 45°')
+                self.mt_right = ui.SpinArrow(-1, 'w prawo 45°')
+                self.mt_angle = QLabel('0°')
+                self.mt_angle.setAlignment(Qt.AlignCenter)
+                self.mt_angle.setStyleSheet('font-size:20px;font-weight:700;color:#1f3b57;')
+                self.mt_left.clicked.connect(lambda _=False: self.spin_mate(45))
+                self.mt_right.clicked.connect(lambda _=False: self.spin_mate(-45))
+                spin_row.addWidget(self.mt_left)
+                spin_row.addWidget(self.mt_angle, 1)
+                spin_row.addWidget(self.mt_right)
+                lay.addLayout(spin_row)
             status = _label('', 'status')
             lay.addWidget(status)
             again = QPushButton('Wskaż ściany od nowa')
@@ -1479,6 +1495,9 @@ class StudioWindow(QMainWindow):
         self.mirror_id = None
         self.mirror_frame = None
         self.mt_pick = {}
+        self.mt_spin = 0.0
+        if hasattr(self, 'mt_angle'):
+            self.mt_angle.setText('0°')
         self.pat_id, self.pat_path = None, None
         self.mod_vertices = {}
         self.t_target = None
@@ -4702,8 +4721,23 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # dopasowanie (ściana do ściany) i wyrównanie (ściany na jednej wysokości)
     # =====================================================================
+    def spin_mate(self, step):
+        """Dopasowanie: obrót przesuwanej bryły o step stopni wokół osi prostopadłej do ścian (przez ich wspólny środek)."""
+        if self.mode != 'mate':
+            return
+        self.mt_spin = (getattr(self, 'mt_spin', 0.0) + float(step)) % 360.0
+        shown = self.mt_spin if self.mt_spin <= 180 else self.mt_spin - 360
+        self.mt_angle.setText(f'{shown:+.0f}°'.replace('+0°', '0°'))
+        if 'moving' in self.mt_pick and 'target' in self.mt_pick:
+            self.update_mate_preview()
+        else:
+            self.mt_status['mate'].setText('Obrót zostanie użyty po wskazaniu obu ścian.')
+
     def _mt_reset(self):
         self.mt_pick = {}
+        self.mt_spin = 0.0
+        if hasattr(self, 'mt_angle'):
+            self.mt_angle.setText('0°')
         self.view.set_preview_mesh(None)
         self._mt_update()
 
@@ -4737,9 +4771,12 @@ class StudioWindow(QMainWindow):
         if mv is None or tg is None:
             return None
         a, b = self.document.get(mv['id']), self.document.get(tg['id'])
-        return dict(type='mate', mode=self.mode, id=a.id, target=b.id,
-                    face=hist.face_ref(mv['face'], mv['normal'], mv['point'], a.shape),
-                    tface=hist.face_ref(tg['face'], tg['normal'], tg['point'], b.shape))
+        recipe = dict(type='mate', mode=self.mode, id=a.id, target=b.id,
+                      face=hist.face_ref(mv['face'], mv['normal'], mv['point'], a.shape),
+                      tface=hist.face_ref(tg['face'], tg['normal'], tg['point'], b.shape))
+        if self.mode == 'mate' and getattr(self, 'mt_spin', 0.0):
+            recipe['spin'] = float(self.mt_spin)
+        return recipe
 
     def _mt_update(self):
         if self.mode not in ('mate', 'align'):

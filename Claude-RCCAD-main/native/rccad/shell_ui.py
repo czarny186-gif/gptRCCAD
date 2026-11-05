@@ -472,3 +472,102 @@ def style_icon(name: str, size: int = 29) -> QIcon:
     icon.addPixmap(white, QIcon.Normal, QIcon.On)
     icon.addPixmap(white, QIcon.Active, QIcon.On)
     return icon
+
+
+class SpinArrow(QToolButton):
+    """Animowana strzałka obrotu (w lewo albo w prawo). Po najechaniu kursorem strzałka lekko „oddycha” (kołysze się
+    w swoim kierunku), a po kliknięciu wykonuje pełny obrót o 45° z łagodnym hamowaniem - widać, w którą stronę obróci się bryła."""
+
+    def __init__(self, direction=1, text='', size=56, parent=None):
+        from PySide6.QtCore import QVariantAnimation, QEasingCurve
+        super().__init__(parent)
+        self.direction = 1 if direction >= 0 else -1
+        self._phase = 0.0          # bieżący kąt rysowania strzałki (stopnie)
+        self._label = text
+        self.setFixedSize(size + 18, size + 26)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(text)
+        self.setObjectName('spinarrow')
+        self._size = size
+        self._hover = QVariantAnimation(self)
+        self._hover.setStartValue(0.0)
+        self._hover.setKeyValueAt(0.5, 14.0)
+        self._hover.setEndValue(0.0)
+        self._hover.setDuration(900)
+        self._hover.setLoopCount(-1)
+        self._hover.setEasingCurve(QEasingCurve.InOutSine)
+        self._hover.valueChanged.connect(self._set_phase)
+        self._turn = QVariantAnimation(self)
+        self._turn.setStartValue(0.0)
+        self._turn.setEndValue(45.0)
+        self._turn.setDuration(420)
+        self._turn.setEasingCurve(QEasingCurve.OutBack)
+        self._turn.valueChanged.connect(self._set_phase)
+        self._turn.finished.connect(lambda: self._set_phase(0.0))
+        self.pressed.connect(self._spin)
+
+    def _set_phase(self, value):
+        self._phase = float(value)
+        self.update()
+
+    def _spin(self):
+        self._hover.stop()
+        self._turn.stop()
+        self._turn.start()
+
+    def enterEvent(self, event):
+        if self._turn.state() != self._turn.State.Running:
+            self._hover.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover.stop()
+        if self._turn.state() != self._turn.State.Running:
+            self._set_phase(0.0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        import math
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QPen, QPainterPath, QPolygonF, QFont
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        hover = self.underMouse()
+        down = self.isDown()
+        box = QRectF(2, 2, self.width() - 4, self.height() - 4)
+        p.setPen(QPen(QColor('#2f87e8' if hover or down else '#d3e0ec'), 1.6))
+        p.setBrush(QColor('#e8f2fd' if down else ('#f3f8fe' if hover else '#ffffff')))
+        p.drawRoundedRect(box, 10, 10)
+        cx, cy, r = self.width() / 2, 6 + self._size / 2, self._size * 0.30
+        p.translate(cx, cy)
+        p.rotate(-self.direction * self._phase)      # w lewo = przeciwnie do ruchu wskazówek zegara
+        # tarcza: jasny okrąg z kropką środka
+        p.setPen(QPen(QColor('#cfe4fb'), 2.0)); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(0, 0), r, r)
+        p.setPen(Qt.NoPen); p.setBrush(QColor('#40586f')); p.drawEllipse(QPointF(0, 0), 2.6, 2.6)
+        # łuk 270° ze strzałką na końcu (pomarańczowy, kolor czynności)
+        span = 270.0      # w lewo: przeciwnie do wskazówek zegara przez górę; w prawo: zgodnie
+        start = -45.0 if self.direction > 0 else 225.0
+        sweep = span if self.direction > 0 else -span
+        pen = QPen(QColor('#f09a22'), 3.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        rect = QRectF(-r, -r, 2 * r, 2 * r)
+        path = QPainterPath()
+        path.arcMoveTo(rect, start)
+        path.arcTo(rect, start, sweep)
+        p.drawPath(path)
+        end = math.radians(start + sweep)
+        tip = QPointF(r * math.cos(end), -r * math.sin(end))
+        tangent = (-math.sin(end) * (1 if sweep > 0 else -1), -math.cos(end) * (1 if sweep > 0 else -1))
+        normal = (-tangent[1], tangent[0])
+        head = 7.5
+        back = QPointF(tip.x() - tangent[0] * head, tip.y() - tangent[1] * head)
+        p.setPen(Qt.NoPen); p.setBrush(QColor('#f09a22'))
+        p.drawPolygon(QPolygonF([QPointF(tip.x() + tangent[0] * 2.5, tip.y() + tangent[1] * 2.5),
+                                 QPointF(back.x() + normal[0] * 5.0, back.y() + normal[1] * 5.0),
+                                 QPointF(back.x() - normal[0] * 5.0, back.y() - normal[1] * 5.0)]))
+        p.resetTransform()
+        f = QFont(self.font()); f.setPixelSize(11); f.setBold(hover)
+        p.setFont(f); p.setPen(QColor('#1f3b57' if hover else '#40586f'))
+        p.drawText(QRectF(0, self.height() - 22, self.width(), 18), Qt.AlignCenter, self._label)
+        p.end()

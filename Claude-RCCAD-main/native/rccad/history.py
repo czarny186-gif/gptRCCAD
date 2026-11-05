@@ -864,7 +864,15 @@ def _rotation_between(a, b):
     return np.eye(3) + vx + vx @ vx * (1 / (1 + c))
 
 
-def placement(mode, face, normal, target, tnormal):
+def _axis_rotation(axis, degrees):
+    """Macierz obrotu o kąt (stopnie) wokół osi przechodzącej przez początek układu (wzór Rodriguesa)."""
+    k = _unit(axis)
+    a = np.radians(float(degrees))
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * (K @ K)
+
+
+def placement(mode, face, normal, target, tnormal, spin=0.0):
     """Macierz 3x4 przekształcenia przesuwanej bryły.
     mate (Dopasowanie): ściana obraca się tak, by patrzeć wprost na ścianę docelową (normalne przeciwne), a jej środek trafia
     w środek ściany docelowej - bryły stykają się tymi ścianami. align (Wyrównanie): bez obrotu, przesunięcie wzdłuż normalnej
@@ -874,7 +882,8 @@ def placement(mode, face, normal, target, tnormal):
     if mode == 'align':
         R, t = np.eye(3), float((cb - ca) @ nb) * nb
     elif mode == 'mate':
-        R = _rotation_between(na, -nb)
+        # spin: dodatkowy obrót (np. co 45°) wokół normalnej ściany docelowej przez jej środek - ściany dalej przylegają
+        R = _axis_rotation(nb, spin) @ _rotation_between(na, -nb)
         t = cb - R @ ca
     else:
         raise kernel.CadError('Nieznany rodzaj dopasowania.')
@@ -904,7 +913,8 @@ def run_mate(bodies, recipe):
         raise kernel.CadError('Wybierz ściany dwóch różnych brył.')
     face, _ = match_face(body.shape, recipe['face'])
     tface, _ = match_face(target.shape, recipe['tface'])
-    matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), tface, outward_normal(target.shape, tface))
+    matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), tface, outward_normal(target.shape, tface),
+                       float(recipe.get('spin', 0.0)))
     return _replace(bodies, body.changed(apply_placement(body.shape, matrix)))
 
 

@@ -22,7 +22,7 @@ TOPICS = [
         'Enter zatwierdza, Esc anuluje.']),
     ('t_mate', 'Dopasowanie', 'Ściana jednej bryły do ściany drugiej', [
         'Zakładka Bryła → Dopasowanie. Kliknij płaską ścianę bryły, która ma się przesunąć, potem płaską ścianę drugiej bryły. Pierwsza bryła obraca się i przesuwa tak, że jej ściana przylega do ściany drugiej bryły (patrzą na siebie), a środki obu ścian się spotykają.',
-        'Zielony podgląd pokazuje nowe położenie. Kliknięcie innej ściany przesuwanej bryły zmienia jej ścianę, kliknięcie ściany innej bryły - ścianę docelową. Zastosuj albo Enter zatwierdza; krok trafia do historii i przelicza się po zmianie wcześniejszych kroków.']),
+        'Zielony podgląd pokazuje nowe położenie. Kliknięcie innej ściany przesuwanej bryły zmienia jej ścianę, kliknięcie ściany innej bryły - ścianę docelową. Strzałki „w lewo 45°” i „w prawo 45°” obracają przesuwaną bryłę wokół osi prostopadłej do ścian, przez ich wspólny środek (ściany dalej przylegają); kąt widać między strzałkami. Zastosuj albo Enter zatwierdza; krok trafia do historii i przelicza się po zmianie wcześniejszych kroków.']),
     ('t_align', 'Wyrównanie', 'Ściany dwóch brył na jednej wysokości', [
         'Zakładka Bryła → Wyrównanie. Kliknij ścianę bryły, która ma się przesunąć, potem ścianę wzorcową innej bryły. Cała pierwsza bryła przesuwa się bez obracania wzdłuż kierunku ściany wzorcowej, aż obie ściany leżą na tej samej wysokości.',
         'Działa w każdej płaszczyźnie: góra / dół, przód / tył, lewo / prawo - kierunek wyznacza ściana wzorcowa.']),

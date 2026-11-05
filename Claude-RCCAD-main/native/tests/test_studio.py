@@ -922,6 +922,24 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.document.info['op']['type'],'mate');self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),16000,6)      # bryła docelowa bez zmian
         w.undo();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.BoundingBox().zmin,0,6)
 
+    def test_mate_spin_arrows_turn_moving_body_in_45_degree_steps(self):
+        w=self.w
+        a=Body('A',k.box(10,20,30)).prepared();b=Body('B',k.box(40,40,10).translate(cq.Vector(100,50,0))).prepared()
+        w.document.commit([a,b]);w.refresh();w.toggle_mode('mate')
+        self.assertTrue(w.mt_left.isVisible());self.assertEqual(w.mt_angle.text(),'0°')
+        self._mate_pick(a,(-1,0,0),(0,10,15));self._mate_pick(b,(0,0,1),(120,70,10))
+        w.mt_left.click();self.assertEqual(w.mt_angle.text(),'+45°');self.assertEqual(w._mt_recipe()['spin'],45.0)
+        w.mt_left.click();w.mt_right.click();w.mt_left.click()          # +45 +45 -45 +45 = 90
+        self.assertEqual(w.mt_angle.text(),'+90°')
+        w.apply_mate();self.wait();bb=w.document.get(a.id).shape.BoundingBox()
+        self.assertAlmostEqual(bb.xlen,20,4);self.assertAlmostEqual(bb.ylen,30,4)        # bez obrotu 30 x 20
+        self.assertAlmostEqual(bb.zmin,10,4)
+        self.assertTrue(any(np.allclose(f.Center().toTuple(),(120,70,10),atol=1e-5) for f in w.document.get(a.id).shape.Faces()))
+        self.assertEqual(w.document.info['op']['spin'],90.0)
+        w.toggle_mode('mate');self.assertEqual(w.mt_angle.text(),'0°')                 # nowe dopasowanie zaczyna od zera
+        for _ in range(5):w.spin_mate(-45)
+        self.assertEqual(w.mt_angle.text(),'+135°')                                    # -225° = +135°
+
     def test_align_moves_body_along_reference_normal_only_and_replays(self):
         w=self.w
         a=Body('Niski',k.box(10,10,30)).prepared();c=Body('Wysoki',k.box(10,10,50).translate(cq.Vector(30,0,0))).prepared()

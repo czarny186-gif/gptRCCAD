@@ -1,4 +1,8 @@
-# RCCAD Desktop 0.4.21 — dopasowanie i wyrównanie brył
+# RCCAD Desktop 0.4.22 — obrót w dopasowaniu
+
+## Zmiany 0.4.22
+
+- **Bryła → Dopasowanie:** animowane strzałki „w lewo 45°” i „w prawo 45°” obracają przesuwaną bryłę co 45° wokół osi prostopadłej do ścian, przez ich wspólny środek - ściany dalej przylegają, a środki się pokrywają. Bieżący kąt widać między strzałkami, podgląd odświeża się od razu, a kąt zapisuje się w historii.
 
 ## Zmiany 0.4.21
 
