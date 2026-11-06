@@ -1212,9 +1212,12 @@ class CadView(gl.GLViewWidget):
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
             data = _pick_data(body.mesh)
-            hit = _ray_triangles(data, origin, direction)
+            hit = _ray_triangles(data, *self._local_ray(body.id, origin, direction))
             if hit is not None and (best is None or hit[0] < best[0]):
                 n = np.cross(data['e1'][hit[1]], data['e2'][hit[1]])
+                m = self._moved(body.id)
+                if m is not None:
+                    n = m[:3, :3] @ n
                 n = n / max(np.linalg.norm(n), 1e-12)
                 best = (hit[0], body.id, n, origin + direction * hit[0])
         return None if best is None else (best[1], best[2], best[3])
@@ -1374,8 +1377,10 @@ class CadView(gl.GLViewWidget):
             data = _pick_data(body.mesh)
             if 'a' not in data:
                 continue
-            pa, za, wa = self.project_points(data['a'])
-            pb, zb, wb = self.project_points(data['b'])
+            m = self._moved(body.id)
+            seg_a, seg_b = (data['a'], data['b']) if m is None else (self._apply_m(m, data['a']), self._apply_m(m, data['b']))
+            pa, za, wa = self.project_points(seg_a)
+            pb, zb, wb = self.project_points(seg_b)
             delta = pb - pa
             denom = (delta * delta).sum(axis=1)
             t = np.clip(((cursor - pa) * delta).sum(axis=1) / np.maximum(denom, 1e-12), 0, 1)
@@ -1383,7 +1388,7 @@ class CadView(gl.GLViewWidget):
             dist[(wa <= 0) | (wb <= 0) | ~np.isfinite(dist)] = np.inf
             near = np.nonzero(dist < 10.)[0]
             for j in near:
-                found.append((float(dist[j]), len(found), body.id, int(data['edge'][j]), data['a'][j] + (data['b'][j] - data['a'][j]) * t[j]))
+                found.append((float(dist[j]), len(found), body.id, int(data['edge'][j]), seg_a[j] + (seg_b[j] - seg_a[j]) * t[j]))
         found.sort(key=lambda item: (item[0], item[1]))
         seen = set()
         for _, _, bid, index, world in found:
@@ -1427,12 +1432,33 @@ class CadView(gl.GLViewWidget):
         direction = pts[1] - pts[0]
         return pts[0], direction / np.linalg.norm(direction)
 
+    def _moved(self, bid):
+        """Macierz podglądu przesunięcia / obrotu bryły (numpy 4x4) albo None. Wskazywanie myszą trafia w bryłę tam,
+        gdzie ją widać - także zanim przesunięcie zostanie zatwierdzone."""
+        m = self._body_m.get(bid) if getattr(self, '_body_m', None) else None
+        if m is None:
+            return None
+        return np.array(m.data(), float).reshape(4, 4).T
+
+    @staticmethod
+    def _apply_m(m, points):
+        points = np.asarray(points, float)
+        return points @ m[:3, :3].T + m[:3, 3]
+
+    def _local_ray(self, bid, origin, direction):
+        m = self._moved(bid)
+        if m is None:
+            return origin, direction
+        r, t = m[:3, :3], m[:3, 3]
+        inv = np.linalg.inv(r)            # obrót + przesunięcie: odległość wzdłuż promienia się nie zmienia
+        return inv @ (np.asarray(origin, float) - t), inv @ np.asarray(direction, float)
+
     def _hit(self, origin, direction):
         best = None
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
-            hit = _ray_triangles(_pick_data(body.mesh), origin, direction)
+            hit = _ray_triangles(_pick_data(body.mesh), *self._local_ray(body.id, origin, direction))
             if hit is None:
                 continue
             # szkic leżący na ścianie bryły (ta sama odległość) wygrywa z bryłą - inaczej trafiałoby się w bryłę
@@ -1568,7 +1594,8 @@ class CadView(gl.GLViewWidget):
                 near = self.nearest_edge(x, y)
                 bid = near[0] if near else None
             ray = self._ray(x, y)
-            if bid == self.free_drag[0] and ray is not None:
+            ids = self.free_drag[2] if len(self.free_drag) > 2 else {self.free_drag[0]}
+            if bid in ids and ray is not None:
                 c = self.camera_dir()
                 axis = np.zeros(3)
                 axis[int(np.argmax(np.abs(c)))] = 1.0

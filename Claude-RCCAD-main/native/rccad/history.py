@@ -1778,3 +1778,73 @@ def mod_preview_job(token, shape, ids, points, size, kind, margin):
         _MOD_CACHE.clear()
         _MOD_CACHE.update(token=token, shape=shape)
     return mod_preview(shape, ids, points, size, kind, margin, _MOD_CACHE)
+
+
+# ---------- podglądy liczone w procesach roboczych (okno nie czeka na OpenCascade) ----------
+def background(function, *args):
+    """Zadanie podglądu w procesie roboczym; gdy procesów nie ma albo czegoś nie da się przesłać - tutaj (w wątku)."""
+    from . import workers
+    try:
+        return workers.call_any(function, *args)
+    except workers.Unavailable:
+        return function(*args)
+
+
+def light(bodies):
+    """Bryły bez siatek - do przesłania do procesu (siatki są tam niepotrzebne, a ważą najwięcej)."""
+    return [replace(b, mesh=None) for b in bodies]
+
+
+def preview_meshes(makers, tol):
+    """Siatki brył-narzędzi (wyciągnięcie, obrót, przeciągnięcie...): `makers` to funkcje z argumentami (functools.partial)."""
+    return [kernel.display_mesh(make(), tol) for make in makers]
+
+
+def mesh_of(function, args, tol):
+    return kernel.display_mesh(function(*args), tol)
+
+
+def split_preview(bodies, recipe, tol):
+    parts = split_shapes(bodies, recipe)
+    keep = recipe['keep']
+    meshes = [(kernel.display_mesh(shape, tol), side, keep == 'both' or str(side) == keep) for shape, side in parts]
+    cut = None
+    if recipe['method'] in ('plane', 'face'):
+        body = next(b for b in bodies if b.id == recipe['id'])
+        n = np.array(recipe['normal'], float)
+        n = n / np.linalg.norm(n)
+        cut = kernel.display_mesh(kernel.cut_plane_face(body.shape, n, np.array(recipe['origin'], float) + n * recipe['offset'], 1.15))
+    return meshes, cut
+
+
+def recipe_body_mesh(bodies, recipe, tol):
+    with kernel.deferred_mesh():
+        moved = next(b for b in run_recipe(bodies, recipe) if b.id == recipe['id'])
+    return kernel.display_mesh(moved.shape, tol)
+
+
+def history_preview(bodies, recipe, values, tol):
+    with kernel.deferred_mesh():       # potrzebne same kształty: podgląd ma własną, rzadszą siatkę
+        result = run_recipe(bodies, recipe, values)
+    return [kernel.display_mesh(b.shape, tol) for b in result if b.kind == 'solid' and b.visible]
+
+
+def sweep_profile(src, path):
+    return kernel.sweep_face(profile_outer(src), path)
+
+
+def face_indices(shape, faces):
+    """Numery ścian bryły - ściany przesłane osobno do procesu tracą powiązanie z bryłą, numery nie."""
+    own = shape.Faces()
+    out = []
+    for face in faces:
+        index = next((i for i, f in enumerate(own) if f.wrapped.IsSame(face.wrapped)), None)
+        if index is None:
+            raise kernel.CadError('Wybrana ściana nie należy już do bryły.')
+        out.append(index)
+    return out
+
+
+def shell_indexed(shape, indices, thickness, inward):
+    faces = shape.Faces()
+    return kernel.shell_solid(shape, [faces[i] for i in indices], thickness, inward)

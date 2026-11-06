@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.48 — praca w tle bez zacinania, natychmiastowy podgląd zaokrągleń
+# RCCAD Desktop 0.4.49 — podglądy w tle, płynne przesuwanie i obracanie
+
+## Zmiany 0.4.49
+
+- **Przesuń / Obróć bez przeliczania**: do Zastosuj bryła tylko przesuwa się / obraca na ekranie; geometria liczy się w tle dopiero po zatwierdzeniu.
+- **Bryłę łapie się tam, gdzie ją widać**: wcześniej po przesunięciu kliknięcie w widoczną bryłę trafiało w pustkę (program szukał jej w starym miejscu), więc nie dało się jej dalej przeciągać, a kliknięcie obok wybierało ją od nowa i kasowało ustawione wartości. Teraz wskazywanie uwzględnia przesunięcie / obrót z podglądu, a ponowne kliknięcie tego samego obiektu zostawia ustawienie.
+- **Podglądy w procesach liczących**: wyciągnięcie, obrót, przeciągnięcie, wyciągnięcie złożone, skorupa, operacje logiczne, przecięcie, lustro, dopasowanie i zmiana kroku historii liczą się w osobnych procesach; okno nie czeka na wynik, a podgląd pokazuje się, gdy jest gotowy (zawsze dla ostatniej wartości).
+- **Bez zbędnego liczenia przy zmianie wartości**: środek bryły, odstęp szkicu od skręconej ściany i położenie profilu względem brył (połącz / wytnij) liczą się raz dla zaznaczenia, a nie przy każdej zmianie liczby. Pomiar (blok z 64 zaokrągleniami): przesuwanie płaszczyzny cięcia - najdłuższe zacięcie 300 ms → 45 ms.
+
+## RCCAD Desktop 0.4.48 — praca w tle bez zacinania, natychmiastowy podgląd zaokrągleń
 
 ## Zmiany 0.4.48
 

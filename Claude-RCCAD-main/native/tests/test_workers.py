@@ -151,6 +151,18 @@ class WorkerTests(unittest.TestCase):
             workers.call_affine(('mod',), hist.mod_preview_job, ('c', 2), None, ids, None, 1.0, 'fillet', 4.0)
         self.assertIsInstance(caught.exception.__cause__, LookupError)
 
+    def test_previews_are_computed_in_processes(self):
+        from functools import partial
+        wire = k.sketch('rectangle', 'XY', 20, 10)
+        makers = [partial(k.extrude, wire, 'XY', 15.0, False), partial(k.extrude_dir, wire, [0, 0, 1], -5.0, 0.0)]
+        a, b = k.box(20, 20, 20), k.box(10, 10, 40).translate((5, 5, -10))
+        with patch.object(k, 'display_mesh', side_effect=AssertionError('liczone w oknie zamiast w procesie')):
+            meshes = hist.background(hist.preview_meshes, makers, .3)
+            cut = hist.background(hist.mesh_of, k.boolean, ('subtract', a, [b]), .3)
+        self.assertEqual(len(meshes), 2)
+        self.assertAlmostEqual(float(meshes[0].vertices[:, 2].max()), 15, 3)
+        self.assertGreater(len(cut.triangles), 12)
+
 
 if __name__ == '__main__':
     unittest.main()

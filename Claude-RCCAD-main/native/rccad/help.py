@@ -7,7 +7,7 @@ from . import icons
 TOPICS = [
     ('new', 'Start', 'Jak zacząć', [
         'Po uruchomieniu widzisz trzy płaszczyzny środkowe (XY, XZ, YZ). Obracaj widok lewym przyciskiem myszy, przesuwaj prawym lub Shift + lewy, zoom kółkiem. Przytrzymane kółko (samo albo razem z lewym przyciskiem) też przesuwa obraz - na boki i w górę / w dół, także na widoku prosto na płaszczyznę.',
-        'Ciężkie operacje (zaokrąglenia, wycięcia, blachy) liczą się w tle, w osobnych procesach: w tym czasie możesz obracać i oglądać model. Mały pomarańczowy pasek pod kostką nawigacji pokazuje, że coś się liczy. Esc przerywa trwającą operację - model zostaje bez zmian.',
+        'Ciężkie operacje (zaokrąglenia, wycięcia, blachy) liczą się w tle, w osobnych procesach: w tym czasie możesz obracać i oglądać model. Mały pomarańczowy pasek pod kostką nawigacji pokazuje, że coś się liczy. Esc przerywa trwającą operację - model zostaje bez zmian. Podglądy narzędzi (wyciągnięcie, obrót, skorupa, przecięcie, lustro, operacje logiczne, dopasowanie, zmiana kroku historii) też liczą się w procesach w tle, a okno pokazuje je, gdy są gotowe.',
         'Pasek narzędzi u góry: Plik, Szkic, Wyciągnij, Obrót, Przeciągnięcie, Wyciągnięcie złożone, Skorupa, Połącz, Edytuj (zaokrąglanie, fazowanie), Lustro.',
         'Cofanie i ponawianie: strzałki w prawym górnym rogu albo Ctrl+Z / Ctrl+Y. Przycisk z warstwami pokazuje płaszczyzny, przycisk obok włącza przezroczyste bryły.']),
     ('t_toolbox', 'Ulubione i Przybornik', 'Twoje najczęściej używane narzędzia w jednej zakładce', [
@@ -120,7 +120,8 @@ TOPICS = [
     ('sym', 'Przesuń i obróć', 'Transformacje', [
         'Zaznacz bryłę lub szkic. Przesuwanie: pociągnij kolorową strzałkę osi, kwadrat płaszczyzny albo złap samą bryłę lewym przyciskiem.',
         'Obrót: pociągnij kolorowy pierścień wokół osi. Wartości można też wpisać. Strzałki dopasowują się do ustawienia kamery.',
-        'Okno Przesuń / Obróć (po lewej) ma pola X, Y, Z z kolorowymi ikonami osi (przesunięcie w mm, obrót w stopniach). Zastosuj zatwierdza, Zamknij zamyka okno bez zmian.']),
+        'Okno Przesuń / Obróć (po lewej) ma pola X, Y, Z z kolorowymi ikonami osi (przesunięcie w mm, obrót w stopniach). Zastosuj zatwierdza, Zamknij zamyka okno bez zmian.',
+        'Do zatwierdzenia nic się nie przelicza: bryła tylko przesuwa się / obraca na ekranie, więc ustawianie jest płynne nawet dla dużych brył. Bryłę łapie się tam, gdzie ją widać, a ponowne kliknięcie jej nie kasuje ustawionych wartości - można poprawiać dalej. Geometria liczy się w tle po Zastosuj.']),
     ('f_save', 'Historia i zapis projektu', 'Kroki, autozapis, zapis kompaktowy', [
         'Każda operacja to krok historii na dolnym pasku. Opis kroku podaje wartości, np. „Kołnierz 20 mm, 90°”, „Przesunięcie X +15 mm”, „Wyciągnięcie 10 mm” - widać je w podpowiedzi kroku, na liście kroków i w tytule Edycji kroku.',
         'Historia pamięta 999 kroków. Przy 950 krokach program ostrzega jeden raz; po przekroczeniu limitu najstarsze kroki są usuwane (też z komunikatem). Aby zachować stan, zapisz wariant w menu historii.',

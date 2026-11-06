@@ -19,6 +19,7 @@ icons_orange = '#f09a22'
 from .document import Body, Document
 from . import history as hist
 from . import workers
+from functools import partial
 from . import sheetmetal as shm
 from . import sheetedit as she
 from .viewcube import ViewCube
@@ -73,6 +74,19 @@ def fmt(value, digits=3):
 
 def kernel_close(a, b, tol=1e-3):
     return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+
+_CENTERS = {}
+
+
+def _center(shape):
+    """Środek masy bryły (cq Vector) zapamiętany dla kształtu - liczenie go przy każdej zmianie wartości zacinało okno."""
+    hit = _CENTERS.get(id(shape))
+    if hit is None or hit[0] is not shape:
+        if len(_CENTERS) > 256:
+            _CENTERS.clear()
+        hit = _CENTERS[id(shape)] = (shape, shape.Center())
+    return hit[1]
 
 
 def _merge_meshes(meshes):
@@ -3608,20 +3622,30 @@ class StudioWindow(QMainWindow):
         value = self.ex_value.value()
         if abs(value) < 1e-6:
             return
-        n = np.array(src['normal'], float)
-        c = np.array(src['center'], float)
-        solids = [b for b in self.document.bodies if b.kind == 'solid']
-        touching = src.get('kind') in ('face', 'cyl')
-        sample = c + n * (.05 if value > 0 else -.05)
-        inside = False
-        try:
-            if not touching:
-                touching = any(kernel.point_state(b.shape, c) != 'out' for b in solids)
-            inside = touching and any(kernel.point_state(b.shape, sample) == 'in' for b in solids)
-            if not touching and src.get('plane') is not None and hist.gap_pad(self.document.bodies, src) > 0:
-                touching, inside = True, value < 0      # szkic na skręconej ścianie: między nim a bryłą jest przerwa, ale to nadal jej ściana
-        except Exception:
-            return
+        # położenie profilu względem brył zależy tylko od profilu, modelu i strony (+/-), nie od samej wartości:
+        # liczone raz, a nie przy każdej zmianie odległości
+        key = (id(src), self.document._revision, value > 0)
+        cache = self.__dict__.setdefault('_ex_side_cache', {})
+        hit = cache.get(key)
+        if hit is None:
+            n = np.array(src['normal'], float)
+            c = np.array(src['center'], float)
+            solids = [b for b in self.document.bodies if b.kind == 'solid']
+            touching = src.get('kind') in ('face', 'cyl')
+            sample = c + n * (.05 if value > 0 else -.05)
+            inside = False
+            try:
+                if not touching:
+                    touching = any(kernel.point_state(b.shape, c) != 'out' for b in solids)
+                inside = touching and any(kernel.point_state(b.shape, sample) == 'in' for b in solids)
+                if not touching and src.get('plane') is not None and self._gap_pad(src) > 0:
+                    touching, inside = True, value < 0      # szkic na skręconej ścianie: między nim a bryłą jest przerwa, ale to nadal jej ściana
+            except Exception:
+                return
+            if len(cache) > 64:
+                cache.clear()
+            cache[key] = hit = (src, touching, inside)
+        touching, inside = hit[1], hit[2]
         want = 'new' if not touching else ('cut' if inside else 'join')
         if self.ex_op.currentData() != want:
             self._ex_auto = True
@@ -3629,6 +3653,17 @@ class StudioWindow(QMainWindow):
                 self.ex_op.setCurrentIndex(self.ex_op._data.index(want))
             finally:
                 self._ex_auto = False
+
+    def _gap_pad(self, src):
+        """Odstęp szkicu od skręconej ściany (hist.gap_pad) - zapamiętany dla profilu i stanu modelu (to drogie liczenie)."""
+        key = (id(src), self.document._revision)
+        cache = self.__dict__.setdefault('_gap_cache', {})
+        hit = cache.get(key)
+        if hit is None:
+            if len(cache) > 64:
+                cache.clear()
+            cache[key] = hit = (src, hist.gap_pad(self.document.bodies, src))
+        return hit[1]
 
     def _ex_op_user_changed(self):
         if not getattr(self, '_ex_auto', False):
@@ -3670,24 +3705,24 @@ class StudioWindow(QMainWindow):
         for src in self.ex_profiles:
             wire, normal, plane, face = src['wire'], src['normal'], src['plane'], src.get('face')
             if src.get('kind') == 'cyl':          # ściana walcowa: zmiana promienia o d1 (+ dodaje, - wycina materiał)
-                out.append(lambda info=src['cyl'], a=d1: kernel.cylinder_offset_tool(info, a))
+                out.append(partial(kernel.cylinder_offset_tool, src['cyl'], d1))
                 continue
             if face is not None:
-                out.append(lambda f=face, n=normal, a=d1, b=d2 if mode == 'two' else 0.0, s=mode == 'symmetric': kernel.extrude_face(f, n, a, b, s))
+                out.append(partial(kernel.extrude_face, face, normal, d1, d2 if mode == 'two' else 0.0, mode == 'symmetric'))
             elif mode == 'two':
-                out.append(lambda w=wire, n=normal, a=d1, b=d2: kernel.extrude_dir(w, n, a, b))
+                out.append(partial(kernel.extrude_dir, wire, normal, d1, d2))
             elif plane is not None:
-                pad = hist.gap_pad(self.document.bodies, src) if mode == 'one' else 0.0
+                pad = self._gap_pad(src) if mode == 'one' else 0.0
                 if pad > 0:      # szkic na płaszczyźnie przylegającej do skręconej ściany: narzędzie cofnięte o odstęp, żeby nie została przerwa
-                    out.append(lambda w=wire, n=normal, a=d1, b=-pad if d1 < 0 else pad: kernel.extrude_dir(w, n, a, b))
+                    out.append(partial(kernel.extrude_dir, wire, normal, d1, -pad if d1 < 0 else pad))
                 else:
-                    out.append(lambda w=wire, p=plane, a=d1, s=mode == 'symmetric': kernel.extrude(w, p, a, s))
+                    out.append(partial(kernel.extrude, wire, plane, d1, mode == 'symmetric'))
             else:
-                out.append(lambda w=wire, n=normal, a=d1, s=mode == 'symmetric': kernel.extrude_dir(w, n, a, 0.0, s))
+                out.append(partial(kernel.extrude_dir, wire, normal, d1, 0.0, mode == 'symmetric'))
         if mode == 'ends':       # oba końce: ta sama odległość na przeciwległej ścianie bryły (np. spód sześcianu dla wskazanej góry)
-            bodies = list(self.document.bodies)
+            bodies = hist.light(self.document.bodies)
             for src in self.ex_profiles:
-                out.append(lambda b=bodies, p=src, a=d1: hist.opposite_tool(b, p, a))
+                out.append(partial(hist.opposite_tool, bodies, src, d1))
         return out
 
     def update_extrude_preview(self):
@@ -3697,8 +3732,8 @@ class StudioWindow(QMainWindow):
         op = self.ex_op.currentData()
         value_now = self.ex_value.value()
 
-        def compute():
-            return _merge_meshes([kernel.display_mesh(make(), PREVIEW_TOL) for make in makers])
+        def compute():          # bryły podglądu liczy proces roboczy - okno w tym czasie działa normalnie
+            return _merge_meshes(hist.background(hist.preview_meshes, makers, PREVIEW_TOL))
 
         def show(mesh, error):
             if self.mode != 'extrude' or not self.ex_profiles:
@@ -3899,7 +3934,7 @@ class StudioWindow(QMainWindow):
         if not self.rev_profiles:
             raise kernel.CadError('Wybierz profil szkicu lub ścianę.')
         axis, angle = self._rev_axis_spec(), self.rev_angle.value()
-        return [lambda s=src: hist.make_revolve(s, axis, angle) for src in self.rev_profiles]
+        return [partial(hist.make_revolve, src, axis, angle) for src in self.rev_profiles]
 
     def update_revolve_preview(self):
         if self.mode != 'revolve' or not self.rev_profiles:
@@ -3911,8 +3946,8 @@ class StudioWindow(QMainWindow):
             return
         op = self.rev_op.currentData()
 
-        def compute():
-            return _merge_meshes([kernel.display_mesh(make(), PREVIEW_TOL) for make in makers])
+        def compute():          # bryły podglądu liczy proces roboczy - okno w tym czasie działa normalnie
+            return _merge_meshes(hist.background(hist.preview_meshes, makers, PREVIEW_TOL))
 
         def show(mesh, error):
             if self.mode != 'revolve' or not self.rev_profiles:
@@ -4108,7 +4143,7 @@ class StudioWindow(QMainWindow):
         mesh = body.mesh
         if body.kind == 'solid':
             box = kernel.bounds(body.shape)
-            c = body.shape.Center()
+            c = _center(body.shape)
             vol = float(body.shape.Volume())
             self._measure_show(f'<b>{body.name}</b><br>Objętość: {vol:,.2f} mm³ ({vol / 1000:,.3f} cm³)<br>Pole powierzchni: {float(body.shape.Area()):,.2f} mm²<br>'
                                f'Wymiary: {box.xmax - box.xmin:.3f} × {box.ymax - box.ymin:.3f} × {box.zmax - box.zmin:.3f} mm<br>Środek masy: ({c.x:.2f}; {c.y:.2f}; {c.z:.2f})',
@@ -4793,7 +4828,7 @@ class StudioWindow(QMainWindow):
         faces, thickness, inward = [f['face'] for f in self.sh_faces], self.sh_thick.value(), self.sh_dir.currentData() == 'in'
 
         def compute():
-            return body.changed(kernel.shell_solid(body.shape, faces, thickness, inward))
+            return body.changed(*hist.offloaded_shape(hist.shell_indexed, body.shape, hist.face_indices(body.shape, faces), thickness, inward))
 
         def show(result, error):
             if self.mode != 'shell' or self.sh_id != body.id:
@@ -4815,7 +4850,7 @@ class StudioWindow(QMainWindow):
         faces, thickness, inward = list(self.sh_faces), self.sh_thick.value(), self.sh_dir.currentData() == 'in'
 
         def build():
-            new = body.changed(*hist.offloaded_shape(kernel.shell_solid, body.shape, [f['face'] for f in faces], thickness, inward))
+            new = body.changed(*hist.offloaded_shape(hist.shell_indexed, body.shape, hist.face_indices(body.shape, [f['face'] for f in faces]), thickness, inward))
             recipe = dict(type='shell', id=body.id, faces=[hist.face_ref(f['face'], f['normal'], f['point'], body.shape) for f in faces], thickness=thickness, inward=inward)
             return new, recipe
 
@@ -4865,8 +4900,8 @@ class StudioWindow(QMainWindow):
         return kernel.DisplayMesh(np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint32), {0: pts}, tuple(float(c) for c in pts.mean(axis=0)), 1.0)
 
     def _merged_preview(self, makers, op):
-        def compute():
-            return _merge_meshes([kernel.display_mesh(make(), PREVIEW_TOL) for make in makers])
+        def compute():          # bryły podglądu liczy proces roboczy - okno w tym czasie działa normalnie
+            return _merge_meshes(hist.background(hist.preview_meshes, makers, PREVIEW_TOL))
 
         def style(mesh):
             red = op == 'cut'
@@ -4939,7 +4974,7 @@ class StudioWindow(QMainWindow):
         if not self.sw_profiles or self.sw_path is None:
             raise kernel.CadError('Wybierz profil i ścieżkę.')
         path = hist.resolve_path(self.document.bodies, self.sw_path)
-        return [lambda s=src: kernel.sweep_face(hist.profile_outer(s), path) for src in self.sw_profiles]
+        return [partial(hist.sweep_profile, src, path) for src in self.sw_profiles]
 
     def update_sweep_preview(self):
         if self.mode != 'sweep' or not self.sw_profiles or self.sw_path is None:
@@ -5059,7 +5094,7 @@ class StudioWindow(QMainWindow):
             raise kernel.CadError('Wybierz co najmniej dwa profile albo profil i punkt.')
         wires = [hist.profile_outer(p).outerWire() for p in self.lf_profiles]
         point, ruled = self.lf_point if self.lf_kind.currentData() == 'point' else None, self.lf_ruled.currentData() == 'ruled'
-        return lambda: kernel.loft_wires(wires, point, ruled)
+        return partial(kernel.loft_wires, wires, point, ruled)
 
     def update_loft_preview(self):
         if self.mode != 'loft' or not self._lf_ready():
@@ -5148,7 +5183,7 @@ class StudioWindow(QMainWindow):
         ids = tuple(self.bool_ids)
 
         def compute():
-            return kernel.display_mesh(kernel.boolean(op, base.shape, [t.shape for t in tools]), PREVIEW_TOL)
+            return hist.background(hist.mesh_of, kernel.boolean, (op, base.shape, [t.shape for t in tools]), PREVIEW_TOL)
 
         def show(mesh, error):
             if self.mode != 'bool' or tuple(self.bool_ids) != ids:
@@ -5509,7 +5544,7 @@ class StudioWindow(QMainWindow):
         if method == 'plane':
             name = self.sp_plane.currentData()
             normal = {'XY': (0, 0, 1), 'XZ': (0, -1, 0), 'YZ': (1, 0, 0)}[name]
-            recipe.update(plane=name, normal=[float(c) for c in normal], origin=[float(c) for c in body.shape.Center().toTuple()],
+            recipe.update(plane=name, normal=[float(c) for c in normal], origin=[float(c) for c in _center(body.shape).toTuple()],
                           offset=float(self.sp_offset.value()))
         elif self.sp_ref is None:
             return None
@@ -5553,7 +5588,7 @@ class StudioWindow(QMainWindow):
             self.view.set_handles([])
             return
         n, origin = frame
-        c = np.array(body.shape.Center().toTuple(), float)
+        c = np.array(_center(body.shape).toTuple(), float)
         start = c - n * float((c - origin) @ n)
         b = kernel.bounds(body.shape)
         length = max(b.xlen, b.ylen, b.zlen) * .35
@@ -5573,16 +5608,7 @@ class StudioWindow(QMainWindow):
         self._sp_sig = sig
 
         def compute():
-            parts = hist.split_shapes(existing, recipe)
-            keep = recipe['keep']
-            meshes = [(kernel.display_mesh(shape, PREVIEW_TOL), side, keep == 'both' or str(side) == keep) for shape, side in parts]
-            cut = None
-            if recipe['method'] in ('plane', 'face'):
-                body = next(b for b in existing if b.id == recipe['id'])
-                n = np.array(recipe['normal'], float)
-                n = n / np.linalg.norm(n)
-                cut = kernel.display_mesh(kernel.cut_plane_face(body.shape, n, np.array(recipe['origin'], float) + n * recipe['offset'], 1.15))
-            return meshes, cut
+            return hist.background(hist.split_preview, hist.light(existing), recipe, PREVIEW_TOL)
 
         def show(value, error):
             if self.mode != 'split' or getattr(self, '_sp_sig', None) != sig:
@@ -5734,8 +5760,7 @@ class StudioWindow(QMainWindow):
         mode = self.mode
 
         def compute():
-            moved = next(b for b in hist.run_recipe(bodies, recipe) if b.id == recipe['id'])
-            return kernel.display_mesh(moved.shape, PREVIEW_TOL)
+            return hist.background(hist.recipe_body_mesh, hist.light(bodies), recipe, PREVIEW_TOL)
 
         def show(mesh, error):
             if self.mode != mode:
@@ -5792,7 +5817,7 @@ class StudioWindow(QMainWindow):
         frame = self.mirror_frame
 
         def compute():
-            return kernel.display_mesh(kernel.mirror_plane(body.shape, *frame), PREVIEW_TOL)
+            return hist.background(hist.mesh_of, kernel.mirror_plane, (body.shape, *frame), PREVIEW_TOL)
 
         def show(mesh, error):
             if self.mode == 'mirror' and self.mirror_frame == frame:
@@ -6129,6 +6154,8 @@ class StudioWindow(QMainWindow):
         if body is None:
             self.toast('Kliknij bryłę lub szkic.')
             return
+        if self.t_target is not None and bid in (getattr(self, 't_group', None) or [self.t_target.id]):
+            return          # ten sam obiekt: ustawione przesunięcie / obrót zostaje, można je dalej poprawiać
         self.select_transform_target(body)
 
     def select_transform_target(self, body):
@@ -6141,7 +6168,7 @@ class StudioWindow(QMainWindow):
             self.t_mass = np.array(box.center.toTuple(), float)
         else:
             box = kernel.bounds(body.shape)
-            self.t_mass = np.array(body.shape.Center().toTuple(), float)
+            self.t_mass = np.array(_center(body.shape).toTuple(), float)
         self.t_center = np.array(box.center.toTuple(), float)
         self.view.clear_body_matrices()
         self.t_radius = max(8.0, max(box.xlen, box.ylen, box.zlen) * .75)
@@ -6151,7 +6178,7 @@ class StudioWindow(QMainWindow):
             spin.setValue(0)
             spin.blockSignals(False)
         self.selected = list(self.t_group)
-        self.view.free_drag = (body.id, self.t_center) if self.mode == 'move' else None
+        self.view.free_drag = (body.id, self.t_center, set(self.t_group)) if self.mode == 'move' else None
         self.refresh()
         self._place_gizmo()
 
@@ -6165,6 +6192,8 @@ class StudioWindow(QMainWindow):
         handles = []
         if self.mode == 'move':
             base = c + np.array([s.value() for s in self.t_spins])
+            if self.view.free_drag is not None:          # chwytanie bryły tam, gdzie jest teraz widoczna
+                self.view.free_drag = (self.t_target.id, base, set(getattr(self, 't_group', None) or [self.t_target.id]))
             length = max(r, float(self.view.opts['distance']) * .13)
             for i, a in enumerate(axes):
                 handles.append(dict(id='xyz'[i], kind='axis', start=base, tip=base + a * length, dir=a, color=AXIS_COLORS[i], label='XYZ'[i], min_px=46))
@@ -7078,10 +7107,8 @@ class StudioWindow(QMainWindow):
             return
         base, values = self.document.states()[index - 1][0], self._hist_values()
 
-        def compute():
-            with kernel.deferred_mesh():       # potrzebne same kształty: podgląd ma własną, rzadszą siatkę
-                result = hist.run_recipe(base, recipe, values)
-            solids = [kernel.display_mesh(b.shape, PREVIEW_TOL) for b in result if b.kind == 'solid' and b.visible]
+        def compute():          # przeliczenie kroku liczy proces roboczy, okno pokazuje wynik, gdy jest gotowy
+            solids = hist.background(hist.history_preview, hist.light(base), recipe, values, PREVIEW_TOL)
             return _merge_meshes(solids) if solids else None
 
         def show(mesh, error):

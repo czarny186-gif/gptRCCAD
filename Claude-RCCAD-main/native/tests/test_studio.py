@@ -2063,6 +2063,21 @@ class StudioTests(unittest.TestCase):
         c=v.opts['center'];moved=np.array([c.x(),c.y(),c.z()])-start
         self.assertGreater(abs(moved[2]),1e-3)                 # w górę / w dół
         self.assertLess(abs(moved[1]),1e-6)                    # nie w głąb ekranu
+    def test_moved_body_is_picked_where_it_is_shown_and_keeps_values(self):
+        w=self.w;a=Body('A',k.box(40,40,40)).prepared();w.document.commit([a]);w.refresh(True);self.app.processEvents()
+        w.set_mode('move');w.select_transform_target(a)
+        w.t_spins[0].setValue(80);self.app.processEvents()
+        p=w.view.project_one((100,20,40))
+        self.assertEqual(w.view.pick_body(*p),a.id)                       # bryłę chwyta się tam, gdzie ją widać
+        self.assertIsNone(w.view.pick_body(*w.view.project_one((20,20,40))))  # a nie w pustym, starym miejscu
+        self.assertIsNotNone(w.view.nearest_edge(*w.view.project_one((120,0,40))))
+        w.view_clicked(*p,False,False)
+        self.assertEqual([s.value() for s in w.t_spins],[80.0,0.0,0.0])   # ponowne kliknięcie nie kasuje ustawienia
+        self.assertTrue(np.allclose(w.view.free_drag[1],w.t_center+[80,0,0]))
+        self.assertEqual(len(w.document.bodies),1);self.assertAlmostEqual(w.document.bodies[0].shape.BoundingBox().xmin,0,4)  # nic nie liczy się przed Zastosuj
+        w.apply_transform();self.wait()
+        self.assertAlmostEqual(w.document.bodies[0].shape.BoundingBox().xmin,80,3)
+
 
 
 if __name__=='__main__':
