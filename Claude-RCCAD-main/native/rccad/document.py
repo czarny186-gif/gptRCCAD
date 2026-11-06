@@ -62,6 +62,14 @@ class Document:
         self._mesh_cache = {}      # id(kształt) -> (kształt, siatka): siatki wyświetlania liczone leniwie, tylko dla bieżącego stanu
         self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
         self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
+        self.dropped = 0           # ile najstarszych kroków wypadło z historii (limit MAX_UNDO)
+
+    MAX_UNDO = 999          # tyle kroków wstecz pamięta historia
+    WARN_UNDO = 950         # od tylu kroków okno ostrzega, że najstarsze kroki zaczną znikać
+
+    @property
+    def history_length(self):
+        return len(self._undo)
 
     @property
     def dirty(self):
@@ -107,7 +115,9 @@ class Document:
         if op:
             info['op'] = op
         self._undo.append((self.bodies, self._revision, self.info))
-        self._undo = self._undo[-999:]
+        if len(self._undo) > self.MAX_UNDO:
+            self.dropped += len(self._undo) - self.MAX_UNDO      # najstarsze kroki wypadają z historii (okno informuje o tym)
+        self._undo = self._undo[-self.MAX_UNDO:]
         if self.keep_future and self._redo:
             self.deferred = (self.bodies, [(e[0], e[2]) for e in reversed(self._redo)])
         self.keep_future = False
@@ -159,8 +169,9 @@ class Document:
     # ---------- historia: oś czasu stanów (niezmienne bryły, więc przeskok jest natychmiastowy) ----------
     def timeline(self):
         """(etykiety, indeks bieżącego): stany od najstarszego do najnowszego, razem z cofniętymi (redo)."""
+        from .history import step_label
         infos, current = self.infos()
-        return [i.get('label', '') for i in infos], current
+        return [step_label(i) for i in infos], current
 
     def infos(self):
         return [e[2] for e in self._undo] + [self.info] + [e[2] for e in reversed(self._redo)], len(self._undo)
@@ -270,37 +281,102 @@ class Document:
         self._brep_cache[id(shape)] = (shape, data)
         return data
 
-    def save(self, path, mark=True):
-        """Zapisuje cały projekt razem z historią: każda unikalna geometria raz (BREP), a kroki jako listy odwołań do niej."""
+    # Plik projektu (wersja 3): cała geometria w jednej paczce shapes.pack (BREP jeden za drugim, położenie w manifest['shapes']),
+    # a w opisie kroków każdy obiekt (wpis) i każde dane blachy / szkicu (meta) zapisane raz - kroki tylko się do nich odwołują.
+    # Dzięki temu długa historia nie tworzy tysięcy plików ani wielkiego manifestu. Wersje 1 i 2 nadal się wczytują.
+    KEYFRAME = 10            # zapis kompaktowy: pełna geometria co tyle kroków (oraz bieżący krok i kroki bez przepisu)
+    MAX_STATES = 1100
+    MAX_SHAPES = 1_000_000
+    MAX_MANIFEST = 200_000_000
+    MAX_TOTAL = 4_000_000_000
+
+    def _virtual_shapes(self, states, current):
+        """Zapis kompaktowy: geometria kroków, które da się odtworzyć z przepisu, nie trafia do pliku (poza co KEYFRAME-tym
+        krokiem, bieżącym i krokami bez przepisu). Zwraca id kształtów pomijanych."""
+        from .history import RUNNERS
+        must, introduced = set(), {}
+        previous = set()
+        for i, (bodies, info) in enumerate(states):
+            ids = {id(b.shape) for b in bodies}
+            op = info.get('op') or {}
+            replayable = (i > 0 and i != current and i % self.KEYFRAME and op.get('type') in RUNNERS
+                          and not info.get('off') and not info.get('stale'))
+            if replayable:
+                for key in ids - previous:
+                    introduced.setdefault(key, i)
+            else:
+                must |= ids
+            previous = ids
+        return {key for key in introduced if key not in must}
+
+    def save(self, path, mark=True, compact=False):
+        """Zapisuje cały projekt razem z historią i wariantami. compact=True: lżejszy plik - część geometrii historii
+        jest odtwarzana z przepisów przy otwieraniu (otwieranie trwa dłużej)."""
         path = Path(path)
         states = self.states()
-        older = self._undo
-        shapes, index = [], {}
-        manifest = {"app": "RCCAD_DESKTOP", "version": 2, "units": "mm", "shapes": [], "states": [], "current": len(older), "constraints": self.constraints, "variables": self.variables}
+        current = len(self._undo)
+        virtual = self._virtual_shapes(states, current) if compact else set()
+        shapes, index, vindex = [], {}, {}
+        metas, meta_index, entries, entry_index = [], {}, [], {}
+        manifest = {"app": "RCCAD_DESKTOP", "version": 3, "units": "mm", "pack": "shapes.pack", "shapes": [], "metas": metas,
+                    "entries": entries, "states": [], "current": current, "constraints": self.constraints, "variables": self.variables}
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
             os.close(fd)
-            with tempfile.TemporaryDirectory(prefix="rccad-brep-") as work, ZipFile(temp_path, "w", ZIP_DEFLATED) as archive:
-                def emit(timeline):
-                    out = []
-                    for bodies, info in timeline:
-                        entries = []
-                        for body in bodies:
-                            key = id(body.shape)
-                            if key not in index:
-                                index[key] = len(shapes)
-                                shapes.append(body.shape)
-                                data = self._brep_bytes(body.shape, Path(work) / f"s{index[key]}.brep")
-                                archive.writestr(f"shapes/{index[key]}.brep", data)
-                                manifest['shapes'].append(f"shapes/{index[key]}.brep")
-                            entries.append(self._entry(body, index[key]))
-                        out.append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), why=info.get('why'), bodies=entries))
-                    return out
-                manifest['states'] = emit(states)
-                manifest['snapshots'] = [dict(name=name, current=snap['current'], constraints=snap['constraints'], variables=snap['variables'], states=emit(snap['states']))
-                                         for name, snap in self.snapshots.items()]
-                archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+            with tempfile.TemporaryDirectory(prefix="rccad-brep-") as work, ZipFile(temp_path, "w", ZIP_DEFLATED, allowZip64=True) as archive:
+                with archive.open("shapes.pack", "w", force_zip64=True) as pack:
+                    offset = 0
+
+                    def shape_ref(shape, allow_virtual):
+                        nonlocal offset
+                        key = id(shape)
+                        if allow_virtual and key in virtual:
+                            if key not in vindex:
+                                vindex[key] = len(vindex)
+                            return -1 - vindex[key]
+                        if key not in index:
+                            index[key] = len(shapes)
+                            shapes.append(shape)
+                            data = self._brep_bytes(shape, Path(work) / "s.brep")
+                            pack.write(data)
+                            manifest['shapes'].append([offset, len(data)])
+                            offset += len(data)
+                        return index[key]
+
+                    def emit(timeline, allow_virtual):
+                        out = []
+                        for i, (bodies, info) in enumerate(timeline):
+                            refs, replay = [], False
+                            for body in bodies:
+                                ref = shape_ref(body.shape, allow_virtual)
+                                replay = replay or ref < 0
+                                entry = self._entry(body, ref)
+                                if body.meta:
+                                    text = json.dumps(body.meta, sort_keys=True, ensure_ascii=False)
+                                    if text not in meta_index:
+                                        meta_index[text] = len(metas)
+                                        metas.append(body.meta)
+                                    entry['meta'] = meta_index[text]
+                                text = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+                                if text not in entry_index:
+                                    entry_index[text] = len(entries)
+                                    entries.append(entry)
+                                refs.append(entry_index[text])
+                            state = dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')),
+                                         off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), why=info.get('why'), bodies=refs)
+                            if replay:
+                                state['replay'] = True
+                            out.append(state)
+                        return out
+                    manifest['states'] = emit(states, True)
+                    manifest['snapshots'] = [dict(name=name, current=snap['current'], constraints=snap['constraints'], variables=snap['variables'], states=emit(snap['states'], False))
+                                             for name, snap in self.snapshots.items()]
+                    manifest['virtual'] = len(vindex)
+                text = json.dumps(manifest, ensure_ascii=False)
+                if len(text.encode('utf-8')) > self.MAX_MANIFEST or len(shapes) > self.MAX_SHAPES or offset > self.MAX_TOTAL:
+                    raise CadError("Projekt przekracza dopuszczalny rozmiar (za długa historia). Zapisz wariant albo usuń stare kroki.")
+                archive.writestr("manifest.json", text)
             os.replace(temp_path, path)
             if mark:      # autozapis (mark=False) nie zmienia ścieżki projektu ani stanu „zapisany”
                 self.path = path
@@ -330,13 +406,15 @@ class Document:
         try:
             with ZipFile(path) as archive, tempfile.TemporaryDirectory(prefix="rccad-open-") as work:
                 infos = archive.infolist()
-                if len(infos) > 3001 or sum(i.file_size for i in infos) > 2_000_000_000:
+                if sum(i.file_size for i in infos) > cls.MAX_TOTAL + cls.MAX_MANIFEST:
                     raise CadError("Projekt jest zbyt duży.")
-                if archive.getinfo("manifest.json").file_size > 20_000_000:
+                if archive.getinfo("manifest.json").file_size > cls.MAX_MANIFEST:
                     raise CadError("Nieprawidłowy manifest projektu.")
                 manifest = json.loads(archive.read("manifest.json"))
-                if manifest.get('app') != 'RCCAD_DESKTOP' or manifest.get('version') not in (1, 2):
+                if manifest.get('app') != 'RCCAD_DESKTOP' or manifest.get('version') not in (1, 2, 3):
                     raise CadError("To nie jest obsługiwany projekt RCCAD Desktop.")
+                if manifest['version'] in (1, 2) and len(infos) > 3001:
+                    raise CadError("Projekt jest zbyt duży.")
                 if manifest['version'] == 1:
                     if not isinstance(manifest.get('bodies'), list):
                         raise CadError("To nie jest obsługiwany projekt RCCAD Desktop.")
@@ -354,36 +432,95 @@ class Document:
                     result.bodies = tuple(bodies)
                     result.path = Path(path)
                     return result
+                version = manifest['version']
                 files, states = manifest.get('shapes'), manifest.get('states')
                 current = manifest.get('current')
-                if not isinstance(files, list) or not isinstance(states, list) or not states or len(states) > 1100 or not isinstance(current, int) or not 0 <= current < len(states):
+                if not isinstance(files, list) or not isinstance(states, list) or not states or len(states) > cls.MAX_STATES or not isinstance(current, int) or not 0 <= current < len(states):
+                    raise CadError("Nieprawidłowa struktura projektu.")
+                pack = archive.read(manifest.get('pack', 'shapes.pack')) if version >= 3 else None
+                metas = manifest.get('metas') or [] if version >= 3 else []
+                table = manifest.get('entries') or [] if version >= 3 else []
+                if version >= 3 and (not isinstance(metas, list) or not isinstance(table, list)):
                     raise CadError("Nieprawidłowa struktura projektu.")
                 cache = {}      # numer geometrii -> (kształt, siatka): wczytywane i siatkowane raz, współdzielone przez wszystkie kroki
 
+                def brep_bytes(number):
+                    if version >= 3:
+                        offset, size = files[number]
+                        if not (isinstance(offset, int) and isinstance(size, int) and 0 <= offset and 0 < size and offset + size <= len(pack)):
+                            raise CadError("Nieprawidłowa struktura projektu.")
+                        return pack[offset:offset + size]
+                    if files[number] != f'shapes/{number}.brep':
+                        raise CadError("Nieprawidłowa struktura projektu.")
+                    return archive.read(files[number])
+
                 def geometry(number, kind):
-                    if not isinstance(number, int) or not 0 <= number < len(files) or files[number] != f'shapes/{number}.brep':
+                    if not isinstance(number, int) or not 0 <= number < len(files):
                         raise CadError("Nieprawidłowa struktura projektu.")
                     if number not in cache:
                         source = Path(work) / f'{number}.brep'
-                        source.write_bytes(archive.read(files[number]))
+                        source.write_bytes(brep_bytes(number))
                         shape = cq.importers.importBrep(str(source)).val()
                         if shape is None or shape.wrapped.IsNull() or (kind == 'solid' and not shape.Solids()):      # pełna walidacja (isValid) przy pierwszym pokazaniu stanu
                             raise CadError("Nieprawidłowa geometria w projekcie.")
                         cache[number] = (shape, None)
                     return cache[number]
 
+                def item_of(ref):
+                    if version < 3:
+                        return ref
+                    if not isinstance(ref, int) or not 0 <= ref < len(table):
+                        raise CadError("Nieprawidłowa struktura projektu.")
+                    item = dict(table[ref])
+                    if 'meta' in item:
+                        m = item['meta']
+                        if not isinstance(m, int) or not 0 <= m < len(metas):
+                            raise CadError("Nieprawidłowa struktura projektu.")
+                        item['meta'] = metas[m]
+                    return item
+
+                virtual = {}       # zapis kompaktowy: numer -> kształt odtworzony z przepisu kroku
+
+                def replayed(state, previous, items):
+                    """Kształty kroku zapisanego bez geometrii - wykonanie jego przepisu na poprzednim stanie."""
+                    from .history import run_recipe
+                    try:
+                        result = {b.id: b for b in run_recipe(previous, state['op'], {})}
+                    except Exception:
+                        result = {}
+                    old = {b.id: b for b in previous}
+                    missing = False
+                    for item in items:
+                        ref = item['shape']
+                        if isinstance(ref, int) and ref < 0 and ref not in virtual:
+                            body = result.get(str(item['id'])) or old.get(str(item['id']))
+                            missing = missing or str(item['id']) not in result
+                            if body is None:
+                                raise CadError("Nie można odtworzyć historii projektu.")
+                            virtual[ref] = (body.shape, None)
+                    return missing
+
                 def parse(state_list):
                   built = []
                   for state in state_list:
                       ids, bodies = set(), []
-                      for item in state['bodies']:
-                          shape, mesh = geometry(item['shape'], item.get('kind', 'solid'))
+                      items = [item_of(ref) for ref in state['bodies']]
+                      stale = False
+                      if any(isinstance(item.get('shape'), int) and item['shape'] < 0 and item['shape'] not in virtual for item in items):
+                          if not built or not isinstance(state.get('op'), dict):
+                              raise CadError("Nieprawidłowa struktura projektu.")
+                          stale = replayed(state, built[-1][0], items)
+                      for item in items:
+                          ref = item.get('shape')
+                          shape, mesh = virtual[ref] if isinstance(ref, int) and ref < 0 else geometry(ref, item.get('kind', 'solid'))
                           body = cls._parse_body(item, shape, mesh)
                           if body.id in ids:
                               raise CadError("Nieprawidłowa struktura projektu.")
                           ids.add(body.id)
                           bodies.append(body)
                       info = {'label': str(state.get('label', 'Zmiana')), 'icon': str(state.get('icon', 'move'))}
+                      if stale:
+                          state = dict(state, stale=True, why='Nie udało się odtworzyć tego kroku z przepisu (zapis kompaktowy).')
                       if isinstance(state.get('op'), dict):
                           info['op'] = state['op']
                       if state.get('stale'):
@@ -407,7 +544,7 @@ class Document:
                 result.constraints = parse_constraints(manifest.get('constraints', []))
                 result.variables = parse_variables(manifest.get('variables', {}))
                 for snap in (manifest.get('snapshots') or [])[:30]:
-                    if not isinstance(snap, dict) or not isinstance(snap.get('states'), list) or not 0 < len(snap['states']) <= 1100:
+                    if not isinstance(snap, dict) or not isinstance(snap.get('states'), list) or not 0 < len(snap['states']) <= cls.MAX_STATES:
                         continue
                     timeline = parse(snap['states'])
                     at = snap.get('current')

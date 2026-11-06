@@ -113,6 +113,12 @@ TOPICS = [
         'Zaznacz bryłę lub szkic. Przesuwanie: pociągnij kolorową strzałkę osi, kwadrat płaszczyzny albo złap samą bryłę lewym przyciskiem.',
         'Obrót: pociągnij kolorowy pierścień wokół osi. Wartości można też wpisać. Strzałki dopasowują się do ustawienia kamery.',
         'Okno Przesuń / Obróć (po lewej) ma pola X, Y, Z z kolorowymi ikonami osi (przesunięcie w mm, obrót w stopniach). Zastosuj zatwierdza, Zamknij zamyka okno bez zmian.']),
+    ('f_save', 'Historia i zapis projektu', 'Kroki, autozapis, zapis kompaktowy', [
+        'Każda operacja to krok historii na dolnym pasku. Opis kroku podaje wartości, np. „Kołnierz 20 mm, 90°”, „Przesunięcie X +15 mm”, „Wyciągnięcie 10 mm” - widać je w podpowiedzi kroku, na liście kroków i w tytule Edycji kroku.',
+        'Historia pamięta 999 kroków. Przy 950 krokach program ostrzega jeden raz; po przekroczeniu limitu najstarsze kroki są usuwane (też z komunikatem). Aby zachować stan, zapisz wariant w menu historii.',
+        'Plik projektu (.rccadx) zawiera całą historię: geometria jest w jednej paczce, a opisy powtarzające się w wielu krokach są zapisane raz, więc nawet bardzo długie historie otwierają się poprawnie. Starsze pliki otwierają się jak dotąd.',
+        'Plik → Zapisz kompaktowo… daje mniejszy plik: kroki, które program umie przeliczyć z przepisu (kołnierze, rozłożenie, przesunięcia…), zapisuje bez geometrii i odtwarza przy otwieraniu (otwarcie trwa wtedy chwilę dłużej). Co 10. krok i bieżący stan są zapisane w całości.',
+        'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu historii → Otwórz autozapis.']),
     ('one', 'Widok', 'Kostka i skróty', [
         'Kostka w prawym górnym rogu: klik w ścianę ustawia widok z tej strony, klik w krawędź lub róg widok ukośny. Domek wraca do widoku głównego.',
         'Skróty: Ctrl+N nowy, Ctrl+O otwórz, Ctrl+S zapisz, Ctrl+Z cofnij, Ctrl+Y ponów, Enter zatwierdź, Esc anuluj.']),

@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.36 — szybsze gięcie blach
+# RCCAD Desktop 0.4.37 — pewniejszy i mniejszy zapis historii
+
+## Zmiany 0.4.37
+
+- **Długie historie otwierają się poprawnie**: dotąd projekt z ponad 3000 kształtami w historii (np. 800 kroków z 4 bryłami) zapisywał się, ale przy otwieraniu pojawiało się „Projekt jest zbyt duży”. Teraz cała geometria jest w jednej paczce w pliku, a limity są sprawdzane już przy zapisie, tak samo jak przy otwieraniu.
+- **Bez powtórzeń w opisie projektu**: dane blachy (stan, kołnierze, reguły) i opisy brył zapisują się raz i są wskazywane przez kroki - wcześniej powtarzały się w każdym kroku (dla 20 blach i 999 kroków ok. 37 MB, ponad limit otwierania).
+- **Autozapis także przy otwartym narzędziu** (np. przy pracy w Kołnierzu) - zapisywane są zatwierdzone kroki.
+- **Czytelne opisy kroków**: „Kołnierz 20 mm, 90°”, „Zawinięcie 8,5 mm”, „Przesunięcie X +15 mm, Z -2,5 mm”, „Obrót Z +30°”, „Wyciągnięcie 10 mm”, „Zaokrąglanie R 2 mm”, „Szyk ×3” - w podpowiedziach kroków, liście kroków i Edycji kroku.
+- **Ostrzeżenie o limicie 999 kroków**: przy 950 krokach jeden komunikat, a gdy najstarsze kroki zaczynają wypadać - drugi (wcześniej znikały bez informacji).
+- **Plik → Zapisz kompaktowo…**: mniejszy plik - kroki z przepisem zapisane bez geometrii i odtwarzane przy otwieraniu (co 10. krok i bieżący stan w całości). Przykład: blacha z kołnierzami 289 KB → 84 KB.
+- Starsze pliki projektów otwierają się bez zmian.
+
+## RCCAD Desktop 0.4.36 — szybsze gięcie blach
 
 ## Zmiany 0.4.36
 

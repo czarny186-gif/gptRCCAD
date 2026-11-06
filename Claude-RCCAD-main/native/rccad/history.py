@@ -41,6 +41,50 @@ LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymi
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file'}
 
 
+def _num(value, unit=''):
+    try:
+        text = f'{float(value):.3f}'.rstrip('0').rstrip('.').replace('.', ',')
+    except (TypeError, ValueError):
+        return ''
+    return text + unit
+
+
+def step_label(info):
+    """Opis kroku do paska historii: podstawowa nazwa i najważniejsze wartości z przepisu (liczone na bieżąco, więc po
+    edycji kroku opis od razu pokazuje nowe wartości). Przykłady: „Kołnierz 20 mm, 90°”, „Przesunięcie X +15 mm”."""
+    label = str(info.get('label', ''))
+    op = info.get('op') if isinstance(info.get('op'), dict) else None
+    if not op:
+        return label
+    kind = op.get('type')
+    try:
+        if kind == 'extrude' and isinstance(op.get('d1'), (int, float)):
+            extra = {'symmetric': ' symetrycznie', 'two': f" + {_num(op.get('d2'), ' mm')}", 'ends': ' (oba końce)'}.get(op.get('dir'), '')
+            return f"{label} {_num(op['d1'], ' mm')}{extra}"
+        if kind == 'revolve' and isinstance(op.get('angle'), (int, float)):
+            return f"{label} {_num(op['angle'], '°')}"
+        if kind == 'shell' and isinstance(op.get('thickness'), (int, float)):
+            return f"{label} {_num(op['thickness'], ' mm')}"
+        if kind == 'mod' and isinstance(op.get('size'), (int, float)):
+            return f"{label} {'R ' if op.get('kind') == 'fillet' else ''}{_num(op['size'], ' mm')}"
+        if kind == 'sheet' and isinstance(op.get('t'), (int, float)):
+            return f"{label} {_num(op['t'], ' mm')}"
+        if kind == 'sheetbuild' and op.get('flanges') and label in ('Kołnierz', 'Zawinięcie'):
+            last = op['flanges'][-1]
+            if last.get('hem'):
+                return f"Zawinięcie {_num(last['hem'].get('ret'), ' mm')}"
+            return f"Kołnierz {_num(last.get('length'), ' mm')}, {_num(last.get('angle'), '°')}"
+        if kind == 'transform' and isinstance(op.get('v'), list):
+            parts = [f"{axis} {'+' if v > 0 else ''}{_num(v, ' mm' if op.get('mode') == 'move' else '°')}"
+                     for axis, v in zip('XYZ', op['v']) if abs(float(v)) > 1e-9]
+            return ('Przesunięcie ' if op.get('mode') == 'move' else 'Obrót ') + (', '.join(parts) or '0')
+        if kind == 'pattern' and isinstance(op.get('out'), list):
+            return f"{label} ×{len(op['out']) + 1}"          # liczba elementów razem z oryginałem
+    except Exception:
+        return label
+    return label
+
+
 def plane_to_json(plane):
     return plane if isinstance(plane, str) else plane.to_dict()
 

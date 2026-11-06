@@ -157,9 +157,18 @@ class _Work(QRunnable):
 
     def run(self):
         try:
-            self.signals.done.emit(self.function())
+            value = self.function()
         except Exception as exc:
-            self.signals.failed.emit(str(exc) if isinstance(exc, kernel.CadError) else f'Operacja nie powiodła się: {exc}')
+            message = str(exc) if isinstance(exc, kernel.CadError) else f'Operacja nie powiodła się: {exc}'
+            try:
+                self.signals.failed.emit(message)
+            except RuntimeError:
+                pass        # okno zamknięte, zanim praca w tle się skończyła (np. przygotowanie rozwinięcia)
+            return
+        try:
+            self.signals.done.emit(value)
+        except RuntimeError:
+            pass
 
 
 def _spin(value, low=-1e6, high=1e6, decimals=3, step=1.0):
@@ -5823,7 +5832,23 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # model, odświeżanie
     # =====================================================================
+    def _history_limit_notice(self):
+        """Ostrzeżenie przed limitem 999 kroków (raz na projekt) i informacja, gdy najstarsze kroki zaczynają wypadać."""
+        doc = self.document
+        seen = self.__dict__.setdefault('_limit_seen', {})
+        state = seen.setdefault(id(doc), {'warned': False, 'dropped': 0})
+        if doc.dropped > state['dropped']:
+            if state['dropped'] == 0:
+                self.toast(f'Historia osiągnęła limit {doc.MAX_UNDO} kroków - najstarsze kroki są usuwane. '
+                           'Aby je zachować, zapisz wariant w menu historii przed dalszą pracą.', 12000)
+            state['dropped'] = doc.dropped
+        elif not state['warned'] and doc.history_length >= doc.WARN_UNDO:
+            state['warned'] = True
+            self.toast(f'Historia ma już {doc.history_length} kroków. Po {doc.MAX_UNDO} krokach najstarsze kroki będą usuwane - '
+                       'jeśli chcesz je zachować, zapisz wariant w menu historii.', 12000)
+
     def refresh(self, fit=False):
+        self._history_limit_notice()
         if getattr(self, '_quick_preview', False) and not self.busy:
             self._quick_preview = False                     # dokładny wynik (albo komunikat) zastępuje szybki podgląd kołnierza
             self.view.set_preview_mesh(None)
@@ -5924,7 +5949,7 @@ class StudioWindow(QMainWindow):
         if self._hist_trim:
             infos = infos[:current + 1]
         self.hist_revert.setEnabled(bool(self.document.backup))
-        keyed = [(i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos]
+        keyed = [(hist.step_label(i), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos]
         mode = (tuple(sorted(self._hist_folded)), self._hist_filter)
         old = self._hist_sig
         if old is not None and old == (keyed, current, mode):
@@ -5974,7 +5999,7 @@ class StudioWindow(QMainWindow):
             chip.setFixedSize(42, 38)
             chip.setCheckable(True)
             editable = bool(info.get('op')) or info.get('icon') == 'sketch'
-            chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + (('\nBŁĄD: ' + info.get('why', 'nie dało się przeliczyć tego kroku')) if info.get('stale') else '')
+            chip.setToolTip(f"{i}. {info.get('note') or hist.step_label(info)}" + (f"\n({hist.step_label(info)})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + (('\nBŁĄD: ' + info.get('why', 'nie dało się przeliczyć tego kroku')) if info.get('stale') else '')
                             + ('\nDwuklik: edytuj parametry' if editable else '') + ('\nKrok wyłączony (pomijany)' if info.get('off') else ''))
             chip.clicked.connect(lambda _=False, n=i: self.history_goto(n))
             chip.editRequested.connect(lambda n=i: self.history_edit(n))
@@ -6152,9 +6177,9 @@ class StudioWindow(QMainWindow):
         infos, current = self.document.infos()
         lines = [f"Historia projektu{' - ' + self.document.path.stem if self.document.path else ''}", '']
         for i, info in enumerate(infos):
-            line = f"{i:3d}. {info.get('note') or info.get('label', '')}"
+            line = f"{i:3d}. {info.get('note') or hist.step_label(info)}"
             if info.get('note'):
-                line += f" ({info.get('label', '')})"
+                line += f" ({hist.step_label(info)})"
             if info.get('group'):
                 line += f" [{info['group']}]"
             if info.get('off'):
@@ -6181,7 +6206,8 @@ class StudioWindow(QMainWindow):
 
     def _autosave(self):
         """Co kilka minut zapisuje kopię projektu obok pliku (albo w ~/.rccad) w tle; nie zmienia stanu „zapisany”."""
-        if self.busy or self.mode is not None or not self.document.dirty or not self.document.can_undo and not self.document.can_redo:
+        # zapisywane są tylko zatwierdzone kroki, więc autozapis działa także przy włączonym narzędziu (np. Kołnierz) - nie w trakcie operacji
+        if self.busy or not self.document.dirty or not self.document.can_undo and not self.document.can_redo:
             return
         document, path = self.document, self._autosave_path()
         revision = document._revision
@@ -6221,7 +6247,7 @@ class StudioWindow(QMainWindow):
             item = lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        title = QLabel(f"Edycja kroku {index}: {info.get('note') or info.get('label', '')}")
+        title = QLabel(f"Edycja kroku {index}: {info.get('note') or hist.step_label(info)}")
         title.setObjectName('ptitle')
         lay.addWidget(title)
         if info.get('why'):
@@ -7026,6 +7052,7 @@ class StudioWindow(QMainWindow):
                    None,
                    (px('f_save'), 'Zapisz projekt', 'Zapis w bieżącym pliku  ·  Ctrl+S', self.save_project),
                    (px('f_saveas'), 'Zapisz jako…', 'Zapis pod nową nazwą', lambda: self.save_project(True)),
+                   (px('f_saveas'), 'Zapisz kompaktowo…', 'Mniejszy plik: część historii odtwarzana z przepisów przy otwieraniu', lambda: self.save_project(True, compact=True)),
                    None,
                    (px('f_import'), 'Importuj…', 'STEP · STL · BREP · DXF · SVG', self.import_model),
                    (px('f_export'), 'Eksportuj…', 'STEP · STL · BREP · DXF', self.export_model),
@@ -7077,16 +7104,21 @@ class StudioWindow(QMainWindow):
 
             self.run_operation('Otwieranie projektu', lambda: Document.load(path), loaded, True)
 
-    def save_project(self, save_as=False):
+    def save_project(self, save_as=False, compact=False):
+        """compact: zapis kompaktowy - pełna geometria tylko co kilka kroków historii (oraz bieżący krok); pozostałe kroki
+        program odtwarza z ich przepisów przy otwieraniu projektu. Plik jest kilka razy mniejszy, otwieranie trwa dłużej."""
         path = self.document.path
         if save_as is True or path is None:
-            value, _ = QFileDialog.getSaveFileName(self, 'Zapisz projekt', str(path or 'Projekt.rccadx'), 'RCCAD (*.rccadx)')
+            title = 'Zapisz projekt kompaktowo' if compact else 'Zapisz projekt'
+            value, _ = QFileDialog.getSaveFileName(self, title, str(path or 'Projekt.rccadx'), 'RCCAD (*.rccadx)')
             if not value:
                 return
             path = Path(value)
             if path.suffix.lower() != '.rccadx':
                 path = path.with_suffix('.rccadx')
-        self.run_operation('Zapisywanie projektu', lambda: self.document.save(path), lambda _: (self._autosave_path_for(self.document).unlink(missing_ok=True), self.toast('Projekt zapisany.', 2500)))
+        done = 'Projekt zapisany kompaktowo (otwieranie potrwa dłużej - kroki historii są odtwarzane).' if compact else 'Projekt zapisany.'
+        self.run_operation('Zapisywanie projektu', lambda: self.document.save(path, compact=compact),
+                           lambda _: (self._autosave_path_for(self.document).unlink(missing_ok=True), self.toast(done, 3500)))
 
     def import_model(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Importuj', '', 'Modele CAD i SVG (*.step *.stp *.brep *.brp *.stl *.dxf *.svg)')

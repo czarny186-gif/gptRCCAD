@@ -1401,7 +1401,7 @@ class StudioTests(unittest.TestCase):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
         w.ex_value.setValue(5);w.apply_extrude();self.wait()
         self.assertFalse(w.document.get(sk.id).visible)               # wykorzystany szkic wygasa
-        labels,cur=w.document.timeline();self.assertEqual(cur,len(labels)-1);self.assertEqual(labels[-1],'Wyciągnięcie');self.assertGreaterEqual(len(labels),3)
+        labels,cur=w.document.timeline();self.assertEqual(cur,len(labels)-1);self.assertTrue(labels[-1].startswith('Wyciągnięcie'));self.assertGreaterEqual(len(labels),3)
         w.hist_button.setChecked(True);self.app.processEvents();self.assertTrue(w.hist_bar.isVisible());self.assertGreaterEqual(w.hist_row.count(),len(labels))
         w.hist_ghost.setChecked(True);self.assertTrue(w.view._cache[sk.id][1])
         w.history_goto(cur-1);self.assertTrue(w.document.get(sk.id).visible);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),0)
@@ -1820,6 +1820,26 @@ class StudioTests(unittest.TestCase):
         finally:sys.excepthook=old
         self.assertEqual(errors,[])
 
+    def test_autosave_runs_with_tool_open_and_history_limit_warns(self):
+        w=self.w;d=w.document
+        with tempfile.TemporaryDirectory() as directory:
+            d.path=Path(directory)/'proj.rccadx'
+            d.commit([Body('A',k.box(5,5,5)).prepared()],'Kostka')
+            w.set_mode('extrude');self.app.processEvents()
+            w._autosave();end=time.monotonic()+20
+            while getattr(w,'_autosaved',None)!=(id(d),d._revision) and time.monotonic()<end:
+                self.app.processEvents();time.sleep(.01)
+            self.assertTrue((Path(directory)/'proj.autosave.rccadx').exists())
+            w.set_mode(None);d.path=None
+        toasts=[]
+        with patch.object(w,'toast',side_effect=lambda text,*a,**kw:toasts.append(text)):
+            body=d.bodies[0]
+            for i in range(d.WARN_UNDO):d.commit([body],str(i))
+            w.refresh();w.refresh()
+            self.assertEqual(sum('najstarsze kroki będą usuwane' in t for t in toasts),1)
+            for i in range(d.MAX_UNDO):d.commit([body],str(i))
+            w.refresh()
+            self.assertTrue(any('osiągnęła limit' in t for t in toasts))
 
 if __name__=='__main__':
     unittest.main()
