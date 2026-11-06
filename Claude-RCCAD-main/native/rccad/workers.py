@@ -54,14 +54,19 @@ def _ping():
     return os.getpid()
 
 
-def _mesh_job(shape, tolerance, solid):
+def _mesh_job(shape, tolerance, solid, coarse=False):
     """W procesie liczącym: sprawdzenie bryły i siatka do wyświetlania. Zwraca (siatka, None) albo (None, komunikat błędu)."""
     import cadquery as cq
     from . import kernel
     try:
         shape = cq.Shape.cast(shape.wrapped)
+        if not coarse:
+            # kształt przyszedł z siatką z okna (np. zgrubną), a po przesłaniu nie wiadomo, jak była dokładna - to kopia tylko
+            # tego procesu, więc siatkę można bezpiecznie usunąć i policzyć dokładną od nowa
+            from OCP.BRepTools import BRepTools
+            BRepTools.Clean_s(shape.wrapped)
         kernel.valid(shape, solid)
-        return kernel.display_mesh(shape, tolerance), None
+        return kernel.display_mesh(shape, tolerance, coarse=coarse and kernel.heavy(shape)), None
     except kernel.CadError as exc:
         return None, str(exc)
 
@@ -168,13 +173,36 @@ def run_affine(jobs):
     return results
 
 
-def mesh_many(items, tolerance=.12):
+def fine_meshes(shapes):
+    """Dokładne siatki dla kształtów, które mają zgrubne: w procesach (osobne kopie, więc wspólny kształt w oknie się nie
+    zmienia), a bez procesów - na kopii kształtu w bieżącym wątku."""
+    shapes = list(shapes)
+    if shapes and ready():
+        try:
+            futures = [_next_pool().submit(_mesh_job, shape, .12, False, False) for shape in shapes]
+            return [f.result()[0] for f in futures]
+        except Exception:
+            _broken()
+    import cadquery as cq
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from . import kernel
+    out = []
+    for shape in shapes:
+        try:
+            out.append(kernel.display_mesh(cq.Shape.cast(BRepBuilderAPI_Copy(shape.wrapped, True, False).Shape())))
+        except Exception:
+            out.append(None)
+    return out
+
+
+def mesh_many(items, tolerance=.12, coarse=False):
     """items: [(kształt, czy_bryła)] -> [(siatka, None) | (None, komunikat)] w tej samej kolejności.
-    Przy co najmniej MIN_PARALLEL kształtach i gotowych procesach liczą procesy (po kolei rozdzielane), inaczej - bieżący proces."""
+    Przy co najmniej MIN_PARALLEL kształtach i gotowych procesach liczą procesy (po kolei rozdzielane), inaczej - bieżący proces.
+    coarse=True: duże bryły dostają zgrubną siatkę (dokładną dolicza potem okno w tle)."""
     items = list(items)
     if len(items) >= MIN_PARALLEL and ready():
         try:
-            futures = [_next_pool().submit(_mesh_job, shape, tolerance, solid) for shape, solid in items]
+            futures = [_next_pool().submit(_mesh_job, shape, tolerance, solid, coarse) for shape, solid in items]
             return [f.result() for f in futures]
         except Exception:
             _broken()
@@ -183,7 +211,7 @@ def mesh_many(items, tolerance=.12):
     for shape, solid in items:
         try:
             kernel.valid(shape, solid)
-            out.append((kernel.display_mesh(shape, tolerance), None))
+            out.append((kernel.display_mesh(shape, tolerance, coarse=coarse and kernel.heavy(shape)), None))
         except kernel.CadError as exc:
             out.append((None, str(exc)))
     return out

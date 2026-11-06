@@ -9,12 +9,15 @@ import tempfile
 import uuid
 from zipfile import ZipFile, ZIP_DEFLATED
 import cadquery as cq
-from .kernel import CadError, DisplayMesh, Frame, display_mesh, mesh_deferred, valid
+from .kernel import CadError, DisplayMesh, Frame, display_mesh, heavy, mesh_deferred, valid
 
 
 def _mesh(shape):
-    """Siatka nowej bryły - albo None w bloku kernel.deferred_mesh (uzupełni ją Document.meshed)."""
-    return None if mesh_deferred() else display_mesh(shape)
+    """Siatka nowej bryły - albo None w bloku kernel.deferred_mesh (uzupełni ją Document.meshed). Duża bryła dostaje najpierw
+    zgrubną siatkę (widać ją od razu), a okno dolicza dokładną w tle (StudioWindow._refine_meshes)."""
+    if mesh_deferred():
+        return None
+    return display_mesh(shape, coarse=heavy(shape))
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,7 @@ class Document:
             if len(self._mesh_cache) + len(todo) > 600:
                 self._mesh_cache.clear()
             items = list(todo.values())
-            for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items])):
+            for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items], coarse=True)):
                 if error is not None:
                     raise CadError(error)
                 self._mesh_cache[id(b.shape)] = (b.shape, mesh)
@@ -159,6 +162,19 @@ class Document:
                 b = replace(b, mesh=self._mesh_cache[id(b.shape)][1])
             out.append(b)
         return tuple(out)
+
+    def refined(self, shape, mesh):
+        """Dokładna siatka policzona w tle zastępuje zgrubną: w bieżącym stanie i w pamięci siatek (bez nowego kroku historii)."""
+        self._mesh_cache[id(shape)] = (shape, mesh)
+        if any(b.shape is shape for b in self.bodies):
+            self.bodies = tuple(replace(b, mesh=mesh) if b.shape is shape else b for b in self.bodies)
+            return True
+        return False
+
+    def fine_mesh(self, shape):
+        """Dokładna siatka z pamięci albo None."""
+        hit = self._mesh_cache.get(id(shape))
+        return hit[1] if hit is not None and hit[0] is shape and hit[1] is not None and hit[1].fine else None
 
     def append_states(self, tail):
         """Dokleja przeliczone późniejsze kroki za bieżący i ustawia widok na ostatnim."""

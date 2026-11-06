@@ -887,11 +887,90 @@ class DisplayMesh:
     edges: dict[int, np.ndarray]
     center: tuple[float, float, float]
     size: float
+    fine: bool = True          # False: zgrubna siatka pokazana od razu; dokładną liczy się w tle (refine)
 
 
-def display_mesh(shape, tolerance=.12):
-    mesh_parallel(shape, tolerance, .12)
-    vertices, triangles = shape.tessellate(tolerance, .12)
+FINE_ANGLE = .12            # dokładna siatka: odchyłka kątowa (rad)
+PREVIEW_ANGLE = .35         # podglądy na żywo (tolerancja liniowa >= .25): rzadsza siatka, liczona kilka razy szybciej
+COARSE = (.5, .5)           # zgrubna siatka dużej bryły (liniowa mm, kątowa rad) - ok. 10x szybciej niż dokładna
+HEAVY_FACES = 40            # od tylu ścian bryła dostaje najpierw zgrubną siatkę
+
+
+def heavy(shape):
+    """Bryła, której dokładna siatka liczy się zauważalnie długo (wiele ścian, np. otwory, zaokrąglenia, blacha z gięciami)."""
+    try:
+        from OCP.TopExp import TopExp
+        from OCP.TopTools import TopTools_IndexedMapOfShape
+        from OCP.TopAbs import TopAbs_FACE
+        faces = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape.wrapped, TopAbs_FACE, faces)
+        return faces.Extent() >= HEAVY_FACES
+    except Exception:
+        return False
+
+
+def _fast_triangles(shape):
+    """Trójkąty gotowej siatki OpenCascade prosto do tablic numpy: zapis binarnego STL w C++ i odczyt jednym ruchem
+    (zamiast przepisywania każdego punktu w Pythonie - kilka razy szybciej). Punkty są wspólne tylko w obrębie ściany,
+    więc krawędzie brył zostają ostre, a ściany zakrzywione gładkie - tak jak dotąd. None, gdy coś się nie zgadza."""
+    import os, tempfile, uuid
+    from OCP.StlAPI import StlAPI_Writer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopoDS import TopoDS
+    counts = []
+    explorer = TopExp_Explorer(shape.wrapped, TopAbs_FACE)
+    while explorer.More():
+        poly = BRep_Tool.Triangulation_s(TopoDS.Face_s(explorer.Current()), TopLoc_Location())
+        counts.append(poly.NbTriangles() if poly is not None else 0)
+        explorer.Next()
+    total = sum(counts)
+    if not total:
+        return None
+    path = os.path.join(tempfile.gettempdir(), f'rccad-{os.getpid()}-{uuid.uuid4().hex}.stl')
+    try:
+        writer = StlAPI_Writer()
+        writer.ASCIIMode = False
+        if not writer.Write(shape.wrapped, path):
+            return None
+        data = np.fromfile(path, dtype=np.uint8)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if len(data) < 84 or int(np.frombuffer(data[80:84].tobytes(), dtype='<u4')[0]) != total or len(data) < 84 + 50 * total:
+        return None
+    record = np.dtype([('n', '<f4', 3), ('v', '<f4', (3, 3)), ('a', '<u2')])
+    points = np.frombuffer(data[84:84 + 50 * total].tobytes(), dtype=record)['v'].reshape(-1, 3)
+    face = np.repeat(np.repeat(np.arange(len(counts), dtype=np.int32), counts), 3)
+    keys = np.empty((len(points), 4), dtype=np.int32)
+    keys[:, 0] = face
+    keys[:, 1:] = points.view(np.int32)
+    _, first, inverse = np.unique(np.ascontiguousarray(keys).view(np.dtype((np.void, 16))).ravel(), return_index=True, return_inverse=True)
+    return points[first].astype(np.float32), inverse.reshape(-1, 3).astype(np.uint32)
+
+
+def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
+    """Siatka do wyświetlania. angular domyślnie: dokładna dla zwykłej tolerancji, rzadsza dla podglądów (tolerancja >= .25).
+    coarse=True: zgrubna siatka (fine=False) - pokazana od razu, dokładna przychodzi później."""
+    if coarse:
+        tolerance, angular = COARSE
+    elif angular is None:
+        angular = PREVIEW_ANGLE if tolerance >= .25 else FINE_ANGLE
+    mesh_parallel(shape, tolerance, angular)
+    fast = None
+    try:
+        fast = _fast_triangles(shape)
+    except Exception:
+        fast = None
+    if fast is None:
+        vertices, triangles = shape.tessellate(tolerance, angular)
+        vertices = np.asarray([v.toTuple() for v in vertices], dtype=np.float32).reshape(-1, 3)
+        triangles = np.asarray(triangles, dtype=np.uint32).reshape(-1, 3)
+    else:
+        vertices, triangles = fast
     edge_faces = {}
     faces = shape.Faces()
     for face in faces:
@@ -915,9 +994,8 @@ def display_mesh(shape, tolerance=.12):
         points = edge.positions(np.linspace(0, 1, count))
         edges[i] = np.asarray([p.toTuple() for p in points], dtype=np.float32)
     box_bounds = bounds(shape)
-    return DisplayMesh(np.asarray([v.toTuple() for v in vertices], dtype=np.float32).reshape(-1, 3),
-                       np.asarray(triangles, dtype=np.uint32).reshape(-1, 3), edges,
-                       box_bounds.center.toTuple(), max(box_bounds.xlen, box_bounds.ylen, box_bounds.zlen, 1))
+    return DisplayMesh(vertices, triangles, edges, box_bounds.center.toTuple(), max(box_bounds.xlen, box_bounds.ylen, box_bounds.zlen, 1),
+                       fine=not coarse)
 
 
 # ---------- etap 2: linie, łuki, punkty, prostokąt 3-punktowy, okrąg styczny, tekst, SVG ----------

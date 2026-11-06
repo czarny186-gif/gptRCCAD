@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.41 — blacha liczona na wielu procesach
+# RCCAD Desktop 0.4.42 — płynniejsze wyświetlanie
+
+## Zmiany 0.4.42
+
+- **Duże bryły widać od razu**: bryła z wieloma ścianami (otwory, zaokrąglenia, blacha z gięciami - od 40 ścian) dostaje najpierw zgrubną siatkę, a dokładna liczy się w tle w procesach liczących i po chwili sama ją zastępuje (bez kroku historii). Płyta 200×200 ze 100 zaokrąglonymi otworami: wynik na ekranie po 0,47 s zamiast 3,8 s; dokładna siatka dochodzi w tle.
+- **Szybsze przepisywanie siatki do wyświetlania**: trójkąty z OpenCascade trafiają do tablic jednym ruchem (zapis binarny w C++), zamiast punkt po punkcie w Pythonie: 0,62 s → 0,19 s dla dużej płyty. Wygląd bez zmian - ostre krawędzie, gładkie ściany zakrzywione.
+- **Lżejsze podglądy na żywo** (wyciąganie, zaokrąglenie, skorupa, lustro, szyk, cięcie…): rzadsza siatka łuków, kilka razy szybsza przy bryłach z wieloma zaokrągleniami.
+- Po cofnięciu i ponowieniu dokładne siatki biorą się z pamięci.
+
+## RCCAD Desktop 0.4.41 — blacha liczona na wielu procesach
 
 ## Zmiany 0.4.41
 

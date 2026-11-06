@@ -92,6 +92,27 @@ class WorkerTests(unittest.TestCase):
             self.assertLess(local.cut(remote).Volume() + remote.cut(local).Volume(), 1e-6, joint)
             self.assertEqual(len(remote.Solids()), 1)
 
+    def test_fast_triangles_match_reference_and_coarse_mesh_is_refined(self):
+        import numpy as np
+        make = lambda: cq.Workplane().box(60, 60, 5).faces('>Z').workplane().rarray(8, 8, 6, 6).hole(3).edges('|Z').fillet(.4).val()
+        big = make()
+        self.assertTrue(k.heavy(big))
+        fine = k.display_mesh(big)
+        vertices, triangles = big.tessellate(.12, k.FINE_ANGLE)
+        self.assertEqual(len(fine.triangles), len(triangles))
+        tri = fine.vertices[fine.triangles]
+        ref = np.array([v.toTuple() for v in vertices])[np.array(triangles)]
+        signed = lambda p: float(np.einsum('ij,ij->i', p[:, 0], np.cross(p[:, 1], p[:, 2])).sum() / 6)
+        self.assertAlmostEqual(signed(tri), signed(ref), 2)                  # te same trójkąty, ta sama orientacja ścian
+        big = make()                                                           # świeży kształt bez siatki
+        body = Body('P', big).prepared()
+        self.assertFalse(body.mesh.fine)                                       # duża bryła: najpierw zgrubna siatka
+        self.assertLess(len(body.mesh.triangles), len(fine.triangles))
+        (refined,) = workers.fine_meshes([big])
+        self.assertTrue(refined.fine)
+        self.assertEqual(sorted(refined.edges), sorted(body.mesh.edges))       # krawędzie do wskazywania bez zmian
+        self.assertEqual(len(refined.triangles), len(fine.triangles))
+
 
 if __name__ == '__main__':
     unittest.main()

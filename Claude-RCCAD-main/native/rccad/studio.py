@@ -213,6 +213,11 @@ class StudioWindow(QMainWindow):
         from . import workers
         QTimer.singleShot(1500, workers.start)        # procesy liczące startują w tle, gdy okno jest już widoczne
         self._warming = set()
+        self._refining = set()
+        self._refine_timer = QTimer(self)
+        self._refine_timer.setSingleShot(True)
+        self._refine_timer.setInterval(60)
+        self._refine_timer.timeout.connect(lambda: self._refine_meshes())
         self._warm_timer = QTimer(self)
         self._warm_timer.setSingleShot(True)
         self._warm_timer.setInterval(400)
@@ -6138,10 +6143,50 @@ class StudioWindow(QMainWindow):
         self.view.set_models(bodies, highlighted, self.edges)
         if fit:
             self.view.fit_all()
+        if hasattr(self, '_refine_timer') and any(b.mesh is not None and not b.mesh.fine for b in self.document.bodies):
+            self._refine_timer.start()     # duże bryły pokazane zgrubnie: dokładne siatki liczą się w tle
         self.undo_button.setEnabled(self.document.can_undo and not self.busy)
         self.redo_button.setEnabled(self.document.can_redo and not self.busy)
         name = self.document.path.name if self.document.path else 'Nowy projekt'
         self.setWindowTitle(f"{'● ' if self.document.dirty else ''}{name} — RCCAD")
+
+    def _refine_meshes(self):
+        """Dokładne siatki dla brył pokazanych zgrubnie - w tle (procesy liczące), bez blokowania okna i bez kroku historii.
+        Gotowa siatka podmienia zgrubną, gdy bryła nadal jest w modelu; wcześniej policzone biorą się z pamięci od razu."""
+        todo, changed = [], False
+        for b in self.document.bodies:
+            if b.mesh is None or b.mesh.fine or id(b.shape) in self._refining:
+                continue
+            ready = self.document.fine_mesh(b.shape)
+            if ready is not None:
+                changed = self.document.refined(b.shape, ready) or changed
+            else:
+                todo.append(b.shape)
+        if changed:
+            self.refresh()
+        if not todo:
+            return
+        keys = {id(shape) for shape in todo}
+        self._refining |= keys
+        from . import workers
+
+        def done(meshes):
+            self._refining -= keys
+            hit = False
+            for shape, mesh in zip(todo, meshes or []):
+                if mesh is not None:
+                    hit = self.document.refined(shape, mesh) or hit
+            if hit:
+                self.refresh()
+
+        def failed(_message):
+            self._refining -= keys
+
+        work = _Work(lambda: workers.fine_meshes(todo))
+        work.signals.done.connect(done)
+        work.signals.failed.connect(failed)
+        self._refine_work = work
+        self.pool.start(work)
 
     # ---------- historia ----------
     def _hist_values(self):

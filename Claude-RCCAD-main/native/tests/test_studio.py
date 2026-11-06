@@ -1891,5 +1891,21 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(len(pts));span=pts.max(axis=0)-pts.min(axis=0)
         self.assertEqual(sorted(round(float(x)) for x in span),[2,2,20])        # sam pas zaokrąglenia R2 wzdłuż krawędzi 20 mm
 
+    def test_heavy_body_shows_coarse_mesh_then_refines_in_background(self):
+        import cadquery as cq
+        w=self.w;big=cq.Workplane().box(60,60,5).faces('>Z').workplane().rarray(8,8,6,6).hole(3).edges('|Z').fillet(.4).val()
+        body=Body('Płyta',big).prepared();self.assertFalse(body.mesh.fine)
+        w.document.commit([body]);w.refresh()
+        end=time.monotonic()+30
+        while not w.document.bodies[0].mesh.fine and time.monotonic()<end:
+            self.app.processEvents();time.sleep(.01)
+        self.assertTrue(w.document.bodies[0].mesh.fine);self.assertFalse(w.document.dirty and w.document.can_redo)
+        self.assertEqual(len(w.document.states()),2)                               # bez nowego kroku historii
+        w.undo();w.redo();self.app.processEvents()
+        end=time.monotonic()+5
+        while not w.document.bodies[0].mesh.fine and time.monotonic()<end:
+            self.app.processEvents();time.sleep(.01)
+        self.assertTrue(w.document.bodies[0].mesh.fine)                           # po cofnięciu i ponowieniu - z pamięci
+
 if __name__=='__main__':
     unittest.main()
