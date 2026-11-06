@@ -202,6 +202,23 @@ def prepared(tag):
     return future is not None and future.done() and not future.cancelled() and future.exception() is None
 
 
+def call_any(function, *args):
+    """Jedno zadanie w dowolnym procesie (po kolei rozdzielane). Okno czeka bez blokady Pythona. Jak call_affine."""
+    if not ready():
+        raise Unavailable()
+    from . import kernel
+    try:
+        return _next_pool().submit(function, *args).result(timeout=TIMEOUT)
+    except kernel.CadError:
+        raise
+    except Exception as exc:
+        from concurrent.futures import TimeoutError as Timeout
+        from concurrent.futures.process import BrokenProcessPool
+        if isinstance(exc, (BrokenProcessPool, Timeout)):
+            _broken()
+        raise Unavailable() from exc
+
+
 def submit_affine(key, function, *args):
     """Zadanie w tle w procesie przypisanym do klucza, bez czekania na wynik (np. przygotowanie rozwinięcia). Future albo None."""
     if not ready():

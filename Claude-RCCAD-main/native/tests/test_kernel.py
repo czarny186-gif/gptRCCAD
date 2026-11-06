@@ -2,6 +2,7 @@ import math
 from pathlib import Path
 import tempfile
 import unittest
+import unittest.mock
 from rccad import kernel as k
 from rccad.document import Body, Document
 
@@ -490,3 +491,24 @@ class DocumentTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class SheetJoinTests(unittest.TestCase):
+    def test_join_and_extension_is_stable(self):
+        from rccad import sheetmetal as shm
+        self.assertEqual([shm._nice_ceil(v) for v in (3, 10, 10.5, 21, 49, 51)], [5, 10, 20, 50, 50, 100])
+        t = 1.0
+        base = dict(o=[0, 0, 0], x=[1, 0, 0], y=[0, 1, 0], z=[0, 0, 1], lx=60, ly=40, lz=t)
+        rules = dict(gap=.1, relief='none', relief_size=3, joint='sheet', miter=True, auto_corners=True, kfactor=.44)
+        edges = [([60, 0, t], [60, 40, t], [1, 0, 0]), ([60, 40, t], [0, 40, t], [0, 1, 0])]
+        flanges = [dict(kind='base', p0=a, p1=b, n=[0, 0, 1], m=m, r=1, angle=90, length=10) for a, b, m in edges]
+        captured = []
+        original = shm._join_sheet
+        with unittest.mock.patch.object(shm, '_join_sheet', side_effect=lambda s, p: captured.append((s, list(p))) or original(s, p)):
+            shm._BUILD_CACHE.clear(); shm._PARTS_CACHE.clear(); shm._OPS_CACHE.clear()
+            shm.build_sheet(dict(base=base, t=t, flanges=flanges, rules=rules))
+        shape, parts = max(captured, key=lambda c: len(c[1]))
+        glued = shm._join_sheet(shape, parts)
+        plain = k.boolean('union', shape, parts)
+        self.assertLess(glued.cut(plain).Volume() + plain.cut(glued).Volume(), 1e-6)
+        self.assertEqual(len(glued.Solids()), 1)

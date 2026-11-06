@@ -356,17 +356,22 @@ def describe_profiles(profiles, bodies=(), merge=True):
     i przesunięcie względem jego środka, więc podąża za szkicem po zmianie jego wymiarów."""
     out = []
     profiles = [p for p in profiles if not p.get('sibling')]      # pozostałe obszary tej samej ściany (wyspy): przepis odtwarza je razem z główną
+    groups, boxes = None, {}           # liczone raz dla wszystkich profili (przy setkach otworów z szyku to sekundy)
     for src in profiles:
         if src['kind'] == 'sketch':
             out.append({'k': 'sketch', 'id': src['id']})
         elif src['kind'] == 'region':
             center = np.array(src['center'], float)
             spec = {'k': 'region', 'plane': plane_to_json(src['plane']), 'center': [float(c) for c in center]}
-            group = sketch_groups(bodies).get(plane_key(src['plane']))
+            if groups is None:
+                groups = sketch_groups(bodies)
+            group = groups.get(plane_key(src['plane']))
             best = None
             for b in (group[1] if group else []):
-                box = kernel.bounds(b.shape)
-                lo, hi = np.array((box.xmin, box.ymin, box.zmin)), np.array((box.xmax, box.ymax, box.zmax))
+                if b.id not in boxes:
+                    box = kernel.bounds(b.shape)
+                    boxes[b.id] = (np.array((box.xmin, box.ymin, box.zmin)), np.array((box.xmax, box.ymax, box.zmax)))
+                lo, hi = boxes[b.id]
                 if np.all(center >= lo - 1e-6) and np.all(center <= hi + 1e-6):
                     size = float(np.prod(np.maximum(hi - lo, 1e-6)))
                     if best is None or size < best[0]:
@@ -598,7 +603,14 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
     fade = lambda bodies: [replace(b, visible=False) if b.id in spent else b for b in bodies]
     if op == 'new':
         ids2 = pad_ids(ids, len(tools), list(ids)[0] if ids else None)
-        return fade([*existing, *[Body(name, t, id=ids2[i]).prepared() for i, t in enumerate(tools)]])
+        return fade([*existing, *prepared_many(Body(name, t, id=ids2[i]) for i, t in enumerate(tools))])
+    if op in ('cut', 'join') and len(tools) > 1:
+        batched = _combine_batched(existing, tools, op, skip)
+        if batched is not None:
+            bodies, used, touched = batched
+            if not used:
+                raise kernel.CadError('Nie ma bryły, z którą można wykonać tę operację. Profil musi dotykać bryły lub ją przecinać.')
+            return fade(split_parts(bodies, touched) if op != 'join' else bodies)
     bodies, used, touched = list(existing), False, set()
     for tool in tools:
         box = kernel.bounds(tool)
@@ -606,11 +618,10 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
             if b.kind != 'solid' or b.id in skip:
                 continue
             other = kernel.bounds(b.shape)
-            if (box.xmin > other.xmax + 1e-3 or box.xmax < other.xmin - 1e-3 or box.ymin > other.ymax + 1e-3 or
-                    box.ymax < other.ymin - 1e-3 or box.zmin > other.zmax + 1e-3 or box.zmax < other.zmin - 1e-3):
+            if not _boxes_touch(box, other):
                 continue
             try:
-                bodies[i] = b.changed(kernel.boolean({'join': 'union', 'cut': 'subtract', 'intersect': 'intersect'}[op], b.shape, [tool]))
+                bodies[i] = _boolean_changed(b, {'join': 'union', 'cut': 'subtract', 'intersect': 'intersect'}[op], [tool])
                 used = True
                 touched.add(b.id)
             except kernel.CadError:
@@ -622,6 +633,86 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
     if not used:
         raise kernel.CadError('Nie ma bryły, z którą można wykonać tę operację. Profil musi dotykać bryły lub ją przecinać.')
     return fade(split_parts(bodies, touched) if op != 'join' else bodies)
+
+
+def boolean_job(operation, base, tools, with_mesh):
+    """W procesie liczącym: operacja logiczna i siatka wyniku. Zwraca (kształt, siatka albo None)."""
+    shape = kernel.boolean(operation, base, tools)
+    # duża bryła (np. płyta z setką otworów): zgrubna siatka od razu, dokładną dolicza w tle osobny proces
+    return shape, (kernel.display_mesh(shape, coarse=kernel.heavy(shape)) if with_mesh else None)
+
+
+def _boolean_changed(body, operation, tools):
+    """Bryła po operacji logicznej. Przy gotowych procesach liczących operacja i siatka liczą się w procesie - wątek okna
+    tylko czeka (bez blokady Pythona), więc okno się nie zacina nawet przy wycinaniu setek otworów naraz."""
+    from . import workers
+    if workers.ready():
+        try:
+            shape, mesh = workers.call_any(boolean_job, operation, body.shape, list(tools), not kernel.mesh_deferred())
+            return body.changed(shape, mesh)
+        except workers.Unavailable:
+            pass
+    return body.changed(kernel.boolean(operation, body.shape, list(tools)))
+
+
+def prepared_many(bodies):
+    """Siatki wielu nowych obiektów naraz (np. szyk, wyciągnięcie wielu profili): w procesach liczących równolegle,
+    bez procesów - po kolei tutaj. W bloku deferred_mesh zostają bez siatek."""
+    bodies = list(bodies)
+    if kernel.mesh_deferred() or not bodies:
+        return bodies
+    from . import workers
+    if len(bodies) >= 2 and workers.ready():
+        out = []
+        for b, (mesh, error) in zip(bodies, workers.mesh_many([(b.shape, b.kind == 'solid') for b in bodies])):
+            if error is not None:
+                raise kernel.CadError(error)
+            out.append(replace(b, mesh=mesh))
+        return out
+    return [b.prepared() for b in bodies]
+
+
+def _boxes_touch(box, other):
+    return not (box.xmin > other.xmax + 1e-3 or box.xmax < other.xmin - 1e-3 or box.ymin > other.ymax + 1e-3 or
+                box.ymax < other.ymin - 1e-3 or box.zmin > other.zmax + 1e-3 or box.zmax < other.zmin - 1e-3)
+
+
+def _combine_batched(existing, tools, op, skip):
+    """Wycięcie / połączenie wielu narzędzi naraz (np. 144 otwory z szyku): jedna operacja logiczna na bryłę ze wszystkimi
+    narzędziami, które jej dotykają, i jedna nowa siatka - zamiast osobnej operacji i siatki po każdym otworze (czas rósł
+    z kwadratem liczby otworów). Wynik taki sam jak po kolei. None, gdy coś się nie uda - wtedy liczy się po kolei."""
+    try:
+        boxes = [kernel.bounds(t) for t in tools]
+        bodies, used, touched = list(existing), False, set()
+        for i, b in enumerate(existing):
+            if b.kind != 'solid' or b.id in skip:
+                continue
+            other = kernel.bounds(b.shape)
+            mine = [n for n, box in enumerate(boxes) if _boxes_touch(box, other)]
+            if op == 'join':        # połączenie powiększa bryłę: narzędzia dotykające dołączonej części też się łączą
+                grown = True
+                while grown:
+                    grown = False
+                    for n, box in enumerate(boxes):
+                        if n not in mine and any(_boxes_touch(box, boxes[m]) for m in mine):
+                            mine.append(n)
+                            grown = True
+            if not mine:
+                continue
+            chosen = [tools[n] for n in sorted(mine)]
+            if op == 'cut' and any(_swallowed(b.shape, t) for t in chosen if _box_inside(other, kernel.bounds(t))):
+                return None         # wycięcie usunęłoby całą bryłę - zachowanie jak po kolei
+            bodies[i] = _boolean_changed(b, 'subtract' if op == 'cut' else 'union', chosen)
+            used = True
+            touched.add(b.id)
+        return bodies, used, touched
+    except Exception:
+        return None
+
+
+def _box_inside(inner, outer):
+    return (inner.xmin >= outer.xmin - 1e-3 and inner.xmax <= outer.xmax + 1e-3 and inner.ymin >= outer.ymin - 1e-3 and
+            inner.ymax <= outer.ymax + 1e-3 and inner.zmin >= outer.zmin - 1e-3 and inner.zmax <= outer.zmax + 1e-3)
 
 
 def _swallowed(shape, tool):
@@ -829,7 +920,7 @@ def run_pattern(bodies, recipe):
         return _replace(bodies, body.changed(merged))
     out = pad_ids(recipe.get('out', ()), len(copies), (recipe.get('out') or [body.id])[0])
     group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
-    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group).prepared() for i, sh in enumerate(copies)]
+    made = prepared_many(Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group) for i, sh in enumerate(copies))
     source_body = body.changed(source) if moved else body
     if group:
         source_body = replace(source_body, group=group)
@@ -1127,6 +1218,21 @@ def _sheet_result(bodies, body, kind, source, args):
                 place = 'layout'
         except Exception:
             pass
+    if kind == 'build' and workers.ready():
+        # budowa blachy: kierowana stąd, ale ciężkie części liczą procesy - cięcia narożników kołnierzy jednego poziomu
+        # równolegle (każdy kołnierz w swoim procesie, który pamięta jego cięcia), łączenie części i siatka też w procesach;
+        # tutaj zostaje tylko lekkie planowanie, więc okno się nie zacina
+        shape, metadata, _ = sheet_job(kind, body.shape, source, args, False)
+        mesh = None
+        if with_mesh:
+            try:
+                mesh, error = workers.call_any(workers._mesh_job, shape, .12, True, False)
+                if error:
+                    raise kernel.CadError(error)
+            except workers.Unavailable:
+                mesh = None
+        out = replace(body, shape=shape, mesh=mesh, meta={'sheet': metadata}) if mesh is not None or not with_mesh else replace(body.changed(shape), meta={'sheet': metadata})
+        return _replace(bodies, out)
     try:
         shape, metadata, mesh = workers.call_affine((place, body.id), sheet_job, kind, body.shape, source, args, with_mesh)
         out = replace(body, shape=shape, mesh=mesh, meta={'sheet': metadata})

@@ -922,7 +922,7 @@ class DisplayMesh:
     fine: bool = True          # False: zgrubna siatka pokazana od razu; dokładną liczy się w tle (refine)
 
 
-FINE_ANGLE = .12            # dokładna siatka: odchyłka kątowa (rad)
+FINE_ANGLE = .2             # dokładna siatka: odchyłka kątowa (rad) - otwór R2 ma 32 odcinki na obwodzie, duże łuki prowadzi odchyłka liniowa
 PREVIEW_ANGLE = .35         # podglądy na żywo (tolerancja liniowa >= .25): rzadsza siatka, liczona kilka razy szybciej
 COARSE = (.5, .5)           # zgrubna siatka dużej bryły (liniowa mm, kątowa rad) - ok. 10x szybciej niż dokładna
 HEAVY_FACES = 40            # od tylu ścian bryła dostaje najpierw zgrubną siatkę

@@ -123,9 +123,9 @@ class WorkerTests(unittest.TestCase):
         flanges = [dict(kind='base', p0=[60, 0, t], p1=[60, 40, t], n=[0, 0, 1], m=[1, 0, 0], r=1, angle=90, length=10),
                    dict(kind='base', p0=[60, 40, t], p1=[0, 40, t], n=[0, 0, 1], m=[0, 1, 0], r=1, angle=90, length=10)]
         recipe = dict(type='sheetbuild', id=plate.id, base=base, t=t, flanges=flanges, rules=rules)
-        with patch.object(workers, 'call_affine', wraps=workers.call_affine) as spy:
+        with patch.object(workers, 'call_any', wraps=workers.call_any) as spy:
             remote = hist.run_recipe([plate], recipe)[0]
-        self.assertEqual(spy.call_args[0][0], ('sheet', plate.id))                 # proces tej blachy
+        self.assertGreaterEqual(spy.call_count, 2)                                 # łączenie części i siatka w procesach
         self.assertTrue(remote.mesh is not None and remote.mesh.fine)             # siatka policzona w procesie
         with patch.object(workers, 'ready', return_value=False):
             local = hist.run_recipe([plate], recipe)[0]

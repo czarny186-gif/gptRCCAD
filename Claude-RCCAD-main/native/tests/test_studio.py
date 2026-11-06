@@ -1983,5 +1983,19 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.pick_object(x+2,y+1),line.id)                   # linia szkicu na ścianie wygrywa z bryłą
         far=w.view.project_one((3.0,3.0,10.0));self.assertEqual(w.pick_object(*far),box.id)
 
+    def test_many_holes_are_cut_in_one_operation(self):
+        import cadquery as cq
+        from rccad import history as H
+        plate=Body('Płyta',k.box(100,100,5)).prepared()
+        tools=[cq.Solid.makeCylinder(1.5,20,cq.Vector(8+10*i,8+10*j,-5)) for i in range(9) for j in range(9)]
+        with patch.object(H,'_boolean_changed',wraps=H._boolean_changed) as spy:
+            out=H.combine([plate],tools,'cut')
+        self.assertEqual(spy.call_count,1)                                         # jedna operacja na wszystkie otwory
+        self.assertAlmostEqual(out[0].shape.Volume(),100*100*5-81*np.pi*1.5**2*5,3)
+        seq=plate.shape
+        for t in tools[:5]:seq=k.boolean('subtract',seq,[t])
+        five=H.combine([plate],tools[:5],'cut')[0].shape
+        self.assertLess(five.cut(seq).Volume()+seq.cut(five).Volume(),1e-6)     # wynik jak po kolei
+
 if __name__=='__main__':
     unittest.main()

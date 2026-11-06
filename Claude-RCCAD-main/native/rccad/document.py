@@ -45,11 +45,12 @@ class Body:
             return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
         return self.changed(shape)
 
-    def changed(self, shape):
+    def changed(self, shape, mesh=False):
+        """Ta sama bryła z nowym kształtem. mesh: gotowa siatka (np. policzona w procesie liczącym); domyślnie liczona tutaj."""
         meta = None
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
-        return replace(self, shape=shape, mesh=_mesh(shape), meta=meta)
+        return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False else mesh, meta=meta)
 
 
 class Document:

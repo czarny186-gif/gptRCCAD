@@ -620,10 +620,27 @@ def _join_sheet(shape, parts):
             _OPS_ORDER.append(key)
         return _OPS_CACHE[key]
     expected = volume(shape) + sum(volume(p) for p in parts)
-    result = kernel.boolean('union', shape, parts)
-    if expected - volume(result) > max(1e-4, expected * 1e-8):
+    tolerance = max(1e-4, expected * 1e-8)
+    from . import workers
+    try:        # w oknie: łączenie liczy proces liczący (okno się nie zacina), w procesie - tutaj
+        result = workers.call_any(kernel.boolean, 'union', shape, list(parts))
+    except workers.Unavailable:
+        result = kernel.boolean('union', shape, parts)
+    # Tryb sklejania OpenCascade byłby 2-3x szybszy, ale przy nachodzących gięciach daje bryłę o „poprawnej” objętości
+    # i kolizja nie zostałaby zgłoszona - dlatego zawsze zwykła suma.
+    if expected - volume(result) > tolerance:
         raise kernel.CadError("Gięcia nachodzą na siebie lub na płytę. Zmień kierunek, kąt albo długość kołnierza.")
     return result
+
+
+def _nice_ceil(value):
+    """Najmniejsza wartość z szeregu 1-2-5 (…, 10, 20, 50, 100, …) nie mniejsza niż value."""
+    value = max(float(value), 1e-6)
+    scale = 10.0 ** math.floor(math.log10(value))
+    for step in (1, 2, 5, 10):
+        if step * scale >= value - 1e-9:
+            return step * scale
+    return 10 * scale
 
 
 def _corner_layout(specs, eff, corners, t):
@@ -637,7 +654,9 @@ def _corner_layout(specs, eff, corners, t):
     reach = []
     for i, f in enumerate(eff):
         reach.append(f['length'] + 2*(f['r'] + t) + (reach[specs[i]['parent']] if specs[i]['kind'] == 'tip' else 0))
-    extension = max(reach, default=0) + t
+    # Zapas zaokrąglony w górę do 1-2-5 (10, 20, 50, 100…): kolejny kołnierz zwykle go nie zmienia, więc części
+    # pozostałych kołnierzy i ich cięcia w narożnikach (zapamiętane) zostają ważne - wynik po przycięciu jest ten sam.
+    extension = _nice_ceil(max(reach, default=0) + t)
     frames = []
     for i, f in enumerate(eff):
         root = eff[owners[i]]

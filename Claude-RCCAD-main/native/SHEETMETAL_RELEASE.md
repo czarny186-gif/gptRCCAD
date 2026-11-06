@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.45 — blacha bez zacinania okna
+# RCCAD Desktop 0.4.46 — szybkie narożniki blach i wycinanie wielu otworów
+
+## Zmiany 0.4.46
+
+- **Blacha ze ściankami bocznymi i powrotami**: zapas materiału w narożnikach jest zaokrąglany (10, 20, 50, 100 mm…), więc kolejny poziom gięć nie unieważnia już zapamiętanych cięć wszystkich kołnierzy. Pomiar (pudełko: 4 ścianki + 2 poziomy powrotów): 9. kołnierz 3,4 s → 0,66 s, 5. kołnierz 1,6 s → 0,47 s; wynik geometrii bez zmian.
+- **Łączenie części blachy w procesie liczącym** (okno się nie zacina); kolizje gięć są wykrywane jak dotąd.
+- **Cięcia narożników nadal na wielu rdzeniach**: budową blachy kieruje program, a cięcia kołnierzy jednego poziomu, łączenie i siatka liczą procesy - okno się nie zacina.
+- **Wycinanie / dodawanie wielu profili naraz** (np. otwory z szyku): jedna operacja na bryłę ze wszystkimi narzędziami zamiast osobnej operacji i nowej siatki po każdym otworze. Pomiar: płyta 200×200 i szyk 12×12 otworów - wycięcie 5 min 14 s → ok. 4 s.
+- **Wybór szkiców z grupy** (szyk „jeden element”): 144 profile w 0,95 s zamiast 20,7 s zamrożenia okna; opis kroku do historii liczony raz dla wszystkich profili.
+- **Operacje logiczne i siatki wielu nowych obiektów w procesach liczących** - okno się nie zacina przy wycinaniu setek otworów; duże bryły najpierw zgrubnie, dokładna siatka w tle.
+- Dokładna siatka trochę lżejsza (otwór R2 ma 32 odcinki zamiast 52) - liczy się 2x szybciej.
+
+## RCCAD Desktop 0.4.45 — blacha bez zacinania okna
 
 ## Zmiany 0.4.45
 

@@ -3261,17 +3261,34 @@ class StudioWindow(QMainWindow):
             cluster = ('group', body.group)
             siblings = []
             groups = self._drawn_sketches()
+            wanted = {m.id: m for m in members}
+            where = {}
+            for key, (_, bodies) in groups.items():
+                for b in bodies:
+                    if b.id in wanted:
+                        where.setdefault(key, []).append(wanted[b.id])
+            covered = set()
+            for key, mine in where.items():
+                # obszary płaszczyzny liczone raz; każdy obszar przypisany do szkicu, w którego prostokącie leży jego punkt
+                # wewnętrzny (dokładne sprawdzenie tylko dla tych kilku) - zamiast porównywać każdy szkic z każdym obszarem
+                plane, bodies = groups[key]
+                boxes = []
+                for m in mine:
+                    bb = kernel.bounds(m.shape)
+                    boxes.append((np.array([bb.xmin, bb.ymin, bb.zmin]) - 1e-6, np.array([bb.xmax, bb.ymax, bb.zmax]) + 1e-6, m))
+                material = {}
+                for f in self._regions_for(key, plane, bodies):
+                    point = np.asarray(hist._inner_point(f), float)
+                    for low, high, m in boxes:
+                        if (point >= low).all() and (point <= high).all():
+                            faces = material.setdefault(m.id, hist.material_faces([m]))
+                            if any(kernel.face_contains(face, point) for face in faces):
+                                siblings.append(dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=src['normal'],
+                                                     center=f.Center().toTuple(), cluster=cluster))
+                                covered.add(m.id)
+                                break
             for member in members:
-                key = next((k for k, (_, bodies) in groups.items() if any(b.id == member.id for b in bodies)), None)
-                regions = []
-                if key is not None:
-                    plane, bodies = groups[key]
-                    material = hist.material_faces([member])
-                    regions = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=src['normal'], center=f.Center().toTuple(), cluster=cluster)
-                               for f in self._regions_for(key, plane, bodies) if any(kernel.face_contains(m, hist._inner_point(f)) for m in material)]
-                if regions:
-                    siblings += regions
-                elif member.shape.IsClosed() if hasattr(member.shape, 'IsClosed') else False:
+                if member.id not in covered and (member.shape.IsClosed() if hasattr(member.shape, 'IsClosed') else False):
                     siblings.append(dict(self._sketch_profile(member), cluster=cluster))
             return dict(src, cluster=cluster, siblings=[*src.get('siblings', ()), *siblings])
         except Exception:
