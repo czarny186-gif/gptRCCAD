@@ -1473,10 +1473,11 @@ class CadView(gl.GLViewWidget):
                     self.sketchInfo.emit(f"Promień {math.hypot(du, dv):.2f} mm")
             event.accept()
             return
-        if self._press and (buttons & Qt.RightButton or (buttons & Qt.LeftButton and event.modifiers() & Qt.ShiftModifier)):
+        if buttons & Qt.MiddleButton or (self._press and (buttons & Qt.RightButton or (buttons & Qt.LeftButton and event.modifiers() & Qt.ShiftModifier))):
+            # przesuwanie w płaszczyźnie ekranu: na boki i w górę / w dół w każdym widoku (także patrząc prosto na płaszczyznę)
             delta = pos - (self._drag_position or pos)
             self._drag_position = pos
-            self.pan(delta.x(), delta.y(), 0, relative='view-upright')
+            self.pan(delta.x(), delta.y(), 0, relative='view')
             event.accept()
             return
         if self._press and self._press[2] == Qt.LeftButton and self.mouse_mode in ('orbit', 'pan'):
@@ -1486,7 +1487,7 @@ class CadView(gl.GLViewWidget):
             if self.mouse_mode == 'orbit':
                 self.orbit(-delta.x(), delta.y())
             else:
-                self.pan(delta.x(), delta.y(), 0, relative='view-upright')
+                self.pan(delta.x(), delta.y(), 0, relative='view')
             event.accept()
             return
         if not buttons:
@@ -1531,6 +1532,11 @@ class CadView(gl.GLViewWidget):
 
     def mousePressEvent(self, event):
         self._drag_position = event.position()
+        if event.buttons() & Qt.MiddleButton:
+            # kółko (samo albo razem z lewym przyciskiem) przesuwa obraz - nie rysuje i nie zaznacza
+            self._press = None
+            event.accept()
+            return
         self._press = (event.position().x(), event.position().y(), event.button())
         if self.drag_hook is not None and event.button() == Qt.LeftButton and not event.modifiers() & Qt.ShiftModifier:
             if self.drag_hook('press', event.position().x(), event.position().y()):

@@ -578,3 +578,55 @@ class SpinArrow(QToolButton):
         p.setFont(f); p.setPen(QColor('#1f3b57' if hover else '#40586f'))
         p.drawText(QRectF(0, self.height() - 22, self.width(), 18), Qt.AlignCenter, self._label)
         p.end()
+
+
+class BusyBar(QWidget):
+    """Mały pasek pod kostką nawigacji: przesuwający się odcinek, gdy coś liczy się w tle (okno działa normalnie).
+    `active` to funkcja mówiąca, czy jest jakaś praca; pasek sam sprawdza ją kilka razy na sekundę."""
+
+    def __init__(self, parent, active):
+        super().__init__(parent)
+        from PySide6.QtCore import QTimer
+        self._active = active
+        self._phase = 0.0
+        self._idle = 0
+        self.setFixedSize(100, 6)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setToolTip('Liczenie w tle - okno działa normalnie, możesz obracać i oglądać model')
+        self.hide()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(40)
+
+    def busy(self):
+        try:
+            return bool(self._active())
+        except Exception:
+            return False
+
+    def _tick(self):
+        if self.busy():
+            self._idle = 0
+            if not self.isVisible():
+                self._phase = 0.0
+                self.show()
+                self.raise_()
+            self._phase = (self._phase + .035) % 1.0
+            self.update()
+        elif self.isVisible():
+            self._idle += 1
+            if self._idle > 4:            # krótkie przerwy między zadaniami nie migają paskiem
+                self.hide()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        r = self.rect()
+        painter.setBrush(QColor(52, 78, 105, 40))
+        painter.drawRoundedRect(QRectF(r), 3, 3)
+        span = r.width() * .35
+        x = -span + (r.width() + span) * self._phase
+        painter.setClipRect(r)
+        painter.setBrush(QColor('#f08a24'))
+        painter.drawRoundedRect(QRectF(x, 0, span, r.height()), 3, 3)

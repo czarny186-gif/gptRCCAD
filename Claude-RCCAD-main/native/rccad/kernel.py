@@ -524,6 +524,115 @@ def map_edges(shape, piece, indices, tol=1e-4):
     return out
 
 
+def _edge_faces(shape):
+    """Mapa: krawędź (TShape) -> ściany przylegające."""
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    data = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, data)
+    return data
+
+
+def _inside_face(face, point):
+    from OCP.BRepClass import BRepClass_FaceClassifier
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+    from OCP.gp import gp_Pnt
+    state = BRepClass_FaceClassifier(face.wrapped, gp_Pnt(*map(float, point)), 1e-6).State()
+    return state in (TopAbs_IN, TopAbs_ON)
+
+
+def blend_frames(shape, indices):
+    """Geometria potrzebna do szybkiego podglądu: dla każdej krawędzi (początek, koniec, kierunek w głąb jednej i drugiej
+    ściany). None, gdy któraś krawędź nie jest prostą między dwiema płaskimi ścianami. Zależy tylko od zaznaczenia,
+    więc przy zmianie promienia liczy się ją raz."""
+    from OCP.TopoDS import TopoDS
+    edges = shape.Edges()
+    ancestors = _edge_faces(shape)
+    result = []
+    for index in sorted(indices):
+        if index < 0 or index >= len(edges):
+            return None
+        edge = edges[index]
+        if edge.geomType() != 'LINE':
+            return None
+        key = ancestors.FindIndex(edge.wrapped)
+        if not key:
+            return None
+        faces = [cq.Face(TopoDS.Face_s(f)) for f in ancestors.FindFromIndex(key)]
+        unique = []
+        for f in faces:
+            if not any(f.wrapped.IsSame(g.wrapped) for g in unique):
+                unique.append(f)
+        if len(unique) != 2 or any(f.geomType() != 'PLANE' for f in unique):
+            return None
+        a, b = np.array(edge.startPoint().toTuple(), float), np.array(edge.endPoint().toTuple(), float)
+        t = b - a
+        length = float(np.linalg.norm(t))
+        if length < 1e-9:
+            return None
+        t /= length
+        mid = (a + b) / 2
+        directions = []
+        for f in unique:
+            n = np.array(f.normalAt(cq.Vector(*mid)).toTuple(), float)
+            u = np.cross(n, t)
+            u /= max(np.linalg.norm(u), 1e-12)
+            probe = min(length * .25, .5)
+            if not _inside_face(f, mid + probe * u):
+                u = -u
+                if not _inside_face(f, mid + probe * u):
+                    return None
+            directions.append(u)
+        result.append((a, b, directions[0], directions[1]))
+    return result
+
+
+def quick_blend_mesh(shape, indices, size, kind="fillet", segments=10, frames=None):
+    """Natychmiastowy podgląd zaokrąglenia / fazy bez liczenia bryły: dla prostej krawędzi między dwiema płaskimi ścianami
+    powierzchnia zaokrąglenia to wycinek walca, a faza - płaski pasek; liczone wprost z geometrii (narożniki, gdzie
+    spotyka się kilka zaokrągleń, są przybliżone). None, gdy któraś krawędź nie jest taka - wtedy czeka się na dokładny."""
+    if frames is None:
+        frames = blend_frames(shape, indices)
+    if not frames:
+        return None
+    size = float(size)
+    A = np.array([f[0] for f in frames], float)
+    B = np.array([f[1] for f in frames], float)
+    U1 = np.array([f[2] for f in frames], float)
+    U2 = np.array([f[3] for f in frames], float)
+    cos_a = np.clip(np.einsum('ij,ij->i', U1, U2), -1, 1)
+    alpha = np.arccos(cos_a)
+    if np.any(alpha < 1e-3) or np.any(alpha > math.pi - 1e-3):
+        return None
+    if kind == 'fillet':
+        setback = size / np.tan(alpha / 2)
+        W = U2 - cos_a[:, None] * U1
+        W /= np.linalg.norm(W, axis=1)[:, None]
+        C = setback[:, None] * U1 + size * W                    # środek łuku względem punktu krawędzi
+        R1 = setback[:, None] * U1 - C
+        R2 = setback[:, None] * U2 - C
+        angle = np.arccos(np.clip(np.einsum('ij,ij->i', R1, R2) / (size * size), -1, 1))
+        axis = np.cross(R1, R2)
+        axis /= np.maximum(np.linalg.norm(axis, axis=1), 1e-12)[:, None]
+        phi = angle[:, None] * (np.arange(segments + 1) / segments)[None, :]          # (n, k)
+        cross = np.cross(axis, R1)
+        dot = np.einsum('ij,ij->i', axis, R1)
+        profile = (C[:, None, :] + R1[:, None, :] * np.cos(phi)[..., None] + cross[:, None, :] * np.sin(phi)[..., None]
+                   + (axis * dot[:, None])[:, None, :] * (1 - np.cos(phi))[..., None])                  # (n, k, 3)
+    else:
+        profile = np.stack([size * U1, size * U2], axis=1)
+    n, k = profile.shape[:2]
+    vertices = np.empty((n, k, 2, 3))
+    vertices[:, :, 0] = A[:, None, :] + profile
+    vertices[:, :, 1] = B[:, None, :] + profile
+    vertices = vertices.reshape(-1, 3).astype(np.float32)
+    base = (np.arange(n)[:, None] * 2 * k + np.arange(k - 1)[None, :] * 2).reshape(-1)
+    triangles = np.concatenate([np.stack([base, base + 1, base + 3], 1), np.stack([base, base + 3, base + 2], 1)]).astype(np.uint32)
+    lo, hi = vertices.min(axis=0), vertices.max(axis=0)
+    return DisplayMesh(vertices, triangles, {}, tuple(float(c) for c in (lo + hi) / 2), float(max(np.max(hi - lo), 1)))
+
+
 def blend(shape, indices, size, kind="fillet"):
     size = positive(size, "Promień / odległość")
     edges = shape.Edges()
@@ -1468,9 +1577,16 @@ def edge_handle(shape, index):
     edge = shape.Edges()[index]
     mid = edge.positionAt(.5)
     total = np.zeros(3)
-    for face in shape.Faces():
-        if any(e.isSame(edge) for e in face.Edges()):
-            total += np.array(face.normalAt(mid).toTuple())
+    from OCP.TopoDS import TopoDS
+    ancestors = _edge_faces(shape)
+    key = ancestors.FindIndex(edge.wrapped)
+    seen = []
+    for f in (ancestors.FindFromIndex(key) if key else []):
+        face = cq.Face(TopoDS.Face_s(f))
+        if any(face.wrapped.IsSame(g.wrapped) for g in seen):
+            continue
+        seen.append(face)
+        total += np.array(face.normalAt(mid).toTuple())
     n = np.linalg.norm(total)
     if n < 1e-6:
         t = np.array(edge.tangentAt(.5).toTuple())

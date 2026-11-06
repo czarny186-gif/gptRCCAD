@@ -6,7 +6,8 @@ from . import icons
 
 TOPICS = [
     ('new', 'Start', 'Jak zacząć', [
-        'Po uruchomieniu widzisz trzy płaszczyzny środkowe (XY, XZ, YZ). Obracaj widok lewym przyciskiem myszy, przesuwaj prawym lub Shift + lewy, zoom kółkiem.',
+        'Po uruchomieniu widzisz trzy płaszczyzny środkowe (XY, XZ, YZ). Obracaj widok lewym przyciskiem myszy, przesuwaj prawym lub Shift + lewy, zoom kółkiem. Przytrzymane kółko (samo albo razem z lewym przyciskiem) też przesuwa obraz - na boki i w górę / w dół, także na widoku prosto na płaszczyznę.',
+        'Ciężkie operacje (zaokrąglenia, wycięcia, blachy) liczą się w tle, w osobnych procesach: w tym czasie możesz obracać i oglądać model. Mały pomarańczowy pasek pod kostką nawigacji pokazuje, że coś się liczy. Esc przerywa trwającą operację - model zostaje bez zmian.',
         'Pasek narzędzi u góry: Plik, Szkic, Wyciągnij, Obrót, Przeciągnięcie, Wyciągnięcie złożone, Skorupa, Połącz, Edytuj (zaokrąglanie, fazowanie), Lustro.',
         'Cofanie i ponawianie: strzałki w prawym górnym rogu albo Ctrl+Z / Ctrl+Y. Przycisk z warstwami pokazuje płaszczyzny, przycisk obok włącza przezroczyste bryły.']),
     ('t_toolbox', 'Ulubione i Przybornik', 'Twoje najczęściej używane narzędzia w jednej zakładce', [
@@ -102,7 +103,7 @@ TOPICS = [
         'Opcja Zachowaj bryły-narzędzia pozostawia oryginały. Podgląd wyniku widać od razu.']),
     ('fillet', 'Zaokrąglanie i fazowanie', 'Krawędzie', [
         'Kliknij krawędź. Shift + klik dodaje kolejne, Ctrl + klik zaznacza cały łańcuch styczny.',
-        'Rozmiar zmieniasz strzałką lub wpisując wartość. Podgląd podświetla ciepłym fioletem tylko tworzone zaokrąglenie albo fazę (widać je także przez jeszcze ostry narożnik); dwuklik w ścianę zaznacza jej krawędzie bez podświetlania całej ściany.']),
+        'Rozmiar zmieniasz strzałką lub wpisując wartość. Podgląd podświetla ciepłym fioletem tylko tworzone zaokrąglenie albo fazę (widać je także przez jeszcze ostry narożnik). Na prostych krawędziach między płaskimi ścianami podgląd pojawia się od razu przy każdej zmianie wartości, a dokładny (z narożnikami) dochodzi chwilę później w tle; Zastosuj liczy dokładny wynik; dwuklik w ścianę zaznacza jej krawędzie bez podświetlania całej ściany.']),
     ('t_split', 'Przetnij bryłę', 'Podział bryły na części (zakładka Edycja)', [
         'Kliknij Przetnij bryłę, potem bryłę (albo zaznacz ją wcześniej kliknięciem). Wybierz metodę ikoną: Płaszczyzna - równoległa do XY, XZ albo YZ, przez środek bryły; Ściana - płaszczyzna klikniętej płaskiej ściany; Szkic - linia, łuk albo zamknięty profil szkicu, cięcie prostopadle do szkicu przez całą bryłę; Bryła - powierzchnia innej bryły (części wewnątrz i na zewnątrz niej).',
         'Przy płaszczyźnie i ścianie Odsunięcie przesuwa cięcie wzdłuż strzałki - można je wpisać albo przeciągnąć strzałkę w widoku. Fioletowa przezroczysta płaszczyzna pokazuje, gdzie bryła zostanie przecięta.',

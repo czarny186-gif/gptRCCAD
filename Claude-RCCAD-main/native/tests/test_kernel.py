@@ -87,6 +87,25 @@ class KernelTests(unittest.TestCase):
         for x in (0,-1,float('nan'),float('inf')):
             with self.subTest(x=x),self.assertRaises(k.CadError):k.box(x,20,30)
 
+    def test_quick_blend_preview_lies_on_the_exact_surface(self):
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+        from OCP.gp import gp_Pnt
+        outer = k.box(20, 10, 8)
+        notch = k.boolean('subtract', k.box(20, 20, 10), [k.box(10, 10, 10).translate((10, 10, 0))])
+        inner = [i for i, e in enumerate(notch.Edges()) if e.geomType() == 'LINE' and abs(e.tangentAt(0).z) > .99
+                 and abs(e.Center().x - 10) < 1e-6 and abs(e.Center().y - 10) < 1e-6]
+        for shape, ids in ((outer, [0]), (notch, inner)):          # krawędź wypukła i wklęsła
+            for kind in ('fillet', 'chamfer'):
+                quick = k.quick_blend_mesh(shape, ids, 2, kind)
+                made = k.compound(k.new_faces(shape, k.blend(shape, set(ids), 2, kind))).wrapped
+                worst = max(BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(*map(float, p))).Vertex(), made).Value()
+                            for p in quick.vertices)
+                self.assertLess(worst, 1e-4, (kind, ids))
+        round_edge = k.blend(outer, {0}, 2, 'fillet')
+        curved = [i for i, e in enumerate(round_edge.Edges()) if e.geomType() != 'LINE']
+        self.assertIsNone(k.quick_blend_mesh(round_edge, curved[:1], 1, 'fillet'))   # nieobsługiwana -> czeka na dokładny
+
     def test_all_edges_fillet_true_spherical_corners(self):
         s=k.box(30,30,30);r=k.blend(s,range(12),3)
         exact=24**3+6*24**2*3+3*math.pi*24*9+4*math.pi*27/3

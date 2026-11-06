@@ -117,9 +117,28 @@ def _unit(v):
     return v / np.linalg.norm(v)
 
 
-def _adjacent_normals(shape, edge=None, vertex_point=None):
+def _edge_neighbours(shape):
+    """Szybka mapa krawędź -> przylegające ściany (zamiast przeglądania wszystkich ścian dla każdej krawędzi)."""
+    return kernel._edge_faces(shape)
+
+
+def _adjacent_normals(shape, edge=None, vertex_point=None, neighbours=None):
     """Posortowane normalne ścian przylegających do krawędzi (lub wierzchołka): „podpis” elementu niezależny od rozmiaru bryły."""
     out = []
+    if edge is not None and neighbours is not None:
+        from OCP.TopoDS import TopoDS
+        key = neighbours.FindIndex(edge.wrapped)
+        faces = []
+        for f in (neighbours.FindFromIndex(key) if key else []):
+            face = cq.Face(TopoDS.Face_s(f))
+            if not any(face.wrapped.IsSame(g.wrapped) for g in faces):
+                faces.append(face)
+        for face in faces:
+            try:
+                out.append([round(float(c), 3) for c in face.normalAt(edge.positionAt(.5)).toTuple()])
+            except Exception:
+                continue
+        return sorted(out)
     for face in shape.Faces():
         try:
             if edge is not None:
@@ -635,6 +654,68 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
     return fade(split_parts(bodies, touched) if op != 'join' else bodies)
 
 
+def _remote_bodies(module, name, bodies, args, kwargs):
+    """W procesie liczącym: funkcja (bryły, *args) -> lista brył. Bryły, których kształt się nie zmienił, wracają bez
+    geometrii (tylko nazwa, widoczność, opis), więc przesyłane są wyłącznie nowe kształty z gotowymi siatkami."""
+    import importlib
+    function = getattr(importlib.import_module(module), name)
+    result = function(list(bodies), *args, **kwargs)
+    extra = None
+    if isinstance(result, tuple):
+        result, extra = result
+    sources = {id(b.shape): b.id for b in bodies}
+    packed = []
+    for b in result:
+        source = sources.get(id(b.shape))
+        if source is not None:
+            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group)))
+        else:
+            packed.append(('body', b))
+    return packed, extra
+
+
+def offloaded(function, existing, *args, **kwargs):
+    """function(bryły, *args) w procesie liczącym, gdy procesy są gotowe - okno w tym czasie działa normalnie (obracanie,
+    oglądanie), bo liczenie nie trzyma blokady Pythona w procesie okna. Bez procesów - tutaj. Wynik jak function:
+    lista brył albo (lista, dodatek)."""
+    from . import workers
+    existing = list(existing)
+    if workers.ready():
+        light = [replace(b, mesh=None) for b in existing]          # siatki nie są potrzebne do liczenia - nie przesyłamy ich
+        try:
+            packed, extra = workers.call_any(_remote_bodies, function.__module__, function.__name__, light, args, kwargs)
+        except workers.Unavailable:
+            packed = None
+        if packed is not None:
+            originals = {b.id: b for b in existing}
+            out = []
+            for item in packed:
+                if item[0] == 'keep':
+                    out.append(replace(originals[item[1]], **item[2]))
+                else:
+                    out.append(item[1])
+            return (out, extra) if extra is not None else out
+    return function(existing, *args, **kwargs)
+
+
+def shape_job(module, name, args, solid=True):
+    """W procesie liczącym: funkcja kernela zwracająca kształt + siatka do wyświetlania."""
+    import importlib
+    shape = getattr(importlib.import_module(module), name)(*args)
+    return shape, kernel.display_mesh(shape, coarse=kernel.heavy(shape))
+
+
+def offloaded_shape(function, *args):
+    """(kształt, siatka albo None) - kształt z funkcji kernela liczony w procesie liczącym; bez procesów tutaj (siatka None)."""
+    from . import workers
+    if workers.ready():
+        try:
+            return workers.call_any(shape_job, function.__module__, function.__name__, args)
+        except workers.Unavailable:
+            pass
+    return function(*args), None
+
+
 def boolean_job(operation, base, tools, with_mesh):
     """W procesie liczącym: operacja logiczna i siatka wyniku. Zwraca (kształt, siatka albo None)."""
     shape = kernel.boolean(operation, base, tools)
@@ -931,12 +1012,13 @@ def run_pattern(bodies, recipe):
 def edge_refs(shape, indices):
     """Odwołania do krawędzi: środek, kierunek i normalne przylegających ścian (rozpoznanie niezależne od rozmiaru bryły)."""
     edges, out = shape.Edges(), []
+    neighbours = _edge_neighbours(shape)
     for i in sorted(indices):
         e = edges[i]
         a, b = np.array(e.positionAt(0).toTuple(), float), np.array(e.positionAt(1).toTuple(), float)
         d = b - a
         out.append(dict(mid=[float(c) for c in e.positionAt(.5).toTuple()], dir=[float(c) for c in (d / max(np.linalg.norm(d), 1e-12))],
-                        normals=_adjacent_normals(shape, edge=e)))
+                        normals=_adjacent_normals(shape, edge=e, neighbours=neighbours)))
     return out
 
 
@@ -958,9 +1040,10 @@ def edge_indices(shape, refs):
             continue
         if info is None:
             info = []
+            neighbours = _edge_neighbours(shape)
             for e in edges:
                 a, b = np.array(e.positionAt(0).toTuple(), float), np.array(e.positionAt(1).toTuple(), float)
-                info.append((_unit(b - a) if np.linalg.norm(b - a) > 1e-12 else np.zeros(3), _adjacent_normals(shape, edge=e)))
+                info.append((_unit(b - a) if np.linalg.norm(b - a) > 1e-12 else np.zeros(3), _adjacent_normals(shape, edge=e, neighbours=neighbours)))
         mid, direction = np.array(ref['mid'], float), np.array(ref['dir'], float)
         cands = [i for i, (d, n) in enumerate(info) if abs(float(d @ direction)) > .999 and _same_normals(n, ref['normals'])]
         if not cands:
@@ -1653,3 +1736,45 @@ def recompute_all(states, constraints=(), job=None):
     ctx.force = True
     tail, failed = rebuild(states[0][0], _steps(states, range(1, len(states))), ctx, job)
     return [states[0], *tail], failed
+
+
+_MOD_CACHE = {}          # w procesie roboczym: bryła i wycięty fragment ostatnio podglądanego zaokrąglenia
+
+
+def mod_preview(shape, ids, points, size, kind, margin, cache=None):
+    """Dokładny podgląd zaokrąglenia / fazy: tylko nowo powstała powierzchnia (siatka). Duża bryła -> mały fragment wokół zaznaczenia."""
+    local_ids = ids
+    try:
+        if len(shape.Faces()) > 10:
+            key = (None if ids is None else frozenset(ids),
+                   None if points is None else tuple(tuple(np.round(q, 3)) for q in points), round(margin, 3))
+            hit = cache.get('piece') if cache is not None else None
+            if hit and hit[0] == key:
+                piece, mapped = hit[1], hit[2]
+            else:
+                piece = kernel.local_piece(shape, ids, points, margin)
+                mapped = None if (piece is None or points is not None) else kernel.map_edges(shape, piece, sorted(ids))
+                if cache is not None:
+                    cache['piece'] = (key, piece, mapped)
+            if piece is not None and (points is not None or mapped is not None):
+                shape, local_ids = piece, (None if points is not None else set(mapped))
+    except Exception:
+        local_ids = ids
+    if points is not None:
+        result = kernel.blend_vertices(shape, points, size, kind)
+    else:
+        result = kernel.blend(shape, local_ids, size, kind)
+    made = kernel.new_faces(shape, result)
+    return kernel.display_mesh(kernel.compound(made), .3) if made else kernel.display_mesh(result, .3)
+
+
+def mod_preview_job(token, shape, ids, points, size, kind, margin):
+    """W procesie roboczym. Bryłę wysyła się tylko raz (token); kolejne wartości przy przeciąganiu idą bez niej."""
+    if shape is None:
+        if _MOD_CACHE.get('token') != token:
+            raise LookupError('brak bryły w pamięci procesu')
+        shape = _MOD_CACHE['shape']
+    elif _MOD_CACHE.get('token') != token:
+        _MOD_CACHE.clear()
+        _MOD_CACHE.update(token=token, shape=shape)
+    return mod_preview(shape, ids, points, size, kind, margin, _MOD_CACHE)

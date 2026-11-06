@@ -1375,7 +1375,7 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'nearest_edge',return_value=(a.id,0)):w.view_clicked(5,5,False,False)
         self.assertEqual(w.edges,{a.id:{0}});self.assertTrue(w.view.handles)
         w.handle_dragged('mod',2.0);self.assertGreater(w.mod_size.value(),3.0);w.handle_released('mod')
-        w.mod_size.setValue(2);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
+        w.mod_size.setValue(2);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items,w.mod_status.text())
         w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
 
     def test_corner_vertex_is_blended_alone_and_face_double_click_selects_edges(self):
@@ -2014,6 +2014,56 @@ class StudioTests(unittest.TestCase):
             self.assertAlmostEqual(float(c@n),0.0,6)                               # każda kopia leży w płaszczyźnie szkicu
         spread=sorted(round(float(np.array(b.shape.Center().toTuple())@u)) for b in copies)
         self.assertEqual(spread,[3,3,13,13,23,23])
+
+    # 0.4.48: podgląd zaokrąglenia od razu, pasek pracy w tle, Esc przerywa, kółko + lewy przesuwa także w górę i w dół
+    def test_fillet_preview_appears_before_background_result(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
+        w.edges={a.id:{0,1}};w.mod_size.setValue(2)
+        with patch.object(w,'run_preview') as later:
+            w.update_mod_preview()
+        later.assert_called_once()                          # dokładny podgląd idzie w tło
+        self.assertTrue(w.view.preview_items)               # a analityczny jest już widoczny
+
+    def test_busy_bar_under_cube_follows_background_work(self):
+        w=self.w;bar=w.busy_bar
+        self.assertGreater(bar.y(),w.cube.y()+w.cube.height()-1)
+        self.assertFalse(w.working())
+        w._refining.add(1)
+        self.assertTrue(w.working())
+        for _ in range(3):bar._tick()
+        self.assertTrue(bar.isVisible())
+        w._refining.clear()
+        for _ in range(8):bar._tick()
+        self.assertFalse(bar.isVisible())
+
+    def test_escape_abandons_running_operation(self):
+        import threading
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtCore import QEvent
+        w=self.w;gate=threading.Event();applied=[]
+        w.run_operation('Test',lambda:(gate.wait(10),1)[1],lambda v:applied.append(v))
+        self.assertTrue(w.busy)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier))
+        self.assertFalse(w.busy)
+        gate.set();w.pool.waitForDone(5000)
+        for _ in range(20):self.app.processEvents();time.sleep(.005)
+        self.assertEqual(applied,[])
+
+    def test_middle_and_left_drag_pans_vertically_on_plane_view(self):
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QEvent,QPointF
+        v=self.w.view;v.setCameraPosition(azimuth=-90,elevation=0)        # prosto na płaszczyznę XZ
+        start=v.opts['center'];start=np.array([start.x(),start.y(),start.z()])
+        both=Qt.MiddleButton|Qt.LeftButton
+        def ev(kind,x,y,button,buttons):
+            return QMouseEvent(kind,QPointF(x,y),QPointF(x,y),button,buttons,Qt.NoModifier)
+        v.mousePressEvent(ev(QEvent.MouseButtonPress,300,300,Qt.MiddleButton,Qt.MiddleButton))
+        v.mousePressEvent(ev(QEvent.MouseButtonPress,300,300,Qt.LeftButton,both))
+        v.mouseMoveEvent(ev(QEvent.MouseMove,300,360,Qt.NoButton,both))
+        c=v.opts['center'];moved=np.array([c.x(),c.y(),c.z()])-start
+        self.assertGreater(abs(moved[2]),1e-3)                 # w górę / w dół
+        self.assertLess(abs(moved[1]),1e-6)                    # nie w głąb ekranu
+
 
 if __name__=='__main__':
     unittest.main()

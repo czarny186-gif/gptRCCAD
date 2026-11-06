@@ -46,9 +46,14 @@ def count():
     return 0 if cores < 2 else min(cores, 8)
 
 
+IN_WORKER = False          # True w procesie liczącym
+
+
 def _init():
     """Start procesu liczącego: wczytuje bibliotekę geometrii. Wątki OpenCascade zostają (pojedyncza operacja na blasze
     w procesie liczy tak samo szybko jak w oknie)."""
+    global IN_WORKER
+    IN_WORKER = True
     from . import kernel  # noqa: F401
 
 
@@ -200,6 +205,14 @@ def prepare(tag, key, function, *args):
 def prepared(tag):
     future = _prepared.get(tag)
     return future is not None and future.done() and not future.cancelled() and future.exception() is None
+
+
+def pending():
+    """Czy któreś przygotowanie w tle jeszcze trwa."""
+    try:
+        return any(not f.done() for f in list(_prepared.values()))
+    except Exception:
+        return False
 
 
 def call_any(function, *args):

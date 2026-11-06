@@ -18,6 +18,7 @@ icons_green = '#2fa56d'
 icons_orange = '#f09a22'
 from .document import Body, Document
 from . import history as hist
+from . import workers
 from . import sheetmetal as shm
 from . import sheetedit as she
 from .viewcube import ViewCube
@@ -224,6 +225,7 @@ class StudioWindow(QMainWindow):
         self._warm_timer.setInterval(400)
         self._warm_timer.timeout.connect(lambda: self._warm_sheets())
         self.busy = False
+        self._cancel_op = None
         self.selected: list[str] = []
         self.hidden_ids: set[str] = set()
         self.locked_ids: set[str] = set()
@@ -542,6 +544,7 @@ class StudioWindow(QMainWindow):
 
         # kostka orientacji (jak ViewCube w Fusion 360): obraca się z kamerą, ściana / narożnik = widok
         self.cube = ViewCube(self.view, v)
+        self.busy_bar = ui.BusyBar(v, self.working)      # pasek pod kostką: coś liczy się w tle
         self.objects = ObjectsPanel(v)
         self.objects.select.connect(self.objects_select)
         self.objects.hide_toggled.connect(self.objects_hide)
@@ -1522,6 +1525,7 @@ class StudioWindow(QMainWindow):
         self.xray.move(W - 254, 20)
         self.home.move(W - 205, 20)
         self.cube.move(W - 160, 20)
+        self.busy_bar.move(W - 160 + (138 - self.busy_bar.width()) // 2, 164)
         self.objects.relayout()
         self.objects.move(W - 18 - self.objects.width(), 212)
         self.pad.adjustSize()
@@ -3746,7 +3750,7 @@ class StudioWindow(QMainWindow):
         skip = self._extent_skip() if op == 'join' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
 
         def build():
-            bodies = hist.combine(existing, [m() for m in makers], op, spent, out, skip=skip)
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, skip=skip)
             recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
             if upto is not None:
                 recipe['upto'] = upto      # skąd wzięła się odległość (wyciągnięcie do elementu)
@@ -3940,7 +3944,7 @@ class StudioWindow(QMainWindow):
         out = [uuid.uuid4().hex for _ in makers]
 
         def build():
-            bodies = hist.combine(existing, [m() for m in makers], op, spent, out, 'Obrót')
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Obrót')
             recipe = dict(type='revolve', mode=op, axis=axis, angle=angle, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
             return bodies, recipe
 
@@ -4811,7 +4815,7 @@ class StudioWindow(QMainWindow):
         faces, thickness, inward = list(self.sh_faces), self.sh_thick.value(), self.sh_dir.currentData() == 'in'
 
         def build():
-            new = body.changed(kernel.shell_solid(body.shape, [f['face'] for f in faces], thickness, inward))
+            new = body.changed(*hist.offloaded_shape(kernel.shell_solid, body.shape, [f['face'] for f in faces], thickness, inward))
             recipe = dict(type='shell', id=body.id, faces=[hist.face_ref(f['face'], f['normal'], f['point'], body.shape) for f in faces], thickness=thickness, inward=inward)
             return new, recipe
 
@@ -4975,7 +4979,7 @@ class StudioWindow(QMainWindow):
         out = [uuid.uuid4().hex for _ in makers]
 
         def build():
-            bodies = hist.combine(existing, [m() for m in makers], op, spent, out, 'Przeciągnięcie')
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Przeciągnięcie')
             return bodies, dict(type='sweep', mode=op, path=path, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
 
         self._finish_solid_op({'new': 'Przeciągnięcie', 'join': 'Przeciągnięcie (dodaj)', 'cut': 'Przeciągnięcie (wytnij)', 'intersect': 'Przeciągnięcie (część wspólna)'}[op], build, op)
@@ -5172,7 +5176,7 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
 
         def build():
-            return list(hist.run_bool(existing, recipe))
+            return list(hist.offloaded(hist.run_bool, existing, recipe))
 
         def apply(new):
             self.document.pending_op = recipe
@@ -5318,7 +5322,11 @@ class StudioWindow(QMainWindow):
         bid, ids = next(iter(self.edges.items()))
         body = self.document.get(bid)
         try:
-            mid, direction = kernel.edge_handle(body.shape, max(ids))
+            hkey = (id(body.shape), max(ids))
+            cached = getattr(self, '_mod_handle', None)
+            if not cached or cached[0] != hkey:
+                cached = self._mod_handle = (hkey, kernel.edge_handle(body.shape, max(ids)))   # przy zmianie wartości bez liczenia
+            mid, direction = cached[1]
         except Exception:
             self.view.set_handles([])
             return
@@ -5347,28 +5355,42 @@ class StudioWindow(QMainWindow):
         self._mod_sig = sig
         points = [np.array(q, float) for q in (self.mod_vertices.get(bid) or [])] if verts else None
 
-        def compute():
-            shape, local_ids = body.shape, ids
-            margin = max(4.0 * size, 2.0)
+        margin = max(4.0 * size, 2.0)
+        shape = body.shape
+        # natychmiast: analityczny podgląd (proste krawędzie między płaskimi ścianami); dokładny dochodzi w tle
+        quick = None
+        if not verts:
             try:
-                if len(shape.Faces()) > 10:      # duża bryła: podgląd liczymy na małym fragmencie wokół zaznaczenia
-                    key = (id(shape), sig, round(margin, 3))
-                    cached = getattr(self, '_mod_piece', None)
-                    if cached and cached[0] == key:
-                        piece, mapped = cached[1], cached[2]
-                    else:
-                        piece = kernel.local_piece(shape, None if verts else ids, points if verts else None, margin)
-                        mapped = None if (piece is None or verts) else kernel.map_edges(shape, piece, sorted(ids))
-                        self._mod_piece = (key, piece, mapped)
-                    if piece is not None and (verts or mapped is not None):
-                        shape, local_ids = piece, (None if verts else set(mapped))
+                fkey = (bid, id(shape), frozenset(ids))
+                cached = getattr(self, '_mod_frames', None)
+                if not cached or cached[0] != fkey:
+                    cached = self._mod_frames = (fkey, kernel.blend_frames(shape, ids))
+                quick = kernel.quick_blend_mesh(shape, ids, size, kind, frames=cached[1]) if cached[1] else None
             except Exception:
-                shape, local_ids = body.shape, ids
-            result = kernel.blend_vertices(shape, points, size, kind) if verts else kernel.blend(shape, local_ids, size, kind)
-            # podświetla się tylko tworzona powierzchnia (zaokrąglenie / faza), nie fragment bryły wokół niej
-            made = kernel.new_faces(shape, result)
-            mesh = kernel.display_mesh(kernel.compound(made), PREVIEW_TOL) if made else kernel.display_mesh(result, PREVIEW_TOL)
-            return mesh
+                quick = None
+            if quick is not None:
+                self.view.set_preview_mesh(quick, color=MOD_PREVIEW, line_color=MOD_PREVIEW_LINE, width=2.2, on_top=True)
+                self.mod_status.setText(f'Zaznaczone {label}: {count}')
+        token = (bid, id(shape))
+
+        def compute():
+            if workers.ready():
+                for attempt in range(2):
+                    sent = getattr(self, '_mod_sent', None) == token and attempt == 0
+                    try:
+                        mesh = workers.call_affine(('mod',), hist.mod_preview_job, token, None if sent else shape,
+                                                   None if verts else sorted(ids), points, size, kind, margin)
+                        self._mod_sent = token
+                        return mesh
+                    except workers.Unavailable as exc:
+                        self._mod_sent = None
+                        if isinstance(exc.__cause__, LookupError):
+                            continue                 # proces nie pamięta bryły: wysyła się ją jeszcze raz
+                        break
+            cache = getattr(self, '_mod_cache', None)
+            if cache is None or cache.get('token') != token:
+                cache = self._mod_cache = {'token': token}
+            return hist.mod_preview(shape, None if verts else ids, points, size, kind, margin, cache)
 
         def show(value, error):
             if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig:
@@ -5410,7 +5432,9 @@ class StudioWindow(QMainWindow):
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
-        work = (lambda: (body.changed(kernel.blend_vertices(body.shape, points, size, kind)), recipe_of())) if verts else (lambda: (body.changed(kernel.blend(body.shape, ids, size, kind)), recipe_of()))
+        # zaokrąglenie / faza liczy proces liczący - okno w tym czasie działa (obracanie, oglądanie modelu)
+        work = (lambda: (body.changed(*hist.offloaded_shape(kernel.blend_vertices, body.shape, points, size, kind)), recipe_of())) if verts else \
+            (lambda: (body.changed(*hist.offloaded_shape(kernel.blend, body.shape, ids, size, kind)), recipe_of()))
         self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
 
     # =====================================================================
@@ -5585,7 +5609,7 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
 
         def build():
-            return list(hist.run_split(existing, recipe))
+            return list(hist.offloaded(hist.run_split, existing, recipe))
 
         def apply(new):
             self.document.pending_op = recipe
@@ -5740,7 +5764,7 @@ class StudioWindow(QMainWindow):
             self._tool_select([recipe['id']])
 
         self.view.set_preview_mesh(None)
-        self.run_operation(label, lambda: hist.run_recipe(existing, recipe), apply, after=lambda: self.set_mode(None))
+        self.run_operation(label, lambda: hist.offloaded(hist.run_recipe, existing, recipe), apply, after=lambda: self.set_mode(None))
 
     def update_mirror_status(self):
         body = self.document.get(self.mirror_id) if self.mirror_id else None
@@ -5789,7 +5813,7 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
 
         def build():
-            return list(hist.run_mirror(existing, recipe))
+            return list(hist.offloaded(hist.run_mirror, existing, recipe))
 
         def apply(new):
             self.document.pending_op = recipe
@@ -6086,7 +6110,7 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
 
         def build():
-            return list(hist.run_pattern(existing, recipe))
+            return list(hist.offloaded(hist.run_pattern, existing, recipe))
 
         def apply(new):
             self.document.pending_op = recipe
@@ -6263,7 +6287,7 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
 
         def build():
-            return hist.run_transform(existing, recipe)
+            return hist.offloaded(hist.run_transform, existing, recipe)
 
         def apply(bodies):
             self.view.clear_body_matrices()
@@ -7252,12 +7276,25 @@ class StudioWindow(QMainWindow):
         self.busy = True
         work = _Work(function)
         self._work = work
+        state = dict(cancelled=False)
 
         def finish():
             self.busy = False
             self._work = None
+            self._cancel_op = None
+
+        def cancel():
+            # Esc: wynik tej operacji zostanie pominięty, okno od razu wraca do pracy (proces dokończy liczenie w tle)
+            state['cancelled'] = True
+            finish()
+            self.toast('Anulowano - model pozostał bez zmian.', 3000)
+            self.refresh()
+
+        self._cancel_op = cancel
 
         def done(value):
+            if state['cancelled']:
+                return
             try:
                 self.document.pending_label = label
                 self.document.pending_icon = hist.LABEL_ICONS.get(label)
@@ -7273,6 +7310,8 @@ class StudioWindow(QMainWindow):
                 self._warm_timer.start()       # po zmianie modelu rozwinięcia blach przygotowują się w tle
 
         def failed(message):
+            if state['cancelled']:
+                return
             finish()
             self.toast(message + ' Dotychczasowy model pozostał bez zmian.', 7000)
             self.refresh()
@@ -7310,6 +7349,12 @@ class StudioWindow(QMainWindow):
             self.warm_pool.start(work, -1)
 
     # ---------- podglądy liczone w tle (GUI nigdy nie czeka na OpenCascade) ----------
+    def working(self):
+        """Czy coś liczy się w tle: operacja, podgląd, dopracowanie siatek albo przygotowanie w procesach."""
+        from . import workers
+        return (self.busy or any(st.get('running') for st in self._pv.values()) or bool(self._refining)
+                or workers.pending())
+
     def run_preview(self, key, compute, show):
         """Ostatnie żądanie wygrywa: przy szybkim przeciąganiu pośrednie wyniki są pomijane, a interfejs nie zamarza."""
         st = self._pv.setdefault(key, dict(running=False, pending=None, gen=0))
@@ -7693,6 +7738,10 @@ class StudioWindow(QMainWindow):
             if key == Qt.Key_Escape and self._hist_job is not None:
                 self._hist_job['cancel'] = True
                 self.toast('Przerywam przeliczanie historii…', 2000)
+                event.accept()
+                return
+            if key == Qt.Key_Escape and getattr(self, '_cancel_op', None) is not None:
+                self._cancel_op()
                 event.accept()
                 return
             super().keyPressEvent(event)

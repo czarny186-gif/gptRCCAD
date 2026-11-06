@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.4.47 — widok bez perspektywy, nowe okno tekstu, szyk szkiców na pochylonych ścianach
+# RCCAD Desktop 0.4.48 — praca w tle bez zacinania, natychmiastowy podgląd zaokrągleń
+
+## Zmiany 0.4.48
+
+- **Operacje w osobnych procesach**: wyciągnięcie, obrót, przeciągnięcie, skorupa, zaokrąglenie / faza, operacje logiczne, przecinanie, lustro, szyk, przesuwanie / obracanie brył i przeliczanie kroków historii liczą procesy liczące; okno tylko czeka na wynik, więc w tym czasie można obracać, przybliżać i oglądać model.
+- **Esc przerywa trwającą operację**: okno od razu wraca do pracy, model zostaje bez zmian (wynik liczony w tle jest pomijany).
+- **Pasek pracy w tle pod kostką nawigacji**: mały pomarańczowy pasek przesuwa się, gdy coś się liczy (operacja, podgląd, dopracowanie siatek, przygotowanie rozwinięć) i znika, gdy wszystko gotowe.
+- **Natychmiastowy podgląd zaokrąglenia / fazy**: na prostych krawędziach między płaskimi ścianami powierzchnia liczy się wprost z geometrii (walec / pasek) w ułamku milisekundy przy każdej zmianie wartości; dokładny podgląd z narożnikami dochodzi w tle w procesie liczącym (liczony tylko dla ostatniej wartości). Zastosuj zawsze liczy dokładny wynik.
+- **Szybsze zatwierdzanie zaokrągleń**: zapis krawędzi do historii korzysta z mapy krawędź → ściany zamiast przeglądania wszystkich ścian. Pomiar (blok z 15 kieszeniami, 64 krawędzie): zaokrąglenie 2,3 s → 0,55 s, najdłuższe zacięcie okna przy zmianie promienia 340 ms → ok. 20 ms.
+- **Przesuwanie kółkiem + lewym przyciskiem** (i prawym / Shift + lewym) działa w płaszczyźnie ekranu: na boki i w górę / w dół w każdym widoku, także patrząc prosto na wybraną płaszczyznę.
+
+## RCCAD Desktop 0.4.47 — widok bez perspektywy, nowe okno tekstu, szyk szkiców na pochylonych ścianach
 
 ## Zmiany 0.4.47
 

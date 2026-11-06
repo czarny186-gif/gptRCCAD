@@ -19,7 +19,8 @@ def _mesh(shape):
         return None
     from . import workers
     # zgrubna siatka tylko wtedy, gdy dokładną policzy osobny proces - inaczej liczyłaby się w oknie i je zacinała
-    return display_mesh(shape, coarse=workers.ready() and heavy(shape))
+    # (w samym procesie liczącym: zgrubna, bo dokładną dolicza potem okno w tle)
+    return display_mesh(shape, coarse=(workers.ready() or workers.IN_WORKER) and heavy(shape))
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class Body:
         meta = None
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
-        return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False else mesh, meta=meta)
+        return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False or (mesh is None and not mesh_deferred()) else mesh, meta=meta)
 
 
 class Document:
