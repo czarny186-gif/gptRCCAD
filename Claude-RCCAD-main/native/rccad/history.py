@@ -1406,6 +1406,11 @@ def rebuild(base, steps, constraints=(), job=None):
     Szybkie ścieżki: stan wejściowy nie zmienił się względem oryginału -> wynik oryginalny; krok niezależny od zmienionych obiektów ->
     przeniesienie różnicy bez ponownych obliczeń. Krok wyłączony ('off') niczego nie zmienia; nieprzeliczalny dostaje 'stale'.
     job: słownik {'cancel', 'i', 'n'} do przerywania i paska postępu. Zwraca (lista (bryły, info), liczba nieprzeliczonych)."""
+    with kernel.deferred_mesh():          # stany pośrednie bez siatek: siatkuje się tylko stan, który potem widać
+        return _rebuild(base, steps, ctx, job)
+
+
+def _rebuild(base, steps, ctx, job):
     out, failed, current = [], 0, tuple(base)
     for n, step in enumerate(steps):
         before, after, info = step[:3]

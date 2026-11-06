@@ -1,5 +1,6 @@
 """Native widget actions and background computation; no browser automation."""
 import os
+os.environ.setdefault('RCCAD_WORKERS', '0')      # procesy liczące mają własne testy (test_workers)
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import tempfile
 import time

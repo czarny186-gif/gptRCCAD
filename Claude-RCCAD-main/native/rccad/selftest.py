@@ -25,6 +25,12 @@ def run(report_path=None):
     wire = k.sketch('rectangle','XY',20,10)
     assert abs(k.extrude(wire,'XY',10).Volume()-2000) < 1e-5
     checks.append('native sketch extrusion')
+    from . import workers
+    if workers.count():          # procesy liczące działają także w spakowanym programie (freeze_support)
+        assert workers.start(wait=True), 'worker processes did not start'
+        meshed = workers.mesh_many([(shape, True), (rounded, True), (drilled, True)])
+        assert all(m is not None and len(m.triangles) for m, _ in meshed)
+        checks.append(f'worker processes: {workers.size()} parallel meshing processes')
     from . import sheetmetal as shm
     slab = k.box(100, 50, 2)
     top = next(f for f in slab.Faces() if abs(f.Center().z-2) < 1e-6)

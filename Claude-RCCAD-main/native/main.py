@@ -71,6 +71,8 @@ def main():
 
 
 if __name__=='__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()      # procesy liczące w spakowanym programie (Windows): proces potomny nie otwiera drugiego okna
     try:
         raise SystemExit(main())
     except Exception as exc:

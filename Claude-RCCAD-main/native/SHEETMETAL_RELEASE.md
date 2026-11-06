@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.39 — liczenie na wielu rdzeniach
+# RCCAD Desktop 0.4.40 — procesy liczące
+
+## Zmiany 0.4.40
+
+- **Procesy liczące**: po otwarciu okna program uruchamia w tle osobne procesy (po jednym na rdzeń, najwyżej 8), które liczą naprawdę równolegle. Dopóki nie są gotowe - albo gdyby któryś przestał działać - wszystko liczy się jak dotąd.
+- **Otwieranie projektu, cofanie / ponawianie i przeskoki w historii**: siatki i sprawdzenie wielu brył liczą się jednocześnie, każda bryła w innym procesie. Projekt z 6 płytami z otworami na 2 rdzeniach: 0,96 s → 0,60 s; z większą liczbą rdzeni zysk rośnie.
+- **Przeliczanie historii** (edycja kroku, wstawienie kroku w środek): stany pośrednie nie są już siatkowane do wyświetlania - siatki liczą się tylko dla stanu, który widać (równolegle, w tle), a dla pozostałych dopiero wtedy, gdy do nich przejdziesz. Podgląd edycji kroku i otwieranie zapisu kompaktowego też nie liczą zbędnych siatek.
+- Autotest spakowanego programu sprawdza, że procesy liczące uruchamiają się w wersji EXE.
+- Liczbę procesów można zmienić zmienną środowiskową `RCCAD_WORKERS` (0 wyłącza procesy).
+
+## RCCAD Desktop 0.4.39 — liczenie na wielu rdzeniach
 
 ## Zmiany 0.4.39
 

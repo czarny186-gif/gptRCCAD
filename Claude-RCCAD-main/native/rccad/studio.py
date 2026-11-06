@@ -210,6 +210,8 @@ class StudioWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.warm_pool = QThreadPool(self)            # osobny wątek na rozwinięcia liczone w tle (nie blokuje operacji)
         self.warm_pool.setMaxThreadCount(1)
+        from . import workers
+        QTimer.singleShot(1500, workers.start)        # procesy liczące startują w tle, gdy okno jest już widoczne
         self._warming = set()
         self._warm_timer = QTimer(self)
         self._warm_timer.setSingleShot(True)
@@ -6814,7 +6816,8 @@ class StudioWindow(QMainWindow):
         base, values = self.document.states()[index - 1][0], self._hist_values()
 
         def compute():
-            result = hist.run_recipe(base, recipe, values)
+            with kernel.deferred_mesh():       # potrzebne same kształty: podgląd ma własną, rzadszą siatkę
+                result = hist.run_recipe(base, recipe, values)
             solids = [kernel.display_mesh(b.shape, PREVIEW_TOL) for b in result if b.kind == 'solid' and b.visible]
             return _merge_meshes(solids) if solids else None
 
@@ -6971,9 +6974,19 @@ class StudioWindow(QMainWindow):
             self.hist_status.setText('')
             apply(value)
 
+        def work():
+            value = build(job)
+            try:        # siatki stanu, który zostanie pokazany - w tle i równolegle (procesy liczące), nie w oknie
+                states = value[0]
+                if states:
+                    self.document.meshed(states[-1][0])
+            except Exception:
+                pass
+            return value
+
         self._hist_tick.start()
         self.toast('Przeliczanie historii… (Esc przerywa)', 2500)
-        self.run_operation('Przeliczanie historii', lambda: build(job), done)
+        self.run_operation('Przeliczanie historii', work, done)
 
     def _hist_progress(self):
         job = self._hist_job

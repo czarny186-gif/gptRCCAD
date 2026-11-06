@@ -5,7 +5,8 @@ faulthandler.dump_traceback_later(600, exit=True, file=DIAG)       # strażnik z
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
 import tempfile
-os.environ['RCCAD_CONFIG_DIR']=tempfile.mkdtemp(prefix='rccad-cfg-')     # zapamiętane ustawienia (Kołnierz → Zatwierdź) nie trafiają do prawdziwego profilu
+os.environ['RCCAD_CONFIG_DIR']=tempfile.mkdtemp(prefix='rccad-cfg-')
+os.environ.setdefault('RCCAD_WORKERS','0')        # testy okna liczą w jednym procesie (procesy liczące mają własne testy: test_workers)     # zapamiętane ustawienia (Kołnierz → Zatwierdź) nie trafiają do prawdziwego profilu
 from pathlib import Path
 import numpy as np
 import cadquery as cq

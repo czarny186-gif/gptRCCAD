@@ -9,7 +9,12 @@ import tempfile
 import uuid
 from zipfile import ZipFile, ZIP_DEFLATED
 import cadquery as cq
-from .kernel import CadError, DisplayMesh, Frame, display_mesh, valid
+from .kernel import CadError, DisplayMesh, Frame, display_mesh, mesh_deferred, valid
+
+
+def _mesh(shape):
+    """Siatka nowej bryły - albo None w bloku kernel.deferred_mesh (uzupełni ją Document.meshed)."""
+    return None if mesh_deferred() else display_mesh(shape)
 
 
 @dataclass(frozen=True)
@@ -24,21 +29,21 @@ class Body:
     meta: dict | None = field(default=None, compare=False, repr=False)   # parametry szkicu (narzędzie, punkty, liczba boków) do edycji wymiarów
 
     def prepared(self):
-        return replace(self, mesh=display_mesh(self.shape))
+        return replace(self, mesh=_mesh(self.shape))
 
     def placed(self, shape, matrix):
         """Bryła po sztywnym przesunięciu / obrocie (macierz 3x4): blacha przenosi swój przepis razem z kształtem
         i dalej daje się rozkładać i zginać (zwykła zmiana kształtu - changed() - oznacza ją jako edytowaną)."""
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             from .sheetedit import placed_state
-            return replace(self, shape=shape, mesh=display_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
+            return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
         return self.changed(shape)
 
     def changed(self, shape):
         meta = None
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
-        return replace(self, shape=shape, mesh=display_mesh(shape), meta=meta)
+        return replace(self, shape=shape, mesh=_mesh(shape), meta=meta)
 
 
 class Document:
@@ -132,16 +137,26 @@ class Document:
         """Bryły z uzupełnionymi siatkami (stany historii wczytane z pliku nie mają siatek, dopóki nie zostaną pokazane)."""
         if all(b.mesh is not None for b in bodies):
             return tuple(bodies)
-        out = []
+        todo = {}
         for b in bodies:
             if b.mesh is None:
                 hit = self._mesh_cache.get(id(b.shape))
                 if hit is None or hit[0] is not b.shape:
-                    if len(self._mesh_cache) > 600:
-                        self._mesh_cache.clear()
-                    valid(b.shape, b.kind == 'solid')
-                    hit = self._mesh_cache[id(b.shape)] = (b.shape, display_mesh(b.shape))
-                b = replace(b, mesh=hit[1])
+                    todo.setdefault(id(b.shape), b)
+        if todo:
+            # kilka brył naraz liczy się w procesach liczących (każda na innym rdzeniu), pojedyncza - tutaj
+            from . import workers
+            if len(self._mesh_cache) + len(todo) > 600:
+                self._mesh_cache.clear()
+            items = list(todo.values())
+            for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items])):
+                if error is not None:
+                    raise CadError(error)
+                self._mesh_cache[id(b.shape)] = (b.shape, mesh)
+        out = []
+        for b in bodies:
+            if b.mesh is None:
+                b = replace(b, mesh=self._mesh_cache[id(b.shape)][1])
             out.append(b)
         return tuple(out)
 
@@ -484,8 +499,10 @@ class Document:
                 def replayed(state, previous, items):
                     """Kształty kroku zapisanego bez geometrii - wykonanie jego przepisu na poprzednim stanie."""
                     from .history import run_recipe
+                    from .kernel import deferred_mesh
                     try:
-                        result = {b.id: b for b in run_recipe(previous, state['op'], {})}
+                        with deferred_mesh():          # potrzebne same kształty
+                            result = {b.id: b for b in run_recipe(previous, state['op'], {})}
                     except Exception:
                         result = {}
                     old = {b.id: b for b in previous}

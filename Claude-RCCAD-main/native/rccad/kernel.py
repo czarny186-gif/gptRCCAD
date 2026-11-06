@@ -42,15 +42,39 @@ def is_valid(shape):
         return shape.isValid()
 
 
+PARALLEL_MESH = True        # w procesach liczących wyłączone: tam równoległość daje sama pula procesów
+
+
 def mesh_parallel(shape, tolerance, angular=.12):
     """Siatka trójkątów liczona na wszystkich rdzeniach; tessellate() używa jej potem bez ponownego liczenia."""
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.BRepTools import BRepTools
     try:
         if not BRepTools.Triangulation_s(shape.wrapped, tolerance):
-            BRepMesh_IncrementalMesh(shape.wrapped, tolerance, True, angular, True)
+            BRepMesh_IncrementalMesh(shape.wrapped, tolerance, True, angular, PARALLEL_MESH)
     except Exception:
         pass
+
+
+import threading as _threading
+_defer = _threading.local()
+
+
+class deferred_mesh:
+    """Blok, w którym nowe bryły nie dostają od razu siatki do wyświetlania (np. przeliczanie historii: stany pośrednie
+    nie są pokazywane). Siatkę uzupełnia potem Document.meshed - równolegle, tylko dla stanu, który widać."""
+
+    def __enter__(self):
+        _defer.depth = getattr(_defer, 'depth', 0) + 1
+        return self
+
+    def __exit__(self, *exc):
+        _defer.depth -= 1
+        return False
+
+
+def mesh_deferred():
+    return getattr(_defer, 'depth', 0) > 0
 
 
 def valid(shape, solid=True):
