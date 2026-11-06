@@ -22,6 +22,7 @@ from . import sheetmetal as shm
 from . import sheetedit as she
 from .viewcube import ViewCube
 from . import sketchmeta as sm
+from . import settings
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
@@ -586,6 +587,19 @@ class StudioWindow(QMainWindow):
         self.grid_button.setToolTip('Pokaż / ukryj siatkę')
         self.grid_button.toggled.connect(lambda on: self.view.set_grid_visible(on))
         pl.addWidget(self.grid_button)
+        self.persp_button = QToolButton()
+        self.persp_button.setObjectName('padTool')
+        self.persp_button.setIcon(ui.style_icon('persp', 28))
+        self.persp_button.setIconSize(QSize(28, 28))
+        self.persp_button.setCheckable(True)
+        self.persp_button.setFixedSize(46, 44)
+        self.persp_button.setToolTip('Perspektywa włączona / wyłączona. Bez perspektywy (domyślnie) bryły wyglądają jak na rysunku: '
+                                     'na widoku prosto na płaszczyznę ścianki zasłaniają to, co jest za nimi.')
+        view_settings = settings.read('view') or {}
+        self.persp_button.setChecked(bool(view_settings.get('perspective', False)))
+        self.view.set_ortho(not self.persp_button.isChecked())
+        self.persp_button.toggled.connect(lambda on: (self.view.set_ortho(not on), settings.write('view', dict(perspective=bool(on)))))
+        pl.addWidget(self.persp_button)
         self.hist_button = QToolButton()
         self.hist_button.setObjectName('padTool')
         self.hist_button.setIcon(ui.style_icon('history', 28))
@@ -1283,12 +1297,14 @@ class StudioWindow(QMainWindow):
         self.pat_counts = [_spin(3 if i == 0 else 1, 1, 200, 0, 1) for i in range(3)]
         self.pat_gaps = [_spin(20, 0, 1e5, 2, 1) for _ in range(3)]
         self.pat_dirs = []
+        self.pat_axis_pics = []
         arrows = (('←', '→', 'w lewo', 'w prawo'), ('↓', '↑', 'w tył (-Y)', 'w przód (+Y)'), ('↓', '↑', 'w dół', 'w górę'))
         for i, axis in enumerate('XYZ'):
             pic = QLabel()
             pic.setFixedSize(26, 26)
             pic.setPixmap(ui.icons.pixmap('tr_m' + axis.lower(), 26))
             pic.setToolTip(f'Oś {axis}')
+            self.pat_axis_pics.append(pic)
             grid.addWidget(pic, i + 1, 0)
             self.pat_counts[i].setFixedWidth(52)
             grid.addWidget(self.pat_counts[i], i + 1, 1)
@@ -1400,7 +1416,7 @@ class StudioWindow(QMainWindow):
         # --- tekst: powierzchnia -> obszar -> treść (jak kreator odbicia lustrzanego) ---
         self.txt = None
         self._text_ext = {}
-        self.text_panel, lay = self._panel(312, 'Tekst', 'x_text', 'Powierzchnia → obszar → treść', plain=True)
+        self.text_panel, lay = self._panel(320, 'Tekst', 'x_text', 'Powierzchnia → obszar → treść', plain=True, scroll=True)
         self.txt_step1 = ui.StepRow(1, 'x_surface', 'Powierzchnia', plain=True)
         self.txt_step2 = ui.StepRow(2, 'x_area', 'Obszar napisu', plain=True)
         lay.addWidget(self.txt_step1)
@@ -1409,8 +1425,18 @@ class StudioWindow(QMainWindow):
         form = QVBoxLayout(self.text_form)
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(9)
+        form.addWidget(ui.StepRow(3, 'x_text', 'Treść', plain=True))
         self.text_edit = QLineEdit('Tekst')
-        self._field(form, '3. Treść', self.text_edit)
+        self.text_edit.setObjectName('textInput')
+        self.text_edit.setPlaceholderText('Wpisz napis…')
+        form.addWidget(self.text_edit)
+        # podgląd napisu w wybranej czcionce i stylu
+        self.text_sample = QLabel()
+        self.text_sample.setObjectName('textSample')
+        self.text_sample.setAlignment(Qt.AlignCenter)
+        self.text_sample.setFixedHeight(64)
+        self.text_sample.setToolTip('Tak będzie wyglądał napis (czcionka i styl)')
+        form.addWidget(self.text_sample)
         self.text_font = QFontComboBox()
         self.text_font.setEditable(False)
         self.text_font.setFontFilters(QFontComboBox.ScalableFonts)
@@ -1419,8 +1445,7 @@ class StudioWindow(QMainWindow):
             if name in QFontDatabase.families():
                 self.text_font.setCurrentFont(QFont(name))
                 break
-        self._field(form, 'Czcionka (zainstalowane w systemie)', self.text_font)
-        form.addWidget(_label('Styl'))
+        self._field(form, 'Czcionka', self.text_font)
         style_row = QHBoxLayout()
         style_row.setSpacing(8)
         self.text_bold, self.text_italic, self.text_caps = (QPushButton(t) for t in ('B', 'I', 'AA'))
@@ -1429,36 +1454,31 @@ class StudioWindow(QMainWindow):
             chip.setCheckable(True)
             chip.setToolTip(tip)
             chip.setCursor(Qt.PointingHandCursor)
-            style_row.addWidget(chip)
-        style_row.addStretch(1)
+            chip.setMinimumWidth(56)
+            style_row.addWidget(chip, 1)
         self.text_bold.setStyleSheet('font-weight:900;')
         self.text_italic.setStyleSheet('font-style:italic;font-family:serif;')
+        form.addWidget(_label('Styl'))
         form.addLayout(style_row)
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        col1, col2 = QVBoxLayout(), QVBoxLayout()
         self.text_size = _spin(10, .1, 5000, 2, 1)
         self.text_angle = _spin(0, -360, 360, 1, 5)
-        col1.addWidget(_label('Wysokość liter (mm)'))
-        col1.addWidget(self.text_size)
-        col2.addWidget(_label('Obrót (°)'))
-        col2.addWidget(self.text_angle)
-        row.addLayout(col1)
-        row.addLayout(col2)
-        form.addLayout(row)
+        self._pic_field(form, 'Wysokość liter (mm)', 'tx_size', self.text_size, 'Wysokość wielkiej litery; niebieski uchwyt ramki w widoku też ją zmienia.')
+        self._pic_field(form, 'Obrót (°)', 'tx_angle', self.text_angle, 'Obrót napisu w płaszczyźnie; czerwony punkt ramki w widoku też obraca.')
         lay.addWidget(self.text_form)
         self.text_status = _label('', 'status')
         lay.addWidget(self.text_status)
-        self._buttons(lay, 'Zatwierdź (Enter)', 'Anuluj', self.apply_text, self.text_cancel)
+        footer = self.text_panel.footer
+        self._buttons(footer, 'Zatwierdź (Enter)', 'Zamknij', self.apply_text, self.text_cancel)
         again = QPushButton('Zmień powierzchnię')
         again.clicked.connect(lambda _=False: self._text_set_stage('surface'))
-        lay.addWidget(again)
+        footer.addWidget(again)
         self.text_form.setEnabled(False)
         for sig in (self.text_edit.textChanged, self.text_font.currentIndexChanged, self.text_bold.toggled, self.text_italic.toggled,
                     self.text_caps.toggled):
-            sig.connect(lambda *_: self._text_refresh())
+            sig.connect(lambda *_: (self._text_sample_update(), self._text_refresh()))
         self.text_size.valueChanged.connect(lambda *_: self._text_spin_changed())
         self.text_angle.valueChanged.connect(lambda *_: self._text_spin_changed())
+        self._text_sample_update()
 
         # --- ofset szkicu ---
         self.off = None             # wybrany kształt: dict(body, base, dir)
@@ -1520,7 +1540,7 @@ class StudioWindow(QMainWindow):
         for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
-        self.text_panel.adjustSize()
+        self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
         self.text_panel.move(92, 88 + TOOLS_TOP - 18)
         self.off_panel.adjustSize()
         self.off_panel.move(92, 88 + TOOLS_TOP - 18)
@@ -2071,6 +2091,26 @@ class StudioWindow(QMainWindow):
         self.text_form.setEnabled(False)
         self.view.update()
 
+    def _text_sample_update(self):
+        """Podgląd napisu w panelu: wybrana czcionka, pogrubienie, pochylenie i wersaliki."""
+        text = self.text_edit.text() or 'Tekst'
+        if self.text_caps.isChecked():
+            text = text.upper()
+        family = self.text_font.currentFont().family()
+        font = QFont(family)
+        font.setPixelSize(30)
+        font.setBold(self.text_bold.isChecked())
+        font.setItalic(self.text_italic.isChecked())
+        from PySide6.QtGui import QFontMetrics
+        width = QFontMetrics(font).horizontalAdvance(text)
+        size = 30 if width <= 260 else max(12, int(30 * 260 / width))      # długi napis mieści się w ramce
+        # styl wprost na etykiecie (styl panelu ustala czcionkę etykiet i nadpisałby setFont)
+        self.text_sample.setStyleSheet(
+            f"QLabel#textSample {{ background:#ffffff; border:1.4px solid #d3e0ec; border-radius:12px; color:#27415a; padding:4px 10px;"
+            f" font-family:'{family}'; font-size:{size}px; font-weight:{900 if self.text_bold.isChecked() else 400};"
+            f" font-style:{'italic' if self.text_italic.isChecked() else 'normal'}; }}")
+        self.text_sample.setText(text)
+
     def _text_set_stage(self, stage):
         if self.txt is None:
             return
@@ -2106,7 +2146,7 @@ class StudioWindow(QMainWindow):
             self._text_refresh()
             self.text_edit.setFocus()
             self.text_edit.selectAll()
-        self.text_panel.adjustSize()
+        self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
         self.view.update()
 
     def _text_params(self):
@@ -5865,6 +5905,9 @@ class StudioWindow(QMainWindow):
             self.pat_step1.set_state('done', body.name)
             self.pat_step2.set_state('done' if self.pat_path is not None else 'active', 'Wskazana' if self.pat_path is not None else 'Kliknij linię lub krawędź')
         solid = body is None or body.kind == 'solid'
+        for axis, pic in zip('XYZ', self.pat_axis_pics):
+            pic.setToolTip(f'Oś {axis} świata' if solid else
+                           (f'Kierunek {axis} w płaszczyźnie szkicu' if axis != 'Z' else 'Prostopadle do płaszczyzny szkicu'))
         self.pat_join.setEnabled(body is not None and body.kind == 'solid')
         self.pat_result._buttons[2].setEnabled(solid)          # „Jedna bryła” tylko dla brył
         if not solid and self.pat_result.currentData() == 'join':
@@ -5876,13 +5919,25 @@ class StudioWindow(QMainWindow):
 
     AXES = {'X': (1.0, 0.0, 0.0), 'Y': (0.0, 1.0, 0.0), 'Z': (0.0, 0.0, 1.0)}
 
+    def _pattern_axes(self, body):
+        """Kierunki szyku: dla szkicu - osie jego płaszczyzny (X i Y leżą w płaszczyźnie szkicu, Z to jej normalna), więc kopie
+        szkicu na pochylonej ścianie zostają na tej ścianie; dla bryły - osie świata."""
+        if body is not None and body.kind == 'sketch':
+            try:
+                frame = kernel.frame_of(body.plane)
+                return {'X': tuple(float(c) for c in kernel._unit(frame.xdir)), 'Y': tuple(float(c) for c in kernel._unit(frame.ydir)),
+                        'Z': tuple(float(c) for c in kernel._unit(frame.normal))}
+            except Exception:
+                pass
+        return dict(self.AXES)
+
     def _pattern_center(self, body):
         low, high = self._mesh_bounds(body.mesh)
         return (low + high) / 2, high - low
 
     def _radial(self, body):
         """(odległość obiektu od osi, wersor promieniowy) dla bieżącego środka i osi obrotu."""
-        axis = np.array(self.AXES[self.pat_axis.currentData()])
+        axis = np.array(self._pattern_axes(body)[self.pat_axis.currentData()])
         pivot = np.array([s.value() for s in self.pat_pivot], float)
         v = self._pattern_center(body)[0] - pivot
         r = v - float(v @ axis) * axis
@@ -5967,12 +6022,14 @@ class StudioWindow(QMainWindow):
         """(kopie, operacja przesunięcia oryginału na zadaną odległość albo None)."""
         kind = self.pat_kind.currentData()
         if kind == 'rect':
-            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing())), None
+            axes = self._pattern_axes(body)
+            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing(),
+                                                   axes=[axes[a] for a in 'XYZ'])), None
         if kind == 'circ':
             d0, direction = self._radial(body)
             offset = tuple(float(c) for c in direction * (self.pat_radius.value() - d0))
             pivot = tuple(s.value() for s in self.pat_pivot)
-            ops = kernel.pattern_ops('circ', dict(axis=self.AXES[self.pat_axis.currentData()], pivot=pivot, count=int(round(self.pat_ccount.value())),
+            ops = kernel.pattern_ops('circ', dict(axis=self._pattern_axes(body)[self.pat_axis.currentData()], pivot=pivot, count=int(round(self.pat_ccount.value())),
                                                   angle=self.pat_angle.value(), offset=offset))
             return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
         return kernel.pattern_ops('path', dict(points=self.pat_path if self.pat_path is not None else [], count=int(round(self.pat_lcount.value())),
@@ -6015,9 +6072,10 @@ class StudioWindow(QMainWindow):
         join = self.pat_join.isChecked() and body.kind == 'solid'
         kind = self.pat_kind.currentData()
         if kind == 'rect':
-            params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing())
+            axes = self._pattern_axes(body)
+            params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing(), axes=[list(axes[a]) for a in 'XYZ'])
         elif kind == 'circ':
-            params = dict(axis=list(self.AXES[self.pat_axis.currentData()]), pivot=[s.value() for s in self.pat_pivot], count=int(round(self.pat_ccount.value())),
+            params = dict(axis=list(self._pattern_axes(body)[self.pat_axis.currentData()]), pivot=[s.value() for s in self.pat_pivot], count=int(round(self.pat_ccount.value())),
                           angle=self.pat_angle.value(), radius=self.pat_radius.value())
         else:
             params = dict(points=[[float(c) for c in q] for q in np.asarray(self.pat_path, float)], count=int(round(self.pat_lcount.value())),

@@ -1997,5 +1997,23 @@ class StudioTests(unittest.TestCase):
         five=H.combine([plate],tools[:5],'cut')[0].shape
         self.assertLess(five.cut(seq).Volume()+seq.cut(five).Volume(),1e-6)     # wynik jak po kolei
 
+    def test_sketch_pattern_on_tilted_face_stays_on_that_face(self):
+        import cadquery as cq
+        w=self.w;n=np.array([0.0,-np.sin(np.radians(30)),np.cos(np.radians(30))])
+        frame=k.face_frame((0.0,0.0,0.0),tuple(n))
+        u,v=np.array(frame.xdir,float),np.array(frame.ydir,float)
+        centre=cq.Vector(*(3*u+3*v))
+        circle=Body('Okrąg',cq.Face.makeFromWires(cq.Wire.assembleEdges([cq.Edge.makeCircle(1,centre,cq.Vector(*n))])),'sketch',frame).prepared()
+        w.document.commit([circle]);w.refresh();w.set_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=circle.id),patch.object(w.view,'nearest_edge',return_value=None):w.view_clicked(5,5,False,False)
+        w.pat_counts[0].setValue(3);w.pat_gaps[0].setValue(10);w.pat_counts[1].setValue(2);w.pat_gaps[1].setValue(6)
+        w.apply_pattern();self.wait()
+        copies=[b for b in w.document.bodies if b.kind=='sketch'];self.assertEqual(len(copies),6)
+        for b in copies:
+            c=np.array(b.shape.Center().toTuple())
+            self.assertAlmostEqual(float(c@n),0.0,6)                               # każda kopia leży w płaszczyźnie szkicu
+        spread=sorted(round(float(np.array(b.shape.Center().toTuple())@u)) for b in copies)
+        self.assertEqual(spread,[3,3,13,13,23,23])
+
 if __name__=='__main__':
     unittest.main()

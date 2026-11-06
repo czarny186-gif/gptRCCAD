@@ -779,11 +779,13 @@ def pattern_ops(kind, p):
         dx, dy, dz = (float(c) for c in p["spacing"])
         if nx * ny * nz > PATTERN_MAX:
             raise CadError(f"Zbyt wiele kopii (maksymalnie {PATTERN_MAX}).")
+        # axes: kierunki trzech rzędów (np. osie płaszczyzny szkicu na pochylonej ścianie); domyślnie osie świata X, Y, Z
+        ax, ay, az = (np.asarray(v, float) for v in p.get("axes", ((1, 0, 0), (0, 1, 0), (0, 0, 1))))
         for i in range(nx):
             for j in range(ny):
                 for k in range(nz):
                     if (i, j, k) != (0, 0, 0):
-                        ops.append(("t", (i * dx, j * dy, k * dz)))
+                        ops.append(("t", tuple(float(c) for c in i * dx * ax + j * dy * ay + k * dz * az)))
     elif kind == "circ":
         n = max(1, int(p["count"]))
         if n > PATTERN_MAX:

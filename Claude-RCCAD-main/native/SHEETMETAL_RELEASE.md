@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.46 — szybkie narożniki blach i wycinanie wielu otworów
+# RCCAD Desktop 0.4.47 — widok bez perspektywy, nowe okno tekstu, szyk szkiców na pochylonych ścianach
+
+## Zmiany 0.4.47
+
+- **Widok bez perspektywy (rzut równoległy) - domyślnie**: na widoku prosto na płaszczyznę bryły wyglądają jak na rysunku - ścianka zasłania to, co jest za nią, nic nie „odstaje” w bok jak przy patrzeniu na horyzont. Skala w środku widoku ta sama co dotąd; przybliżanie, przesuwanie i wskazywanie myszą działają tak samo.
+- **Przycisk Perspektywa** na dolnym pasku (obok siatki) włącza dawny widok z perspektywą; wybór zapisuje się w ustawieniach.
+- **Nowe okno Tekst**: kroki z obrazkami (Powierzchnia → Obszar napisu → Treść), duże pole treści, podgląd napisu w wybranej czcionce i stylu, styl B / I / AA na całą szerokość, obrazki przy wysokości liter i obrocie, przyciski Zatwierdź / Zamknij / Zmień powierzchnię zawsze na dole (treść przewija się na niskim ekranie).
+- **Szyk szkicu na pochylonej ścianie**: kierunki X i Y szyku leżą teraz w płaszczyźnie szkicu (Z - prostopadle do niej), więc kopie zostają na tej samej ścianie i dają się od razu wyciągnąć albo wyciąć. Tak samo oś szyku kołowego dla szkicu. Szyk brył bez zmian (osie świata). Podpowiedzi przy osiach mówią, w jakim układzie działają.
+
+## RCCAD Desktop 0.4.46 — szybkie narożniki blach i wycinanie wielu otworów
 
 ## Zmiany 0.4.46
 

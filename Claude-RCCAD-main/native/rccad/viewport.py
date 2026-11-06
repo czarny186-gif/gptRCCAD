@@ -1311,6 +1311,43 @@ class CadView(gl.GLViewWidget):
                 self.snap_marker = (xy, label)
         self.overlay.update()
 
+    ortho = True           # rzut równoległy (bez perspektywy): na widoku prosto na płaszczyznę ścianki zasłaniają to, co za nimi
+
+    def set_ortho(self, on):
+        self.ortho = bool(on)
+        self._refresh_grid() if hasattr(self, '_refresh_grid') else None
+        self.update()
+
+    def _scene_extent(self):
+        """Promień sceny wokół punktu, na który patrzy kamera - zakres głębi rzutu równoległego (bez ucinania brył)."""
+        center = np.array([self.opts['center'].x(), self.opts['center'].y(), self.opts['center'].z()], float)
+        extent = 100.0
+        for body in getattr(self, 'bodies', ()):
+            mesh = body.mesh
+            if mesh is not None:
+                extent = max(extent, float(np.linalg.norm(np.asarray(mesh.center, float) - center)) + float(mesh.size))
+        return extent
+
+    def projectionMatrix(self, region=None, viewport=None):
+        """Rzut równoległy: ta sama skala co perspektywa w punkcie, na który patrzy kamera, ale bez zbiegania się linii -
+        widok prosto na płaszczyznę pokazuje bryły jak rysunek (tylne krawędzie nie „odstają”)."""
+        if region is None:
+            region = viewport = self.getViewport()
+        if not self.ortho:
+            return super().projectionMatrix(region, viewport)
+        x0, y0, w, h = viewport
+        dist = float(self.opts['distance'])
+        r = dist * math.tan(math.radians(float(self.opts['fov'])) / 2)
+        t = r * h / max(w, 1)
+        left = r * ((region[0] - x0) * (2.0 / w) - 1)
+        right = r * ((region[0] + region[2] - x0) * (2.0 / w) - 1)
+        bottom = t * ((region[1] - y0) * (2.0 / h) - 1)
+        top = t * ((region[1] + region[3] - y0) * (2.0 / h) - 1)
+        depth = dist + 2 * self._scene_extent()
+        matrix = QMatrix4x4()
+        matrix.ortho(left, right, bottom, top, -depth, depth)
+        return matrix
+
     def camera_matrix(self):
         viewport = (0, 0, max(1,self.width()), max(1,self.height()))
         return self.projectionMatrix(viewport,viewport) * self.viewMatrix()

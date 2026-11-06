@@ -112,6 +112,7 @@ TOPICS = [
         'Zachowaj oryginał tworzy kopię, Połącz z oryginałem skleja obie bryły w jedną.']),
     ('x_pat_rect', 'Szyk', 'Powielanie obiektów', [
         'Kliknij bryłę lub szkic, wybierz rodzaj: prostokątny (ilość i odstęp w osiach X, Y, Z), kołowy (oś, ilość i kąt całkowity) albo wzdłuż linii (kliknij linię szkicu lub krawędź bryły).',
+        'Szyk szkicu działa w układzie jego płaszczyzny: X i Y leżą w płaszczyźnie szkicu (także na pochylonej ścianie), Z jest do niej prostopadła - kopie zostają na ścianie. Szyk brył używa osi świata.',
         'W szyku prostokątnym strzałki w kolumnie Kierunek wybierają, w którą stronę od obiektu wyjściowego powstają kopie: w lewo / w prawo (X), w tył / w przód (Y), w dół / w górę (Z).',
         'Wynik: Osobno - każda kopia to osobny obiekt; Jeden element - oryginał i kopie zachowują się jak jeden: kliknięcie zaznacza wszystkie, wyciągnięcie albo wycięcie jednego szkicu robi to dla wszystkich, przesuwanie i obracanie przenosi je razem (wokół wspólnego środka), cięcie bryły szkicem tnie wszystkimi; Jedna bryła - kopie brył łączą się z oryginałem.',
         'Kopie widać na bieżąco i zmieniają się razem z wartościami. Enter zatwierdza.']),
@@ -127,6 +128,7 @@ TOPICS = [
         'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu historii → Otwórz autozapis.']),
     ('one', 'Widok', 'Kostka i skróty', [
         'Bryła zaznacza się tylko kliknięciem lewym przyciskiem (ciepły niebieski kolor); ponowne kliknięcie odznacza. Wynik operacji nie zaznacza się sam.',
+        'Widok jest domyślnie bez perspektywy (rzut równoległy) - bryły wyglądają jak na rysunku. Przycisk Perspektywa na dolnym pasku włącza widok z perspektywą (wybór zostaje zapamiętany).',
         'Linia szkicu narysowanego na ścianie bryły ma pierwszeństwo: kliknięcie blisko niej wybiera szkic, a nie bryłę (np. przy cięciu bryły szkicem).',
         'Kostka w prawym górnym rogu: klik w ścianę ustawia widok z tej strony, klik w krawędź lub róg widok ukośny. Domek wraca do widoku głównego.',
         'Skróty: Ctrl+N nowy, Ctrl+O otwórz, Ctrl+S zapisz, Ctrl+Z cofnij, Ctrl+Y ponów, Enter zatwierdź, Esc anuluj.']),

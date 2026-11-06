@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QFont, QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 BLUE = '#2f87e8'
 BLUE_SOFT = '#cfe4fb'
@@ -402,6 +402,21 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         else:
             p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(24, 3.5), QPointF(40, 3.5)); p.drawLine(QPointF(44.5, 8), QPointF(44.5, 24))
             p.drawLine(QPointF(24, 1.5), QPointF(24, 6)); p.drawLine(QPointF(42.5, 24), QPointF(46.5, 24))
+    elif kind in ('tx_size', 'tx_angle'):
+        # tekst: wysokość liter (litera A ze strzałką wysokości) / obrót (pochylony napis i łuk kąta)
+        f = QFont('DejaVu Sans'); f.setPixelSize(30); f.setBold(True); p.setFont(f)
+        if kind == 'tx_size':
+            p.setPen(pen(BLUE, 1)); p.setBrush(QColor(BLUE_SOFT))
+            path = QPainterPath(); path.addText(QPointF(6, 39), f, 'A'); p.setPen(pen(BLUE, 1.6)); p.drawPath(path)
+            p.setPen(pen(ORANGE, 2.2)); p.drawLine(QPointF(38, 12), QPointF(38, 38))
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(38, 8), QPointF(34.5, 14), QPointF(41.5, 14)])); p.drawPolygon(QPolygonF([QPointF(38, 42), QPointF(34.5, 36), QPointF(41.5, 36)]))
+        else:
+            p.save(); p.translate(14, 36); p.rotate(-28)
+            path = QPainterPath(); f.setPixelSize(20); path.addText(QPointF(0, 0), f, 'Ab')
+            p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 1.4)); p.drawPath(path); p.restore()
+            p.setPen(pen(INK, 1.8)); p.drawLine(QPointF(8, 40), QPointF(44, 40))
+            p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 2.4)); p.drawArc(QRectF(-14, 18, 44, 44), 0, 28 * 16)
     elif kind == 'of_dist':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(14, 16, 20, 16), 2, 2)
         dash = pen(ORANGE, 2.2); dash.setStyle(Qt.DashLine); p.setPen(dash); p.setBrush(Qt.NoBrush); p.drawRoundedRect(QRectF(5, 7, 38, 34), 6, 6)
@@ -928,6 +943,14 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             path = QPainterPath(); path.moveTo(7, 24); path.lineTo(24, 8); path.lineTo(41, 24); path.lineTo(36, 24); path.lineTo(36, 40); path.lineTo(12, 40); path.lineTo(12, 24); path.closeSubpath()
             fl(path, soft)
             fl(_rounded(20, 28, 8, 12, 1.5), QColor(acc), acc, 1.2)
+        elif name == 'persp':
+            # perspektywa: sześcian, którego tylna ściana jest mniejsza (krawędzie zbiegają się do punktu)
+            fl(_poly_path([(6, 14), (30, 14), (30, 40), (6, 40)]), soft)
+            p.drawPolygon(poly([(22, 8), (36, 8), (36, 24), (22, 24)]))
+            st(acc, 2.4)
+            for a, b in (((6, 14), (22, 8)), ((30, 14), (36, 8)), ((30, 40), (36, 24))):
+                p.drawLine(QPointF(*a), QPointF(*b))
+            p.setPen(Qt.NoPen); p.setBrush(QColor(acc)); p.drawEllipse(QPointF(42, 4.5), 2.6, 2.6)
         elif name == 'grid':
             st(ink, 2.4)
             for k in (9, 19, 29, 39):

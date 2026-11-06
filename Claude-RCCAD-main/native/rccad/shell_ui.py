@@ -48,6 +48,9 @@ QPushButton#chip { background:#fff; border:1px solid #bdccdb; border-radius:8px;
 QPushButton#chip:hover { border-color:#187ac1; }
 QPushButton#chip:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
 QPushButton#chip:disabled { background:#eef2f6; color:#a9b9c8; border-color:#d6e0ea; }
+QLabel#textSample { background:#ffffff; border:1.4px solid #d3e0ec; border-radius:12px; color:#27415a; padding:4px 10px; }
+QLineEdit#textInput { font-size:15px; font-weight:600; padding:8px 10px; border:1.6px solid #9cc4ee; border-radius:9px; background:#ffffff; }
+QLineEdit#textInput:focus { border-color:#2f87e8; }
 QPushButton#dirchip { background:#f3f8fd; border:1px solid #d3e0ec; border-radius:8px; color:#5b7690; font-size:16px; font-weight:800; padding:0; }
 QPushButton#dirchip:hover { border-color:#8fc0f2; background:#eaf4ff; }
 QPushButton#dirchip:checked { background:#2f87e8; border-color:#2f87e8; color:#ffffff; }
