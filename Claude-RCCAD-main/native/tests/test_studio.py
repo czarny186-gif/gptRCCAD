@@ -1907,5 +1907,34 @@ class StudioTests(unittest.TestCase):
             self.app.processEvents();time.sleep(.01)
         self.assertTrue(w.document.bodies[0].mesh.fine)                           # po cofnięciu i ponowieniu - z pamięci
 
+    def test_view_keeps_fill_on_selection_and_fast_picking_matches_brute_force(self):
+        from rccad import viewport as vp
+        w=self.w;a=Body('A',k.blend(k.hole(k.box(40,40,30),6,20,20),range(12),3)).prepared();w.document.commit([a]);w.refresh(True)
+        fill=w.view._parts[a.id]['fill']
+        w.selected=[a.id];w.refresh();self.assertIs(w.view._parts[a.id]['fill'],fill)           # zaznaczenie zmienia tylko kolor
+        self.assertEqual(w.view._parts[a.id]['color'][:3],vp.PICKED_FILL[:3])
+        w.selected=[];w.refresh();self.assertIs(w.view._parts[a.id]['fill'],fill)
+        md=vp._meshdata(a.mesh);ref=__import__('pyqtgraph.opengl',fromlist=['MeshData']).MeshData(vertexes=a.mesh.vertices,faces=a.mesh.triangles).vertexNormals()
+        self.assertLess(float(np.abs(md.vertexNormals()-ref).max()),1e-5)                        # cieniowanie jak w pyqtgraph
+        tri=a.mesh.vertices.astype(float)[a.mesh.triangles]
+        def brute(origin,direction):
+            e1,e2=tri[:,1]-tri[:,0],tri[:,2]-tri[:,0];h=np.cross(np.broadcast_to(direction,e2.shape),e2);aa=np.einsum('ij,ij->i',e1,h)
+            f=np.divide(1.,aa,out=np.zeros_like(aa),where=np.abs(aa)>1e-9);sv=origin-tri[:,0];u=f*np.einsum('ij,ij->i',sv,h);q=np.cross(sv,e1)
+            v=f*np.einsum('j,ij->i',direction,q);t=f*np.einsum('ij,ij->i',e2,q);ok=(np.abs(aa)>1e-9)&(u>=-1e-6)&(v>=-1e-6)&(u+v<=1+1e-6)&(t>1e-6)
+            return float(t[ok].min()) if ok.any() else None
+        W,H=w.view.width(),w.view.height();hits=0
+        for x in np.linspace(W*.2,W*.8,9):
+            for y in np.linspace(H*.2,H*.8,7):
+                origin,direction=w.view._ray(x,y);fast=w.view._hit(origin,direction);slow=brute(origin,direction)
+                self.assertEqual(fast is None,slow is None)
+                if fast is not None:
+                    hits+=1;self.assertAlmostEqual(fast[0],slow,6)
+        self.assertGreater(hits,5)
+        for index,points in list(a.mesh.edges.items())[:12]:
+            xy,_,_=w.view.project_points(points[len(points)//2:len(points)//2+1])
+            hit=w.view.nearest_edge(*xy[0])
+            if hit is not None:
+                self.assertEqual(hit[0],a.id)
+
 if __name__=='__main__':
     unittest.main()

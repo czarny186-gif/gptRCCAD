@@ -299,6 +299,105 @@ class OverLine(gl.GLLinePlotItem):
                            'glBlendFunc': (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)})
 
 
+_MESHDATA = {}
+
+
+def _meshdata(mesh):
+    """Dane siatki dla karty graficznej z kierunkami do cieniowania liczonymi tablicami (pyqtgraph liczy je w pętli Pythona,
+    punkt po punkcie - przy dużej bryle to setki milisekund przy każdym pokazaniu). Wynik jest zapamiętany dla siatki."""
+    hit = _MESHDATA.get(id(mesh))
+    if hit is not None and hit[0] is mesh:
+        return hit[1]
+    v = np.asarray(mesh.vertices, dtype=np.float32)
+    f = np.asarray(mesh.triangles, dtype=np.uint32)
+    md = gl.MeshData(vertexes=v, faces=f)
+    if len(f):
+        a = v[f[:, 0]].astype(np.float64)
+        n = np.cross(v[f[:, 1]] - a, v[f[:, 2]] - a)            # waga = pole trójkąta, jak w pyqtgraph
+        normals = np.empty((len(v), 3))
+        flat = f.ravel()
+        for c in range(3):
+            normals[:, c] = np.bincount(flat, weights=np.repeat(n[:, c], 3), minlength=len(v))
+        length = np.linalg.norm(normals, axis=1)
+        normals /= np.where(length > 1e-20, length, 1.0)[:, None]
+        md._vertexNormals = normals.astype(np.float32)
+    if len(_MESHDATA) > 256:
+        _MESHDATA.clear()
+    _MESHDATA[id(mesh)] = (mesh, md)
+    return md
+
+
+_PICK = {}
+PICK_CHUNK = 1024
+
+
+def _pick_data(mesh):
+    """Przygotowane dla wskazywania myszą: trójkąty w blokach z prostopadłościanami ograniczającymi (promień sprawdza
+    najpierw bloki, potem tylko trójkąty w trafionych blokach), wszystkie odcinki krawędzi i końce krawędzi naraz."""
+    hit = _PICK.get(id(mesh))
+    if hit is not None and hit[0] is mesh:
+        return hit[1]
+    data = {}
+    if len(mesh.triangles):
+        tri = np.asarray(mesh.vertices, dtype=np.float64)[np.asarray(mesh.triangles)]
+        v0, e1, e2 = tri[:, 0], tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+        starts = np.arange(0, len(tri), PICK_CHUNK)
+        low = np.minimum.reduceat(tri.min(axis=1), starts)
+        high = np.maximum.reduceat(tri.max(axis=1), starts)
+        data.update(v0=v0, e1=e1, e2=e2, starts=starts, low=low, high=high, box=(tri.min(axis=(0, 1)), tri.max(axis=(0, 1))))
+    chains = [(index, np.asarray(points, dtype=np.float64)) for index, points in mesh.edges.items() if len(points) >= 2]
+    if chains:
+        data['a'] = np.concatenate([p[:-1] for _, p in chains])
+        data['b'] = np.concatenate([p[1:] for _, p in chains])
+        data['edge'] = np.concatenate([np.full(len(p) - 1, index) for index, p in chains])
+    ends = {}
+    for points in mesh.edges.values():
+        for q in (points[0], points[-1]):
+            ends[tuple(np.round(q, 3))] = q
+    data['ends'] = np.array(list(ends.values()), dtype=float) if ends else None
+    if len(_PICK) > 256:
+        _PICK.clear()
+    _PICK[id(mesh)] = (mesh, data)
+    return data
+
+
+def _ray_box(origin, inv, low, high):
+    """Które prostopadłościany (low/high: N x 3) przecina półprosta: test płyt, naraz dla wszystkich."""
+    t1, t2 = (low - origin) * inv, (high - origin) * inv
+    near = np.nanmax(np.minimum(t1, t2), axis=-1)
+    far = np.nanmin(np.maximum(t1, t2), axis=-1)
+    return (far >= np.maximum(near, 0.0) - 1e-6)
+
+
+def _ray_triangles(data, origin, direction):
+    """(t, indeks trójkąta) najbliższego trafienia albo None - tylko trójkąty z bloków, które promień przecina."""
+    if 'v0' not in data:
+        return None
+    with np.errstate(divide='ignore', invalid='ignore'):
+        inv = 1.0 / direction
+        if not _ray_box(origin, inv, data['box'][0][None], data['box'][1][None])[0]:
+            return None
+        chunks = np.nonzero(_ray_box(origin, inv, data['low'], data['high']))[0]
+    if not len(chunks):
+        return None
+    n = len(data['v0'])
+    index = np.concatenate([np.arange(data['starts'][c], min(data['starts'][c] + PICK_CHUNK, n)) for c in chunks])
+    v0, e1, e2 = data['v0'][index], data['e1'][index], data['e2'][index]
+    h = np.cross(np.broadcast_to(direction, e2.shape), e2)
+    a = np.einsum('ij,ij->i', e1, h)
+    f = np.divide(1., a, out=np.zeros_like(a), where=np.abs(a) > 1e-9)
+    sv = origin - v0
+    u = f * np.einsum('ij,ij->i', sv, h)
+    q = np.cross(sv, e1)
+    v = f * np.einsum('j,ij->i', direction, q)
+    t = f * np.einsum('ij,ij->i', e2, q)
+    ok = (np.abs(a) > 1e-9) & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6) & (t > 1e-6)
+    if not ok.any():
+        return None
+    j = np.nonzero(ok)[0][int(np.argmin(t[ok]))]
+    return float(t[j]), int(index[j])
+
+
 def _segments(chains):
     """Wiele łamanych -> jedna tablica odcinków (tryb 'lines'): jedno wywołanie rysowania zamiast setek (płynny obrót modelu z tekstem)."""
     parts = []
@@ -439,6 +538,7 @@ class CadView(gl.GLViewWidget):
         self.snapper = None           # funkcja (x, y, (u, v)) -> (u, v, etykieta) ustawiana przez Studio
         self._body_m = {}             # id bryły -> macierz podglądu przesunięcia / obrotu (bez ponownego liczenia geometrii)
         self._cache = {}              # id bryły -> (klucz, elementy GL): bez przebudowy całej sceny przy każdej zmianie
+        self._parts = {}              # id bryły -> wypełnienie i linie z kluczami (wypełnienie zostaje przy zmianie koloru)
         self.overlay = Overlay2D(self)
         self.overlay.setGeometry(0, 0, self.width(), self.height())
         self.overlay.raise_()
@@ -513,6 +613,7 @@ class CadView(gl.GLViewWidget):
         for bid in list(self._cache):
             for item in self._cache.pop(bid)[1]:
                 self.removeItem(item)
+        self._parts.clear()
         self.set_models(self.bodies, self.selected_bodies, self.selected_edges)
 
     def _apply_body_matrix(self, bid):
@@ -562,19 +663,28 @@ class CadView(gl.GLViewWidget):
             picked = body.id in self.selected_bodies
             color = PICKED_FILL if picked and body.kind != 'sketch' else (self.tints.get(body.id) or SOLID_COLOR)
             sel = frozenset(self.selected_edges.get(body.id, ()))
-            key = (id(mesh), tuple(color), picked, sel, body.kind, self.xray)
-            cached = self._cache.get(body.id)
-            if cached is None or cached[0] != key:
-                if cached is not None:
-                    for item in cached[1]:
-                        self.removeItem(item)
-                items = []
-                if len(mesh.triangles):
-                    shown = (*color[:3], .30) if self.xray and body.kind != 'sketch' else color
-                    item = OffsetMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=True, color=shown, shader='rccad', drawEdges=False)
-                    item.setGLOptions('translucent' if self.xray else 'opaque')
-                    self.addItem(item)
-                    items.append(item)
+            # obraz bryły (wypełnienie w pamięci karty graficznej) zostaje, dopóki nie zmieni się siatka - zaznaczenie i kolory
+            # zmieniają tylko kolor; od nowa budują się wyłącznie linie krawędzi (lekkie)
+            shown = (*color[:3], .30) if self.xray and body.kind != 'sketch' else tuple(color)
+            fill_key = (id(mesh), body.kind, self.xray)
+            line_key = (id(mesh), picked, sel, body.kind, self.xray)
+            parts = self._parts.get(body.id)
+            if parts is None or parts['fill_key'] != fill_key or parts['line_key'] != line_key:
+                old_parts = parts or {}
+                fill = old_parts.get('fill')
+                if parts is None or parts['fill_key'] != fill_key:
+                    if fill is not None:
+                        self.removeItem(fill)
+                    fill = None
+                    if len(mesh.triangles):
+                        fill = OffsetMesh(meshdata=_meshdata(mesh), smooth=True, color=shown, shader='rccad', drawEdges=False)
+                        fill.setGLOptions('translucent' if self.xray else 'opaque')
+                        self.addItem(fill)
+                elif fill is not None and old_parts.get('color') != shown:
+                    fill.setColor(shown)
+                for line in old_parts.get('lines', ()):
+                    self.removeItem(line)
+                lines = []
                 base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
                 for hot, color_, width_ in ((False, base, 2.3 if body.kind == 'sketch' else 1.5), (True, PICKED_COLOR if picked else PREVIEW_COLOR, 4.0 if picked else 3.5)):
                     seg = _segments([pts for index, pts in mesh.edges.items() if (index in sel or picked) == hot])
@@ -584,10 +694,15 @@ class CadView(gl.GLViewWidget):
                     if body.kind != 'sketch':
                         line.setGLOptions('additive' if self.xray else 'translucent')
                     self.addItem(line)
-                    items.append(line)
-                self._cache[body.id] = (key, items)
+                    lines.append(line)
+                parts = self._parts[body.id] = dict(fill_key=fill_key, line_key=line_key, fill=fill, lines=lines, color=shown)
+                self._cache[body.id] = (line_key, ([fill] if fill is not None else []) + lines)
                 if body.id in self._body_m:
                     self._apply_body_matrix(body.id)
+            elif parts['color'] != shown:
+                if parts['fill'] is not None:
+                    parts['fill'].setColor(shown)        # sam kolor (zaznaczenie, podświetlenie narzędzia) - bez przebudowy
+                parts['color'] = shown
             if body.kind == 'sketch' and len(mesh.vertices) + len(mesh.edges):
                 pts = np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()]) if mesh.edges else mesh.vertices
                 if len(pts):
@@ -595,6 +710,7 @@ class CadView(gl.GLViewWidget):
         for bid in [b for b in self._cache if b not in live]:
             for item in self._cache.pop(bid)[1]:
                 self.removeItem(item)
+            self._parts.pop(bid, None)
         self.sketch_centers = centers
         self.update()
 
@@ -1094,23 +1210,12 @@ class CadView(gl.GLViewWidget):
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
-            tri = body.mesh.vertices[body.mesh.triangles]
-            e1, e2 = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
-            h = np.cross(np.broadcast_to(direction, e2.shape), e2)
-            a = np.einsum('ij,ij->i', e1, h)
-            f = np.divide(1., a, out=np.zeros_like(a), where=np.abs(a) > 1e-9)
-            sv = origin - tri[:, 0]
-            u = f * np.einsum('ij,ij->i', sv, h)
-            q = np.cross(sv, e1)
-            v = f * np.einsum('j,ij->i', direction, q)
-            t = f * np.einsum('ij,ij->i', e2, q)
-            ok = (np.abs(a) > 1e-9) & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6) & (t > 1e-6)
-            if ok.any():
-                idx = np.where(ok)[0][int(np.argmin(t[ok]))]
-                if best is None or t[idx] < best[0]:
-                    n = np.cross(e1[idx], e2[idx])
-                    n = n / max(np.linalg.norm(n), 1e-12)
-                    best = (float(t[idx]), body.id, n, origin + direction * t[idx])
+            data = _pick_data(body.mesh)
+            hit = _ray_triangles(data, origin, direction)
+            if hit is not None and (best is None or hit[0] < best[0]):
+                n = np.cross(data['e1'][hit[1]], data['e2'][hit[1]])
+                n = n / max(np.linalg.norm(n), 1e-12)
+                best = (hit[0], body.id, n, origin + direction * hit[0])
         return None if best is None else (best[1], best[2], best[3])
 
     def pick_profile(self, x, y):
@@ -1221,29 +1326,37 @@ class CadView(gl.GLViewWidget):
         return xy, ndc[:, 2], w
 
     def nearest_edge(self, x, y, solids_only=False, kinds=None):
-        best, distance = None, 10.
+        """Krawędź najbliżej kursora (do 10 px), widoczna (nie zasłonięta bryłą, chyba że przezroczystość): (id, indeks) albo None.
+        Wszystkie odcinki krawędzi bryły rzutowane naraz; zasłonięcie sprawdzane tylko dla najbliższych kandydatów."""
+        found = []
+        cursor = np.array([x, y], dtype=float)
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or (solids_only and body.kind != 'solid') or (kinds and body.kind not in kinds):
                 continue
-            for index, points in body.mesh.edges.items():
-                xy, z, w = self.project_points(points)
-                if len(xy) < 2:
-                    continue
-                a, b = xy[:-1], xy[1:]
-                delta = b - a
-                denom = (delta * delta).sum(axis=1)
-                t = np.clip(((np.array([x, y]) - a) * delta).sum(axis=1) / np.maximum(denom, 1e-12), 0, 1)
-                projected = a + delta * t[:, None]
-                dist = np.linalg.norm(projected - [x, y], axis=1)
-                dist[(w[:-1] <= 0) | (w[1:] <= 0)] = np.inf
-                if not np.isfinite(dist).any():
-                    continue
-                j = int(np.nanargmin(dist))
-                if dist[j] < distance:
-                    world = points[j] + (points[j + 1] - points[j]) * t[j]
-                    if self.xray or self._visible_point(world):
-                        distance, best = float(dist[j]), (body.id, index)
-        return best
+            data = _pick_data(body.mesh)
+            if 'a' not in data:
+                continue
+            pa, za, wa = self.project_points(data['a'])
+            pb, zb, wb = self.project_points(data['b'])
+            delta = pb - pa
+            denom = (delta * delta).sum(axis=1)
+            t = np.clip(((cursor - pa) * delta).sum(axis=1) / np.maximum(denom, 1e-12), 0, 1)
+            dist = np.linalg.norm(pa + delta * t[:, None] - cursor, axis=1)
+            dist[(wa <= 0) | (wb <= 0) | ~np.isfinite(dist)] = np.inf
+            near = np.nonzero(dist < 10.)[0]
+            for j in near:
+                found.append((float(dist[j]), len(found), body.id, int(data['edge'][j]), data['a'][j] + (data['b'][j] - data['a'][j]) * t[j]))
+        found.sort(key=lambda item: (item[0], item[1]))
+        seen = set()
+        for _, _, bid, index, world in found:
+            if (bid, index) in seen:
+                continue
+            seen.add((bid, index))
+            if self.xray or self._visible_point(world):
+                return (bid, index)
+            if len(seen) > 24:
+                break
+        return None
 
     def nearest_vertex(self, x, y, radius=11.0, solids_only=True):
         """Wierzchołek (koniec krawędzi) najbliżej kursora: (id obiektu, punkt 3D) albo None; solids_only=False obejmuje też punkty szkiców."""
@@ -1251,13 +1364,9 @@ class CadView(gl.GLViewWidget):
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or (solids_only and body.kind != 'solid') or body.kind not in ('solid', 'sketch'):
                 continue
-            ends = {}
-            for points in body.mesh.edges.values():
-                for q in (points[0], points[-1]):
-                    ends[tuple(np.round(q, 3))] = q
-            if not ends:
+            pts = _pick_data(body.mesh)['ends']
+            if pts is None:
                 continue
-            pts = np.array(list(ends.values()), dtype=float)
             xy, z, w = self.project_points(pts)
             if len(xy) != len(pts):
                 continue
@@ -1285,21 +1394,9 @@ class CadView(gl.GLViewWidget):
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
-            v = body.mesh.vertices[body.mesh.triangles]
-            e1, e2 = v[:, 1]-v[:, 0], v[:, 2]-v[:, 0]
-            h = np.cross(np.broadcast_to(direction, e2.shape), e2)
-            a = np.einsum('ij,ij->i', e1, h)
-            f = np.divide(1., a, out=np.zeros_like(a), where=np.abs(a)>1e-9)
-            s = origin-v[:, 0]
-            u = f*np.einsum('ij,ij->i', s, h)
-            q = np.cross(s, e1)
-            vv = f*np.einsum('j,ij->i', direction, q)
-            t = f*np.einsum('ij,ij->i', e2, q)
-            mask=(np.abs(a)>1e-9)&(u>=-1e-6)&(vv>=-1e-6)&(u+vv<=1+1e-6)&(t>1e-6)
-            if mask.any():
-                value=float(t[mask].min())
-                if best is None or value<best[0]:
-                    best=(value,body.id)
+            hit = _ray_triangles(_pick_data(body.mesh), origin, direction)
+            if hit is not None and (best is None or hit[0] < best[0]):
+                best = (hit[0], body.id)
         return best
 
     def _visible_point(self, point):

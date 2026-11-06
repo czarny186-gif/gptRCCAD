@@ -1,4 +1,17 @@
-# RCCAD Desktop 0.4.42 — płynniejsze wyświetlanie
+# RCCAD Desktop 0.4.43 — szybszy widok
+
+## Zmiany 0.4.43
+
+Pomiar: 4 płyty ze 100 zaokrąglonymi otworami (383 tys. trójkątów).
+
+- **Zaznaczenie bryły bez przebudowy obrazu**: bryła zostaje w pamięci karty graficznej, zmienia się tylko kolor (i linie krawędzi). Zaznaczenie / odznaczenie: 631 ms → 121 ms (reszta to samo narysowanie klatki).
+- **Cieniowanie liczone tablicami**: kierunki do cieniowania nowej siatki (po każdej operacji) liczone naraz zamiast punkt po punkcie w Pythonie: 0,54 s → 0,012 s na dużą bryłę, wynik identyczny.
+- **Wskazywanie myszą bez przycinania** (przy każdym ruchu kursora):
+  - krawędź pod kursorem: 261 ms → 10 ms (wszystkie odcinki krawędzi bryły liczone naraz, zasłonięcie sprawdzane tylko dla najbliższych),
+  - ściana pod kursorem: 45 ms → 3 ms, narożnik: 72 ms → 3 ms (trójkąty w blokach - promień sprawdza najpierw bloki, potem tylko trójkąty w trafionych).
+- Obracanie widoku: siatki były już wcześniej w pamięci karty graficznej, więc samo rysowanie klatki się nie zmienia.
+
+## RCCAD Desktop 0.4.42 — płynniejsze wyświetlanie
 
 ## Zmiany 0.4.42
 
