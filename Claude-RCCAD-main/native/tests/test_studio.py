@@ -333,14 +333,17 @@ class StudioTests(unittest.TestCase):
         w.fl_pick = dict(id=body.id, spec=dict(kind='base', p0=[100,0,2], p1=[100,50,2], n=[0,0,1], m=[1,0,0]))
         return body
 
-    def test_flange_mode_highlights_only_edges_and_restores_object_selection(self):
+    def test_flange_mode_highlights_only_edges_and_never_selects_by_itself(self):
         body = self.converted_sheet(); w = self.w
-        self.assertEqual(w.selected, [body.id])
+        self.assertEqual(w.selected, [])                     # konwersja nie zaznacza bryły sama
         self.assertNotIn(body.id, w.view.selected_bodies)
         w.apply_flange(); self.wait()
-        self.assertEqual(w.selected, [body.id])
+        self.assertEqual(w.selected, [body.id])              # blacha, na której pracuje narzędzie
         self.assertNotIn(body.id, w.view.selected_bodies)
-        w.set_mode(None)
+        w.set_mode(None)                                     # po zamknięciu narzędzia nic nie zostaje zaznaczone
+        self.assertEqual(w.selected, [])
+        self.assertNotIn(body.id, w.view.selected_bodies)
+        w.selected = [body.id]; w.refresh()                  # zaznaczenie kliknięciem zostaje
         self.assertIn(body.id, w.view.selected_bodies)
 
     def test_corner_choices_hide_diagonal_and_restore_legacy_as_sheet(self):
@@ -655,7 +658,7 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(w.fl_gap.value(),.7)
 
     def _four_bottom_hems_and_refold(self,joint):
-        w=self.w;body=self.converted_sheet()
+        w=self.w;body=self.converted_sheet();w.selected=[body.id]          # blacha zaznaczona kliknięciem
         w.fl_joint.setCurrentIndex(w.fl_joint.findData(joint));w.apply_sheet_rules();self.wait()
         w.toggle_mode('hem');w.hm_radius.setValue(1);w.hm_gap.setValue(.2);w.hm_length.setValue(5)
         for count,point in enumerate(((100,25,0),(50,50,0),(0,25,0),(50,0,0)),1):
@@ -674,7 +677,10 @@ class StudioTests(unittest.TestCase):
         w.tools['unfold_sheet'].click();self.wait()
         self.assertTrue(w._sheet_state(body.id)['flat'],w.notice.text())
         self.assertEqual(len(w.document.get(body.id).shape.Solids()),1)
-        w.tools['fold_sheet'].click();self.wait()
+        w.tools['fold_sheet'].click();self.app.processEvents()
+        if w.mode=='sheetpick':                      # wynik operacji nie jest zaznaczony sam - blachę wskazuje się kliknięciem
+            with patch.object(w.view,'pick_body',return_value=body.id):w.view_clicked(5,5,False,False)
+        self.wait()
         self.assertFalse(w._sheet_state(body.id)['flat'])
         folded=w.document.get(body.id).shape
         self.assertLess(folded.cut(original).Volume(1e-9)+original.cut(folded).Volume(1e-9),1e-4)
@@ -1381,7 +1387,7 @@ class StudioTests(unittest.TestCase):
         w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000);self.assertGreater(w.document.bodies[0].shape.Volume(),7990)
         a=w.document.bodies[0];w.set_mode('mod');far=max((np.array(e[0],float) for e in a.mesh.edges.values()),key=lambda q:float(np.linalg.norm(q-pt)))
         with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],far.tolist())):w.view_double_clicked(5,5)
-        self.assertEqual(w.mod_vertices,{});self.assertGreaterEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
+        self.assertEqual(w.mod_vertices,{});self.assertGreaterEqual(len(w.edges[a.id]),4);self.assertFalse(w.view.selection_items)     # ściana się nie podświetla
 
     def test_local_piece_preview_matches_edge_and_pattern_candidate_prefers_sketch(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared()
@@ -1840,6 +1846,47 @@ class StudioTests(unittest.TestCase):
             for i in range(d.MAX_UNDO):d.commit([body],str(i))
             w.refresh()
             self.assertTrue(any('osiągnęła limit' in t for t in toasts))
+
+    def test_split_tool_plane_face_sketch_and_body(self):
+        import cadquery as cq
+        w=self.w;a=Body('Kostka',k.box(40,20,10)).prepared();w.document.commit([a]);w.refresh()
+        self.assertIn('split',__import__('rccad.studio',fromlist=['TABS']).TABS['Edycja'])
+        w.selected=[a.id];w.toggle_mode('split');self.assertEqual((w.mode,w.sp_id),('split',a.id))
+        w.sp_plane.setCurrentIndex(2);w.sp_offset.setValue(10);self.assertTrue(w.view.handles)          # YZ przez środek, +10 mm
+        w.update_split_preview();self.preview();self.assertTrue(w.view.preview_items);self.assertIn('2',w.sp_status.text())
+        w.apply_split();self.wait()
+        vols=sorted(round(b.shape.Volume()) for b in w.document.bodies);self.assertEqual(vols,[2000,6000])
+        self.assertIsNone(w.mode);self.assertEqual(w.selected,[a.id])                                  # zaznaczona kliknięciem zostaje, nowa część nie zaznacza się sama
+        self.assertTrue(w.document.timeline()[0][-1].startswith('Przecięcie płaszczyzną YZ'))
+        # zostaje tylko jedna strona: ściana bryły jako płaszczyzna, odsunięta w głąb
+        w.undo();w.set_mode('split');w.sp_id=a.id;w.sp_method.setCurrentIndex(1)
+        face=next(f for f in a.shape.Faces() if abs(f.Center().z-10)<1e-6)
+        with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],face.Center().toTuple())):w.view_clicked(5,5,False,False)
+        self.assertIsNotNone(w.sp_ref);w.sp_offset.setValue(-4);w.sp_keep.setCurrentIndex(2)       # strona 2: pod płaszczyzną
+        w.apply_split();self.wait();self.assertEqual(len(w.document.bodies),1);self.assertAlmostEqual(w.document.bodies[0].shape.Volume(),40*20*6,3)
+        # szkic: zamknięty okrąg wycina walec (wewnątrz = strona 2), szkic wygasa
+        w.undo();circle=Body('Okrąg',cq.Face.makeFromWires(cq.Wire.assembleEdges([cq.Edge.makeCircle(4,cq.Vector(20,10,10))])),'sketch').prepared()
+        w.document.commit([*w.document.bodies,circle]);w.set_mode('split');w.sp_id=a.id;w.sp_method.setCurrentIndex(2);w.sp_keep.setCurrentIndex(0)
+        with patch.object(w.view,'pick_body',return_value=circle.id):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.sp_ref['tool'],circle.id);w.apply_split();self.wait()
+        solids=[b for b in w.document.bodies if b.kind=='solid'];self.assertEqual(len(solids),2)
+        self.assertAlmostEqual(min(b.shape.Volume() for b in solids),math.pi*16*10,1);self.assertFalse(w.document.get(circle.id).visible)
+        # inna bryła: walec dzieli kostkę, narzędzie zostaje
+        w.undo();w.undo();cyl=Body('Walec',cq.Solid.makeCylinder(5,30,cq.Vector(0,0,-10))).prepared()
+        w.document.commit([*w.document.bodies,cyl]);w.set_mode('split');w.sp_id=a.id;w.sp_method.setCurrentIndex(3)
+        with patch.object(w.view,'pick_body',return_value=cyl.id):w.view_clicked(5,5,False,False)
+        w.apply_split();self.wait();self.assertEqual(len(w.document.bodies),3);self.assertIsNotNone(w.document.get(cyl.id))
+        # krok przelicza się z przepisu
+        info=w.document.states()[-1][1];self.assertEqual(info['op']['type'],'split')
+        again=hist.run_recipe(w.document.states()[-2][0],info['op']);self.assertEqual(len(again),3)
+
+    def test_fillet_preview_shows_only_created_surface(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
+        with patch.object(w.view,'nearest_edge',return_value=(a.id,0)):w.view_clicked(5,5,False,False)
+        w.mod_size.setValue(2);w.update_mod_preview();self.preview()
+        pts=np.concatenate([i.opts['meshdata'].vertexes() for i in w.view.preview_items if i.__class__.__name__=='OverMesh'])
+        self.assertTrue(len(pts));span=pts.max(axis=0)-pts.min(axis=0)
+        self.assertEqual(sorted(round(float(x)) for x in span),[2,2,20])        # sam pas zaokrąglenia R2 wzdłuż krawędzi 20 mm
 
 if __name__=='__main__':
     unittest.main()

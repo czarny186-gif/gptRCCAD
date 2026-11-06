@@ -204,6 +204,70 @@ def _draw_measure(p, which, ink, acc, soft, pen):
         p.setPen(pen(acc, 3.0)); p.drawLine(QPointF(37, 36), QPointF(37, 41)); p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(37, 31.5), 1.9, 1.9)
 
 
+def _poly_path(points):
+    path = QPainterPath()
+    path.addPolygon(QPolygonF([QPointF(*q) for q in points]))
+    path.closeSubpath()
+    return path
+
+
+def _draw_split(p, kind, pen):
+    """Przetnij bryłę: ikony metod cięcia (płaszczyzna, ściana, szkic, bryła) i wyboru zachowanych części."""
+    soft, blue, green = QColor(BLUE_SOFT), BLUE, GREEN
+    cube = lambda: (p.setBrush(soft), p.setPen(pen(blue, 2.2)),
+                    p.drawPolygon(QPolygonF([QPointF(8, 18), QPointF(22, 10), QPointF(40, 14), QPointF(40, 34), QPointF(26, 42), QPointF(8, 38)])),
+                    p.setPen(pen(blue, 1.6)), p.drawPolyline(QPolygonF([QPointF(8, 18), QPointF(26, 22), QPointF(40, 14)])), p.drawLine(QPointF(26, 22), QPointF(26, 42)))
+    if kind == 'x_split':
+        p.setBrush(soft); p.setPen(pen(blue, 2.4))
+        p.drawPath(_poly_path([(5, 13), (21, 13), (17, 41), (5, 41)]))
+        p.drawPath(_poly_path([(27, 13), (43, 13), (43, 41), (23, 41)]))
+        p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(25.5, 4), QPointF(19.5, 46))
+    elif kind == 'sp_plane':
+        cube()
+        p.setBrush(QColor(47, 165, 109, 70)); p.setPen(pen(green, 2.2))
+        p.drawPolygon(QPolygonF([QPointF(2, 26), QPointF(18, 18), QPointF(46, 23), QPointF(30, 31)]))
+    elif kind == 'sp_face':
+        cube()
+        p.setBrush(QColor('#d6f1e3')); p.setPen(pen(green, 2.2))
+        p.drawPolygon(QPolygonF([QPointF(26, 22), QPointF(40, 14), QPointF(40, 34), QPointF(26, 42)]))
+        dash = pen(ORANGE, 2.0); dash.setStyle(Qt.DashLine); p.setPen(dash); p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF([QPointF(17, 20), QPointF(31, 12), QPointF(31, 32), QPointF(17, 40)]))
+    elif kind == 'sp_sketch':
+        cube()
+        p.setPen(pen(ORANGE, 2.8)); p.setBrush(Qt.NoBrush)
+        path = QPainterPath(); path.moveTo(9, 12); path.cubicTo(18, 4, 26, 22, 39, 9); p.drawPath(path)
+        dash = pen(ORANGE, 1.6); dash.setStyle(Qt.DashLine); p.setPen(dash)
+        for x, y in ((9, 12), (24, 13.5), (39, 9)):
+            p.drawLine(QPointF(x, y), QPointF(x, y + 30))
+    elif kind == 'sp_body':
+        cube()
+        p.setBrush(QColor(47, 165, 109, 90)); p.setPen(pen(green, 2.2)); p.drawEllipse(QPointF(33, 24), 11, 11)
+    elif kind in ('sp_both', 'sp_side1', 'sp_side2'):
+        top, bottom = _poly_path([(8, 8), (40, 8), (40, 21), (8, 21)]), _poly_path([(8, 27), (40, 27), (40, 40), (8, 40)])
+        for path, kept, (c_fill, c_edge) in ((top, kind != 'sp_side2', ('#d6f1e3', green)), (bottom, kind != 'sp_side1', ('#fde3c2', ORANGE))):
+            if kept:
+                p.setBrush(QColor(c_fill)); p.setPen(pen(c_edge, 2.4))
+            else:
+                dash = pen('#9fb4c8', 1.8); dash.setStyle(Qt.DashLine); p.setBrush(Qt.NoBrush); p.setPen(dash)
+            p.drawPath(path)
+        p.setPen(pen('#8a63d2', 2.6)); p.drawLine(QPointF(3, 24), QPointF(45, 24))
+        if kind != 'sp_both':
+            y0, y1 = (24, 13) if kind == 'sp_side1' else (24, 35)
+            arrow = green if kind == 'sp_side1' else ORANGE
+            p.setPen(pen(arrow, 2.4)); p.drawLine(QPointF(44, y0), QPointF(44, y1))
+            p.setBrush(QColor(arrow)); p.setPen(Qt.NoPen)
+            d = -1 if kind == 'sp_side1' else 1
+            p.drawPolygon(QPolygonF([QPointF(44, y1 + d * 4), QPointF(40.5, y1), QPointF(47.5, y1)]))
+    elif kind in ('sp_xy', 'sp_xz', 'sp_yz'):
+        color = {'sp_xy': '#4a8fe0', 'sp_xz': '#3aa77a', 'sp_yz': '#df5a5e'}[kind]
+        pts = {'sp_xy': [(4, 30), (20, 22), (44, 26), (28, 34)], 'sp_xz': [(10, 8), (34, 12), (34, 40), (10, 36)],
+               'sp_yz': [(14, 12), (30, 4), (30, 34), (14, 42)]}[kind]
+        c = QColor(color); c.setAlpha(60)
+        p.setBrush(c); p.setPen(pen(color, 2.4)); p.drawPolygon(QPolygonF([QPointF(*q) for q in pts]))
+        f = p.font(); f.setPixelSize(12); f.setBold(True); p.setFont(f); p.setPen(QColor(color))
+        p.drawText(QRectF(26, 34, 22, 14), Qt.AlignCenter, kind[3:].upper())
+
+
 def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     S = 48.0
     pm = QPixmap(size * scale, size * scale)
@@ -536,6 +600,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPath(path)
         arc = QPainterPath(); arc.moveTo(25, 14); arc.quadTo(41, 14, 41, 30)
         p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 4.0)); p.drawPath(arc)
+    elif kind == 'x_split' or kind.startswith('sp_'):
+        _draw_split(p, kind, pen)
     elif kind == 'x_object':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2))
         p.drawPolygon(QPolygonF([QPointF(6, 18), QPointF(20, 10), QPointF(34, 18), QPointF(20, 26)]))
@@ -753,6 +819,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             path2 = QPainterPath(); path2.moveTo(8, 40); path2.lineTo(8, 10); path2.lineTo(24, 10); path2.arcTo(QRectF(8, 10, 32, 32), 90, -90); path2.lineTo(40, 40); path2.closeSubpath()
             fl(path2, soft)
             st(acc, 3.0); p.drawArc(QRectF(8, 10, 32, 32), 90 * 16, -90 * 16)
+        elif name == 'split':
+            # bryła rozcięta na dwie części (lekko rozsunięte), pomarańczowa linia cięcia w szczelinie
+            fl(_poly_path([(5, 15), (21, 15), (17, 41), (5, 41)]), soft)
+            fl(_poly_path([(27, 15), (43, 15), (43, 41), (23, 41)]), soft)
+            st(acc, 3.0); p.drawLine(QPointF(25.5, 5), QPointF(19.5, 45))
         elif name == 'mirror':
             fl(QPainterPath(), QColor(0, 0, 0, 0))
             tri = QPainterPath(); tri.moveTo(21, 10); tri.lineTo(21, 40); tri.lineTo(5, 40); tri.closeSubpath()

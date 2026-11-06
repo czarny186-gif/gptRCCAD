@@ -18,10 +18,10 @@ from .document import Body
 
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
-         'mirror': 'mirror', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync'}
+         'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
-           'Modyfikacje': {'mod', 'shell', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
+           'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
 
 
 def passes_filter(info, name):
@@ -37,7 +37,7 @@ def passes_filter(info, name):
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
-               'Zaokrąglanie': 'mod', 'Skorupa': 'shell', 'Fazowanie': 'mod', 'Odbicie lustrzane': 'mirror', 'Szyk': 'pattern', 'Przekształcenie': 'move', 'Dopasowanie': 'mate', 'Wyrównanie': 'align',
+               'Zaokrąglanie': 'mod', 'Skorupa': 'shell', 'Fazowanie': 'mod', 'Odbicie lustrzane': 'mirror', 'Przecięcie': 'split', 'Szyk': 'pattern', 'Przekształcenie': 'move', 'Dopasowanie': 'mate', 'Wyrównanie': 'align',
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file'}
 
 
@@ -78,6 +78,11 @@ def step_label(info):
             parts = [f"{axis} {'+' if v > 0 else ''}{_num(v, ' mm' if op.get('mode') == 'move' else '°')}"
                      for axis, v in zip('XYZ', op['v']) if abs(float(v)) > 1e-9]
             return ('Przesunięcie ' if op.get('mode') == 'move' else 'Obrót ') + (', '.join(parts) or '0')
+        if kind == 'split':
+            how = {'plane': f"płaszczyzną {op.get('plane', '')}".rstrip(), 'face': 'równolegle do ściany', 'sketch': 'szkicem', 'body': 'bryłą'}.get(op.get('method'), '')
+            off = op.get('offset')
+            extra = f" {'+' if off > 0 else ''}{_num(off, ' mm')}" if isinstance(off, (int, float)) and abs(off) > 1e-9 and op.get('method') in ('plane', 'face') else ''
+            return f"{label} {how}{extra}".strip()
         if kind == 'pattern' and isinstance(op.get('out'), list):
             return f"{label} ×{len(op['out']) + 1}"          # liczba elementów razem z oryginałem
     except Exception:
@@ -1013,6 +1018,45 @@ def run_mirror(bodies, recipe):
     return [mirrored if b.id == body.id else b for b in bodies]
 
 
+def split_shapes(bodies, recipe):
+    """Części bryły po przecięciu: [(kształt, strona)] wg metody z kroku."""
+    body = _body(bodies, recipe['id'])
+    method = recipe['method']
+    if method in ('plane', 'face'):
+        n = np.array(recipe['normal'], float)
+        n = n / np.linalg.norm(n)
+        origin = np.array(recipe['origin'], float) + n * float(recipe.get('offset', 0.0))
+        return kernel.split_plane(body.shape, n, origin)
+    if method == 'sketch':
+        return kernel.split_sketch(body.shape, _body(bodies, recipe['tool']).shape)
+    if method == 'body':
+        return kernel.split_body(body.shape, _body(bodies, recipe['tool']).shape)
+    raise kernel.CadError('Nieznana metoda przecięcia.')
+
+
+def run_split(bodies, recipe):
+    """Przetnij bryłę: części stają się osobnymi bryłami (największa zachowuje identyfikator). keep: 'both' albo strona 1 / 2.
+    Użyty szkic wygasa; bryła-narzędzie zostaje."""
+    body = _body(bodies, recipe['id'])
+    keep = recipe.get('keep', 'both')
+    parts = [s for s, side in split_shapes(bodies, recipe) if keep == 'both' or side == int(keep)]
+    if not parts:
+        raise kernel.CadError('Po tej stronie cięcia nie ma żadnej części bryły.')
+    parts.sort(key=lambda s: -s.Volume())
+    seed = recipe.get('out') or body.id
+    new = [body.changed(part) if n == 0 else Body(f'{body.name} — część {n + 1}', part, 'solid', body.plane, id=stable_id(f'{seed}:split', n)).prepared()
+           for n, part in enumerate(parts)]
+    out = []
+    for b in bodies:
+        if b.id == body.id:
+            out.extend(new)
+        elif recipe['method'] == 'sketch' and b.id == recipe.get('tool'):
+            out.append(replace(b, visible=False))
+        else:
+            out.append(b)
+    return out
+
+
 def run_bool(bodies, recipe):
     base = _body(bodies, recipe['base'])
     tools = [_body(bodies, i) for i in recipe['tools']]
@@ -1132,7 +1176,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1240,6 +1284,8 @@ def reads(recipe, current):
         return {recipe['base'], *recipe['tools']}
     if kind == 'mate':
         return {recipe['id'], recipe['target']}
+    if kind == 'split':
+        return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
     if kind == 'delete':
         return set(recipe['ids'])
     if kind == 'trim':

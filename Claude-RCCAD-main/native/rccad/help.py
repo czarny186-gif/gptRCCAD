@@ -102,7 +102,11 @@ TOPICS = [
         'Opcja Zachowaj bryły-narzędzia pozostawia oryginały. Podgląd wyniku widać od razu.']),
     ('fillet', 'Zaokrąglanie i fazowanie', 'Krawędzie', [
         'Kliknij krawędź. Shift + klik dodaje kolejne, Ctrl + klik zaznacza cały łańcuch styczny.',
-        'Rozmiar zmieniasz strzałką lub wpisując wartość. Zielony podgląd dodaje materiał, pomarańczowy go usuwa.']),
+        'Rozmiar zmieniasz strzałką lub wpisując wartość. Podgląd podświetla ciepłym fioletem tylko tworzone zaokrąglenie albo fazę (widać je także przez jeszcze ostry narożnik); dwuklik w ścianę zaznacza jej krawędzie bez podświetlania całej ściany.']),
+    ('t_split', 'Przetnij bryłę', 'Podział bryły na części (zakładka Edycja)', [
+        'Kliknij Przetnij bryłę, potem bryłę (albo zaznacz ją wcześniej kliknięciem). Wybierz metodę ikoną: Płaszczyzna - równoległa do XY, XZ albo YZ, przez środek bryły; Ściana - płaszczyzna klikniętej płaskiej ściany; Szkic - linia, łuk albo zamknięty profil szkicu, cięcie prostopadle do szkicu przez całą bryłę; Bryła - powierzchnia innej bryły (części wewnątrz i na zewnątrz niej).',
+        'Przy płaszczyźnie i ścianie Odsunięcie przesuwa cięcie wzdłuż strzałki - można je wpisać albo przeciągnąć strzałkę w widoku. Fioletowa przezroczysta płaszczyzna pokazuje, gdzie bryła zostanie przecięta.',
+        'Podgląd koloruje części: zielona i pomarańczowa (przy zamkniętym profilu szkicu i przy innej bryle pomarańczowa jest wewnątrz). Zostaw: Obie części (osobne bryły), tylko Zielona albo tylko Pomarańczowa. Zastosuj albo Enter wykonuje cięcie; krok trafia do historii i przelicza się po zmianie wcześniejszych kroków.']),
     ('mirror', 'Lustro', 'Odbicie lustrzane', [
         'Krok 1: kliknij bryłę lub element szkicu do odbicia. Krok 2: kliknij ścianę, która ma być lustrem. Odbicie powstaje po drugiej stronie tej ściany.',
         'Zachowaj oryginał tworzy kopię, Połącz z oryginałem skleja obie bryły w jedną.']),
@@ -120,6 +124,7 @@ TOPICS = [
         'Plik → Zapisz kompaktowo… daje mniejszy plik: kroki, które program umie przeliczyć z przepisu (kołnierze, rozłożenie, przesunięcia…), zapisuje bez geometrii i odtwarza przy otwieraniu (otwarcie trwa wtedy chwilę dłużej). Co 10. krok i bieżący stan są zapisane w całości.',
         'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu historii → Otwórz autozapis.']),
     ('one', 'Widok', 'Kostka i skróty', [
+        'Bryła zaznacza się tylko kliknięciem lewym przyciskiem (ciepły niebieski kolor); ponowne kliknięcie odznacza. Wynik operacji nie zaznacza się sam.',
         'Kostka w prawym górnym rogu: klik w ścianę ustawia widok z tej strony, klik w krawędź lub róg widok ukośny. Domek wraca do widoku głównego.',
         'Skróty: Ctrl+N nowy, Ctrl+O otwórz, Ctrl+S zapisz, Ctrl+Z cofnij, Ctrl+Y ponów, Enter zatwierdź, Esc anuluj.']),
 ]

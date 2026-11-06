@@ -1,4 +1,18 @@
-# RCCAD Desktop 0.4.37 — pewniejszy i mniejszy zapis historii
+# RCCAD Desktop 0.4.38 — spokojne zaznaczanie, fioletowy podgląd zaokrągleń, Przetnij bryłę
+
+## Zmiany 0.4.38
+
+- **Zaznaczenie w ciepłym niebieskim** zamiast jaskrawej zieleni (wypełnienie i obrys bryły).
+- **Bryła zaznacza się tylko kliknięciem** lewym przyciskiem. Wynik operacji (wyciągnięcie, obrót, skorupa, połącz, zaokrąglenie, lustro, blacha, kołnierz, wklejanie, import…) nie zaznacza się sam; bryła wskazana wewnątrz narzędzia przestaje być zaznaczona po jego zamknięciu. Zaznaczenie zrobione kliknięciem zostaje.
+- **Zaokrąglanie i fazowanie**: podświetla się tylko tworzona powierzchnia zaokrąglenia / fazy, w ciepłym fiolecie, widoczna także przez jeszcze ostry narożnik. Fragment bryły wokół krawędzi ani cała ściana (dwuklik) już się nie podświetlają.
+- **Nowe narzędzie Przetnij bryłę** (zakładka Edycja), panel w stylu pozostałych, z ikonami metod:
+  - **Płaszczyzna** - równoległa do XY, XZ albo YZ, przez środek bryły, z odsunięciem (pole albo przeciągnięcie strzałki),
+  - **Ściana** - płaszczyzna klikniętej płaskiej ściany, z odsunięciem,
+  - **Szkic** - linia, łuk albo zamknięty profil szkicu, cięcie prostopadle do szkicu przez całą bryłę,
+  - **Bryła** - powierzchnia innej bryły (część wewnątrz i na zewnątrz; narzędzie zostaje).
+  - Podgląd: zielona i pomarańczowa część, fioletowa płaszczyzna cięcia. **Zostaw**: obie części (osobne bryły), tylko zieloną albo tylko pomarańczową. Krok trafia do historii z opisem (np. „Przecięcie płaszczyzną YZ +10 mm”) i przelicza się po zmianie wcześniejszych kroków.
+
+## RCCAD Desktop 0.4.37 — pewniejszy i mniejszy zapis historii
 
 ## Zmiany 0.4.37
 

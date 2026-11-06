@@ -59,8 +59,8 @@ SOLID_SELECTED = (.40, .60, .90, 1)
 EDGE_COLOR = (.10, .13, .18, 1)
 SKETCH_COLOR = (.03, .20, .52, 1)
 PREVIEW_COLOR = (1, .48, .05, 1)
-PICKED_COLOR = (.05, 1, .25, 1)           # zaznaczony obiekt: jaskrawa zieleń
-PICKED_FILL = (.30, .95, .42, 1)
+PICKED_COLOR = (.16, .43, .90, 1)         # zaznaczony obiekt: ciepły niebieski obrys
+PICKED_FILL = (.53, .69, .93, 1)           # i spokojne, ciepłe niebieskie wypełnienie (nie razi oczu)
 PLANE_COLORS = {'XY': '#4a8fe0', 'XZ': '#3aa77a', 'YZ': '#df5a5e'}
 PLANE_SIZES = (2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)
 PLANE_HALF = 14.0
@@ -822,14 +822,21 @@ class CadView(gl.GLViewWidget):
             item.setTransform(mat)
         self.update()
 
-    def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5, dashed=False):
+    def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5, dashed=False, on_top=False):
+        """on_top: podgląd widoczny także przez bryłę (np. tworzone zaokrąglenie wewnątrz jeszcze ostrego narożnika)."""
         for item in self.preview_items:
             self.removeItem(item)
         self.preview_items = []
         if mesh is not None:
             if len(mesh.triangles):
-                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
-                item.setGLOptions('translucent')
+                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=True, color=color, drawEdges=False, shader='rccad') if on_top \
+                    else OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
+                if on_top:
+                    item.setDepthValue(10)
+                    item.setGLOptions({GL.GL_DEPTH_TEST: False, GL.GL_BLEND: True, GL.GL_ALPHA_TEST: False, GL.GL_CULL_FACE: False,
+                                       'glBlendFunc': (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)})
+                else:
+                    item.setGLOptions('translucent')
                 self.addItem(item)
                 self.preview_items.append(item)
             if dashed:
@@ -841,6 +848,40 @@ class CadView(gl.GLViewWidget):
                 line = gl.GLLinePlotItem(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
                 self.addItem(line)
                 self.preview_items.append(line)
+        self.update()
+
+    SPLIT_COLORS = {1: ((.30, .80, .50, .62), (.08, .50, .25, 1)), 2: ((.96, .58, .18, .62), (.65, .33, .03, 1))}
+
+    def set_split_preview(self, parts, cut=None):
+        """Podgląd przecięcia: części [(siatka, strona, zostaje)] - strona 1 zielona, 2 pomarańczowa, odrzucone ledwie widoczne;
+        cut - płaszczyzna cięcia (półprzezroczysty fiolet). Czyści się razem z set_preview_mesh(None)."""
+        for item in self.preview_items:
+            self.removeItem(item)
+        self.preview_items = []
+        for mesh, side, kept in parts:
+            fill, line = self.SPLIT_COLORS.get(side, self.SPLIT_COLORS[1])
+            if not kept:
+                fill, line = (.55, .6, .66, .10), (.45, .5, .56, .45)
+            if len(mesh.triangles):
+                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=fill, drawEdges=False)
+                item.setGLOptions('translucent')
+                self.addItem(item)
+                self.preview_items.append(item)
+            seg = _segments(mesh.edges.values())
+            if seg is not None:
+                item = gl.GLLinePlotItem(pos=seg, color=line, width=2.0, antialias=True, mode='lines')
+                self.addItem(item)
+                self.preview_items.append(item)
+        if cut is not None and len(cut.triangles):
+            item = OverMesh(vertexes=cut.vertices, faces=cut.triangles, smooth=False, color=(.62, .45, .90, .28), drawEdges=False)
+            item.setGLOptions('translucent')
+            self.addItem(item)
+            self.preview_items.append(item)
+            seg = _segments(cut.edges.values())
+            if seg is not None:
+                item = gl.GLLinePlotItem(pos=seg, color=(.45, .25, .75, .9), width=1.6, antialias=True, mode='lines')
+                self.addItem(item)
+                self.preview_items.append(item)
         self.update()
 
     def set_selection_meshes(self, meshes, color=(1, .55, .1, .55), line_color=(.95, .42, .02, 1)):

@@ -1,5 +1,6 @@
 """Okno „Studio”: układ, grafika i sposób modelowania / szkicowania odtworzone z wersji HTML (natywnie, bez przeglądarki)."""
 from __future__ import annotations
+import json
 import math
 import uuid
 from dataclasses import replace
@@ -60,6 +61,8 @@ TINT_TOOL = (.95, .55, .20, 1)
 PREVIEW_BLUE = (.30, .62, .91, .73)
 PREVIEW_TOL = .3
 SKETCH_ORANGE = (.95, .55, .1, 1)
+MOD_PREVIEW = (.66, .45, .90, .80)          # tworzone zaokrąglenie / faza: ciepły fiolet
+MOD_PREVIEW_LINE = (.45, .22, .72, 1)
 
 
 def fmt(value, digits=3):
@@ -189,7 +192,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 # narzędzia, które można dodać do Ulubionych (bez Pliku, Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu)
@@ -280,7 +283,7 @@ class StudioWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
         self._timers = {}
         for name, slot in (('extrude', self.update_extrude_preview), ('revolve', self.update_revolve_preview), ('shell', self.update_shell_preview), ('sweep', self.update_sweep_preview), ('loft', self.update_loft_preview), ('mod', self.update_mod_preview), ('bool', self.update_bool_preview),
-                           ('mirror', self.update_mirror_preview), ('pattern', self.update_pattern_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
+                           ('mirror', self.update_mirror_preview), ('split', self.update_split_preview), ('pattern', self.update_pattern_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
                            ('gizmo', self._place_gizmo)):
             timer = QTimer(self)
             timer.setSingleShot(True)
@@ -438,6 +441,7 @@ class StudioWindow(QMainWindow):
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
+                 ('split', ui.style_icon('split', 38), 'Przetnij bryłę — płaszczyzną, ścianą, szkicem albo inną bryłą'),
                  ('shell', ui.style_icon('shell', 38), 'Skorupa — wydrąż bryłę i otwórz ściany'),
                  ('sheet', ui.style_icon('sheet', 38), 'Konwertuj na blachę — wybierz płaski prostokąt prostopadłościanu'),
                  ('flange', ui.style_icon('flange', 38), 'Kołnierz — wybierz krawędź blachy'),
@@ -1169,6 +1173,49 @@ class StudioWindow(QMainWindow):
         self.mir_keep.toggled.connect(lambda *_: self._timers['mirror'].start())
         self.mir_join.toggled.connect(lambda *_: self._timers['mirror'].start())
 
+        # --- przetnij bryłę ---
+        self.sp_panel, lay = self._panel(312, 'Przetnij bryłę', 'x_split', 'Podział bryły na części', plain=True)
+        self.sp_step1 = ui.StepRow(1, 'x_object', 'Bryła do przecięcia', plain=True)
+        lay.addWidget(self.sp_step1)
+        self.sp_method = ui.Segmented([('Płaszczyzna', 'plane', 'sp_plane'), ('Ściana', 'face', 'sp_face'), ('Szkic', 'sketch', 'sp_sketch'), ('Bryła', 'body', 'sp_body')], 30)
+        for b, tip in zip(self.sp_method._buttons, ('Płaszczyzna równoległa do XY, XZ albo YZ, przez środek bryły (z odsunięciem)',
+                                                     'Płaszczyzna wskazanej płaskiej ściany (z odsunięciem)',
+                                                     'Linia, łuk albo zamknięty profil szkicu - cięcie prostopadle do szkicu przez całą bryłę',
+                                                     'Powierzchnia innej bryły - części wewnątrz i na zewnątrz niej')):
+            b.setToolTip(tip)
+        self._field(lay, 'Metoda', self.sp_method)
+        self.sp_plane_box = QWidget()
+        box = QVBoxLayout(self.sp_plane_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        self.sp_plane = ui.Segmented([('XY', 'XY', 'sp_xy'), ('XZ', 'XZ', 'sp_xz'), ('YZ', 'YZ', 'sp_yz')], 30)
+        self._field(box, 'Płaszczyzna', self.sp_plane)
+        lay.addWidget(self.sp_plane_box)
+        self.sp_step2 = ui.StepRow(2, 'x_wall', 'Ściana cięcia', plain=True)
+        lay.addWidget(self.sp_step2)
+        self.sp_offset_box = QWidget()
+        box = QVBoxLayout(self.sp_offset_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        self.sp_offset = _spin(0, -1e5, 1e5, 3, 1)
+        self.sp_offset.setToolTip('Przesunięcie płaszczyzny cięcia wzdłuż strzałki; można też przeciągnąć strzałkę w widoku.')
+        self._field(box, 'Odsunięcie (mm)', self.sp_offset)
+        lay.addWidget(self.sp_offset_box)
+        self.sp_keep = ui.Segmented([('Obie części', 'both', 'sp_both'), ('Zielona', '1', 'sp_side1'), ('Pomarańczowa', '2', 'sp_side2')], 30)
+        for b, tip in zip(self.sp_keep._buttons, ('Obie części zostają jako osobne bryły', 'Zostaje tylko zielona część (z podglądu)', 'Zostaje tylko pomarańczowa część (z podglądu)')):
+            b.setToolTip(tip)
+        self._field(lay, 'Zostaw', self.sp_keep)
+        self.sp_status = _label('', 'status')
+        lay.addWidget(self.sp_status)
+        reset = QPushButton('Zmień bryłę')
+        reset.clicked.connect(lambda _=False: self.reset_split())
+        lay.addWidget(reset)
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_split, lambda: self.set_mode(None))
+        self.sp_method.currentIndexChanged.connect(lambda *_: self._split_method_changed())
+        self.sp_plane.currentIndexChanged.connect(lambda *_: self.update_split_status())
+        self.sp_offset.valueChanged.connect(lambda *_: (self._place_split_handle(), self._timers['split'].start()))
+        self.sp_keep.currentIndexChanged.connect(lambda *_: self._timers['split'].start())
+
         # --- dopasowanie i wyrównanie: ściana przesuwanej bryły względem ściany innej bryły ---
         self.mt_pick = {}
         self.mt_panels, self.mt_steps, self.mt_status = {}, {}, {}
@@ -1388,7 +1435,7 @@ class StudioWindow(QMainWindow):
         self.off_side.currentIndexChanged.connect(lambda *_: self._off_update())
         self.off_value.valueChanged.connect(lambda *_: self._off_update())
 
-        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1467,7 +1514,7 @@ class StudioWindow(QMainWindow):
                 if self.open_dim_edit():
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
-            action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
+            action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
                       'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -1617,6 +1664,7 @@ class StudioWindow(QMainWindow):
         self.bool_ids = []
         self.mirror_id = None
         self.mirror_frame = None
+        self.sp_id, self.sp_ref = None, None
         self.mt_pick = {}
         self.off = None
         self.mt_spin = 0.0
@@ -1743,6 +1791,14 @@ class StudioWindow(QMainWindow):
             self.mt_panels[mode].show()
             self.view.setCursor(Qt.PointingHandCursor)
             self._mt_update()
+        elif mode == 'split':
+            self.sp_panel.show()
+            self.view.setCursor(Qt.PointingHandCursor)
+            chosen = self.document.get(self.selected[0]) if len(self.selected) == 1 else None
+            if chosen is not None and chosen.kind == 'solid':
+                self.sp_id = chosen.id                      # bryła zaznaczona kliknięciem przed włączeniem narzędzia
+            self._split_method_changed()
+            self.hint('Przetnij bryłę: kliknij bryłę, wybierz metodę i wskaż, czym ją przeciąć.')
         elif mode == 'mirror':
             self.mir_panel.show()
             self.update_mirror_status()
@@ -2373,7 +2429,7 @@ class StudioWindow(QMainWindow):
         if bodies and bodies[-1].meta:
             self._last_sketch_id = bodies[-1].id
         if self.mode != 'sketch':
-            self.selected = [b.id for b in bodies]
+            self._tool_select([b.id for b in bodies], sketch=all(b.kind == 'sketch' for b in bodies))
 
     def _trim_target(self):
         """Szkic i kawałek jego krawędzi (między przecięciami z innymi szkicami) najbliższy kursorowi."""
@@ -2967,6 +3023,8 @@ class StudioWindow(QMainWindow):
             self.pick_edge(x, y, shift, ctrl)
         elif self.mode == 'mirror':
             self.pick_mirror(x, y)
+        elif self.mode == 'split':
+            self.pick_split(x, y)
         elif self.mode in ('mate', 'align'):
             self.pick_mate(x, y)
         elif self.mode == 'pattern':
@@ -3544,7 +3602,7 @@ class StudioWindow(QMainWindow):
             bodies, recipe = result
             self.document.pending_op = recipe
             self.document.commit(bodies)
-            self.selected = [bodies[-1].id] if op == 'new' else []
+            self._tool_select([bodies[-1].id] if op == 'new' else [])
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
@@ -3734,7 +3792,7 @@ class StudioWindow(QMainWindow):
             bodies, recipe = result
             self.document.pending_op = recipe
             self.document.commit(bodies)
-            self.selected = [bodies[-1].id] if op == 'new' else []
+            self._tool_select([bodies[-1].id] if op == 'new' else [])
 
         self.view.set_preview_mesh(None)
         label = {'new': 'Obrót', 'join': 'Obrót (dodaj)', 'cut': 'Obrót (wytnij)', 'intersect': 'Obrót (część wspólna)'}[op]
@@ -4073,7 +4131,7 @@ class StudioWindow(QMainWindow):
         self.view.set_selection_meshes(None)
         metadata=she.state(dict(base=info['base'],t=info['t'],flanges=[],rules=recipe['rules']))
         self.document.commit([replace(b,meta={'sheet':metadata}) if b.id==body.id else b for b in self.document.bodies], label='Konwersja na blachę', icon='sheet', op=recipe)
-        self.selected = [body.id]
+        self._tool_select([body.id])
         self.set_mode(None)
 
     def _flange_rules(self):
@@ -4105,7 +4163,7 @@ class StudioWindow(QMainWindow):
                 state['dirty']=True
             elif kind in ('mod','shell','bool') and body_id in {op.get('id'),op.get('base')} and state is not None:
                 state['dirty']=True
-            elif kind in ('transform','mirror','pattern') and body_id in {op.get('id'),op.get('base')} :
+            elif kind in ('transform','mirror','pattern','split') and body_id in {op.get('id'),op.get('base')} :
                 state=None
         return state
 
@@ -4183,7 +4241,7 @@ class StudioWindow(QMainWindow):
             return hist.run_sheetmode([body],recipe)[0]
         def apply(result):
             self.document.commit([result if b.id==body.id else b for b in self.document.bodies],label=label,icon=command,op=recipe)
-            self.selected=[body.id]
+            self._tool_select([body.id])
         self.set_mode(None)
         def shown():
             if not sync:
@@ -4218,7 +4276,7 @@ class StudioWindow(QMainWindow):
         def apply(result):
             self.document.commit([result if b.id == body.id else b for b in self.document.bodies],
                                  label='Narożniki blachy',icon='flange',op=recipe)
-            self.selected = [body.id]
+            self._tool_select([body.id])
             if self.mode == 'rules':
                 self.rl_status.setText(f'Reguły zastosowane do: {body.name}.')
         source=replace(body,meta={'sheet':self._editable_sheet_state(body.id)})
@@ -4230,7 +4288,7 @@ class StudioWindow(QMainWindow):
         if body is None or body.kind != 'solid' or self._sheet_state(body.id) is None:
             self.rl_status.setText('To nie jest blacha. Kliknij blachę (najpierw KONWERTUJ NA BLACHĘ).')
             return
-        self.selected = [body.id]
+        self._tool_select([body.id])
         self.refresh()
         self.apply_sheet_rules()
 
@@ -4452,7 +4510,7 @@ class StudioWindow(QMainWindow):
         def apply(result):
             new, rec = result
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies], label=label, icon='flange', op=rec)
-            self.selected = [body.id]
+            self._tool_select([body.id])
 
         self.fl_pick = None
         self.view.set_picked_edge(None)
@@ -4544,7 +4602,7 @@ class StudioWindow(QMainWindow):
     def _sh_update(self):
         body = self.document.get(self.sh_id) if self.sh_id else None
         self._sh_xray(body is not None)
-        self.selected = [body.id] if body is not None else []
+        self._tool_select([body.id] if body is not None else [])
         self._hover_key = None
         if body is None:
             self.sh_id, self.sh_faces = None, []
@@ -4605,7 +4663,7 @@ class StudioWindow(QMainWindow):
             new, recipe = result
             self.document.pending_op = recipe
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
-            self.selected = [body.id]
+            self._tool_select([body.id])
 
         self.override = {}
         self.view.set_selection_meshes(None)
@@ -4771,7 +4829,7 @@ class StudioWindow(QMainWindow):
             bodies, recipe = result
             self.document.pending_op = recipe
             self.document.commit(bodies)
-            self.selected = [bodies[-1].id] if op == 'new' else []
+            self._tool_select([bodies[-1].id] if op == 'new' else [])
 
         self.view.set_preview_mesh(None)
         self.run_operation(label, build, apply, after=lambda: self.set_mode(None))
@@ -4963,7 +5021,7 @@ class StudioWindow(QMainWindow):
         def apply(new):
             self.document.pending_op = recipe
             self.document.commit(new)
-            self.selected = [base.id]
+            self._tool_select([base.id])
 
         self.view.set_preview_mesh(None)
         self.run_operation('Operacja na bryłach', build, apply, after=lambda: self.set_mode(None))
@@ -5069,9 +5127,8 @@ class StudioWindow(QMainWindow):
         self.edges = {body.id: ids}
         self.mod_vertices = {}
         self.view.sel_vertices = []
+        self._mod_face_mesh = None          # zaznaczają się krawędzie obwodu; sama ściana się nie podświetla (widać tworzone zaokrąglenie)
         self.update_mod_status()
-        self._mod_face_mesh = mesh
-        self.view.set_selection_meshes([mesh])
 
     def update_mod_status(self):
         count = sum(len(v) for v in self.edges.values())
@@ -5152,7 +5209,10 @@ class StudioWindow(QMainWindow):
             except Exception:
                 shape, local_ids = body.shape, ids
             result = kernel.blend_vertices(shape, points, size, kind) if verts else kernel.blend(shape, local_ids, size, kind)
-            return kernel.display_mesh(result, PREVIEW_TOL), result.Volume() > shape.Volume() + 1e-6
+            # podświetla się tylko tworzona powierzchnia (zaokrąglenie / faza), nie fragment bryły wokół niej
+            made = kernel.new_faces(shape, result)
+            mesh = kernel.display_mesh(kernel.compound(made), PREVIEW_TOL) if made else kernel.display_mesh(result, PREVIEW_TOL)
+            return mesh
 
         def show(value, error):
             if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig:
@@ -5161,10 +5221,9 @@ class StudioWindow(QMainWindow):
                 self.view.set_preview_mesh(None)
                 self.mod_status.setText(f'Zaznaczone {label}: {count}\n' + (str(error) if verts and error else 'Ta wartość jest za duża dla wybranych elementów.'))
                 return
-            mesh, adds = value
-            self.view.set_preview_mesh(mesh, color=(.25, .8, .45, .6) if adds else (.95, .55, .2, .6),
-                                       line_color=(.1, .4, .2, 1) if adds else (.55, .3, .05, 1), width=2)
-            self.mod_status.setText(f'Zaznaczone {label}: {count}\n' + ('Zielony podgląd: dodaje materiał.' if adds else 'Pomarańczowy podgląd: usuwa materiał.'))
+            # tylko tworzona powierzchnia, ciepły fiolet, widoczna także przez jeszcze ostry narożnik bryły
+            self.view.set_preview_mesh(value, color=MOD_PREVIEW, line_color=MOD_PREVIEW_LINE, width=2.2, on_top=True)
+            self.mod_status.setText(f'Zaznaczone {label}: {count}')
 
         self.run_preview('mod', compute, show)
     def apply_mod(self):
@@ -5191,7 +5250,7 @@ class StudioWindow(QMainWindow):
             new, recipe = result
             self.document.pending_op = recipe
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
-            self.selected = [body.id]
+            self._tool_select([body.id])
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
@@ -5201,6 +5260,185 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # lustro
     # =====================================================================
+    # =====================================================================
+    # przetnij bryłę: płaszczyzną, ścianą, szkicem albo inną bryłą
+    # =====================================================================
+    def reset_split(self):
+        self.sp_id, self.sp_ref = None, None
+        self.view.tints = {}
+        self.cancel_previews()
+        self.view.set_preview_mesh(None)
+        self.view.set_handles([])
+        self.update_split_status()
+
+    def _split_method_changed(self):
+        method = self.sp_method.currentData()
+        self.sp_ref = None
+        self.sp_plane_box.setVisible(method == 'plane')
+        self.sp_step2.setVisible(method != 'plane')
+        self.sp_offset_box.setVisible(method in ('plane', 'face'))
+        self.sp_step2.title.setText({'face': 'Ściana cięcia', 'sketch': 'Szkic cięcia', 'body': 'Bryła tnąca'}.get(method, ''))
+        self.sp_offset.blockSignals(True)
+        self.sp_offset.setValue(0)
+        self.sp_offset.blockSignals(False)
+        if self.sp_panel.isVisible():
+            self.sp_panel.adjustSize()
+        self.update_split_status()
+
+    def pick_split(self, x, y):
+        method = self.sp_method.currentData()
+        if self.sp_id is None or method == 'plane':
+            bid = self.pick_object(x, y)
+            body = self.document.get(bid) if bid else None
+            if body is None or body.kind != 'solid':
+                if self.sp_id is None:
+                    self.toast('Kliknij bryłę, którą chcesz przeciąć.')
+                return
+            self.sp_id = body.id
+            self.update_split_status()
+            return
+        if method == 'face':
+            hit = self.view.pick_face(x, y)
+            body = self.document.get(hit[0]) if hit else None
+            if body is None or body.kind != 'solid':
+                self.toast('Kliknij płaską ścianę - jej płaszczyzna przetnie bryłę.')
+                return
+            try:
+                face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            except kernel.CadError as exc:
+                self.toast(str(exc))
+                return
+            self.sp_ref = dict(normal=[float(c) for c in normal], origin=[float(c) for c in face.Center().toTuple()])
+        else:
+            bid = self.pick_object(x, y)
+            body = self.document.get(bid) if bid else None
+            want = 'sketch' if method == 'sketch' else 'solid'
+            if body is None or body.kind != want or body.id == self.sp_id:
+                self.toast('Kliknij szkic (linię, łuk albo zamknięty profil).' if method == 'sketch' else 'Kliknij inną bryłę, która przecina tę bryłę.')
+                return
+            self.sp_ref = dict(tool=body.id, name=body.name)
+        self.update_split_status()
+
+    def _split_recipe(self):
+        """Przepis cięcia z bieżących ustawień albo None, gdy czegoś brakuje."""
+        body = self.document.get(self.sp_id) if self.sp_id else None
+        if body is None:
+            return None
+        method = self.sp_method.currentData()
+        recipe = dict(type='split', id=body.id, method=method, keep=self.sp_keep.currentData())
+        if method == 'plane':
+            name = self.sp_plane.currentData()
+            normal = {'XY': (0, 0, 1), 'XZ': (0, -1, 0), 'YZ': (1, 0, 0)}[name]
+            recipe.update(plane=name, normal=[float(c) for c in normal], origin=[float(c) for c in body.shape.Center().toTuple()],
+                          offset=float(self.sp_offset.value()))
+        elif self.sp_ref is None:
+            return None
+        elif method == 'face':
+            recipe.update(normal=self.sp_ref['normal'], origin=self.sp_ref['origin'], offset=float(self.sp_offset.value()))
+        else:
+            recipe.update(tool=self.sp_ref['tool'])
+        return recipe
+
+    def update_split_status(self):
+        body = self.document.get(self.sp_id) if self.sp_id else None
+        method = self.sp_method.currentData()
+        if body is None:
+            self.sp_step1.set_state('active', 'Kliknij bryłę')
+            self.sp_step2.set_state('pending', 'Najpierw wybierz bryłę')
+            self.view.tints = {}
+        else:
+            self.sp_step1.set_state('done', body.name)
+            self.view.tints = {body.id: TINT_BASE}
+            if self.sp_ref is None:
+                self.sp_step2.set_state('active', {'face': 'Kliknij płaską ścianę', 'sketch': 'Kliknij szkic', 'body': 'Kliknij bryłę tnącą'}.get(method, ''))
+            else:
+                self.sp_step2.set_state('done', self.sp_ref.get('name', 'Wskazana'))
+        self.refresh()
+        self._place_split_handle()
+        self._timers['split'].start()
+
+    def _split_frame(self):
+        """(normalna, punkt na płaszczyźnie cięcia z odsunięciem) dla metod z płaszczyzną."""
+        recipe = self._split_recipe()
+        if recipe is None or recipe['method'] not in ('plane', 'face'):
+            return None
+        n = np.array(recipe['normal'], float)
+        n = n / np.linalg.norm(n)
+        return n, np.array(recipe['origin'], float) + n * recipe['offset']
+
+    def _place_split_handle(self):
+        frame = self._split_frame() if self.mode == 'split' else None
+        body = self.document.get(self.sp_id) if self.sp_id else None
+        if frame is None or body is None:
+            self.view.set_handles([])
+            return
+        n, origin = frame
+        c = np.array(body.shape.Center().toTuple(), float)
+        start = c - n * float((c - origin) @ n)
+        b = kernel.bounds(body.shape)
+        length = max(b.xlen, b.ylen, b.zlen) * .35
+        self.view.set_handles([dict(id='split', start=start, tip=start + n * length, dir=n, color=(.94, .6, .13, 1))])
+
+    def update_split_preview(self):
+        if self.mode != 'split':
+            return
+        recipe = self._split_recipe()
+        if recipe is None:
+            self.cancel_previews()
+            self.view.set_preview_mesh(None)
+            self.sp_status.setText('')
+            return
+        existing = list(self.document.bodies)
+        sig = json.dumps(recipe, sort_keys=True)
+        self._sp_sig = sig
+
+        def compute():
+            parts = hist.split_shapes(existing, recipe)
+            keep = recipe['keep']
+            meshes = [(kernel.display_mesh(shape, PREVIEW_TOL), side, keep == 'both' or str(side) == keep) for shape, side in parts]
+            cut = None
+            if recipe['method'] in ('plane', 'face'):
+                body = next(b for b in existing if b.id == recipe['id'])
+                n = np.array(recipe['normal'], float)
+                n = n / np.linalg.norm(n)
+                cut = kernel.display_mesh(kernel.cut_plane_face(body.shape, n, np.array(recipe['origin'], float) + n * recipe['offset'], 1.15))
+            return meshes, cut
+
+        def show(value, error):
+            if self.mode != 'split' or getattr(self, '_sp_sig', None) != sig:
+                return
+            if error or value is None:
+                self.view.set_preview_mesh(None)
+                self.sp_status.setText(str(error) if error else '')
+                return
+            meshes, cut = value
+            self.view.set_split_preview(meshes, cut)
+            count = sum(1 for *_, kept in meshes if kept)
+            self.sp_status.setText(f'Części po przecięciu: {len(meshes)}' + ('' if recipe['keep'] == 'both' else f', zostaje: {count}'))
+
+        self.run_preview('split', compute, show)
+
+    def apply_split(self):
+        if self.busy:
+            return
+        recipe = self._split_recipe()
+        if recipe is None:
+            self.toast('Kliknij bryłę i wskaż, czym ją przeciąć.')
+            return
+        recipe['out'] = uuid.uuid4().hex
+        existing = list(self.document.bodies)
+
+        def build():
+            return list(hist.run_split(existing, recipe))
+
+        def apply(new):
+            self.document.pending_op = recipe
+            self.document.commit(new)
+
+        self.view.set_preview_mesh(None)
+        self.view.set_handles([])
+        self.run_operation('Przecięcie', build, apply, after=lambda: self.set_mode(None))
+
     def reset_mirror(self):
         self.mirror_id = None
         self.mirror_frame = None
@@ -5343,7 +5581,7 @@ class StudioWindow(QMainWindow):
         def apply(bodies):
             self.document.pending_op = recipe
             self.document.commit(list(bodies))
-            self.selected = [recipe['id']]
+            self._tool_select([recipe['id']])
 
         self.view.set_preview_mesh(None)
         self.run_operation(label, lambda: hist.run_recipe(existing, recipe), apply, after=lambda: self.set_mode(None))
@@ -5400,7 +5638,7 @@ class StudioWindow(QMainWindow):
         def apply(new):
             self.document.pending_op = recipe
             self.document.commit(new)
-            self.selected = [new[-1].id if keep and not join else body.id]
+            self._tool_select([new[-1].id if keep and not join else body.id])
 
         self.view.set_preview_mesh(None)
         self.run_operation('Odbicie lustrzane', build, apply, after=lambda: self.set_mode(None))
@@ -5757,6 +5995,10 @@ class StudioWindow(QMainWindow):
             if self._hv is None:
                 self._hv = self._off_signed()
             self._off_set_signed(self._hv + delta)
+        elif hid == 'split':
+            if self._hv is None:
+                self._hv = self.sp_offset.value()
+            self.sp_offset.setValue(round(self._hv + delta, 1))
         elif hid == 'mod':
             if self._hv is None:
                 self._hv = self.mod_size.value()
@@ -5788,6 +6030,8 @@ class StudioWindow(QMainWindow):
             self._off_place_handle()
         elif hid == 'mod':
             self._place_mod_handle()
+        elif hid == 'split':
+            self._place_split_handle()
         else:
             self._place_gizmo()
 
@@ -5847,8 +6091,23 @@ class StudioWindow(QMainWindow):
             self.toast(f'Historia ma już {doc.history_length} kroków. Po {doc.MAX_UNDO} krokach najstarsze kroki będą usuwane - '
                        'jeśli chcesz je zachować, zapisz wariant w menu historii.', 12000)
 
+    def _tool_select(self, ids, sketch=False):
+        """Zaznaczenie ustawione przez program (wynik operacji, bryła wskazana w narzędziu). Bryła zaznacza się na stałe tylko
+        kliknięciem użytkownika: po zamknięciu narzędzia takie zaznaczenie znika samo, o ile użytkownik go nie zmienił.
+        Nowy szkic dostaje zaznaczenie na stałe (uchwyty do zmiany rozmiaru)."""
+        ids = list(ids)
+        if ids == self.selected:
+            return
+        self.selected = ids
+        self._auto_selected = None if sketch else list(ids)
+
     def refresh(self, fit=False):
         self._history_limit_notice()
+        auto = getattr(self, '_auto_selected', None)
+        if auto is not None and self.mode is None:
+            self._auto_selected = None
+            if self.selected == auto:
+                self.selected = []
         if getattr(self, '_quick_preview', False) and not self.busy:
             self._quick_preview = False                     # dokładny wynik (albo komunikat) zastępuje szybki podgląd kołnierza
             self.view.set_preview_mesh(None)
@@ -6833,7 +7092,7 @@ class StudioWindow(QMainWindow):
     def add_prepared(self, body):
         self.document.commit((*self.document.bodies, body))
         if self.mode != 'sketch':
-            self.selected = [body.id]
+            self._tool_select([body.id], sketch=body.kind == 'sketch')
 
     def clear_all(self):
         if self.busy:
@@ -6996,7 +7255,7 @@ class StudioWindow(QMainWindow):
 
         def apply(new):
             self.document.commit((*self.document.bodies, *new))
-            self.selected = [b.id for b in new]
+            self._tool_select([b.id for b in new])
 
         self.run_operation('Wklejanie', build, apply)
 
@@ -7138,7 +7397,7 @@ class StudioWindow(QMainWindow):
             if not bodies:
                 raise kernel.CadError('Plik nie zawiera obsługiwanej geometrii.')
             self.document.commit((*self.document.bodies, *bodies))
-            self.selected = [b.id for b in bodies]
+            self._tool_select([b.id for b in bodies])
 
         self.run_operation('Importowanie modelu', build, add, True)
 
@@ -7200,7 +7459,7 @@ class StudioWindow(QMainWindow):
             event.accept()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
-            action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
+            action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
                       'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text

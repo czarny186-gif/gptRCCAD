@@ -457,6 +457,182 @@ def blend(shape, indices, size, kind="fillet"):
         raise CadError("Ten promień / faza nie mieści się w geometrii. Zmniejsz wartość lub wybierz mniej krawędzi.") from exc
 
 
+def _face_point(face):
+    """Punkt leżący na pewno wewnątrz ściany: środek największego trójkąta jej siatki, rzutowany na powierzchnię."""
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+    from OCP.gp import gp_Pnt
+    vertices, triangles = face.tessellate(.05, .2)
+    if not triangles:
+        c = face.Center()
+        return np.array(c.toTuple(), float)
+    pts = np.array([v.toTuple() for v in vertices], float)
+    tri = np.array(triangles, int)
+    area = np.linalg.norm(np.cross(pts[tri[:, 1]] - pts[tri[:, 0]], pts[tri[:, 2]] - pts[tri[:, 0]]), axis=1)
+    p = pts[tri[int(np.argmax(area))]].mean(axis=0)
+    try:
+        proj = GeomAPI_ProjectPointOnSurf(gp_Pnt(*map(float, p)), BRep_Tool.Surface_s(face.wrapped))
+        if proj.NbPoints():
+            q = proj.NearestPoint()
+            return np.array((q.X(), q.Y(), q.Z()), float)
+    except Exception:
+        pass
+    return p
+
+
+def compound(shapes):
+    return cq.Compound.makeCompound(list(shapes))
+
+
+def new_faces(before, after, tolerance=1e-4):
+    """Ściany bryły `after`, których nie było w `before` (np. powierzchnia zaokrąglenia / fazy).
+    Ściana zachowana albo tylko przycięta leży na ścianie bryły wyjściowej; nowa - nie."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCP.gp import gp_Pnt
+    boundary = cq.Compound.makeCompound(before.Faces()).wrapped
+    found = []
+    for face in after.Faces():
+        try:
+            p = _face_point(face)
+            vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(*map(float, p))).Vertex()
+            dist = BRepExtrema_DistShapeShape(vertex, boundary)
+            if not dist.IsDone() or dist.Value() > tolerance:
+                found.append(face)
+        except Exception:
+            continue
+    return found
+
+
+def _splitter(shape, tools):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+    from OCP.TopTools import TopTools_ListOfShape
+    args, tl = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(shape.wrapped)
+    for t in tools:
+        tl.Append(t.wrapped)
+    sp = BRepAlgoAPI_Splitter()
+    sp.SetArguments(args)
+    sp.SetTools(tl)
+    sp.SetRunParallel(True)
+    sp.Build()
+    if not sp.IsDone():
+        raise CadError("Nie udało się przeciąć bryły.")
+    return [s for s in cq.Shape.cast(sp.Shape()).Solids() if s.Volume() > 1e-9]
+
+
+def _span(shape):
+    b = bounds(shape)
+    return max(b.xlen, b.ylen, b.zlen, 1.0)
+
+
+def cut_plane_face(shape, normal, origin, margin=1.6):
+    """Kwadratowa ściana płaszczyzny cięcia, większa od bryły (do podziału i do podglądu)."""
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    o = np.asarray(origin, float)
+    c = np.array(shape.Center().toTuple(), float)
+    c = c - n * float((c - o) @ n)                      # środek bryły rzutowany na płaszczyznę
+    size = _span(shape) * margin * 1.8
+    return cq.Face.makePlane(size, size, cq.Vector(*c), cq.Vector(*n))
+
+
+def split_plane(shape, normal, origin):
+    """Podział płaszczyzną. Zwraca [(bryła, strona)]: strona 1 - po stronie normalnej, strona 2 - po przeciwnej."""
+    if not shape.Solids():
+        raise CadError("Przeciąć można tylko bryłę.")
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    o = np.asarray(origin, float)
+    parts = _splitter(shape, [cut_plane_face(shape, n, o)])
+    if len(parts) < 2:
+        raise CadError("Płaszczyzna nie przecina bryły. Zmień odsunięcie albo płaszczyznę.")
+    return [(s, 1 if float((np.array(s.Center().toTuple()) - o) @ n) >= 0 else 2) for s in parts]
+
+
+def sketch_plane(edges):
+    """Normalna i punkt płaszczyzny szkicu (z jego krawędzi)."""
+    from OCP.BRepLib import BRepLib_FindSurface
+    from OCP.GeomAdaptor import GeomAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Plane
+    finder = BRepLib_FindSurface(cq.Compound.makeCompound(edges).wrapped, 1e-4, True)
+    if finder.Found():
+        surf = GeomAdaptor_Surface(finder.Surface())
+        if surf.GetType() == GeomAbs_Plane:
+            pl = surf.Plane()
+            d, l = pl.Axis().Direction(), pl.Location()
+            return np.array((d.X(), d.Y(), d.Z())), np.array((l.X(), l.Y(), l.Z()))
+    pts = np.array([v.toTuple() for e in edges for v in (e.startPoint(), e.endPoint())], float)
+    if len(pts) >= 2:      # pojedyncza prosta linia: brak jednoznacznej płaszczyzny
+        raise CadError("Nie można ustalić płaszczyzny szkicu - narysuj linię w szkicu na płaszczyźnie lub ścianie.")
+    raise CadError("Szkic nie ma krawędzi.")
+
+
+def split_sketch(shape, sketch, normal=None):
+    """Podział szkicem: jego krawędzie (linia, łuk, zamknięty profil…) przeciągnięte prostopadle do szkicu przez całą bryłę.
+    Zwraca [(bryła, strona)]: zamknięty profil - strona 2 wewnątrz profilu, 1 na zewnątrz; otwarta linia - strony linii."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+    if not shape.Solids():
+        raise CadError("Przeciąć można tylko bryłę.")
+    edges = sketch.Edges()
+    if not edges:
+        raise CadError("Szkic nie ma krawędzi.")
+    if normal is None:
+        normal, _ = sketch_plane(edges)
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    L = _span(shape) * 2 + float(np.linalg.norm(np.array(shape.Center().toTuple()) - np.array(sketch.Center().toTuple()))) * 2
+    back = cq.Compound.makeCompound(edges).translate(cq.Vector(*(-n * L)))
+    curtain = cq.Shape.cast(BRepPrimAPI_MakePrism(back.wrapped, gp_Vec(*(n * 2 * L))).Shape())
+    parts = _splitter(shape, [curtain])
+    if len(parts) < 2:
+        raise CadError("Szkic nie przecina bryły na części - linia musi przejść przez całą bryłę (albo profil musi być zamknięty).")
+    wires = [w for w in sketch.Wires() if w.IsClosed()] if hasattr(sketch, 'Wires') else []
+    if wires:
+        faces = []
+        for w in wires:
+            try:
+                faces.append(cq.Face.makeFromWires(w))
+            except Exception:
+                pass
+        if faces:
+            prism = cq.Shape.cast(BRepPrimAPI_MakePrism(cq.Compound.makeCompound(faces).translate(cq.Vector(*(-n * L))).wrapped, gp_Vec(*(n * 2 * L))).Shape())
+            return [(s, 2 if _inside_share(s, prism) > .5 else 1) for s in parts]
+    # otwarta linia: strona wg położenia środka części względem najbliższego fragmentu linii (w płaszczyźnie szkicu)
+    out = []
+    for s in parts:
+        c = np.array(s.Center().toTuple(), float)
+        best = None
+        for e in edges:
+            for t in np.linspace(0, 1, 21):
+                q = np.array(e.positionAt(t).toTuple(), float)
+                d = float(np.linalg.norm((c - q) - n * float((c - q) @ n)))
+                if best is None or d < best[0]:
+                    tan = np.array(e.tangentAt(t).toTuple(), float)
+                    best = (d, q, tan)
+        _, q, tan = best
+        out.append((s, 1 if float(np.cross(tan, c - q) @ n) >= 0 else 2))
+    return out
+
+
+def _inside_share(solid, tool):
+    try:
+        common = boolean("intersect", solid, [tool])
+        return common.Volume() / max(solid.Volume(), 1e-12)
+    except Exception:
+        return 0.0
+
+
+def split_body(shape, tool):
+    """Podział inną bryłą (jej powierzchnią). Zwraca [(bryła, strona)]: strona 2 - wewnątrz bryły-narzędzia, 1 - na zewnątrz."""
+    if not shape.Solids() or not tool.Solids():
+        raise CadError("Przeciąć można tylko bryłę i tylko inną bryłą.")
+    parts = _splitter(shape, [tool])
+    if len(parts) < 2:
+        raise CadError("Bryły się nie przecinają.")
+    return [(s, 2 if _inside_share(s, tool) > .5 else 1) for s in parts]
+
+
 def hole(shape, radius, x, y, depth=0):
     radius = positive(radius, "Promień otworu")
     box_bounds = bounds(shape)
