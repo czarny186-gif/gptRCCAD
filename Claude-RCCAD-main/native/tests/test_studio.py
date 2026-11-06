@@ -1,6 +1,7 @@
 """Okno Studio: układ jak w HTML oraz przepływ szkic → wyciągnięcie → Boolean / zaokrąglenie / lustro."""
 import os, faulthandler
-faulthandler.dump_traceback_later(600, exit=True, file=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w"))
+DIAG=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w")
+faulthandler.dump_traceback_later(600, exit=True, file=DIAG)       # strażnik zawieszenia; licznik startuje od nowa w każdym teście (setUp)
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
 import tempfile
@@ -27,6 +28,7 @@ class StudioTests(unittest.TestCase):
         cls.app=QApplication.instance() or QApplication([])
 
     def setUp(self):
+        faulthandler.dump_traceback_later(600, exit=True, file=DIAG)      # 10 minut na jeden test, nie na cały zestaw
         self.w=StudioWindow();self.w.resize(1400,850);self.w.show();self.app.processEvents()
         self.patches=[patch.object(QMessageBox,'warning',return_value=QMessageBox.Ok),patch.object(QMessageBox,'information',return_value=QMessageBox.Ok)]
         for p in self.patches:p.start()

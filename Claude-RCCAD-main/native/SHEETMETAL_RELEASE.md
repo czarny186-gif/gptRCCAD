@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.38 — spokojne zaznaczanie, fioletowy podgląd zaokrągleń, Przetnij bryłę
+# RCCAD Desktop 0.4.39 — liczenie na wielu rdzeniach
+
+## Zmiany 0.4.39
+
+- **Siatka do wyświetlania liczona na wszystkich rdzeniach** procesora (po każdej operacji, otwarciu projektu, podglądach). Płyta 200×200 z setką zaokrąglonych otworów (235 ścian), na 2 rdzeniach: 6,6 s → 3,9 s. Na komputerze z większą liczbą rdzeni zysk jest większy.
+- **Sprawdzanie poprawności bryły** po każdej operacji - wielowątkowo (ok. 1,5× szybciej na 2 rdzeniach).
+- **Operacje logiczne OpenCascade** (budowanie, dzielenie, części gięcia blach) w trybie wielordzeniowym także tam, gdzie wcześniej domyślnie liczyły na jednym rdzeniu. Połącz / wytnij / część wspólna już wcześniej używały wielu rdzeni.
+- Małe bryły liczą się tak jak dotąd - podział pracy opłaca się dopiero przy większej liczbie ścian.
+
+## RCCAD Desktop 0.4.38 — spokojne zaznaczanie, fioletowy podgląd zaokrągleń, Przetnij bryłę
 
 ## Zmiany 0.4.38
 

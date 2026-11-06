@@ -24,8 +24,37 @@ def positive(value, label="Wymiar"):
     return value
 
 
+# Wielordzeniowe liczenie wewnątrz OpenCascade: operacje logiczne (połącz, wytnij, część wspólna, cięcie, gięcie blach),
+# sprawdzanie poprawności brył i siatkowanie do wyświetlania dzielą pracę na wszystkie rdzenie procesora.
+try:
+    from OCP.BOPAlgo import BOPAlgo_Options
+    BOPAlgo_Options.SetParallelMode_s(True)
+except Exception:       # starsza biblioteka: zostaje liczenie na jednym rdzeniu
+    pass
+
+
+def is_valid(shape):
+    """Sprawdzenie poprawności bryły na wielu rdzeniach (to samo co Shape.isValid, równolegle)."""
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    try:
+        return BRepCheck_Analyzer(shape.wrapped, True, True).IsValid()
+    except TypeError:
+        return shape.isValid()
+
+
+def mesh_parallel(shape, tolerance, angular=.12):
+    """Siatka trójkątów liczona na wszystkich rdzeniach; tessellate() używa jej potem bez ponownego liczenia."""
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.BRepTools import BRepTools
+    try:
+        if not BRepTools.Triangulation_s(shape.wrapped, tolerance):
+            BRepMesh_IncrementalMesh(shape.wrapped, tolerance, True, angular, True)
+    except Exception:
+        pass
+
+
 def valid(shape, solid=True):
-    if shape is None or shape.wrapped.IsNull() or not shape.isValid():
+    if shape is None or shape.wrapped.IsNull() or not is_valid(shape):
         raise CadError("Nie udało się utworzyć poprawnej geometrii. Model pozostaje bez zmian.")
     if solid and (not shape.Solids() or shape.Volume() <= 1e-8):
         raise CadError("Operacja nie utworzyła zamkniętej bryły. Sprawdź położenie i wymiary.")
@@ -837,6 +866,7 @@ class DisplayMesh:
 
 
 def display_mesh(shape, tolerance=.12):
+    mesh_parallel(shape, tolerance, .12)
     vertices, triangles = shape.tessellate(tolerance, .12)
     edge_faces = {}
     faces = shape.Faces()
