@@ -67,6 +67,31 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(all(b.mesh is not None for b in shown))
         self.assertAlmostEqual(shown[0].shape.Volume(), 1200, 6)
 
+    def test_sheet_corners_trimmed_in_processes_match_local(self):
+        from rccad import sheetmetal as shm
+        t = 1.0
+        base = dict(o=[0, 0, 0], x=[1, 0, 0], y=[0, 1, 0], z=[0, 0, 1], lx=60, ly=40, lz=t)
+        edges = [([60, 0, t], [60, 40, t], [1, 0, 0]), ([60, 40, t], [0, 40, t], [0, 1, 0]), ([0, 40, t], [0, 0, t], [-1, 0, 0]), ([0, 0, t], [60, 0, t], [0, -1, 0])]
+        flanges = [dict(kind='base', p0=a, p1=b, n=[0, 0, 1], m=m, r=1, angle=90, length=10) for a, b, m in edges]
+        flanges += [dict(kind='tip', parent=i, side='in', r=1, angle=90, length=4) for i in range(4)]
+
+        def clear():
+            for cache in (shm._BUILD_CACHE, shm._PARTS_CACHE, shm._OPS_CACHE):
+                cache.clear()
+            for order in (shm._BUILD_ORDER, shm._PARTS_ORDER, shm._OPS_ORDER):
+                order.clear()
+        for joint in ('parallel', 'sheet'):
+            recipe = dict(base=base, t=t, flanges=flanges, rules=dict(gap=.1, relief='none', relief_size=3, joint=joint, miter=True, auto_corners=True, kfactor=.44))
+            clear()
+            with patch.object(workers, 'ready', return_value=False):
+                local = shm.build_sheet(recipe)
+            clear()
+            with patch.object(workers, 'run_affine', wraps=workers.run_affine) as spy:
+                remote = shm.build_sheet(recipe)
+            self.assertTrue(spy.call_count >= 2, joint)                   # dwa poziomy kołnierzy, każdy w procesach
+            self.assertLess(local.cut(remote).Volume() + remote.cut(local).Volume(), 1e-6, joint)
+            self.assertEqual(len(remote.Solids()), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

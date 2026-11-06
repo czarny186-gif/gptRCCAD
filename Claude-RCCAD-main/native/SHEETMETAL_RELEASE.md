@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.40 — procesy liczące
+# RCCAD Desktop 0.4.41 — blacha liczona na wielu procesach
+
+## Zmiany 0.4.41
+
+- **Przycinanie kołnierzy w narożnikach w procesach liczących**: kołnierze jednego poziomu (np. cztery ścianki pudełka, potem cztery powroty) liczą się jednocześnie, każdy w innym procesie. Poziomy idą po kolei, bo kolejne gięcie dziedziczy koniec poprzedniego. Wynik jest identyczny jak przy liczeniu w jednym procesie (sprawdzone różnicą brył).
+- **Każdy kołnierz trafia zawsze do tego samego procesu**, który pamięta jego wcześniejsze cięcia - dodawanie kolejnych kołnierzy dalej korzysta z zapamiętanych narożników i nie liczy wszystkiego od nowa.
+- Zysk jest największy, gdy blacha liczy się od zera: zmiana reguł blach (szczelina, wycięcia, sposób łączenia), przeliczanie historii, otwieranie starszego projektu. Pomiar na 2 rdzeniach (pudełko 8 kołnierzy z wycięciami kwadratowymi): 3,6 s → 1,6 s; połączenie blacharskie 2,7 s → 2,3 s. Na komputerze z większą liczbą rdzeni zysk rośnie.
+- Łączenie części blachy i rozwinięcie liczy jedna operacja OpenCascade, która już wcześniej używała wielu rdzeni.
+
+## RCCAD Desktop 0.4.40 — procesy liczące
 
 ## Zmiany 0.4.40
 

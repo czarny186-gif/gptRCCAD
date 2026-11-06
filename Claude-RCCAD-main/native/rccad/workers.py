@@ -7,8 +7,14 @@ Pula startuje w tle po otwarciu okna (start()), a każdy proces raz wczytuje bib
 gotowa - albo gdy jej zabraknie (błąd, wyłączona zmienną RCCAD_WORKERS=0) - wszystko liczy się jak dotąd, w bieżącym
 procesie. Kształty przechodzą między procesami jako binarny zapis OpenCascade (pickle z cadquery), wyniki jako tablice numpy.
 
-Teraz w procesach liczą się siatki do wyświetlania razem ze sprawdzeniem poprawności brył (mesh_many): otwieranie projektu,
-cofanie / ponawianie, przeskoki w historii i stan wynikowy po przeliczeniu historii.
+W procesach liczą się:
+- siatki do wyświetlania razem ze sprawdzeniem poprawności brył (mesh_many): otwieranie projektu, cofanie / ponawianie,
+  przeskoki w historii i stan wynikowy po przeliczeniu historii,
+- przycinanie kołnierzy blachy w narożnikach (run_affine): kołnierze jednego poziomu równolegle.
+
+Każdy proces ma własną kolejkę (osobny wykonawca z jednym procesem). Zadanie z kluczem trafia zawsze do tego samego procesu,
+więc proces pamięta swoje wcześniejsze wyniki (np. cięcia narożników danego kołnierza) - dodanie kolejnego kołnierza
+nie liczy wszystkiego od nowa.
 """
 from __future__ import annotations
 
@@ -18,7 +24,8 @@ import threading
 
 MIN_PARALLEL = 2         # mniej kształtów nie opłaca się wysyłać do procesów (przesyłanie trwa dłużej niż zysk)
 
-_pool = None
+_pools = []          # wykonawcy z jednym procesem każdy (stałe przypisanie zadań do procesu)
+_turn = 0
 _ready = False
 _starting = False
 _lock = threading.Lock()
@@ -60,10 +67,10 @@ def _mesh_job(shape, tolerance, solid):
 
 
 def start(wait=False):
-    """Uruchamia pulę w tle (raz na cały program). wait=True czeka, aż procesy będą gotowe (testy, autotest)."""
+    """Uruchamia procesy w tle (raz na cały program). wait=True czeka, aż będą gotowe (testy, autotest)."""
     global _starting
     with _lock:
-        if _pool is not None or _starting or count() == 0:
+        if _pools or _starting or count() == 0:
             begin = None
         else:
             _starting = True
@@ -79,35 +86,35 @@ def start(wait=False):
 
 
 def _create():
-    global _pool, _ready, _starting
+    global _pools, _ready, _starting
     try:
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
-        n = count()
-        pool = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context('spawn'), initializer=_init)
-        pids = {f.result(timeout=180) for f in [pool.submit(_ping) for _ in range(n * 2)]}     # każdy proces wczytał bibliotekę
+        context = multiprocessing.get_context('spawn')
+        pools = [ProcessPoolExecutor(max_workers=1, mp_context=context, initializer=_init) for _ in range(count())]
+        pids = {f.result(timeout=180) for f in [p.submit(_ping) for p in pools]}       # każdy proces wczytał bibliotekę
         with _lock:
-            _pool, _ready = pool, bool(pids)
+            _pools, _ready = pools, len(pids) == len(pools) > 0
     except Exception:
         with _lock:
-            _pool, _ready = None, False
+            _pools, _ready = [], False
     finally:
         _starting = False
 
 
 def ready():
-    return _ready and _pool is not None
+    return _ready and bool(_pools)
 
 
 def size():
-    return count() if ready() else 0
+    return len(_pools) if ready() else 0
 
 
 def shutdown():
-    global _pool, _ready
+    global _pools, _ready
     with _lock:
-        pool, _pool, _ready = _pool, None, False
-    if pool is not None:
+        pools, _pools, _ready = _pools, [], False
+    for pool in pools:
         try:
             pool.shutdown(wait=False, cancel_futures=True)
         except Exception:
@@ -118,17 +125,56 @@ atexit.register(shutdown)
 
 
 def _broken():
-    """Pula przestała działać (np. proces zamknięty przez system): dalej liczy bieżący proces."""
+    """Procesy przestały działać (np. zamknięte przez system): dalej liczy bieżący proces."""
     shutdown()
+
+
+def _next_pool():
+    global _turn
+    with _lock:
+        pools = _pools
+        _turn += 1
+        return pools[_turn % len(pools)] if pools else None
+
+
+def _pool_for(key):
+    import zlib
+    pools = _pools
+    return pools[zlib.crc32(repr(key).encode()) % len(pools)] if pools else None
+
+
+def run_affine(jobs):
+    """jobs: [(klucz, funkcja, argumenty)] -> lista wyników albo None (procesy niegotowe / awaria: licz w bieżącym procesie).
+    Zadanie o danym kluczu trafia zawsze do tego samego procesu. Błąd geometrii (CadError) z procesu jest zgłaszany dalej."""
+    if not ready():
+        return None
+    from . import kernel
+    try:
+        futures = [_pool_for(key).submit(function, *args) for key, function, args in jobs]
+    except Exception:
+        _broken()
+        return None
+    results = []
+    for future in futures:
+        try:
+            results.append(future.result())
+        except kernel.CadError:
+            raise
+        except Exception:
+            from concurrent.futures.process import BrokenProcessPool
+            if isinstance(future.exception(), BrokenProcessPool):
+                _broken()
+            return None             # nieoczekiwany kłopot w procesie: ta sama praca liczy się jeszcze raz tutaj
+    return results
 
 
 def mesh_many(items, tolerance=.12):
     """items: [(kształt, czy_bryła)] -> [(siatka, None) | (None, komunikat)] w tej samej kolejności.
-    Przy co najmniej MIN_PARALLEL kształtach i gotowej puli liczą procesy, inaczej (albo po awarii puli) - bieżący proces."""
+    Przy co najmniej MIN_PARALLEL kształtach i gotowych procesach liczą procesy (po kolei rozdzielane), inaczej - bieżący proces."""
     items = list(items)
     if len(items) >= MIN_PARALLEL and ready():
         try:
-            futures = [_pool.submit(_mesh_job, shape, tolerance, solid) for shape, solid in items]
+            futures = [_next_pool().submit(_mesh_job, shape, tolerance, solid) for shape, solid in items]
             return [f.result() for f in futures]
         except Exception:
             _broken()

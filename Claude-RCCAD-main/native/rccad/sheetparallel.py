@@ -42,42 +42,60 @@ def eligible(recipe,eff,corners,flexible=False,local=False):
     return all(all(x==y for x,y in zip(signatures[a],signatures[b])) for _,a,b,_ in corners)
 
 
-def parts(recipe,eff,corners,closed=False):
+def _ctx(recipe,eff,corners,closed=False):
+    """Dane wspólne przycinania (te same w oknie i w procesie liczącym)."""
     from . import sheetmetal as s
     specs,t=recipe['flanges'],float(recipe['t']);gap=float((recipe.get('rules') or {}).get('gap',0))
     frames,owners,depths,extension=s._corner_layout(specs,eff,corners,t)
     raw={i:s._flange_parts(f,t) for i,f in enumerate(frames)};result={i:list(v) for i,v in raw.items()}
     lookup={(owner,depth):i for i,(owner,depth) in enumerate(zip(owners,depths))}
     reach=sum(float(recipe['base'][key]) for key in ('lx','ly','lz'))+4*extension+gap+1
-    normal=s._unit(recipe['base']['z']);caps={};bounds={}
-    for i in sorted(result,key=lambda j:depths[j]):
-        for c,(point,a,b,_) in enumerate(corners):
-            owner=owners[i]
-            if owner not in (a,b):continue
-            other=b if owner==a else a;direction=eff[other]['m'];peer=lookup.get((other,depths[i]))
-            if depths[i]==0:
-                profile=s._leg_profile(eff[other],eff[other],point,normal,t)
-                stop=float(profile[:,0].min())-gap
-            elif owner==a or peer is None:
-                stop=caps[specs[i]['parent'],c]
-            else:
-                key=(peer,c)
-                if key not in bounds:
-                    pieces=list(raw[peer])+[raw[j][0] for j in raw if specs[j].get('parent')==peer]
-                    plane=cq.Plane(origin=tuple(point),xDir=tuple(direction),normal=tuple(np.cross(direction,normal)))
-                    bounds[key]=min(k.bounds(piece.transformShape(plane.fG)).xmin for piece in pieces)
-                stop=bounds[key]-gap
-            caps[i,c]=stop
-            if closed and depths[i]==0 and peer is not None:
-                # zamknięty narożnik (styk): pierwsza ściana a dochodzi do zewnętrznej powierzchni sąsiada, ściana b kończy się
-                # szczeliną przed nią; łuki kończą się skosem od narożnika płyty do końca swojej ściany - kwadrat wspólny obu
-                # stref gięcia jest podzielony, a nie wycięty. Kolejne poziomy dziedziczą dotychczasowy koniec (caps).
-                end=float(profile[:,0].max()) if owner==a else stop
-                result[i][1]=s._endcut(result[i][1],point+end*direction,direction,reach)
-                d=s._unit(direction);start=float((s._arr(frames[peer]['p0'])-point)@d)-gap/2
-                result[i][0]=s._curved_endcut(result[i][0],frames[i],t,point,d,start,end,reach,vertical_end=True)
-                continue
-            result[i]=[s._endcut(piece,point+stop*direction,direction,reach) for piece in result[i]]
+    normal=s._unit(recipe['base']['z'])
+    return dict(recipe=recipe,eff=eff,corners=corners,closed=closed,specs=specs,t=t,gap=gap,frames=frames,owners=owners,depths=depths,
+                raw=raw,result=result,lookup=lookup,reach=reach,normal=normal,caps={},bounds={})
+
+
+def _trim(ctx,i):
+    """Przycięcie kołnierza i we wszystkich jego narożnikach; czyta tylko wyniki niższych poziomów (caps rodzica, surowe części),
+    więc kołnierze jednego poziomu liczą się równolegle w procesach liczących."""
+    from . import sheetmetal as s
+    eff,corners,closed,specs,t,gap=ctx['eff'],ctx['corners'],ctx['closed'],ctx['specs'],ctx['t'],ctx['gap']
+    frames,owners,depths,raw,result=ctx['frames'],ctx['owners'],ctx['depths'],ctx['raw'],ctx['result']
+    lookup,reach,normal,caps,bounds=ctx['lookup'],ctx['reach'],ctx['normal'],ctx['caps'],ctx['bounds']
+    for c,(point,a,b,_) in enumerate(corners):
+        owner=owners[i]
+        if owner not in (a,b):continue
+        other=b if owner==a else a;direction=eff[other]['m'];peer=lookup.get((other,depths[i]))
+        if depths[i]==0:
+            profile=s._leg_profile(eff[other],eff[other],point,normal,t)
+            stop=float(profile[:,0].min())-gap
+        elif owner==a or peer is None:
+            stop=caps[specs[i]['parent'],c]
+        else:
+            key=(peer,c)
+            if key not in bounds:
+                pieces=list(raw[peer])+[raw[j][0] for j in raw if specs[j].get('parent')==peer]
+                plane=cq.Plane(origin=tuple(point),xDir=tuple(direction),normal=tuple(np.cross(direction,normal)))
+                bounds[key]=min(k.bounds(piece.transformShape(plane.fG)).xmin for piece in pieces)
+            stop=bounds[key]-gap
+        caps[i,c]=stop
+        if closed and depths[i]==0 and peer is not None:
+            # zamknięty narożnik (styk): pierwsza ściana a dochodzi do zewnętrznej powierzchni sąsiada, ściana b kończy się
+            # szczeliną przed nią; łuki kończą się skosem od narożnika płyty do końca swojej ściany - kwadrat wspólny obu
+            # stref gięcia jest podzielony, a nie wycięty. Kolejne poziomy dziedziczą dotychczasowy koniec (caps).
+            end=float(profile[:,0].max()) if owner==a else stop
+            result[i][1]=s._endcut(result[i][1],point+end*direction,direction,reach)
+            d=s._unit(direction);start=float((s._arr(frames[peer]['p0'])-point)@d)-gap/2
+            result[i][0]=s._curved_endcut(result[i][0],frames[i],t,point,d,start,end,reach,vertical_end=True)
+            continue
+        result[i]=[s._endcut(piece,point+stop*direction,direction,reach) for piece in result[i]]
+
+
+def parts(recipe,eff,corners,closed=False):
+    from . import sheetmetal as s
+    ctx=_ctx(recipe,eff,corners,closed)
+    s._trim_levels(ctx,'parallel')
+    eff,result,t=ctx['eff'],ctx['result'],ctx['t']
     # Root sectors meet in a small shared corner, as in the reference solid.
     # Partition that material rather than relaxing global collision checks.
     for _,a,b,_ in corners:

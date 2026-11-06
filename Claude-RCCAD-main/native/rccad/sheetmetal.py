@@ -756,6 +756,58 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=ENGINE):
         from . import sheetparallel
         if sheetparallel.eligible(recipe,eff,corners,flexible=parallel_version>=5 and bool((recipe.get('rules') or {}).get('auto_corners'))):
             return sheetparallel.parts(recipe,eff,corners,closed=parallel_version>=6)
+    ctx = _corner_ctx(recipe, eff, corners, parallel_version)
+    _trim_levels(ctx, 'corner')
+    recipe, eff, corners, parallel_version, specs, t, rules, gap, automatic, frames, owners, depths, extension, lookup, raw, parts, K, normal, sheet_joint, parallel, legacy_parallel, local_planes, curtains_cache, curtains_world, local_caps, local_bounds, caps = (ctx[n] for n in _CTX_NAMES)
+    if legacy_parallel:
+        # Retained only for mapping edits from pre-0.4.8 project baselines.
+        # A butt seam has a through wall and a wall ending against it. Trim
+        # the latter against the real neighbouring material, including bends
+        # on preceding levels; a fixed diagonal plane cannot describe it.
+        for P,a,b,_ in corners:
+            root = eff[b]
+            axis = _unit(root['p1']-root['p0'])
+            outward = axis if np.linalg.norm(P-root['p1']) < np.linalg.norm(P-root['p0']) else -axis
+            tools = [tool for j in parts if owners[j]==a for piece in parts[j]
+                     for tool in ((piece,piece.translate(tuple(-gap*outward))) if gap>_TOL else (piece,))]
+            for i in parts:
+                if owners[i] != b:
+                    continue
+                trimmed = []
+                for piece in parts[i]:
+                    bb = piece.BoundingBox()
+                    candidates = []
+                    for tool in tools:
+                        cb = tool.BoundingBox()
+                        if all(min(getattr(bb,d+'max'),getattr(cb,d+'max')) >
+                               max(getattr(bb,d+'min'),getattr(cb,d+'min'))+_TOL for d in 'xyz'):
+                            candidates.append(tool)
+                    trimmed.append(kernel.boolean('subtract',piece,candidates) if candidates else piece)
+                parts[i] = trimmed
+    if automatic and parallel:
+        for _,a,b,_ in corners:
+            if any(eff[j].get('hem') or abs(eff[j]['angle']-90)>1e-6 for j in (a,b)):continue
+            left,right=parts[a][0],parts[b][0]
+            key=('auto-root-partition',_sig(right),_sig(left))
+            if key[1] is None or key[2] is None:key=None
+            parts[b][0]=_ops_memo(key,lambda right=right,left=left:kernel.boolean('subtract',right,[left]))
+    for i in parts:
+        # Corner cuts must not silently shorten a flange until its requested
+        # free end disappears (e.g. inward returns longer than the box opening).
+        end, _, _, direction = (_hem_end_geom(eff[i], 'out', t) if eff[i].get('hem') else _tip_geom(eff[i], 'out', t))
+        vertices = [np.array(v.toTuple()) for v in parts[i][-1].Vertices()
+                    if abs(float((np.array(v.toTuple())-end) @ direction)) < _TOL]
+        axis = _unit(eff[i]['p1']-eff[i]['p0'])
+        if len(vertices) < 2 or np.ptp([float(v @ axis) for v in vertices]) < _TOL:
+            raise kernel.CadError("Narożniki zabierają cały koniec kołnierza. Zmniejsz jego długość albo zmień kierunek gięcia.")
+    return parts
+
+
+_CTX_NAMES = ('recipe', 'eff', 'corners', 'parallel_version', 'specs', 't', 'rules', 'gap', 'automatic', 'frames', 'owners', 'depths', 'extension', 'lookup', 'raw', 'parts', 'K', 'normal', 'sheet_joint', 'parallel', 'legacy_parallel', 'local_planes', 'curtains_cache', 'curtains_world', 'local_caps', 'local_bounds', 'caps')
+
+
+def _corner_ctx(recipe, eff, corners, parallel_version=ENGINE, local_planes=None):
+    """Dane wspólne przycinania kołnierzy w narożnikach (te same w oknie i w procesie liczącym)."""
     specs, t = recipe['flanges'], float(recipe['t'])
     rules = recipe.get('rules') or {}
     gap = float(rules.get('gap', 0))
@@ -771,6 +823,20 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=ENGINE):
     parallel = rules.get('joint','parallel') == 'parallel' and parallel_version>=2
     legacy_parallel = rules.get('joint','parallel') == 'parallel' and not parallel
     curtains_cache,curtains_world={},{}
+    if local_planes is None:
+        local_planes={}
+        if automatic and parallel:
+            from . import sheetparallel
+            local_planes={c:sheetparallel.eligible(recipe,eff,[corner],flexible=True,local=True)
+                          for c,corner in enumerate(corners)}
+    local_caps,local_bounds,caps={},{},{}
+    return dict(recipe=recipe, eff=eff, corners=corners, parallel_version=parallel_version, specs=specs, t=t, rules=rules, gap=gap, automatic=automatic, frames=frames, owners=owners, depths=depths, extension=extension, lookup=lookup, raw=raw, parts=parts, K=K, normal=normal, sheet_joint=sheet_joint, parallel=parallel, legacy_parallel=legacy_parallel, local_planes=local_planes, curtains_cache=curtains_cache, curtains_world=curtains_world, local_caps=local_caps, local_bounds=local_bounds, caps=caps)
+
+
+def _trim_corner_flange(ctx, i):
+    """Przycięcie kołnierza i we wszystkich jego narożnikach. Czyta tylko części niższych poziomów, więc kołnierze
+    jednego poziomu można liczyć równolegle (procesy liczące)."""
+    recipe, eff, corners, parallel_version, specs, t, rules, gap, automatic, frames, owners, depths, extension, lookup, raw, parts, K, normal, sheet_joint, parallel, legacy_parallel, local_planes, curtains_cache, curtains_world, local_caps, local_bounds, caps = (ctx[n] for n in _CTX_NAMES)
     def curtain(owner,corner,far):
         from . import sheetcorner
         root=eff[owner]
@@ -787,13 +853,6 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=ENGINE):
             plane=cq.Plane(origin=tuple(corners[corner][0]),xDir=tuple(root['m']),normal=tuple(axis))
             curtains_world[key]=curtains_cache[signature][0 if far else 1].transformShape(plane.rG)
         return curtains_world[key]
-    local_planes={}
-    if automatic and parallel:
-        from . import sheetparallel
-        local_planes={c:sheetparallel.eligible(recipe,eff,[corner],flexible=True,local=True)
-                      for c,corner in enumerate(corners)}
-    local_caps,local_bounds={},{}
-    caps = {}
 
     def straight_end(i, corner):
         """Continue the parent's real end as a plane when adjacent folds diverge."""
@@ -856,208 +915,218 @@ def _corner_parts_build(recipe, eff, corners, parallel_version=ENGINE):
             parts[i][0] = _curved_endcut(parts[i][0],frames[i],t,P,direction,start,end,K,
                                         vertical_end=abs(float(d@normal))>1-1e-6)
 
-    # All parent edges must already be trimmed before their children inherit an end.
-    for i in sorted(range(len(frames)),key=lambda index:depths[index]):
-        f = frames[i]
-        for corner,(P, a, b, N) in enumerate(corners):
-            owner = owners[i]
-            if owner not in (a, b):
-                continue
-            other = b if owner == a else a
-            peer = lookup.get((other, depths[i]))
-            profile = _leg_profile(eff[i], eff[owner], P, normal, t)
-            peer_profile = _leg_profile(eff[peer], eff[other], P, normal, t) if peer is not None else None
-            matching = (profile is not None and peer_profile is not None
-                        and np.allclose(profile,peer_profile,atol=_TOL,rtol=0))
-            direction = _tip_geom(eff[i], 'out', t)[3] if profile is not None else normal
-            peer_direction = _tip_geom(eff[peer], 'out', t)[3] if peer_profile is not None else normal
-            vertical_pair = (sheet_joint and profile is not None and peer_profile is not None
-                             and abs(float(direction@normal))>1-1e-6
-                             and abs(float(peer_direction@normal))>1-1e-6
-                             and np.allclose([profile[:,0].min(),profile[:,0].max()],
-                                             [peer_profile[:,0].min(),peer_profile[:,0].max()],atol=_TOL,rtol=0)
-                             and min(profile[:,1].max(),peer_profile[:,1].max()) >
-                                 max(profile[:,1].min(),peer_profile[:,1].min())+_TOL)
-            if local_planes.get(corner):
-                if depths[i]==0:
-                    stop=float(peer_profile[:,0].min())-gap
-                elif owner==a or peer is None:
-                    stop=local_caps[specs[i]['parent'],corner]
-                else:
-                    key=(peer,corner)
-                    if key not in local_bounds:
-                        pieces=list(raw[peer])+[raw[j][0] for j in raw if specs[j].get('parent')==peer]
-                        plane=cq.Plane(origin=tuple(P),xDir=tuple(eff[other]['m']),normal=tuple(np.cross(eff[other]['m'],normal)))
-                        local_bounds[key]=min(kernel.bounds(piece.transformShape(plane.fG)).xmin for piece in pieces)
-                    stop=local_bounds[key]-gap
-                local_caps[i,corner]=stop
-                parts[i]=[_endcut(piece,P+stop*eff[other]['m'],eff[other]['m'],K) for piece in parts[i]]
-                continue
-            if (automatic and depths[i]==0 and not f.get('hem') and not eff[other].get('hem')
-                    and abs(f['angle']-90)<1e-6 and abs(eff[other]['angle']-90)<1e-6):
-                # Fit the first walls directly to their neighbouring skins,
-                # even when later flanges differ in height or fold direction.
-                stop=float(peer_profile[:,0].min())-gap/(math.sqrt(2) if sheet_joint else 1)
-                parts[i][1]=_endcut(parts[i][1],P+stop*eff[other]['m'],eff[other]['m'],K)
-                if parallel_version>=6:
-                    # Zamknięty narożnik (bez wycięcia, gdy reguła go nie żąda): kwadrat wspólny dla obu stref gięcia
-                    # dzielony jest skosem od narożnika płyty do końca ściany, więc nic nie zostaje usunięte.
-                    direction=_unit(eff[other]['m'])
-                    start=float((_arr(frames[peer]['p0'])-P)@direction)-gap/2
-                    parts[i][0]=_curved_endcut(parts[i][0],frames[i],t,P,direction,start,stop,K,vertical_end=True)
-                else:
-                    parts[i][0]=_endcut(parts[i][0],P+(stop if parallel else 0)*eff[other]['m'],eff[other]['m'],K)
-                continue
-            if automatic and parallel and f.get('hem') and depths[i]>0:
-                # A folded-back lip must also clear the neighbouring first wall,
-                # not only the neighbouring lip at its own height.
-                root=eff[other]
-                if not root.get('hem') and abs(root['angle']-90)<1e-6:
-                    root_profile=_leg_profile(root,root,P,normal,t)
-                    stop=float(root_profile[:,0].min())-gap
-                    parts[i]=[_endcut(piece,P+stop*root['m'],root['m'],K) for piece in parts[i]]
-            if parallel:
-                capped=straight_end(i,corner)
-                if not matching and capped is not None:
-                    peer_cap=straight_end(peer,corner) if peer is not None else None
-                    neighbors=(peer_cap[1] if peer_cap is not None else raw[peer] if peer is not None else
-                               [piece for j in parts if owners[j]==other and depths[j]<depths[i] for piece in parts[j]])
-                    if not overlap(capped[1],neighbors):
-                        parts[i]=[_endcut(piece,*capped[0],K) for piece in parts[i]]
-                        continue
-                if peer is None:
-                    root=eff[owner];axis=_unit(root['p1']-root['p0'])
-                    outward=axis if np.linalg.norm(P-root['p1'])<np.linalg.norm(P-root['p0']) else -axis
-                    plane=capped[0] if capped is not None else (P,outward)
-                    parts[i]=[_endcut(piece,*plane,K) for piece in parts[i]]
-                else:
-                    tool=curtain(other,corner,owner==a)
-                    parts[i]=[kernel.boolean('subtract',piece,[tool]) for piece in parts[i]]
-                continue
-            if (legacy_parallel and profile is not None and peer_profile is not None):
-                if not matching:
-                    capped, peer_cap = straight_end(i,corner), straight_end(peer,corner)
-                    if capped is not None and not overlap(capped[1],peer_cap[1] if peer_cap else raw[peer]):
-                        parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
-                        continue
-                # Butt ends belong to every level, not just terminal panels.
-                # Reserve the complete bend end; the actual neighbouring
-                # material trims it below instead of a diagonal seam plane.
-                end = float(peer_profile[:,0].max()) if owner == a else float(peer_profile[:,0].min())-gap
-                cut_direction = eff[other]['m']
-                peer_outer,_,peer_normal,_ = _tip_geom(eff[peer],'out',t)
-                if abs(float(peer_normal@cut_direction)) > 1e-6:
-                    peer_inner = _tip_geom(eff[peer],'in',t)[0]
-                    near, far = sorted((peer_inner,peer_outer),key=lambda point:float(point@cut_direction))
-                    plane_normal = peer_normal if float(peer_normal@cut_direction)>0 else -peer_normal
-                    plane_point = far if owner == a else near-gap*plane_normal
-                    parts[i][1] = _endcut(parts[i][1],plane_point,plane_normal,K)
-                    end = max(float((np.array(v.toTuple())-P)@cut_direction) for v in parts[i][1].Vertices())
-                else:
-                    parts[i][1] = _endcut(parts[i][1],P+end*cut_direction,cut_direction,K)
-                parent_end = straight_end(i,corner)
-                start = float((parent_end[0][0]-P)@cut_direction) if parent_end is not None else 0.
-                if depths[i] == 0:
-                    parts[i][0] = _endcut(parts[i][0],P,cut_direction,K)
-                elif abs(start-end) < _TOL:
-                    parts[i][0] = _endcut(parts[i][0],P+end*cut_direction,cut_direction,K)
-                else:
-                    parts[i][0] = _endcut(parts[i][0],P+max(start,end)*cut_direction,cut_direction,K)
-                continue
-            if sheet_joint and f.get('hem') and depths[i]==0:
-                # The bend starts on the real plate edge. Miter extensions
-                # here overlap after development when K<0.5 and gap=0.
-                # Keep the root turn square; the inward return still receives
-                # the sheet-style miter shared with its neighbour.
-                sign=1 if owner==a else -1
-                parts[i][0]=_endcut(parts[i][0],P,eff[other]['m'],K)
-                parts[i][1]=_miter(parts[i][1],P,N,sign,gap/2,K,K)
-                continue
-            if vertical_pair:
-                # Upright panels end square to their edge, not on a 45-degree
-                # plane through their thickness. Both sides get equal clearance.
-                offset = float(peer_profile[:,0].min())-gap/math.sqrt(2)
-                parts[i][1] = _endcut(parts[i][1],P+offset*eff[other]['m'],eff[other]['m'],K)
-                if depths[i] == 0:
-                    # The first bend follows the real plate edge. Extending its
-                    # curved cross section creates artificial bulges in corners.
-                    parts[i][0] = _endcut(parts[i][0],P,eff[other]['m'],K)
-                else:
-                    sign = 1 if owner == a else -1
-                    parts[i][0] = _miter(parts[i][0],P,N,sign,gap/2,K,K)
-                    relieve_bend(i,corner)
-                continue
+    f = frames[i]
+    for corner,(P, a, b, N) in enumerate(corners):
+        owner = owners[i]
+        if owner not in (a, b):
+            continue
+        other = b if owner == a else a
+        peer = lookup.get((other, depths[i]))
+        profile = _leg_profile(eff[i], eff[owner], P, normal, t)
+        peer_profile = _leg_profile(eff[peer], eff[other], P, normal, t) if peer is not None else None
+        matching = (profile is not None and peer_profile is not None
+                    and np.allclose(profile,peer_profile,atol=_TOL,rtol=0))
+        direction = _tip_geom(eff[i], 'out', t)[3] if profile is not None else normal
+        peer_direction = _tip_geom(eff[peer], 'out', t)[3] if peer_profile is not None else normal
+        vertical_pair = (sheet_joint and profile is not None and peer_profile is not None
+                         and abs(float(direction@normal))>1-1e-6
+                         and abs(float(peer_direction@normal))>1-1e-6
+                         and np.allclose([profile[:,0].min(),profile[:,0].max()],
+                                         [peer_profile[:,0].min(),peer_profile[:,0].max()],atol=_TOL,rtol=0)
+                         and min(profile[:,1].max(),peer_profile[:,1].max()) >
+                             max(profile[:,1].min(),peer_profile[:,1].min())+_TOL)
+        if local_planes.get(corner):
+            if depths[i]==0:
+                stop=float(peer_profile[:,0].min())-gap
+            elif owner==a or peer is None:
+                stop=local_caps[specs[i]['parent'],corner]
+            else:
+                key=(peer,corner)
+                if key not in local_bounds:
+                    pieces=list(raw[peer])+[raw[j][0] for j in raw if specs[j].get('parent')==peer]
+                    plane=cq.Plane(origin=tuple(P),xDir=tuple(eff[other]['m']),normal=tuple(np.cross(eff[other]['m'],normal)))
+                    local_bounds[key]=min(kernel.bounds(piece.transformShape(plane.fG)).xmin for piece in pieces)
+                stop=local_bounds[key]-gap
+            local_caps[i,corner]=stop
+            parts[i]=[_endcut(piece,P+stop*eff[other]['m'],eff[other]['m'],K) for piece in parts[i]]
+            continue
+        if (automatic and depths[i]==0 and not f.get('hem') and not eff[other].get('hem')
+                and abs(f['angle']-90)<1e-6 and abs(eff[other]['angle']-90)<1e-6):
+            # Fit the first walls directly to their neighbouring skins,
+            # even when later flanges differ in height or fold direction.
+            stop=float(peer_profile[:,0].min())-gap/(math.sqrt(2) if sheet_joint else 1)
+            parts[i][1]=_endcut(parts[i][1],P+stop*eff[other]['m'],eff[other]['m'],K)
+            if parallel_version>=6:
+                # Zamknięty narożnik (bez wycięcia, gdy reguła go nie żąda): kwadrat wspólny dla obu stref gięcia
+                # dzielony jest skosem od narożnika płyty do końca ściany, więc nic nie zostaje usunięte.
+                direction=_unit(eff[other]['m'])
+                start=float((_arr(frames[peer]['p0'])-P)@direction)-gap/2
+                parts[i][0]=_curved_endcut(parts[i][0],frames[i],t,P,direction,start,stop,K,vertical_end=True)
+            else:
+                parts[i][0]=_endcut(parts[i][0],P+(stop if parallel else 0)*eff[other]['m'],eff[other]['m'],K)
+            continue
+        if automatic and parallel and f.get('hem') and depths[i]>0:
+            # A folded-back lip must also clear the neighbouring first wall,
+            # not only the neighbouring lip at its own height.
+            root=eff[other]
+            if not root.get('hem') and abs(root['angle']-90)<1e-6:
+                root_profile=_leg_profile(root,root,P,normal,t)
+                stop=float(root_profile[:,0].min())-gap
+                parts[i]=[_endcut(piece,P+stop*root['m'],root['m'],K) for piece in parts[i]]
+        if parallel:
+            capped=straight_end(i,corner)
+            if not matching and capped is not None:
+                peer_cap=straight_end(peer,corner) if peer is not None else None
+                neighbors=(peer_cap[1] if peer_cap is not None else raw[peer] if peer is not None else
+                           [piece for j in parts if owners[j]==other and depths[j]<depths[i] for piece in parts[j]])
+                if not overlap(capped[1],neighbors):
+                    parts[i]=[_endcut(piece,*capped[0],K) for piece in parts[i]]
+                    continue
+            if peer is None:
+                root=eff[owner];axis=_unit(root['p1']-root['p0'])
+                outward=axis if np.linalg.norm(P-root['p1'])<np.linalg.norm(P-root['p0']) else -axis
+                plane=capped[0] if capped is not None else (P,outward)
+                parts[i]=[_endcut(piece,*plane,K) for piece in parts[i]]
+            else:
+                tool=curtain(other,corner,owner==a)
+                parts[i]=[kernel.boolean('subtract',piece,[tool]) for piece in parts[i]]
+            continue
+        if (legacy_parallel and profile is not None and peer_profile is not None):
             if not matching:
-                capped = straight_end(i,corner)
-                peer_cap = straight_end(peer,corner) if peer is not None else None
-                neighbors = (peer_cap[1] if peer_cap is not None else raw[peer] if peer is not None else
-                             [piece for j in parts if owners[j] == other and depths[j] < depths[i] for piece in parts[j]])
-                if capped is not None and not overlap(capped[1],neighbors):
-                    # A common root does not imply a common corner at every
-                    # level. Non-intersecting returns keep straight end faces.
+                capped, peer_cap = straight_end(i,corner), straight_end(peer,corner)
+                if capped is not None and not overlap(capped[1],peer_cap[1] if peer_cap else raw[peer]):
                     parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
                     continue
-            if peer is None and legacy_parallel:
-                capped = straight_end(i,corner)
-                root = eff[owner]
-                axis = _unit(root['p1']-root['p0'])
-                outward = axis if np.linalg.norm(P-root['p1']) < np.linalg.norm(P-root['p0']) else -axis
-                plane = capped[0] if capped is not None else (P,outward)
-                parts[i] = [_endcut(piece,*plane,K) for piece in parts[i]]
-                continue
-            if peer is None:
-                # Keep the same seam as the preceding bend while a box is
-                # assembled one edge at a time. A missing peer is not a wall
-                # at the old base width and must not truncate the return.
+            # Butt ends belong to every level, not just terminal panels.
+            # Reserve the complete bend end; the actual neighbouring
+            # material trims it below instead of a diagonal seam plane.
+            end = float(peer_profile[:,0].max()) if owner == a else float(peer_profile[:,0].min())-gap
+            cut_direction = eff[other]['m']
+            peer_outer,_,peer_normal,_ = _tip_geom(eff[peer],'out',t)
+            if abs(float(peer_normal@cut_direction)) > 1e-6:
+                peer_inner = _tip_geom(eff[peer],'in',t)[0]
+                near, far = sorted((peer_inner,peer_outer),key=lambda point:float(point@cut_direction))
+                plane_normal = peer_normal if float(peer_normal@cut_direction)>0 else -peer_normal
+                plane_point = far if owner == a else near-gap*plane_normal
+                parts[i][1] = _endcut(parts[i][1],plane_point,plane_normal,K)
+                end = max(float((np.array(v.toTuple())-P)@cut_direction) for v in parts[i][1].Vertices())
+            else:
+                parts[i][1] = _endcut(parts[i][1],P+end*cut_direction,cut_direction,K)
+            parent_end = straight_end(i,corner)
+            start = float((parent_end[0][0]-P)@cut_direction) if parent_end is not None else 0.
+            if depths[i] == 0:
+                parts[i][0] = _endcut(parts[i][0],P,cut_direction,K)
+            elif abs(start-end) < _TOL:
+                parts[i][0] = _endcut(parts[i][0],P+end*cut_direction,cut_direction,K)
+            else:
+                parts[i][0] = _endcut(parts[i][0],P+max(start,end)*cut_direction,cut_direction,K)
+            continue
+        if sheet_joint and f.get('hem') and depths[i]==0:
+            # The bend starts on the real plate edge. Miter extensions
+            # here overlap after development when K<0.5 and gap=0.
+            # Keep the root turn square; the inward return still receives
+            # the sheet-style miter shared with its neighbour.
+            sign=1 if owner==a else -1
+            parts[i][0]=_endcut(parts[i][0],P,eff[other]['m'],K)
+            parts[i][1]=_miter(parts[i][1],P,N,sign,gap/2,K,K)
+            continue
+        if vertical_pair:
+            # Upright panels end square to their edge, not on a 45-degree
+            # plane through their thickness. Both sides get equal clearance.
+            offset = float(peer_profile[:,0].min())-gap/math.sqrt(2)
+            parts[i][1] = _endcut(parts[i][1],P+offset*eff[other]['m'],eff[other]['m'],K)
+            if depths[i] == 0:
+                # The first bend follows the real plate edge. Extending its
+                # curved cross section creates artificial bulges in corners.
+                parts[i][0] = _endcut(parts[i][0],P,eff[other]['m'],K)
+            else:
                 sign = 1 if owner == a else -1
-                parts[i] = [_miter(part, P, N, sign, gap/2, K, K) for part in parts[i]]
+                parts[i][0] = _miter(parts[i][0],P,N,sign,gap/2,K,K)
+                relieve_bend(i,corner)
+            continue
+        if not matching:
+            capped = straight_end(i,corner)
+            peer_cap = straight_end(peer,corner) if peer is not None else None
+            neighbors = (peer_cap[1] if peer_cap is not None else raw[peer] if peer is not None else
+                         [piece for j in parts if owners[j] == other and depths[j] < depths[i] for piece in parts[j]])
+            if capped is not None and not overlap(capped[1],neighbors):
+                # A common root does not imply a common corner at every
+                # level. Non-intersecting returns keep straight end faces.
+                parts[i] = [_endcut(piece,*capped[0],K) for piece in parts[i]]
                 continue
-            sign = 1 if owner == a else -1
-            # The retained diagonal mode is needed to replay existing projects.
-            parts[i] = [_miter(part,P,N,sign,gap/2,K,K) for part in parts[i]]
-            relieve_bend(i,corner)
-    if legacy_parallel:
-        # Retained only for mapping edits from pre-0.4.8 project baselines.
-        # A butt seam has a through wall and a wall ending against it. Trim
-        # the latter against the real neighbouring material, including bends
-        # on preceding levels; a fixed diagonal plane cannot describe it.
-        for P,a,b,_ in corners:
-            root = eff[b]
+        if peer is None and legacy_parallel:
+            capped = straight_end(i,corner)
+            root = eff[owner]
             axis = _unit(root['p1']-root['p0'])
             outward = axis if np.linalg.norm(P-root['p1']) < np.linalg.norm(P-root['p0']) else -axis
-            tools = [tool for j in parts if owners[j]==a for piece in parts[j]
-                     for tool in ((piece,piece.translate(tuple(-gap*outward))) if gap>_TOL else (piece,))]
-            for i in parts:
-                if owners[i] != b:
-                    continue
-                trimmed = []
-                for piece in parts[i]:
-                    bb = piece.BoundingBox()
-                    candidates = []
-                    for tool in tools:
-                        cb = tool.BoundingBox()
-                        if all(min(getattr(bb,d+'max'),getattr(cb,d+'max')) >
-                               max(getattr(bb,d+'min'),getattr(cb,d+'min'))+_TOL for d in 'xyz'):
-                            candidates.append(tool)
-                    trimmed.append(kernel.boolean('subtract',piece,candidates) if candidates else piece)
-                parts[i] = trimmed
-    if automatic and parallel:
-        for _,a,b,_ in corners:
-            if any(eff[j].get('hem') or abs(eff[j]['angle']-90)>1e-6 for j in (a,b)):continue
-            left,right=parts[a][0],parts[b][0]
-            key=('auto-root-partition',_sig(right),_sig(left))
-            if key[1] is None or key[2] is None:key=None
-            parts[b][0]=_ops_memo(key,lambda right=right,left=left:kernel.boolean('subtract',right,[left]))
-    for i in parts:
-        # Corner cuts must not silently shorten a flange until its requested
-        # free end disappears (e.g. inward returns longer than the box opening).
-        end, _, _, direction = (_hem_end_geom(eff[i], 'out', t) if eff[i].get('hem') else _tip_geom(eff[i], 'out', t))
-        vertices = [np.array(v.toTuple()) for v in parts[i][-1].Vertices()
-                    if abs(float((np.array(v.toTuple())-end) @ direction)) < _TOL]
-        axis = _unit(eff[i]['p1']-eff[i]['p0'])
-        if len(vertices) < 2 or np.ptp([float(v @ axis) for v in vertices]) < _TOL:
-            raise kernel.CadError("Narożniki zabierają cały koniec kołnierza. Zmniejsz jego długość albo zmień kierunek gięcia.")
-    return parts
+            plane = capped[0] if capped is not None else (P,outward)
+            parts[i] = [_endcut(piece,*plane,K) for piece in parts[i]]
+            continue
+        if peer is None:
+            # Keep the same seam as the preceding bend while a box is
+            # assembled one edge at a time. A missing peer is not a wall
+            # at the old base width and must not truncate the return.
+            sign = 1 if owner == a else -1
+            parts[i] = [_miter(part, P, N, sign, gap/2, K, K) for part in parts[i]]
+            continue
+        sign = 1 if owner == a else -1
+        # The retained diagonal mode is needed to replay existing projects.
+        parts[i] = [_miter(part,P,N,sign,gap/2,K,K) for part in parts[i]]
+        relieve_bend(i,corner)
+
+
+_TRIM_KINDS = {'corner': ('parts', 'local_caps'), 'parallel': ('result', 'caps')}
+
+
+def _trim_levels(ctx, kind):
+    """Przycina kołnierze poziomami (najpierw przy płycie, potem kolejne gięcia). Kołnierze jednego poziomu czytają tylko
+    wyniki niższych poziomów, więc przy gotowych procesach liczących idą równolegle - każdy kołnierz zawsze do tego samego
+    procesu, który pamięta jego wcześniejsze cięcia (dodanie kolejnego kołnierza nie liczy narożników od nowa)."""
+    from . import workers
+    parts_key, state_key = _TRIM_KINDS[kind]
+    trim = _trimmer(kind)
+    depths = ctx['depths']
+    order = sorted(range(len(depths)), key=lambda j: depths[j])
+    for depth in sorted(set(depths)):
+        ids = [i for i in order if depths[i] == depth]
+        done = None
+        if len(ids) >= 2 and workers.ready():
+            payload = dict(kind=kind, recipe=ctx['recipe'], eff=ctx['eff'], corners=ctx['corners'],
+                           version=ctx.get('parallel_version'), closed=ctx.get('closed'), local_planes=ctx.get('local_planes'),
+                           lower={j: [(p, _sig(p)) for p in ctx[parts_key][j]] for j in ctx[parts_key] if depths[j] < depth},
+                           state=dict(ctx[state_key]))
+            done = workers.run_affine([(('trim', kind, i), _trim_job, (payload, i)) for i in ids])
+        if done is None:
+            for i in ids:
+                trim(ctx, i)
+            continue
+        for i, (pieces, state) in zip(ids, done):
+            ctx[parts_key][i] = [_signed(p, sig) if sig is not None else p for p, sig in pieces]
+            ctx[state_key].update(state)
+
+
+def _trimmer(kind):
+    if kind == 'corner':
+        return _trim_corner_flange
+    from . import sheetparallel
+    return sheetparallel._trim
+
+
+def _trim_job(payload, i):
+    """W procesie liczącym: przycięcie jednego kołnierza. Zwraca (części z podpisami, wpisy stanu tego kołnierza)."""
+    kind = payload['kind']
+    if kind == 'corner':
+        ctx = _corner_ctx(payload['recipe'], payload['eff'], payload['corners'], payload['version'], payload['local_planes'])
+    else:
+        from . import sheetparallel
+        ctx = sheetparallel._ctx(payload['recipe'], payload['eff'], payload['corners'], payload['closed'])
+    parts_key, state_key = _TRIM_KINDS[kind]
+    for j, pieces in payload['lower'].items():
+        ctx[parts_key][j] = [_signed(cq.Shape.cast(p.wrapped), sig) if sig is not None else cq.Shape.cast(p.wrapped) for p, sig in pieces]
+    ctx[state_key].update(payload['state'])
+    _trimmer(kind)(ctx, i)
+    return ([(p, _sig(p)) for p in ctx[parts_key][i]],
+            {key: value for key, value in ctx[state_key].items() if key[0] == i and key not in payload['state']})
 
 
 def _build_corner_sheet(base, recipe, eff, corners, parallel_version=ENGINE):
