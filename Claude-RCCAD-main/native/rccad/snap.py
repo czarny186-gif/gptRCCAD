@@ -10,10 +10,12 @@ import time
 import numpy as np
 from . import kernel
 
-LEVELS = (.01, .02, .05, .1, .2, .5, 1, 2, 5, 10)
+LEVELS = (.01, .02, .05, .1, .2, .5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000)
 RADIUS = 12.0         # px - zasięg punktów i krawędzi
-GRID_RADIUS = 6.0     # px - narożnik kratki tylko blisko (siatka jest wszędzie, więc mniejszy zasięg)
+GRID_RADIUS = 9.0     # px - najwyżej tyle od narożnika kratki (i nie dalej niż 45% kratki - patrz grid_radius)
+GRID_PX = 8.0         # px - najmniejszy odstęp linii siatki (tak samo jak rysowana siatka w widoku)
 DWELL = 0.25          # s - tyle kursor musi zostać przy punkcie, żeby przyciąganie się włączyło
+GRID_DWELL = 0.06     # s - do siatki kursor klei się prawie od razu (i przeskakuje po jej narożnikach, dopóki jest blisko)
 PLANE_TOL = 1e-4      # mm - krawędź bryły leży na płaszczyźnie szkicu
 
 # priorytet (mniejszy wygrywa): punkty geometrii, środki, krawędzie, siatka
@@ -154,7 +156,14 @@ def grid_step(view, geometry):
     """Krok siatki dopasowany do powiększenia (min. 12 px między liniami), jak rysowana siatka."""
     s = _project(view, geometry.world([(0, 0), (1, 0)]))[0]
     px = float(np.hypot(*(s[1] - s[0]))) if len(s) == 2 else 1.0
-    return next((g for g in LEVELS if g * px >= 12), 10)
+    return next((g for g in LEVELS if g * px >= GRID_PX), LEVELS[-1])
+
+
+def grid_radius(view, geometry, step):
+    """Zasięg przyciągania do narożnika kratki: do GRID_RADIUS px, ale najwyżej 45% odstępu linii (sąsiednie narożniki się nie mylą)."""
+    s = _project(view, geometry.world([(0, 0), (step, 0)]))[0]
+    px = float(np.hypot(*(s[1] - s[0]))) if len(s) == 2 else GRID_PX
+    return max(4.0, min(GRID_RADIUS, .45 * px))
 
 
 def candidate(view, geometry, x, y, raw):
@@ -196,7 +205,7 @@ def candidate(view, geometry, x, y, raw):
         grid = grid_step(view, geometry)
         u, v = round(raw[0] / grid) * grid, round(raw[1] / grid) * grid
         s = _project(view, geometry.world([(u, v)]))
-        if s[1].all() and float(np.hypot(*(s[0][0] - cursor))) <= GRID_RADIUS:
+        if s[1].all() and float(np.hypot(*(s[0][0] - cursor))) <= grid_radius(view, geometry, grid):
             best = (P_GRID, 0.0, u, v, 'Siatka')
     return None if best is None else (float(best[2]), float(best[3]), best[4])
 
@@ -217,12 +226,18 @@ class Dwell:
     def _key(c):
         return (c[2], round(c[0], 6), round(c[1], 6)) if c[2] not in ('Krawędź', 'Krawędź ściany', 'Okrąg') else (c[2],)
 
+    def delay_for(self, c):
+        """Czas oczekiwania dla kandydata: siatka prawie od razu, punkty i krawędzie geometrii - DWELL."""
+        return min(self.delay, GRID_DWELL) if c is not None and c[2] == 'Siatka' else self.delay
+
     def update(self, c, x, y):
         """c = kandydat z candidate() albo None. Zwraca (punkt przyciągnięty albo None, czy trzeba odczekać i zapytać ponownie)."""
         now = self.clock()
         if self._engaged is not None:
             label, ex, ey = self._engaged
-            if c is not None and c[2] == label and math.hypot(x - ex, y - ey) <= RADIUS:
+            if c is not None and c[2] == label and (label == 'Siatka' or math.hypot(x - ex, y - ey) <= RADIUS):
+                if label == 'Siatka':
+                    self._engaged = (label, x, y)       # po siatce kursor przeskakuje z narożnika na narożnik bez czekania
                 return c, False
             self._engaged = None
         if c is None:
@@ -230,7 +245,7 @@ class Dwell:
             return None, False
         key = self._key(c)
         if self._pending is not None and self._pending[0] == key and math.hypot(x - self._pending[2], y - self._pending[3]) <= RADIUS:
-            if now - self._pending[1] >= self.delay:
+            if now - self._pending[1] >= self.delay_for(c):
                 self._engaged, self._pending = (c[2], x, y), None
                 return c, False
             return None, True

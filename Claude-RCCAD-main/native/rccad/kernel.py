@@ -701,10 +701,11 @@ def hole(shape, radius, x, y, depth=0):
     return result
 
 
-def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0)):
+def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
+    """center: punkt obrotu (domyślnie środek bryły; grupa obraca się wokół wspólnego środka)."""
     if not all(isfinite(float(v)) for v in (*translation, *rotation)):
         raise CadError("Współrzędne muszą być skończonymi liczbami.")
-    center = shape.Center().toTuple()
+    center = tuple(float(c) for c in center) if center is not None else shape.Center().toTuple()
     result = shape
     for axis, angle in zip(((1, 0, 0), (0, 1, 0), (0, 0, 1)), rotation):
         if angle:
@@ -713,10 +714,10 @@ def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0)):
     return valid(result.translate(tuple(float(v) for v in translation)), bool(shape.Solids()))
 
 
-def transform_matrix(shape, translation=(0, 0, 0), rotation=(0, 0, 0)):
-    """Macierz 3x4 tego samego przekształcenia co transform(): obroty wokół osi X, Y, Z przez środek bryły
+def transform_matrix(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
+    """Macierz 3x4 tego samego przekształcenia co transform(): obroty wokół osi X, Y, Z przez środek bryły (albo center)
     (kolejno), potem przesunięcie. Służy do przeniesienia razem z bryłą danych w niej zapisanych (np. przepisu blachy)."""
-    c = np.array(shape.Center().toTuple(), float)
+    c = np.array(center if center is not None else shape.Center().toTuple(), float)
     R = np.eye(3)
     for axis, angle in zip(np.eye(3), rotation):
         if angle:

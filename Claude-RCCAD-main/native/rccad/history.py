@@ -828,8 +828,12 @@ def run_pattern(bodies, recipe):
         merged = kernel.boolean('union', source, copies) if copies else source
         return _replace(bodies, body.changed(merged))
     out = pad_ids(recipe.get('out', ()), len(copies), (recipe.get('out') or [body.id])[0])
-    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i]).prepared() for i, sh in enumerate(copies)]
-    current = _replace(bodies, body.changed(source)) if moved else list(bodies)
+    group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
+    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group).prepared() for i, sh in enumerate(copies)]
+    source_body = body.changed(source) if moved else body
+    if group:
+        source_body = replace(source_body, group=group)
+    current = _replace(bodies, source_body) if (moved or group) else list(bodies)
     return [*current, *made]
 
 
@@ -918,11 +922,16 @@ def run_shell(bodies, recipe):
 
 
 def run_transform(bodies, recipe):
-    body = _body(bodies, recipe['id'])
+    """Przesunięcie / obrót obiektu - albo całej grupy (ids, wspólny środek obrotu center)."""
     v = tuple(float(c) for c in recipe['v'])
     tr, rot = (v, (0, 0, 0)) if recipe['mode'] == 'move' else ((0, 0, 0), v)
-    shape = kernel.transform(body.shape, tr, rot)
-    return _replace(bodies, body.placed(shape, kernel.transform_matrix(body.shape, tr, rot)))
+    center = recipe.get('center')
+    out = list(bodies)
+    for identifier in recipe.get('ids') or [recipe['id']]:
+        body = _body(out, identifier)
+        shape = kernel.transform(body.shape, tr, rot, center)
+        out = _replace(out, body.placed(shape, kernel.transform_matrix(body.shape, tr, rot, center)))
+    return out
 
 
 def outward_normal(shape, face, normal=None):
@@ -1028,7 +1037,9 @@ def split_shapes(bodies, recipe):
         origin = np.array(recipe['origin'], float) + n * float(recipe.get('offset', 0.0))
         return kernel.split_plane(body.shape, n, origin)
     if method == 'sketch':
-        return kernel.split_sketch(body.shape, _body(bodies, recipe['tool']).shape)
+        tool = _body(bodies, recipe['tool'])
+        members = [b.shape for b in bodies if tool.group and b.group == tool.group and b.kind == 'sketch' and b.visible] or [tool.shape]
+        return kernel.split_sketch(body.shape, members[0] if len(members) == 1 else kernel.compound(members))
     if method == 'body':
         return kernel.split_body(body.shape, _body(bodies, recipe['tool']).shape)
     raise kernel.CadError('Nieznana metoda przecięcia.')
@@ -1050,7 +1061,7 @@ def run_split(bodies, recipe):
     for b in bodies:
         if b.id == body.id:
             out.extend(new)
-        elif recipe['method'] == 'sketch' and b.id == recipe.get('tool'):
+        elif recipe['method'] == 'sketch' and (b.id == recipe.get('tool') or (b.group and b.group == _body(bodies, recipe['tool']).group)):
             out.append(replace(b, visible=False))
         else:
             out.append(b)
@@ -1278,7 +1289,9 @@ def reads(recipe, current):
             else:
                 ids.add(spec['id'])
         return ids
-    if kind in ('mod', 'shell', 'transform', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode'):
+    if kind == 'transform':
+        return set(recipe.get('ids') or [recipe['id']])
+    if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode'):
         return {recipe['id']}
     if kind == 'bool':
         return {recipe['base'], *recipe['tools']}

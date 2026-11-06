@@ -48,6 +48,10 @@ QPushButton#chip { background:#fff; border:1px solid #bdccdb; border-radius:8px;
 QPushButton#chip:hover { border-color:#187ac1; }
 QPushButton#chip:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
 QPushButton#chip:disabled { background:#eef2f6; color:#a9b9c8; border-color:#d6e0ea; }
+QPushButton#dirchip { background:#f3f8fd; border:1px solid #d3e0ec; border-radius:8px; color:#5b7690; font-size:16px; font-weight:800; padding:0; }
+QPushButton#dirchip:hover { border-color:#8fc0f2; background:#eaf4ff; }
+QPushButton#dirchip:checked { background:#2f87e8; border-color:#2f87e8; color:#ffffff; }
+QToolButton#segbtn:disabled { color:#b3c2d0; background:#f4f6f8; border-color:#e1e7ee; }
 QToolButton#cubeX, QToolButton#cubeY, QToolButton#cubeZ, QToolButton#cubeI { border:1px solid transparent; border-radius:18px; color:#fff; font-weight:700; font-size:12px; }
 QToolButton#cubeX { background:#dc5658; } QToolButton#cubeY { background:#39a56d; } QToolButton#cubeZ { background:#4589e7; } QToolButton#cubeI { background:#677e99; }
 QToolButton#cubeX:hover, QToolButton#cubeY:hover, QToolButton#cubeZ:hover, QToolButton#cubeI:hover { border:1px solid #fff; }

@@ -1261,42 +1261,62 @@ class StudioWindow(QMainWindow):
         # --- szyk (prostokątny / kołowy / wzdłuż linii) ---
         self.pat_id, self.pat_path = None, None
         self.pat_picking = False
-        self.pat_panel, lay = self._panel(312, 'Szyk', 'x_pattern', 'Prostokątny · kołowy · wzdłuż linii', plain=True)
+        self.pat_panel, lay = self._panel(312, 'Szyk', 'x_pattern', 'Prostokątny · kołowy · wzdłuż linii', plain=True, scroll=True)
         self.pat_step1 = ui.StepRow(1, 'x_object', 'Obiekt do szyku', plain=True)
         self.pat_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia lub krawędź)', plain=True)
         lay.addWidget(self.pat_step1)
         self.pat_filter = ui.Segmented([('Auto', 'auto', 'x_object'), ('Bryła', 'solid', 'x_extrude'), ('Szkic', 'sketch', 'x_area')], 20)
+        for b, tip in zip(self.pat_filter._buttons, ('Bryła albo szkic - co jest pod kursorem', 'Tylko bryły', 'Tylko szkice')):
+            b.setToolTip(tip)
         lay.addWidget(self.pat_filter)
         lay.addWidget(self.pat_step2)
-        self.pat_kind = ui.Segmented([('Prostokątny', 'rect', 'x_pat_rect'), ('Kołowy', 'circ', 'x_pat_circ'), ('Wzdłuż linii', 'path', 'x_pat_path')], 34)
+        self.pat_kind = ui.Segmented([('Prostokątny', 'rect', 'x_pat_rect'), ('Kołowy', 'circ', 'x_pat_circ'), ('Wzdłuż linii', 'path', 'x_pat_path')], 30)
         lay.addWidget(self.pat_kind)
+        # prostokątny: tabela oś | ilość | odstęp | kierunek (od obiektu wyjściowego)
         self.pat_rect = QWidget()
-        grid = QVBoxLayout(self.pat_rect)
+        grid = QGridLayout(self.pat_rect)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(6)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for col, text in ((1, 'Ilość'), (2, 'Odstęp (mm)'), (3, 'Kierunek')):
+            grid.addWidget(_label(text), 0, col)
         self.pat_counts = [_spin(3 if i == 0 else 1, 1, 200, 0, 1) for i in range(3)]
-        self.pat_gaps = [_spin(20, -1e5, 1e5, 2, 1) for _ in range(3)]
+        self.pat_gaps = [_spin(20, 0, 1e5, 2, 1) for _ in range(3)]
+        self.pat_dirs = []
+        arrows = (('←', '→', 'w lewo', 'w prawo'), ('↓', '↑', 'w tył (-Y)', 'w przód (+Y)'), ('↓', '↑', 'w dół', 'w górę'))
         for i, axis in enumerate('XYZ'):
-            row = QHBoxLayout()
-            row.setSpacing(8)
             pic = QLabel()
-            pic.setFixedSize(30, 30)
-            pic.setPixmap(ui.icons.pixmap('tr_m' + axis.lower(), 30))
-            row.addWidget(pic, 0, Qt.AlignBottom)
-            c1, c2 = QVBoxLayout(), QVBoxLayout()
-            c1.addWidget(_label(f'Ilość {axis}'))
-            c1.addWidget(self.pat_counts[i])
-            c2.addWidget(_label(f'Odstęp {axis} (mm)'))
-            c2.addWidget(self.pat_gaps[i])
-            row.addLayout(c1)
-            row.addLayout(c2)
-            grid.addLayout(row)
+            pic.setFixedSize(26, 26)
+            pic.setPixmap(ui.icons.pixmap('tr_m' + axis.lower(), 26))
+            pic.setToolTip(f'Oś {axis}')
+            grid.addWidget(pic, i + 1, 0)
+            self.pat_counts[i].setFixedWidth(52)
+            grid.addWidget(self.pat_counts[i], i + 1, 1)
+            grid.addWidget(self.pat_gaps[i], i + 1, 2)
+            box = QHBoxLayout()
+            box.setSpacing(3)
+            pair = []
+            for sign, (text, tip) in ((-1, (arrows[i][0], arrows[i][2])), (1, (arrows[i][1], arrows[i][3]))):
+                b = QPushButton(text)
+                b.setObjectName('dirchip')
+                b.setCheckable(True)
+                b.setChecked(sign > 0)
+                b.setFixedSize(30, 30)
+                b.setToolTip(f'Kopie {tip} od obiektu wyjściowego')
+                b.sign = sign
+                pair.append(b)
+                box.addWidget(b)
+            for b in pair:
+                b.clicked.connect(lambda _=False, b=b, pair=pair: self._pattern_dir(pair, b))
+            self.pat_dirs.append(pair)
+            grid.addLayout(box, i + 1, 3)
+        grid.setColumnStretch(2, 1)
         lay.addWidget(self.pat_rect)
         self.pat_circ = QWidget()
         cl = QVBoxLayout(self.pat_circ)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(6)
-        self.pat_axis = ui.Segmented([('Oś Z', 'Z', 'tr_rz'), ('Oś X', 'X', 'tr_rx'), ('Oś Y', 'Y', 'tr_ry')], 30)
+        self.pat_axis = ui.Segmented([('Oś Z', 'Z', 'tr_rz'), ('Oś X', 'X', 'tr_rx'), ('Oś Y', 'Y', 'tr_ry')], 26)
         self._field(cl, 'Oś obrotu', self.pat_axis)
         crow = QHBoxLayout()
         crow.setSpacing(8)
@@ -1320,7 +1340,7 @@ class StudioWindow(QMainWindow):
             col.addWidget(spin)
             prow.addLayout(col)
         cl.addLayout(prow)
-        self.pat_pick = QPushButton('Wskaż punkt środka na modelu')
+        self.pat_pick = QPushButton('Wskaż środek na modelu')
         self.pat_pick.setCheckable(True)
         self.pat_pick.toggled.connect(lambda on: self._pattern_pick_toggled(on))
         cl.addWidget(self.pat_pick)
@@ -1347,14 +1367,27 @@ class StudioWindow(QMainWindow):
         self.pat_fit.setChecked(True)
         ll.addWidget(self.pat_fit)
         lay.addWidget(self.pat_line)
-        self.pat_join = QCheckBox('Połącz kopie w jedną bryłę')
-        lay.addWidget(self.pat_join)
+        # wynik: kopie osobno / połączone w jedną bryłę / jako jeden element (grupa)
+        self.pat_result = ui.Segmented([('Osobno', 'separate', 'x_pat_separate'), ('Jeden element', 'group', 'x_pat_group'), ('Jedna bryła', 'join', 'x_pat_join')], 30)
+        for b, tip in zip(self.pat_result._buttons, ('Każda kopia jest osobnym obiektem',
+                                                     'Kopie i oryginał zachowują się jak jeden element: kliknięcie zaznacza wszystkie, wyciągnięcie / wycięcie '
+                                                     'szkicu działa na wszystkie, przesuwanie i obracanie przenosi je razem',
+                                                     'Bryły: kopie łączą się z oryginałem w jedną bryłę')):
+            b.setToolTip(tip)
+        self._field(lay, 'Wynik', self.pat_result)
+        self.pat_join = QCheckBox()           # zgodność: stan „Jedna bryła” (używany w testach i przepisach)
+        self.pat_join.hide()
+        self.pat_join.toggled.connect(lambda on: self.pat_result.setCurrentIndex(2 if on else (0 if self.pat_result.currentData() == 'join' else self.pat_result.currentIndex())))
+        self.pat_result.currentIndexChanged.connect(lambda *_: self.pat_join.setChecked(self.pat_result.currentData() == 'join'))
         self.pat_status = _label('', 'status')
         lay.addWidget(self.pat_status)
-        self._buttons(lay, 'Zastosuj (Enter)', 'Zamknij', self.apply_pattern, lambda: self.set_mode(None))
+        footer = self.pat_panel.footer
+        self._buttons(footer, 'Zastosuj (Enter)', 'Zamknij', self.apply_pattern, lambda: self.set_mode(None))
         reset = QPushButton('Zmień obiekt')
         reset.clicked.connect(lambda _=False: self.reset_pattern())
-        lay.addWidget(reset)
+        footer.addWidget(reset)
+        for spin in (*self.pat_gaps, self.pat_ccount, self.pat_angle, *self.pat_pivot, self.pat_lcount, self.pat_lgap, self.pat_radius):
+            spin.setMinimumWidth(40)          # pola mieszczą się w panelu (bez wystawania pod pasek przewijania)
         self.pat_kind.currentIndexChanged.connect(lambda *_: self._pattern_kind_changed())
         for w in (*self.pat_counts, *self.pat_gaps, self.pat_ccount, self.pat_angle, self.pat_lcount, self.pat_lgap, self.pat_radius):
             w.valueChanged.connect(lambda *_: self._timers['pattern'].start())
@@ -1484,7 +1517,7 @@ class StudioWindow(QMainWindow):
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self.text_panel.adjustSize()
@@ -1680,6 +1713,7 @@ class StudioWindow(QMainWindow):
         self.pat_id, self.pat_path = None, None
         self.mod_vertices = {}
         self.t_target = None
+        self.t_group = []
         self.edges = {}
         self._hover_key = None
         for key, button in self.tools.items():
@@ -1960,7 +1994,7 @@ class StudioWindow(QMainWindow):
         c = snapping.candidate(self.view, self._snap_cache[1], x, y, raw)
         point, wait = self._dwell.update(c, x, y)
         if wait:
-            self._dwell_timer.start(int(snapping.DWELL * 1000) + 15)
+            self._dwell_timer.start(int(self._dwell.delay_for(c) * 1000) + 15)
         return point if point is not None else (float(raw[0]), float(raw[1]), None)
 
     def _dwell_refresh(self):
@@ -3045,16 +3079,29 @@ class StudioWindow(QMainWindow):
                 if name:
                     self.enter_sketch(name)
                     return
+            members = self._group_ids(bid)
             if bid is None:
                 if not (shift or ctrl):
                     self.selected = []
             elif shift or ctrl:
-                self.selected = [i for i in self.selected if i != bid] if bid in self.selected else [*self.selected, bid]
+                self.selected = [i for i in self.selected if i not in members] if bid in self.selected else [*self.selected, *[i for i in members if i not in self.selected]]
             else:
-                self.selected = [bid]
+                self.selected = members          # obiekt z grupy zaznacza całą grupę
             self.refresh()
 
+    def _group_ids(self, bid):
+        """Obiekt razem z pozostałymi z jego grupy (np. szyk „jako jeden element”); bez grupy - sam obiekt."""
+        body = self.document.get(bid) if bid else None
+        if body is None or not body.group:
+            return [bid] if bid else []
+        return [b.id for b in self.document.bodies if b.group == body.group]
+
     def pick_object(self, x, y):
+        """Obiekt pod kursorem. Linia szkicu blisko kursora ma pierwszeństwo przed bryłą, na której leży (szkic narysowany
+        na ścianie łatwo wskazać, np. do cięcia bryły szkicem), a zamknięty szkic na ścianie wygrywa z samą ścianą."""
+        hit = self.view.nearest_edge(x, y, kinds=('sketch',))
+        if hit is not None:
+            return hit[0]
         bid = self.view.pick_body(x, y)
         if bid is None:
             hit = self.view.nearest_edge(x, y)
@@ -3173,7 +3220,7 @@ class StudioWindow(QMainWindow):
         if region is not None and (solid is None or region[0] <= solid[0] + max(5e-3, 1e-4 * solid[0])):
             frame = kernel.frame_of(region[1])
             face = region[2]
-            return self._with_letters(dict(kind='region', id=None, face=face, wire=face.outerWire(), plane=region[1], normal=tuple(frame.normal), center=face.Center().toTuple()), x, y)
+            return self._with_group(self._with_letters(dict(kind='region', id=None, face=face, wire=face.outerWire(), plane=region[1], normal=tuple(frame.normal), center=face.Center().toTuple()), x, y), x, y)
         if solid is not None:
             return solid[1]
         bid = self.view.pick_profile(x, y)
@@ -3182,8 +3229,53 @@ class StudioWindow(QMainWindow):
             frame = kernel.frame_of(body.plane)
             normal = kernel.profile_normal(body.shape, frame.normal)   # szkic mógł zostać obrócony: wyciągamy wzdłuż jego rzeczywistej normalnej
             tilted = abs(float(np.dot(normal, frame.normal))) < 1 - 1e-6
-            return dict(kind='sketch', id=bid, face=None, wire=body.shape, plane=None if tilted else body.plane, normal=normal, center=body.shape.Center().toTuple())
+            return self._with_group(dict(kind='sketch', id=bid, face=None, wire=body.shape, plane=None if tilted else body.plane, normal=normal, center=body.shape.Center().toTuple()), x, y)
         return None
+
+    def _sketch_profile(self, body):
+        frame = kernel.frame_of(body.plane)
+        normal = kernel.profile_normal(body.shape, frame.normal)
+        tilted = abs(float(np.dot(normal, frame.normal))) < 1 - 1e-6
+        return dict(kind='sketch', id=body.id, face=None, wire=body.shape, plane=None if tilted else body.plane, normal=normal, center=body.shape.Center().toTuple())
+
+    def _with_group(self, src, x, y):
+        """Szkic z grupy (szyk „jako jeden element”): kliknięcie jednego wybiera do wyciągnięcia / wycięcia wszystkie szkice grupy
+        (Shift + klik dodaje albo odejmuje całą grupę)."""
+        try:
+            if src.get('letters'):
+                return src
+            if src['kind'] == 'sketch':
+                body = self.document.get(src['id'])
+            else:
+                plane = src['plane']
+                found = self._drawn_sketches().get(self._plane_key(plane))
+                hit = self.view._plane_hit(plane, x, y)
+                if not found or hit is None:
+                    return src
+                body = next((b for b in found[1] if b.group and any(kernel.face_contains(m, hit[1]) for m in hist.material_faces([b]))), None)
+            if body is None or not body.group:
+                return src
+            members = [b for b in self.document.bodies if b.group == body.group and b.kind == 'sketch' and b.id != body.id]
+            if not members:
+                return src
+            cluster = ('group', body.group)
+            siblings = []
+            groups = self._drawn_sketches()
+            for member in members:
+                key = next((k for k, (_, bodies) in groups.items() if any(b.id == member.id for b in bodies)), None)
+                regions = []
+                if key is not None:
+                    plane, bodies = groups[key]
+                    material = hist.material_faces([member])
+                    regions = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=src['normal'], center=f.Center().toTuple(), cluster=cluster)
+                               for f in self._regions_for(key, plane, bodies) if any(kernel.face_contains(m, hist._inner_point(f)) for m in material)]
+                if regions:
+                    siblings += regions
+                elif member.shape.IsClosed() if hasattr(member.shape, 'IsClosed') else False:
+                    siblings.append(dict(self._sketch_profile(member), cluster=cluster))
+            return dict(src, cluster=cluster, siblings=[*src.get('siblings', ()), *siblings])
+        except Exception:
+            return src
     def _with_letters(self, src, x, y):
         """Obszar litery napisu: zwykłe kliknięcie wybiera cały napis (wszystkie litery), Shift + klik odznacza / dodaje pojedynczą literę."""
         try:
@@ -5755,7 +5847,11 @@ class StudioWindow(QMainWindow):
         else:
             self.pat_step1.set_state('done', body.name)
             self.pat_step2.set_state('done' if self.pat_path is not None else 'active', 'Wskazana' if self.pat_path is not None else 'Kliknij linię lub krawędź')
+        solid = body is None or body.kind == 'solid'
         self.pat_join.setEnabled(body is not None and body.kind == 'solid')
+        self.pat_result._buttons[2].setEnabled(solid)          # „Jedna bryła” tylko dla brył
+        if not solid and self.pat_result.currentData() == 'join':
+            self.pat_result.setCurrentIndex(0)
         if body is None or (path and self.pat_path is None):
             self.pat_status.setText('Wybierz obiekt.' if body is None else 'Wskaż ścieżkę.')
         self.refresh()
@@ -5840,11 +5936,21 @@ class StudioWindow(QMainWindow):
         self.pat_pick.setChecked(False)
         self._pattern_pivot_changed()
 
+    def _pattern_dir(self, pair, chosen):
+        """Kierunek kopii wzdłuż osi: jeden z dwóch przycisków (strzałek) jest zawsze wciśnięty."""
+        for b in pair:
+            b.setChecked(b is chosen)
+        self._timers['pattern'].start()
+
+    def _pattern_spacing(self):
+        """Odstępy szyku prostokątnego ze znakiem kierunku (strzałki w panelu)."""
+        return [g.value() * next(b.sign for b in pair if b.isChecked()) for g, pair in zip(self.pat_gaps, self.pat_dirs)]
+
     def _pattern_ops(self, body):
         """(kopie, operacja przesunięcia oryginału na zadaną odległość albo None)."""
         kind = self.pat_kind.currentData()
         if kind == 'rect':
-            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=[g.value() for g in self.pat_gaps])), None
+            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing())), None
         if kind == 'circ':
             d0, direction = self._radial(body)
             offset = tuple(float(c) for c in direction * (self.pat_radius.value() - d0))
@@ -5892,7 +5998,7 @@ class StudioWindow(QMainWindow):
         join = self.pat_join.isChecked() and body.kind == 'solid'
         kind = self.pat_kind.currentData()
         if kind == 'rect':
-            params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=[g.value() for g in self.pat_gaps])
+            params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing())
         elif kind == 'circ':
             params = dict(axis=list(self.AXES[self.pat_axis.currentData()]), pivot=[s.value() for s in self.pat_pivot], count=int(round(self.pat_ccount.value())),
                           angle=self.pat_angle.value(), radius=self.pat_radius.value())
@@ -5900,6 +6006,8 @@ class StudioWindow(QMainWindow):
             params = dict(points=[[float(c) for c in q] for q in np.asarray(self.pat_path, float)], count=int(round(self.pat_lcount.value())),
                           fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())
         recipe = dict(type='pattern', id=body.id, kind=kind, params=params, join=join, out=[uuid.uuid4().hex for _ in ops])
+        if not join and self.pat_result.currentData() == 'group':
+            recipe['group'] = uuid.uuid4().hex             # „jako jeden element”: oryginał i kopie w jednej grupie
         existing = list(self.document.bodies)
 
         def build():
@@ -5927,17 +6035,23 @@ class StudioWindow(QMainWindow):
     def select_transform_target(self, body):
         self.override = {}
         self.t_target = body
-        box = kernel.bounds(body.shape)
+        self.t_group = self._group_ids(body.id)
+        members = [self.document.get(i) for i in self.t_group]
+        if len(members) > 1:          # grupa: wspólna ramka i wspólny środek obrotu
+            box = kernel.bounds(kernel.compound([m.shape for m in members]))
+            self.t_mass = np.array(box.center.toTuple(), float)
+        else:
+            box = kernel.bounds(body.shape)
+            self.t_mass = np.array(body.shape.Center().toTuple(), float)
         self.t_center = np.array(box.center.toTuple(), float)
-        self.t_mass = np.array(body.shape.Center().toTuple(), float)
         self.view.clear_body_matrices()
         self.t_radius = max(8.0, max(box.xlen, box.ylen, box.zlen) * .75)
-        self.t_status.setText(f'Zaznaczono: {body.name}')
+        self.t_status.setText(f'Zaznaczono: {body.name}' + (f' (grupa: {len(members)})' if len(members) > 1 else ''))
         for spin in self.t_spins:
             spin.blockSignals(True)
             spin.setValue(0)
             spin.blockSignals(False)
-        self.selected = [body.id]
+        self.selected = list(self.t_group)
         self.view.free_drag = (body.id, self.t_center) if self.mode == 'move' else None
         self.refresh()
         self._place_gizmo()
@@ -6057,7 +6171,8 @@ class StudioWindow(QMainWindow):
                 if angle:
                     m.rotate(float(angle), *[1.0 if i == axis else 0.0 for i in range(3)])
             m.translate(*(-c))
-        self.view.set_body_matrix(self.t_target.id, m)
+        for identifier in getattr(self, 't_group', None) or [self.t_target.id]:
+            self.view.set_body_matrix(identifier, m)
     def apply_transform(self):
         if self.busy or self.t_target is None:
             self.toast('Kliknij obiekt, aby go zaznaczyć.')
@@ -6066,16 +6181,20 @@ class StudioWindow(QMainWindow):
         v = tuple(s.value() for s in self.t_spins)
         target, mode = self.t_target, self.mode
         self.override = {}
+        ids = [i for i in (getattr(self, 't_group', None) or [target.id]) if self.document.get(i) is not None] or [target.id]
+        recipe = dict(type='transform', id=target.id, mode=mode, v=[float(c) for c in v])
+        if len(ids) > 1:          # grupa przesuwa się / obraca razem, wokół wspólnego środka
+            recipe.update(ids=ids, center=[float(c) for c in self.t_mass])
+        existing = list(self.document.bodies)
 
         def build():
-            tr, rot = (v, (0, 0, 0)) if mode == 'move' else ((0, 0, 0), v)
-            return target.placed(kernel.transform(target.shape, tr, rot), kernel.transform_matrix(target.shape, tr, rot))
+            return hist.run_transform(existing, recipe)
 
-        def apply(body):
+        def apply(bodies):
             self.view.clear_body_matrices()
-            self.document.pending_op = dict(type='transform', id=target.id, mode=mode, v=[float(c) for c in v])
-            self.document.commit([body if b.id == body.id else b for b in self.document.bodies])
-            self.selected = [body.id]
+            self.document.pending_op = recipe
+            self.document.commit(bodies)
+            self.selected = list(ids)
 
         self.view.set_handles([])
         self.run_operation('Przekształcenie', build, apply, after=lambda: self.set_mode(None))
@@ -7231,12 +7350,13 @@ class StudioWindow(QMainWindow):
             return
         if self.mode is not None:
             self.set_mode(None)
+        members = self._group_ids(oid)
         if modifiers & (Qt.ShiftModifier | Qt.ControlModifier):
-            self.selected = [i for i in self.selected if i != oid] if oid in self.selected else [*self.selected, oid]
-        elif self.selected == [oid]:
+            self.selected = [i for i in self.selected if i not in members] if oid in self.selected else [*self.selected, *[i for i in members if i not in self.selected]]
+        elif sorted(self.selected) == sorted(members):
             self.selected = []
         else:
-            self.selected = [oid]
+            self.selected = members
         self.refresh()
 
     def objects_hide(self, oid):

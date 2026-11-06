@@ -64,7 +64,8 @@ PICKED_FILL = (.53, .69, .93, 1)           # i spokojne, ciepłe niebieskie wype
 PLANE_COLORS = {'XY': '#4a8fe0', 'XZ': '#3aa77a', 'YZ': '#df5a5e'}
 PLANE_SIZES = (2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)
 PLANE_HALF = 14.0
-GRID_LEVELS = (.1, .2, .5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000)
+GRID_LEVELS = (.01, .02, .05, .1, .2, .5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000)
+GRID_PX = 8           # najmniejszy odstęp cienkich linii siatki (px) - tak samo przyciąga kursor (snap.GRID_PX)
 VIEWS = {  # (elewacja, azymut) kamery pyqtgraph
     'iso': (25, -55), 'XY': (90, -90), 'XZ': (0, -90), 'YZ': (0, 0),
     'Z': (90, -90), '-Z': (-90, -90), 'X': (0, 0), '-X': (0, 180), 'Y': (0, 90), '-Y': (0, -90),
@@ -544,12 +545,12 @@ class CadView(gl.GLViewWidget):
         self.overlay.raise_()
 
     def _refresh_grid(self):
-        """Siatka zagęszcza się przy przybliżaniu (min. 12 px między cienkimi liniami) i podąża za środkiem widoku."""
+        """Siatka zagęszcza się przy przybliżaniu (min. GRID_PX px między cienkimi liniami) i podąża za środkiem widoku."""
         if not getattr(self, 'grid_items', None) or self.width() < 2:
             return
         dist = max(float(self.opts['distance']), 1e-6)
         ppm = (self.height() / 2) / (dist * math.tan(math.radians(float(self.opts['fov']) / 2)))
-        step = next((g for g in GRID_LEVELS if g * ppm >= 12), GRID_LEVELS[-1])
+        step = next((g for g in GRID_LEVELS if g * ppm >= GRID_PX), GRID_LEVELS[-1])
         want = next((z for z in PLANE_SIZES if z >= dist * .035), PLANE_SIZES[-1])
         if want != self._plane_half and hasattr(self, '_plane_corners'):
             self._plane_half = float(want)
@@ -569,7 +570,7 @@ class CadView(gl.GLViewWidget):
         o = np.array(frame.origin, float) + x * cu + y * cv
         for r in range(3):
             m.setRow(r, QVector4D(float(x[r]), float(y[r]), float(n[r]), float(o[r])))
-        half = step * 120
+        half = step * 170
         for grid, spacing in zip(self.grid_items, (step, major)):
             grid.setSize(2 * half, 2 * half)
             grid.setSpacing(spacing, spacing)
@@ -1395,9 +1396,13 @@ class CadView(gl.GLViewWidget):
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
             hit = _ray_triangles(_pick_data(body.mesh), origin, direction)
-            if hit is not None and (best is None or hit[0] < best[0]):
-                best = (hit[0], body.id)
-        return best
+            if hit is None:
+                continue
+            # szkic leżący na ścianie bryły (ta sama odległość) wygrywa z bryłą - inaczej trafiałoby się w bryłę
+            tie = 1e-4 * max(1.0, hit[0])
+            if best is None or hit[0] < best[0] - tie or (abs(hit[0] - best[0]) <= tie and body.kind == 'sketch' and best[2] != 'sketch'):
+                best = (hit[0], body.id, body.kind)
+        return None if best is None else best[:2]
 
     def _visible_point(self, point):
         xy, _, _ = self.project_points(np.asarray([point]))

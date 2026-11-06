@@ -16,7 +16,7 @@ TOPICS = [
         'Ustawienia (Ulubione, zapamiętane wartości Kołnierza i Zawinięcia i kolejne) są w folderze „Ustawienia” obok pliku RCCAD Desktop.exe. Po aktualizacji przenieś ten folder do nowej wersji programu, a ustawienia wrócą. Gdy folderu programu nie można zapisać, ustawienia trafiają do profilu użytkownika.']),
     ('sketch', 'Szkic', 'Rysowanie na płaszczyźnie lub ścianie', [
         'Kliknij Szkic, potem płaszczyznę środkową albo dowolną płaską ścianę bryły (podświetli się na pomarańczowo). Można też kliknąć ścianę kostki widoku.',
-        'Wybierz kształt: linia, prostokąt, okrąg, łuk, wielokąt, tekst. Rysuj klik–klik. Kursor w ruchu jest wolny; gdy zatrzymasz go na chwilę przy punkcie (także przed pierwszym kliknięciem, więc widać, gdzie kształt się zacznie), przyciąga się (znacznik pokazuje typ): narożniki kratek siatki, punkty i środki szkiców, krawędzie, okręgi, przecięcia oraz krawędzie i narożniki ścianki, na której rysujesz. Alt wyłącza przyciąganie.',
+        'Wybierz kształt: linia, prostokąt, okrąg, łuk, wielokąt, tekst. Rysuj klik–klik. Kursor w ruchu jest wolny; gdy zatrzymasz go na chwilę przy punkcie (także przed pierwszym kliknięciem, więc widać, gdzie kształt się zacznie), przyciąga się (znacznik pokazuje typ): punkty i środki szkiców, krawędzie, okręgi, przecięcia oraz krawędzie i narożniki ścianki, na której rysujesz. Do narożników kratek siatki kursor klei się prawie od razu i przeskakuje po nich, dopóki jest blisko siatki. Siatka gęstnieje przy przybliżaniu. Alt wyłącza przyciąganie.',
         'Na ściance bryły pojawia się tymczasowy krzyż osi szkicu (czerwona U, zielona V) przechodzący przez środek ścianki; główny krzyż osi jest wtedy ukryty. Strzałki (także z bloku numerycznego) przesuwają widok, Shift + strzałka - większy krok.',
         'Esc lub prawy przycisk kończy bieżącą linię i zostawia ją. Kształty nachodzące na siebie dzielą się na obszary, które można osobno wyciągać. Narzędzie Przytnij usuwa odcinek między przecięciami.',
         'Ofset (w narzędziach szkicu): kliknij kształt (prostokąt, okrąg, obrys z linii, łuk, pojedynczą linię). Otworzy się okienko: Na zewnątrz / Do wewnątrz i odległość. Przy kształcie pojawia się pomarańczowa strzałka - przeciągnij ją na zewnątrz albo do środka (przeciągnięcie przez kształt zmienia stronę). Przerywana linia pokazuje wynik, Zastosuj albo Enter dodaje nowy kształt (oryginał zostaje), Esc wybiera inny kształt. Narożniki zostają ostre.']),
@@ -112,7 +112,9 @@ TOPICS = [
         'Zachowaj oryginał tworzy kopię, Połącz z oryginałem skleja obie bryły w jedną.']),
     ('x_pat_rect', 'Szyk', 'Powielanie obiektów', [
         'Kliknij bryłę lub szkic, wybierz rodzaj: prostokątny (ilość i odstęp w osiach X, Y, Z), kołowy (oś, ilość i kąt całkowity) albo wzdłuż linii (kliknij linię szkicu lub krawędź bryły).',
-        'Kopie widać na bieżąco i zmieniają się razem z wartościami. Połącz kopie w jedną bryłę skleja wynik. Enter zatwierdza.']),
+        'W szyku prostokątnym strzałki w kolumnie Kierunek wybierają, w którą stronę od obiektu wyjściowego powstają kopie: w lewo / w prawo (X), w tył / w przód (Y), w dół / w górę (Z).',
+        'Wynik: Osobno - każda kopia to osobny obiekt; Jeden element - oryginał i kopie zachowują się jak jeden: kliknięcie zaznacza wszystkie, wyciągnięcie albo wycięcie jednego szkicu robi to dla wszystkich, przesuwanie i obracanie przenosi je razem (wokół wspólnego środka), cięcie bryły szkicem tnie wszystkimi; Jedna bryła - kopie brył łączą się z oryginałem.',
+        'Kopie widać na bieżąco i zmieniają się razem z wartościami. Enter zatwierdza.']),
     ('sym', 'Przesuń i obróć', 'Transformacje', [
         'Zaznacz bryłę lub szkic. Przesuwanie: pociągnij kolorową strzałkę osi, kwadrat płaszczyzny albo złap samą bryłę lewym przyciskiem.',
         'Obrót: pociągnij kolorowy pierścień wokół osi. Wartości można też wpisać. Strzałki dopasowują się do ustawienia kamery.',
@@ -125,6 +127,7 @@ TOPICS = [
         'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu historii → Otwórz autozapis.']),
     ('one', 'Widok', 'Kostka i skróty', [
         'Bryła zaznacza się tylko kliknięciem lewym przyciskiem (ciepły niebieski kolor); ponowne kliknięcie odznacza. Wynik operacji nie zaznacza się sam.',
+        'Linia szkicu narysowanego na ścianie bryły ma pierwszeństwo: kliknięcie blisko niej wybiera szkic, a nie bryłę (np. przy cięciu bryły szkicem).',
         'Kostka w prawym górnym rogu: klik w ścianę ustawia widok z tej strony, klik w krawędź lub róg widok ukośny. Domek wraca do widoku głównego.',
         'Skróty: Ctrl+N nowy, Ctrl+O otwórz, Ctrl+S zapisz, Ctrl+Z cofnij, Ctrl+Y ponów, Enter zatwierdź, Esc anuluj.']),
 ]

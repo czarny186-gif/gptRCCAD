@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.43 — szybszy widok
+# RCCAD Desktop 0.4.44 — szyk jako jeden element, kierunki szyku, siatka
+
+## Zmiany 0.4.44
+
+- **Przyciąganie do siatki**: kursor klei się do narożników kratek prawie od razu (0,06 s zamiast 0,25 s) i przeskakuje po nich bez czekania, dopóki jest blisko siatki; zasięg przyciągania większy (do 9 px, nie dalej niż pół kratki).
+- **Gęstsza siatka**: linie co najmniej co 8 px zamiast 12 px (rysowana siatka i przyciąganie zgodnie), także drobniejsze kroki 0,01-0,05 mm przy dużym przybliżeniu.
+- **Szyk - Wynik „Jeden element”**: oryginał i kopie tworzą grupę - kliknięcie jednego zaznacza wszystkie (także na liście obiektów), wyciągnięcie / wycięcie jednego szkicu działa na wszystkie, przesuwanie i obracanie przenosi całą grupę (obrót wokół wspólnego środka), cięcie bryły szkicem z grupy tnie wszystkimi szkicami. Grupa zapisuje się w projekcie. Działa tylko, gdy wybierzesz tę opcję w oknie szyku.
+- **Szyk prostokątny - kierunki**: strzałki przy każdej osi wybierają, w którą stronę od obiektu wyjściowego powstają kopie (w lewo / w prawo, w tył / w przód, w dół / w górę).
+- **Nowe okno szyku**: tabela oś - ilość - odstęp - kierunek, wynik do wyboru ikonami (Osobno / Jeden element / Jedna bryła), przyciski zawsze na dole, treść przewija się na niskim ekranie.
+- **Łatwiejsze wskazywanie szkiców na bryłach**: linia szkicu blisko kursora ma pierwszeństwo przed bryłą, na której leży, a zamknięty szkic na ścianie wygrywa ze ścianą - np. przy cięciu bryły szkicem nie zaznacza się już cała bryła.
+- Panel Przetnij bryłę jest teraz ustawiany przy lewej krawędzi tak jak inne panele.
+
+## RCCAD Desktop 0.4.43 — szybszy widok
 
 ## Zmiany 0.4.43
 

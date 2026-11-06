@@ -616,6 +616,20 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.drawPolygon(QPolygonF([QPointF(4, 36), QPointF(4, 22), QPointF(12, 29)]))
         p.drawPolygon(QPolygonF([QPointF(44, 36), QPointF(44, 22), QPointF(36, 29)]))
         pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 4), QPointF(24, 44))
+    elif kind in ('x_pat_separate', 'x_pat_group', 'x_pat_join'):
+        # wynik szyku: osobne kopie / jeden element (przerywana ramka grupy) / jedna bryła (połączone)
+        if kind == 'x_pat_join':
+            path = QPainterPath()
+            for c in range(3):
+                path.addRoundedRect(QRectF(6 + c * 12, 17, 14, 14), 2.5, 2.5)
+            p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawPath(path.simplified())
+        else:
+            for c in range(3):
+                p.setBrush(QColor(BLUE if c == 0 else BLUE_SOFT)); p.setPen(pen(BLUE, 2.0))
+                p.drawRoundedRect(QRectF(6 + c * 13, 18, 10, 10), 2.4, 2.4)
+            if kind == 'x_pat_group':
+                pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); pn.setDashPattern([2.4, 1.8]); p.setPen(pn); p.setBrush(Qt.NoBrush)
+                p.drawRoundedRect(QRectF(2.5, 13, 43, 20), 6, 6)
     elif kind == 'x_pattern' or kind == 'x_pat_rect':
         for r in range(2):
             for c in range(3):

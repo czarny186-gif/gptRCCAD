@@ -30,6 +30,7 @@ class Body:
     visible: bool = True
     mesh: DisplayMesh | None = field(default=None, compare=False, repr=False)
     meta: dict | None = field(default=None, compare=False, repr=False)   # parametry szkicu (narzędzie, punkty, liczba boków) do edycji wymiarów
+    group: str = field(default='', compare=False)       # wspólna grupa (np. szyk „jako jeden element”): zaznaczanie, wyciąganie i przenoszenie razem
 
     def prepared(self):
         return replace(self, mesh=_mesh(self.shape))
@@ -293,6 +294,8 @@ class Document:
     @staticmethod
     def _entry(body, shape_index):
         entry = dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, shape=shape_index)
+        if body.group:
+            entry['group'] = body.group
         if body.meta:
             entry['meta'] = body.meta
         if isinstance(body.plane, Frame):
@@ -428,8 +431,10 @@ class Document:
         if kind not in ('solid', 'mesh', 'sketch') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
             raise CadError("Nieprawidłowy typ obiektu lub płaszczyzna.")
         meta = item.get('meta')
+        group = item.get('group', '')
+        group = group if isinstance(group, str) and re.fullmatch('[0-9a-f]{1,40}', group) else ''
         return Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)), mesh=mesh,
-                    meta=meta if isinstance(meta, dict) else None)
+                    meta=meta if isinstance(meta, dict) else None, group=group)
 
     @classmethod
     def load(cls, path):

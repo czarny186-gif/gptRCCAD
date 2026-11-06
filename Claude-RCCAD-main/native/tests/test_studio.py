@@ -1936,5 +1936,48 @@ class StudioTests(unittest.TestCase):
             if hit is not None:
                 self.assertEqual(hit[0],a.id)
 
+    def test_pattern_directions_and_group_acts_as_one_element(self):
+        w=self.w;self.sketch('rect',(0,0),(5,5));src=w.document.bodies[0];w.choose_tool(None);w.set_mode(None)
+        w.toggle_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=src.id),patch.object(w.view,'nearest_edge',return_value=None):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.pat_id,src.id)
+        w.pat_counts[0].setValue(3);w.pat_gaps[0].setValue(10);w.pat_counts[1].setValue(2);w.pat_gaps[1].setValue(8)
+        w.pat_dirs[0][0].click();w.pat_dirs[1][0].click()                   # X w lewo, Y w dół
+        self.assertEqual(w._pattern_spacing()[:2],[-10.0,-8.0])
+        w.pat_result.setCurrentIndex(1);self.assertFalse(w.pat_join.isChecked())
+        w.apply_pattern();self.wait()
+        sketches=[b for b in w.document.bodies if b.kind=='sketch'];self.assertEqual(len(sketches),6)
+        self.assertTrue(sketches[0].group and all(b.group==sketches[0].group for b in sketches))
+        xs=sorted(round(b.shape.Center().x) for b in sketches);self.assertEqual(xs[0],-18);self.assertEqual(xs[-1],2)
+        self.assertEqual(min(round(b.shape.Center().y) for b in sketches),-6)
+        # kliknięcie jednej kopii zaznacza całą grupę
+        copy=sketches[-1]
+        with patch.object(w.view,'nearest_edge',return_value=(copy.id,0)):w.view_clicked(5,5,False,False)
+        self.assertEqual(sorted(w.selected),sorted(b.id for b in sketches))
+        # wyciągnięcie: jeden profil z grupy wybiera wszystkie
+        w.set_mode('extrude');centre=np.array(copy.shape.Center().toTuple())
+        with patch.object(w.view,'_plane_hit',lambda pl,x,y:(1.0,centre)),patch.object(w.view,'pick_face',return_value=None):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(len(w.ex_profiles),6)
+        w.apply_extrude();self.wait()
+        self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),6)
+        # przesunięcie przenosi całą grupę; zapis i odczyt zachowuje grupę
+        w.set_mode('move');w.select_transform_target(w.document.get(copy.id));self.assertEqual(len(w.t_group),6)
+        w.t_spins[2].setValue(7);w.apply_transform();self.wait()
+        self.assertTrue(all(abs(b.shape.Center().z-7)<1e-6 for b in w.document.bodies if b.kind=='sketch'))
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'g.rccadx';w.document.save(path)
+            from rccad.document import Document
+            loaded=Document.load(path);self.assertEqual({b.group for b in loaded.bodies if b.kind=='sketch'},{sketches[0].group})
+
+    def test_sketch_on_solid_face_is_picked_before_the_solid(self):
+        import cadquery as cq
+        w=self.w;box=Body('Kostka',k.box(20,20,10)).prepared()
+        line=Body('Linia',cq.Edge.makeLine(cq.Vector(-5,10,10),cq.Vector(25,10,10)),'sketch',k.face_frame((10,10,10),(0,0,1))).prepared()
+        w.document.commit([box,line]);w.refresh(True)
+        x,y=w.view.project_one((10.0,10.0,10.0))
+        self.assertEqual(w.pick_object(x+2,y+1),line.id)                   # linia szkicu na ścianie wygrywa z bryłą
+        far=w.view.project_one((3.0,3.0,10.0));self.assertEqual(w.pick_object(*far),box.id)
+
 if __name__=='__main__':
     unittest.main()
