@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.44 — szyk jako jeden element, kierunki szyku, siatka
+# RCCAD Desktop 0.4.45 — blacha bez zacinania okna
+
+## Zmiany 0.4.45
+
+- **Operacje na blasze w osobnym procesie**: kołnierz, zawinięcie, zmiana reguł, Rozłóż i Zegnij liczą się w procesie liczącym przypisanym do tej blachy (pamięta jej wcześniejsze cięcia), a okno tylko czeka na wynik - już się nie zacina. Pomiar (pudełko z 4 kołnierzami): najdłuższe zamarznięcie okna 1,5-1,8 s → ok. 0,06 s, przy tym samym czasie operacji.
+- **Rozwinięcie przygotowywane w tle w osobnym procesie** (wcześniej w oknie, co je zacinało po każdej zmianie blachy). Rozłóż bierze je gotowe, a gdy jeszcze nie jest gotowe - liczy je proces, który ma blachę w pamięci.
+- **Naprawione przesyłanie kształtów blach do procesów**: niektóre krawędzie blach nie dawały się odczytać po przesłaniu („UnExpected BRep_PointRepresentation”), program wyłączał wtedy procesy i liczył wszystko jeszcze raz - teraz kształty przechodzą w formacie BREP, który czyta wszystko.
+- Błąd jednego zadania nie wyłącza już wszystkich procesów liczących.
+- Dokładna siatka dużych brył liczy się w osobnym procesie (nie blokuje operacji na blachach); bez procesów bryła od razu dostaje dokładną siatkę (bez liczenia jej w oknie).
+
+## RCCAD Desktop 0.4.44 — szyk jako jeden element, kierunki szyku, siatka
 
 ## Zmiany 0.4.44
 

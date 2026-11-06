@@ -113,6 +113,30 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(sorted(refined.edges), sorted(body.mesh.edges))       # krawędzie do wskazywania bez zmian
         self.assertEqual(len(refined.triangles), len(fine.triangles))
 
+    def test_sheet_operations_run_in_the_sheet_process_and_match_local(self):
+        import pickle
+        from rccad import sheetedit as she
+        t = 1.0
+        base = dict(o=[0, 0, 0], x=[1, 0, 0], y=[0, 1, 0], z=[0, 0, 1], lx=60, ly=40, lz=t)
+        rules = dict(gap=.1, relief='none', relief_size=3, joint='sheet', miter=True, auto_corners=True, kfactor=.44)
+        plate = Body('Blacha', k.box(60, 40, t), meta={'sheet': she.state(dict(base=base, t=t, flanges=[], rules=rules))}).prepared()
+        flanges = [dict(kind='base', p0=[60, 0, t], p1=[60, 40, t], n=[0, 0, 1], m=[1, 0, 0], r=1, angle=90, length=10),
+                   dict(kind='base', p0=[60, 40, t], p1=[0, 40, t], n=[0, 0, 1], m=[0, 1, 0], r=1, angle=90, length=10)]
+        recipe = dict(type='sheetbuild', id=plate.id, base=base, t=t, flanges=flanges, rules=rules)
+        with patch.object(workers, 'call_affine', wraps=workers.call_affine) as spy:
+            remote = hist.run_recipe([plate], recipe)[0]
+        self.assertEqual(spy.call_args[0][0], ('sheet', plate.id))                 # proces tej blachy
+        self.assertTrue(remote.mesh is not None and remote.mesh.fine)             # siatka policzona w procesie
+        with patch.object(workers, 'ready', return_value=False):
+            local = hist.run_recipe([plate], recipe)[0]
+        self.assertLess(remote.shape.cut(local.shape).Volume() + local.shape.cut(remote.shape).Volume(), 1e-6)
+        self.assertEqual(remote.meta['sheet']['recipe'], local.meta['sheet']['recipe'])
+        flat = hist.run_recipe([remote], dict(type='sheetmode', id=plate.id, state=remote.meta['sheet'], flat=True, sync=False))[0]
+        self.assertTrue(flat.meta['sheet']['flat'])
+        again = pickle.loads(pickle.dumps(flat.shape))                             # przesyłanie kształtów blachy (BREP)
+        self.assertAlmostEqual(again.Volume(), flat.shape.Volume(), 6)
+        self.assertEqual(len(again.Edges()), len(flat.shape.Edges()))
+
 
 if __name__ == '__main__':
     unittest.main()

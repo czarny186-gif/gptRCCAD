@@ -1893,8 +1893,12 @@ class StudioTests(unittest.TestCase):
 
     def test_heavy_body_shows_coarse_mesh_then_refines_in_background(self):
         import cadquery as cq
-        w=self.w;big=cq.Workplane().box(60,60,5).faces('>Z').workplane().rarray(8,8,6,6).hole(3).edges('|Z').fillet(.4).val()
-        body=Body('Płyta',big).prepared();self.assertFalse(body.mesh.fine)
+        from rccad import workers
+        make=lambda:cq.Workplane().box(60,60,5).faces('>Z').workplane().rarray(8,8,6,6).hole(3).edges('|Z').fillet(.4).val()
+        self.assertTrue(Body('Płyta',make()).prepared().mesh.fine)            # bez procesów liczących: od razu dokładna siatka
+        w=self.w;big=make()
+        with patch.object(workers,'ready',return_value=True):body=Body('Płyta',big).prepared()
+        self.assertFalse(body.mesh.fine)                                        # z procesami: najpierw zgrubna
         w.document.commit([body]);w.refresh()
         end=time.monotonic()+30
         while not w.document.bodies[0].mesh.fine and time.monotonic()<end:

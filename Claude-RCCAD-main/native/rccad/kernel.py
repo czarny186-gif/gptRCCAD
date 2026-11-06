@@ -42,6 +42,37 @@ def is_valid(shape):
         return shape.isValid()
 
 
+def _brep_bytes(shape):
+    """Kształt jako tekstowy BREP bez siatki (przesyłanie do procesów liczących). Zapis binarny cadquery (BinTools) nie
+    odczytuje niektórych krawędzi blach („UnExpected BRep_PointRepresentation”) - BREP tekstowy czyta wszystko."""
+    import io
+    from OCP.BRepTools import BRepTools
+    from OCP.TopTools import TopTools_FormatVersion
+    buffer = io.BytesIO()
+    BRepTools.Write_s(shape.wrapped, buffer, False, False, TopTools_FormatVersion.TopTools_FormatVersion_VERSION_1)
+    return buffer.getvalue()
+
+
+def _from_brep(data):
+    import io
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepTools import BRepTools
+    from OCP.TopoDS import TopoDS_Shape
+    shape = TopoDS_Shape()
+    BRepTools.Read_s(shape, io.BytesIO(data), BRep_Builder())
+    return cq.Shape.cast(shape)
+
+
+def _register_pickling():
+    import copyreg
+    for cls in (cq.Shape, cq.Solid, cq.Compound, cq.Face, cq.Wire, cq.Edge, cq.Shell, cq.Vertex, getattr(cq, 'CompSolid', None)):
+        if cls is not None:
+            copyreg.pickle(cls, lambda shape: (_from_brep, (_brep_bytes(shape),)))
+
+
+_register_pickling()
+
+
 PARALLEL_MESH = True        # w procesach liczących wyłączone: tam równoległość daje sama pula procesów
 
 

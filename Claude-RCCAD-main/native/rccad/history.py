@@ -1096,22 +1096,56 @@ def run_flange(bodies, recipe):
     return _replace(bodies, body.changed(shape))
 
 
+def sheet_job(kind, shape, source, args, with_mesh):
+    """Operacja na blasze (budowa z kołnierzami / rozłożenie / zgięcie) - w procesie liczącym przypisanym do tej blachy
+    (pamięta jej wcześniejsze cięcia i rozwinięcia) albo tutaj. Zwraca (kształt, stan blachy, siatka albo None)."""
+    if kind == 'build':
+        shape, metadata = she.rebuild(shape, source, args) if source else (shm.build_sheet(args), she.state(args))
+    else:
+        flat, sync = args
+        shape, metadata = she.switch(shape, source, flat, sync)
+    mesh = kernel.display_mesh(shape) if with_mesh else None
+    return shape, metadata, mesh
+
+
+def sheet_warm(recipe):
+    """W procesie blachy: rozwinięcie przygotowane zawczasu (Rozłóż / Zegnij potem prawie natychmiast)."""
+    return she.warm(recipe)
+
+
+def _sheet_result(bodies, body, kind, source, args):
+    """Wynik operacji na blasze: w procesie liczącym tej blachy (okno się nie zacina - czeka bez blokady Pythona),
+    a bez procesów - jak dotąd w tym wątku."""
+    from . import workers
+    with_mesh = not kernel.mesh_deferred()
+    place = 'sheet'
+    if kind == 'mode':
+        # rozłożenie / zgięcie: proces rozwinięć, jeśli zdążył już przygotować rozwinięcie tej blachy; inaczej proces budowy
+        # tej blachy (ma ją gotową w pamięci, więc liczy tylko rozwinięcie)
+        try:
+            if workers.prepared(('layout', she._layout_key(source.get('recipe') or {}))):
+                place = 'layout'
+        except Exception:
+            pass
+    try:
+        shape, metadata, mesh = workers.call_affine((place, body.id), sheet_job, kind, body.shape, source, args, with_mesh)
+        out = replace(body, shape=shape, mesh=mesh, meta={'sheet': metadata})
+    except workers.Unavailable:
+        shape, metadata, _ = sheet_job(kind, body.shape, source, args, False)
+        out = replace(body.changed(shape), meta={'sheet': metadata})
+    return _replace(bodies, out)
+
+
 def run_sheetbuild(bodies, recipe):
     """Blacha od podstaw: płyta bazowa i lista kołnierzy zapisane w kroku (geometria liczy się z nich, nie z poprzedniego stanu)."""
     body = _body(bodies, recipe['id'])
-    source=(body.meta or {}).get('sheet')
-    if source:
-        shape,metadata=she.rebuild(body.shape,source,recipe)
-    else:
-        shape,metadata=shm.build_sheet(recipe),she.state(recipe)
-    return _replace(bodies,replace(body.changed(shape),meta={'sheet':metadata}))
+    return _sheet_result(bodies, body, 'build', (body.meta or {}).get('sheet'), recipe)
 
 
 def run_sheetmode(bodies,recipe):
     body=_body(bodies,recipe['id'])
     source=(body.meta or {}).get('sheet') or recipe['state']
-    shape,metadata=she.switch(body.shape,source,recipe['flat'],recipe.get('sync',False))
-    return _replace(bodies,replace(body.changed(shape),meta={'sheet':metadata}))
+    return _sheet_result(bodies, body, 'mode', source, (recipe['flat'], recipe.get('sync', False)))
 
 
 def run_text(bodies, recipe):

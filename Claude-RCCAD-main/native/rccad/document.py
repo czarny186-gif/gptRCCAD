@@ -17,7 +17,9 @@ def _mesh(shape):
     zgrubną siatkę (widać ją od razu), a okno dolicza dokładną w tle (StudioWindow._refine_meshes)."""
     if mesh_deferred():
         return None
-    return display_mesh(shape, coarse=heavy(shape))
+    from . import workers
+    # zgrubna siatka tylko wtedy, gdy dokładną policzy osobny proces - inaczej liczyłaby się w oknie i je zacinała
+    return display_mesh(shape, coarse=workers.ready() and heavy(shape))
 
 
 @dataclass(frozen=True)

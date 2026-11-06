@@ -7222,6 +7222,12 @@ class StudioWindow(QMainWindow):
                 continue
             if key in self._warming or she.is_warm(recipe):
                 continue
+            from . import workers
+            if workers.ready():
+                # rozwinięcie przygotowuje proces rozwinięć tej blachy (ten sam, który potem rozkłada) - okno się nie zacina
+                if workers.prepare(('layout', key), ('layout', body.id), hist.sheet_warm, recipe):
+                    self._warming.add(key)
+                    continue
             self._warming.add(key)
             work = _Work(lambda r=recipe: she.warm(r))
             work.signals.done.connect(lambda _=None, k=key: self._warming.discard(k))
