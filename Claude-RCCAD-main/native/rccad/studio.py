@@ -26,6 +26,7 @@ from .viewcube import ViewCube
 from . import sketchmeta as sm
 from . import settings
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
+from .plywood_ui import PlywoodTools, PLY_MODES
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
         'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'line': 2, 'circleTangent2': 3}
@@ -210,6 +211,7 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
@@ -221,7 +223,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing')
 
 
-class StudioWindow(QMainWindow):
+class StudioWindow(PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -311,10 +313,10 @@ class StudioWindow(QMainWindow):
         self._timers = {}
         for name, slot in (('extrude', self.update_extrude_preview), ('revolve', self.update_revolve_preview), ('shell', self.update_shell_preview), ('sweep', self.update_sweep_preview), ('loft', self.update_loft_preview), ('mod', self.update_mod_preview), ('bool', self.update_bool_preview),
                            ('mirror', self.update_mirror_preview), ('split', self.update_split_preview), ('pattern', self.update_pattern_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
-                           ('gizmo', self._place_gizmo)):
+                           ('gizmo', self._place_gizmo), ('ply_joints', self.update_ply_joints_preview)):
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.setInterval(16 if name in ('extrude', 'mod') else 40)
+            timer.setInterval(16 if name in ('extrude', 'mod') else (300 if name == 'ply_joints' else 40))
             timer.timeout.connect(slot)
             self._timers[name] = timer
         for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
@@ -478,6 +480,11 @@ class StudioWindow(QMainWindow):
                  ('unfold_sheet', ui.style_icon('unfold_sheet',38), 'Rozłóż blachę — edytuj płaskie rozwinięcie'),
                  ('fold_sheet', ui.style_icon('fold_sheet',38), 'Zegnij blachę — przywróć gięcia z wykonanymi zmianami'),
                  ('flat', ui.style_icon('flat', 38), 'Rozwinięcie DXF — zaznacz jedną blachę w drzewie obiektów'),
+                 ('ply', ui.style_icon('ply', 38), 'Płyta — szkic albo ściana jako płyta ze sklejki (laser, frezarka, druk 3D)'),
+                 ('ply_wall', ui.style_icon('ply_wall', 38), 'Ścianka — płyta na krawędzi płyty, jak przy blasze'),
+                 ('ply_between', ui.style_icon('ply_between', 38), 'Półka / przegroda — płyta między dwiema ścianami'),
+                 ('ply_joints', ui.style_icon('ply_joints', 38), 'Połączenia — wczepy, czopy, rowki i nacięcia tam, gdzie płyty się stykają'),
+                 ('ply_cut', ui.style_icon('ply_cut', 38), 'Do cięcia — lista płyt i plik DXF / STL do lasera, frezarki, drukarki'),
                  ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
                  ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii'),
                  ('mdist', ui.style_icon('mdist', 38), 'Pomiar odległości między dwoma punktami'),
@@ -1646,7 +1653,8 @@ class StudioWindow(QMainWindow):
         self.off_side.currentIndexChanged.connect(lambda *_: self._off_update())
         self.off_value.valueChanged.connect(lambda *_: self._off_update())
 
-        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self._build_ply_panels()
+        self.panels = (*self.ply_panels(), *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1689,7 +1697,7 @@ class StudioWindow(QMainWindow):
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels()):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1727,7 +1735,8 @@ class StudioWindow(QMainWindow):
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate,
+                      'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
             focus = QApplication.focusWidget()
@@ -1975,6 +1984,8 @@ class StudioWindow(QMainWindow):
             self.hm_status.setText('Kliknij Zaginaj, potem klikaj krawędzie blachy.')
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Zawinięcie: kliknij krawędź blachy. Krawędź zawija się do środka o 180°.')
+        elif mode in PLY_MODES:
+            self._ply_enter(mode)
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
@@ -3228,6 +3239,8 @@ class StudioWindow(QMainWindow):
                 self._hover_face_only(x, y) if self.sh_id else self._hover_shell_solid(x, y)
             elif self.mode == 'thread':
                 self._th_hover(x, y)
+            elif self.mode in PLY_MODES:
+                self.ply_hover(x, y)
             elif self.mode == 'split':
                 self._split_hover(x, y)
             elif self.mode == 'sheet':
@@ -3327,6 +3340,8 @@ class StudioWindow(QMainWindow):
             self.pick_loft(x, y)
         elif self.mode == 'thread':
             self.pick_thread(x, y, shift)
+        elif self.mode in PLY_MODES:
+            self.ply_clicked(x, y, shift)
         elif self.mode == 'shell':
             self.pick_shell(x, y)
         elif self.mode == 'sheet':
@@ -6918,6 +6933,8 @@ class StudioWindow(QMainWindow):
             self._pattern_drag(hid[3], delta)
         elif hid in ('thS', 'thE', 'thD'):
             self._th_drag(hid, delta)
+        elif hid in ('plyH', 'plyP'):
+            self.ply_handle_dragged(hid, delta)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -6953,6 +6970,8 @@ class StudioWindow(QMainWindow):
             self._place_pattern_handles()
         elif hid.startswith('th'):
             self._th_update()
+        elif hid.startswith('ply'):
+            self._ply_update()
         else:
             self._place_gizmo()
 
@@ -8842,7 +8861,8 @@ class StudioWindow(QMainWindow):
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate}.get(self.mode)
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate,
+                      'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
             if action is None and self.mode == 'sketch' and self.tool == 'offset' and self.off is not None:

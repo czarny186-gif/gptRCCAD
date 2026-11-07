@@ -35,7 +35,7 @@ class StudioTests(unittest.TestCase):
         for p in self.patches:p.start()
 
     def tearDown(self):
-        self.wait();self.w.document._saved_revision=self.w.document._revision;self.w.close();self.app.processEvents()
+        self.wait();self.w.document._saved_revision=self.w.document._revision;self.w.close();self.w.deleteLater();self.app.sendPostedEvents(None,QEvent.DeferredDelete);self.app.processEvents();self.w=None   # okno zwalniane od razu (inaczej pamięć rośnie z każdym testem)
         for p in self.patches:p.stop()
 
     def wait(self):

@@ -96,6 +96,9 @@ class LibraryWindowTests(unittest.TestCase):
             d.close()
         self.w.document._saved_revision = self.w.document._revision
         self.w.close()
+        self.w.deleteLater()
+        from PySide6.QtCore import QEvent
+        self.app.sendPostedEvents(None, QEvent.DeferredDelete)
         self.env.stop()
         self.tmp.cleanup()
 

@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.58 — cięcie szkicem, strzałka skorupy, wierzchołek wielokąta w kursorze
+# RCCAD Desktop 0.4.59 — nowa zakładka Sklejka
+
+## Zmiany 0.4.59
+
+- **Zakładka Sklejka** - meble i pudełka ze sklejki: regały, szafki, pudełka. Pięć narzędzi: Płyta, Ścianka, Półka / przegroda, Połączenia, Do cięcia.
+- **Metoda produkcji**: cięcie laserowe, frezowanie CNC albo druk 3D, z grubością płyty zapamiętywaną osobno dla każdej metody. Metoda decyduje, jakie połączenia da się wykonać (laser tylko na wylot).
+- **Płyta**: dowolny zamknięty profil szkicu (łuki, wycięcia) albo płaska ściana → płyta o grubości sklejki, nad albo pod szkicem; Shift - kilka naraz.
+- **Ścianka**: płyta na prostej krawędzi płyty, jak przy blasze - na podstawie albo przy boku, po wybranej stronie; wysokość strzałką; Shift - kilka krawędzi naraz (dłuższe ścianki przez całą długość, krótsze między nimi).
+- **Półka / przegroda**: płyta między dwiema ścianami naprzeciw siebie, pozioma albo pionowa, położenie strzałką albo kilka płyt rozłożonych równo; przycinana do wolnego miejsca między płytami.
+- **Połączenia rozpoznawane automatycznie**: narożnik (L), płyta w płycie (T), krzyż (X). Do wyboru: wczepy, czopy i gniazda przelotowe, gniazda nieprzelotowe, rowek, nacięcia krzyżowe, bez połączenia. Niedostępne dla metody są wyszarzone, a po zmianie metody zamieniają się na możliwe. Szerokość noska (liczba nosków zawsze nieparzysta), luz pasowania, głębokość gniazd, „psie kości” na średnicę frezu przy CNC. Podgląd na płytach przed zatwierdzeniem, krok w historii.
+- **Do cięcia**: lista płyt z wymiarami i zapis - DXF 1:1 mm (warstwy CUT, POCKET z głębokością, OPIS; przy laserze kompensacja szerokości cięcia) albo osobne pliki STL do druku, płyty położone płasko.
+
+## RCCAD Desktop 0.4.58 — cięcie szkicem, strzałka skorupy, wierzchołek wielokąta w kursorze
 
 ## Zmiany 0.4.58
 

@@ -59,6 +59,8 @@ class Body:
         meta = None
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
+        elif self.kind == 'solid' and self.meta and self.meta.get('ply'):
+            meta = {'ply': dict(self.meta['ply'])}      # płyta ze sklejki zostaje płytą (grubość, metoda, połączenia)
         return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False or (mesh is None and not mesh_deferred()) else mesh, meta=meta)
 
 

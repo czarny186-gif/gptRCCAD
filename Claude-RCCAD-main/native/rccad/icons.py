@@ -367,6 +367,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             fill(_rounded(13, 15, 22, 20, 2), BLUE_SOFT, BLUE)
     elif kind in ('x_thread', 'th_in', 'th_out', 'th_rh', 'th_lh', 'th_full', 'th_len'):
         _draw_thread_icon(p, kind, pen, fill)
+    elif kind in PLY_HEADERS:
+        _draw_ply_tool(p, PLY_HEADERS[kind], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind in PLY_ICONS:
+        _draw_ply_icon(p, kind, pen)
     elif kind == 'x_shell':
         cup = QPainterPath(); cup.moveTo(6, 8); cup.lineTo(6, 42); cup.lineTo(42, 42); cup.lineTo(42, 8); cup.lineTo(33, 8); cup.lineTo(33, 33); cup.lineTo(15, 33); cup.lineTo(15, 8); cup.closeSubpath()
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawPath(cup)
@@ -791,6 +795,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             st(acc, 3.0); p.drawLine(QPointF(16, 27), QPointF(32, 27)); p.drawPolyline(poly([(20, 22), (24, 27), (28, 22)]))
         elif name in ('sheet', 'rules', 'hem'):
             _draw_sheet_ops(p, name, ink, acc, soft, pen)
+        elif name in PLY_TOOLS:
+            _draw_ply_tool(p, name, ink, acc, soft, pen)
         elif name == 'flat':
             # rozwinięcie pudełka: dno z czterema ściankami (krzyż z wycięciami w narożnikach), linie gięcia tylko wewnątrz obrysu
             cross = QPainterPath(); cross.moveTo(15, 4); cross.lineTo(33, 4); cross.lineTo(33, 13); cross.lineTo(35, 15); cross.lineTo(44, 15)
@@ -1142,3 +1148,193 @@ def _draw_thread_icon(p, kind, pen, fill):
         p.drawLine(QPointF(span[0], 40), QPointF(span[1], 40))
         for x in span:
             p.drawLine(QPointF(x, 37), QPointF(x, 43))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# sklejka: narzędzia (t_ply...), nagłówki paneli (x_ply...) i obrazki pól
+# ---------------------------------------------------------------------------------------------------------------
+PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut')
+PLY_HEADERS = {'x_ply': 'ply', 'x_plywall': 'ply_wall', 'x_plybetween': 'ply_between', 'x_plyjoints': 'ply_joints', 'x_plycut': 'ply_cut'}
+PLY_ICONS = ('pm_laser', 'pm_cnc', 'pm_print', 'pl_up', 'pl_down', 'pl_thick', 'pw_on', 'pw_side', 'pw_height', 'pb_h', 'pb_v', 'pb_count',
+             'pb_pos', 'pj_width', 'pj_fit', 'pj_tool', 'pj_depth', 'pc_sheet', 'pc_kerf')
+
+
+def _slab(p, pts, depth, ink, soft, pen, layers=True, acc=None):
+    """Płyta w rzucie izometrycznym: górna ściana (pts, 4 punkty) i boki o wysokości depth; warstwy sklejki na boku."""
+    top = QPolygonF([QPointF(*q) for q in pts])
+    a, b, c, d = pts
+    for e0, e1 in ((d, c), (c, b)):
+        side = QPolygonF([QPointF(*e0), QPointF(*e1), QPointF(e1[0], e1[1] + depth), QPointF(e0[0], e0[1] + depth)])
+        p.setBrush(soft); p.setPen(pen(ink, 2.0)); p.drawPolygon(side)
+        if layers:
+            p.setPen(pen(acc or ink, 1.1))
+            for k in (1, 2):
+                y = depth * k / 3
+                p.drawLine(QPointF(e0[0], e0[1] + y), QPointF(e1[0], e1[1] + y))
+    p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawPolygon(top)
+
+
+def _arrow(p, a, b, colour, pen, width=2.6, head=5.0):
+    import math as _m
+    p.setPen(pen(colour, width)); p.drawLine(QPointF(*a), QPointF(*b))
+    ang = _m.atan2(b[1] - a[1], b[0] - a[0])
+    l = (b[0] - head * _m.cos(ang - .45), b[1] - head * _m.sin(ang - .45))
+    r = (b[0] - head * _m.cos(ang + .45), b[1] - head * _m.sin(ang + .45))
+    p.drawPolyline(QPolygonF([QPointF(*l), QPointF(*b), QPointF(*r)]))
+
+
+def _fingers(p, x0, x1, y, h, n, colour, pen, up=True, width=2.4):
+    """Krawędź z noskami (wczepami) od x0 do x1 na wysokości y."""
+    step = (x1 - x0) / n
+    pts = [QPointF(x0, y)]
+    for k in range(n):
+        xa, xb = x0 + k * step, x0 + (k + 1) * step
+        yy = y - h if (k % 2 == 0) == up else y
+        pts += [QPointF(xa, yy), QPointF(xb, yy)]
+    pts.append(QPointF(x1, y))
+    p.setPen(pen(colour, width)); p.setBrush(Qt.NoBrush); p.drawPolyline(QPolygonF(pts))
+
+
+def _draw_ply_tool(p, name, ink, acc, soft, pen):
+    if name == 'ply':
+        _slab(p, [(5, 24), (22, 14), (43, 22), (26, 32)], 7, ink, soft, pen, acc=acc)
+        _arrow(p, (24, 21), (24, 4), acc, pen, 3.0)
+    elif name == 'ply_wall':
+        _slab(p, [(4, 30), (19, 22), (44, 30), (29, 38)], 5, ink, soft, pen, acc=acc)
+        wall = QPolygonF([QPointF(19, 22), QPointF(19, 5), QPointF(44, 13), QPointF(44, 30)])
+        p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawPolygon(wall)
+        p.setPen(pen(ink, 2.0)); p.drawLine(QPointF(23, 6.3), QPointF(23, 23.3)); p.drawLine(QPointF(19, 5), QPointF(23, 6.3))
+        _arrow(p, (32, 24), (32, 10), acc, pen, 2.8, 4.5)
+    elif name == 'ply_between':
+        p.setBrush(soft); p.setPen(pen(ink, 2.4))
+        p.drawRect(QRectF(5, 6, 7, 36)); p.drawRect(QRectF(36, 6, 7, 36))
+        p.setBrush(QColor(acc)); p.setPen(pen(acc, 1.8)); p.drawRect(QRectF(12, 21, 24, 6))
+        _arrow(p, (24, 37), (24, 30), acc, pen, 2.4, 4)
+        _arrow(p, (24, 11), (24, 18), acc, pen, 2.4, 4)
+    elif name == 'ply_joints':
+        body = QPainterPath()
+        body.moveTo(6, 30); body.lineTo(6, 40); body.lineTo(42, 40); body.lineTo(42, 30); body.closeSubpath()
+        p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawPath(body)
+        wall = QPainterPath(); wall.moveTo(32, 6); wall.lineTo(42, 6); wall.lineTo(42, 30); wall.lineTo(32, 30); wall.closeSubpath()
+        p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawPath(wall)
+        # wczepy na styku (pomarańczowe)
+        pts = [QPointF(6, 30), QPointF(32, 30)]
+        y0, y1 = 30, 36
+        xs = [32, 35.3, 38.6, 42]
+        p.setPen(pen(acc, 2.6)); p.setBrush(Qt.NoBrush)
+        zig = [QPointF(32, 30)]
+        for k in range(3):
+            a, b = xs[k], xs[k + 1]
+            yy = y1 if k % 2 == 0 else y0
+            zig += [QPointF(a, yy), QPointF(b, yy)]
+        zig.append(QPointF(42, 30))
+        p.drawPolyline(QPolygonF(zig))
+        p.drawPolyline(QPolygonF([QPointF(32, 18), QPointF(35.3, 18), QPointF(35.3, 22), QPointF(38.6, 22), QPointF(38.6, 18), QPointF(42, 18)]))
+    elif name == 'ply_cut':
+        p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawRoundedRect(QRectF(4, 8, 40, 32), 2, 2)
+        p.setBrush(Qt.NoBrush)
+        _fingers(p, 9, 23, 18, 3, 5, ink, pen, True, 2.0)
+        p.setPen(pen(ink, 2.0)); p.drawPolyline(QPolygonF([QPointF(9, 18), QPointF(9, 33), QPointF(23, 33), QPointF(23, 18)]))
+        dash = pen(acc, 2.6); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.6]); p.setPen(dash)
+        p.drawRect(QRectF(28, 15, 11, 18))
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(39, 15), 3.0, 3.0)
+
+
+def _draw_ply_icon(p, kind, pen):
+    blue, soft, acc, ink = BLUE, QColor(BLUE_SOFT), ORANGE, INK
+    if kind in ('pm_laser', 'pm_cnc', 'pm_print'):
+        if kind != 'pm_print':
+            _slab(p, [(4, 34), (18, 27), (44, 34), (30, 41)], 4, blue, soft, pen, layers=False)
+        if kind == 'pm_laser':
+            p.setBrush(soft); p.setPen(pen(blue, 2.2))
+            p.drawPolygon(QPolygonF([QPointF(15, 4), QPointF(33, 4), QPointF(29, 14), QPointF(19, 14)]))
+            p.setPen(pen(RED, 2.6)); p.drawLine(QPointF(24, 14), QPointF(24, 33))
+            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(24, 29), QPointF(26, 33), QPointF(30, 34), QPointF(26, 35.5), QPointF(24, 39), QPointF(22, 35.5), QPointF(18, 34), QPointF(22, 33)]))
+        elif kind == 'pm_cnc':
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRoundedRect(QRectF(16, 2, 16, 12), 2, 2)
+            p.setPen(pen(ink, 2.4)); p.drawLine(QPointF(24, 14), QPointF(24, 32))
+            p.setPen(pen(ink, 1.6))
+            for y in (18, 22, 26, 30):
+                p.drawLine(QPointF(21.5, y + 1.5), QPointF(26.5, y - 1.5))
+            p.setPen(pen(acc, 2.4)); p.setBrush(Qt.NoBrush); p.drawArc(QRectF(12, 15, 24, 9), 200 * 16, 140 * 16)
+            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(35, 18), QPointF(31, 16), QPointF(32, 21)]))
+        else:
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRoundedRect(QRectF(15, 2, 18, 10), 2, 2)
+            p.drawPolygon(QPolygonF([QPointF(20, 12), QPointF(28, 12), QPointF(24, 18)]))
+            p.setPen(pen(acc, 2.6)); p.drawLine(QPointF(24, 19), QPointF(24, 24))
+            p.setBrush(soft); p.setPen(pen(blue, 2.0))
+            for k, y in enumerate((38, 33, 28)):
+                p.drawRoundedRect(QRectF(10 + k, y, 28 - 2 * k, 5), 2, 2)
+            p.setPen(pen(acc, 2.4)); p.drawLine(QPointF(14, 28.5), QPointF(24, 28.5))
+    elif kind in ('pl_up', 'pl_down'):
+        dash = pen(ink, 1.8); dash.setStyle(Qt.DashLine); p.setPen(dash); p.setBrush(Qt.NoBrush)
+        y = 30 if kind == 'pl_up' else 16
+        p.drawPolygon(QPolygonF([QPointF(4, y), QPointF(18, y - 7), QPointF(44, y), QPointF(30, y + 7)]))
+        top = 16 if kind == 'pl_up' else 22
+        _slab(p, [(4, top), (18, top - 7), (44, top), (30, top + 7)], 8, blue, soft, pen, acc=acc)
+        if kind == 'pl_up':
+            _arrow(p, (40, 34), (40, 22), acc, pen, 2.4, 4)
+        else:
+            _arrow(p, (40, 12), (40, 26), acc, pen, 2.4, 4)
+    elif kind == 'pl_thick':
+        p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(4, 17, 30, 14))
+        p.setPen(pen(blue, 1.1)); p.drawLine(QPointF(4, 21.7), QPointF(34, 21.7)); p.drawLine(QPointF(4, 26.3), QPointF(34, 26.3))
+        _arrow(p, (41, 24), (41, 17), acc, pen, 2.2, 3.5); _arrow(p, (41, 24), (41, 31), acc, pen, 2.2, 3.5)
+        p.setPen(pen(ink, 1.6)); p.drawLine(QPointF(36, 17), QPointF(45, 17)); p.drawLine(QPointF(36, 31), QPointF(45, 31))
+    elif kind in ('pw_on', 'pw_side', 'pw_height'):
+        p.setBrush(soft); p.setPen(pen(blue, 2.2))
+        if kind == 'pw_side':
+            p.drawRect(QRectF(5, 32, 30, 8)); p.setBrush(QColor(acc)); p.setPen(pen(acc, 1.8)); p.drawRect(QRectF(35, 8, 8, 32))
+        else:
+            p.drawRect(QRectF(5, 32, 38, 8)); p.setBrush(QColor(acc)); p.setPen(pen(acc, 1.8)); p.drawRect(QRectF(35, 8, 8, 24))
+        if kind == 'pw_height':
+            _arrow(p, (26, 30), (26, 10), ink, pen, 2.2, 4)
+            p.setPen(pen(ink, 1.6)); p.drawLine(QPointF(21, 8), QPointF(34, 8))
+    elif kind in ('pb_h', 'pb_v', 'pb_count', 'pb_pos'):
+        p.setBrush(soft); p.setPen(pen(blue, 2.2))
+        if kind == 'pb_v':
+            p.drawRect(QRectF(5, 5, 38, 7)); p.drawRect(QRectF(5, 36, 38, 7))
+            p.setBrush(QColor(acc)); p.setPen(pen(acc, 1.8)); p.drawRect(QRectF(21, 12, 6, 24))
+        else:
+            p.drawRect(QRectF(5, 5, 7, 38)); p.drawRect(QRectF(36, 5, 7, 38))
+            p.setBrush(QColor(acc)); p.setPen(pen(acc, 1.8))
+            if kind == 'pb_count':
+                for y in (12, 22, 32):
+                    p.drawRect(QRectF(12, y, 24, 4))
+            else:
+                p.drawRect(QRectF(12, 20 if kind == 'pb_pos' else 21, 24, 6))
+            if kind == 'pb_pos':
+                _arrow(p, (24, 43), (24, 28), ink, pen, 2.0, 3.5)
+    elif kind in ('pj_width', 'pj_fit', 'pj_tool', 'pj_depth'):
+        if kind == 'pj_width':
+            p.setBrush(soft); p.setPen(Qt.NoPen); p.drawRect(QRectF(4, 26, 40, 14))
+            _fingers(p, 4, 44, 26, 7, 5, blue, pen, True)
+            _arrow(p, (20, 12), (12.5, 12), acc, pen, 2.0, 3); _arrow(p, (16, 12), (27.5, 12), acc, pen, 2.0, 3)
+        elif kind == 'pj_fit':
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(4, 24, 40, 16))
+            p.setBrush(QColor('#ffffff')); p.drawRect(QRectF(15, 24, 18, 10))
+            p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(17, 6, 14, 26))
+            p.setPen(pen(acc, 2.4)); p.drawLine(QPointF(15.8, 26), QPointF(15.8, 33)); p.drawLine(QPointF(32.2, 26), QPointF(32.2, 33))
+        elif kind == 'pj_tool':
+            path = QPainterPath(); path.moveTo(4, 8); path.lineTo(18, 8); path.lineTo(18, 30); path.lineTo(30, 30); path.lineTo(30, 8); path.lineTo(44, 8)
+            path.lineTo(44, 42); path.lineTo(4, 42); path.closeSubpath()
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawPath(path)
+            p.setBrush(QColor('#ffffff')); p.setPen(pen(acc, 2.2))
+            p.drawEllipse(QPointF(20.2, 27.8), 3.6, 3.6); p.drawEllipse(QPointF(27.8, 27.8), 3.6, 3.6)
+        else:
+            path = QPainterPath(); path.moveTo(4, 10); path.lineTo(16, 10); path.lineTo(16, 24); path.lineTo(32, 24); path.lineTo(32, 10); path.lineTo(44, 10)
+            path.lineTo(44, 40); path.lineTo(4, 40); path.closeSubpath()
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawPath(path)
+            _arrow(p, (24, 11), (24, 23), acc, pen, 2.2, 3.5)
+            p.setPen(pen(acc, 1.6)); p.drawLine(QPointF(19, 10), QPointF(29, 10))
+    elif kind in ('pc_sheet', 'pc_kerf'):
+        if kind == 'pc_sheet':
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(4, 14, 40, 26))
+            p.setBrush(QColor('#ffffff')); p.setPen(pen(ink, 1.8))
+            p.drawRect(QRectF(8, 18, 13, 18)); p.drawRect(QRectF(24, 18, 16, 9))
+            _arrow(p, (24, 8), (4.5, 8), acc, pen, 2.0, 3.2); _arrow(p, (24, 8), (43.5, 8), acc, pen, 2.0, 3.2)
+        else:
+            p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(4, 20, 17, 20)); p.drawRect(QRectF(27, 20, 17, 20))
+            p.setPen(pen(RED, 2.4)); p.drawLine(QPointF(24, 6), QPointF(24, 40))
+            _arrow(p, (14, 13), (20.5, 13), acc, pen, 2.0, 3); _arrow(p, (34, 13), (27.5, 13), acc, pen, 2.0, 3)

@@ -18,7 +18,8 @@ from .document import Body
 
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
-         'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync'}
+         'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
@@ -83,6 +84,13 @@ def step_label(info):
             off = op.get('offset')
             extra = f" {'+' if off > 0 else ''}{_num(off, ' mm')}" if isinstance(off, (int, float)) and abs(off) > 1e-9 and op.get('method') in ('plane', 'face') else ''
             return f"{label} {how}{extra}".strip()
+        if kind == 'ply_panel' and isinstance(op.get('t'), (int, float)):
+            return f"{label} {_num(op['t'], ' mm')}"
+        if kind == 'ply_wall' and isinstance(op.get('h'), (int, float)):
+            many = f" ×{len(op.get('edges') or [])}" if len(op.get('edges') or []) > 1 else ''
+            return f"{label}{many} {_num(op['h'], ' mm')}"
+        if kind == 'ply_between' and int(op.get('count', 1)) > 1:
+            return f"{label} ×{int(op['count'])}"
         if kind == 'pattern' and isinstance(op.get('out'), list):
             return f"{label} ×{len(op['out']) + 1}"          # liczba elementów razem z oryginałem
     except Exception:
@@ -1450,6 +1458,138 @@ def run_thread_real(bodies, recipe):
     return _replace(bodies, replace(body.changed(shape), threads=rest))
 
 
+# ---------- sklejka: płyty, ścianki, półki, połączenia ----------
+def _next_names(bodies, base, count):
+    """Kolejne wolne nazwy „Płyta 1”, „Płyta 2”…"""
+    used = {b.name for b in bodies}
+    out, k = [], 1
+    while len(out) < count:
+        name = f'{base} {k}'
+        if name not in used:
+            out.append(name)
+        k += 1
+    return out
+
+
+def _ply_bodies(bodies, shapes, base, recipe, folder=''):
+    from . import plywood as pw
+    ids = pad_ids(recipe.get('out', ()), len(shapes), (recipe.get('out') or [None])[0])
+    names = _next_names(bodies, base, len(shapes))
+    meta = pw.ply_meta(recipe['t'], recipe.get('method', 'cnc'))
+    return prepared_many(Body(names[i], shp, id=ids[i], meta=meta, folder=folder) for i, shp in enumerate(shapes))
+
+
+def run_ply_panel(bodies, recipe):
+    """Płyty ze szkiców / ścian: profil wyciągnięty na grubość sklejki (d - grubość ze znakiem strony)."""
+    sources = [src for spec in recipe['profiles'] for src in resolve_profiles(bodies, spec)]
+    if not sources:
+        raise kernel.CadError('Brak profilu płyty.')
+    shapes = [make_tool(src, float(recipe['d']), 0.0, 'one') for src in sources]
+    spent = set(recipe.get('spent', ()))
+    for src in sources:
+        spent |= set(src.get('spent', ()))
+    fade = [replace(b, visible=False) if b.id in spent else b for b in bodies]
+    return [*fade, *_ply_bodies(bodies, shapes, 'Płyta', recipe)]
+
+
+def _ply_trim(shape, others):
+    """Nowa płyta bez części nachodzących na inne płyty - tylko się z nimi styka (połączenia dodaje osobny krok)."""
+    for other in others:
+        bb, ob = shape.BoundingBox(), other.BoundingBox()
+        if bb.xmax < ob.xmin or ob.xmax < bb.xmin or bb.ymax < ob.ymin or ob.ymax < bb.ymin or bb.zmax < ob.zmin or ob.zmax < bb.zmin:
+            continue
+        try:
+            if shape.intersect(other).Volume() > 1e-6:
+                shape = kernel.boolean('subtract', shape, [other])
+        except kernel.CadError:
+            pass
+    if shape.Solids():
+        shape = max(shape.Solids(), key=lambda x: x.Volume())
+    return kernel.valid(shape)
+
+
+def _ply_others(bodies, skip=()):
+    from . import plywood as pw
+    return [b.shape for b in bodies if b.kind == 'solid' and b.visible and b.id not in skip and pw.is_panel(b)]
+
+
+def ply_walls(bodies, base, indices, recipe):
+    """Ścianki na krawędziach płyty-podstawy. Najdłuższe krawędzie najpierw: dłuższe ścianki biegną przez całą długość,
+    krótsze mieszczą się między nimi; kolejne ścianki i inne płyty nie nachodzą na siebie."""
+    from . import plywood as pw
+    edges = base.shape.Edges()
+    base_t = (base.meta or {}).get('ply', {}).get('t') if base.meta else None
+    others = _ply_others(bodies, {base.id})
+    walls = []
+    for i in sorted(indices, key=lambda i: -edges[i].Length()):
+        wall, _ = pw.edge_wall(base.shape, edges[i], float(recipe['t']), float(recipe['h']), recipe.get('side', 'on'),
+                               bool(recipe.get('flip')), base_t)
+        walls.append(_ply_trim(wall, [*others, *walls]))
+    return walls
+
+
+def run_ply_wall(bodies, recipe):
+    base = _body(bodies, recipe['base'])
+    indices = edge_indices(base.shape, recipe['edges'])
+    walls = ply_walls(bodies, base, indices, recipe)
+    return [*bodies, *_ply_bodies(bodies, walls, 'Ścianka', recipe)]
+
+
+def ply_between_shapes(bodies, recipe):
+    from . import plywood as pw
+    a, b = _body(bodies, recipe['a']['id']), _body(bodies, recipe['b']['id'])
+    fa, na = match_face(a.shape, recipe['a'])
+    fb, _ = match_face(b.shape, recipe['b'])
+    pa = np.array(fa.Center().toTuple(), float)
+    pb = np.array(fb.Center().toTuple(), float)
+    return pw.between_panels(fa, pa, na, fb, pb, float(recipe['t']), recipe.get('pos'), int(recipe.get('count', 1)), bool(recipe.get('turn')))
+
+
+def run_ply_between(bodies, recipe):
+    shapes, _ = ply_between_shapes(bodies, recipe)
+    others = _ply_others(bodies)
+    shapes = [_ply_trim(shp, others) for shp in shapes]
+    return [*bodies, *_ply_bodies(bodies, shapes, 'Półka' if not recipe.get('turn') else 'Przegroda', recipe)]
+
+
+def ply_contacts(bodies, recipe):
+    """Styki płyt z kroku połączeń z wybranym połączeniem (zapisane dla pary albo domyślne dla metody)."""
+    from . import plywood as pw
+    ids = set(recipe['ids'])
+    panels = pw.panels_of([b for b in bodies if b.id in ids])
+    contacts, skipped = pw.find_contacts(panels)
+    chosen = recipe.get('joints') or {}
+    meth = recipe.get('params', {}).get('method', 'cnc')
+    for c in contacts:
+        c['joint'] = pw.joint_for(meth, c['kind'], chosen.get(c['key']))
+    return panels, contacts, skipped
+
+
+def run_ply_joints(bodies, recipe):
+    from . import plywood as pw
+    panels, contacts, _ = ply_contacts(bodies, recipe)
+    if not contacts:
+        raise kernel.CadError('Płyty się nie stykają - nie ma czego połączyć.')
+    params = recipe.get('params', {})
+    shapes = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, params)
+    partners = {}
+    for c in contacts:
+        if c['joint'] != 'none':
+            partners.setdefault(c['a'], set()).add(c['b'])
+            partners.setdefault(c['b'], set()).add(c['a'])
+    out = []
+    for b in bodies:
+        if b.id in shapes or b.id in partners:
+            ply = dict(b.meta['ply'])
+            ply['method'] = params.get('method', ply.get('method', 'cnc'))
+            ply['joined'] = sorted(set(ply.get('joined', ())) | partners.get(b.id, set()))
+            nb = b.changed(shapes[b.id]) if b.id in shapes else b
+            out.append(replace(nb, meta={**(b.meta or {}), 'ply': ply}))
+        else:
+            out.append(b)
+    return out
+
+
 def run_folder(bodies, recipe):
     """Grupa (folder) na liście obiektów: przeniesienie do grupy, wyjęcie z niej (pusta nazwa) albo zmiana nazwy."""
     ids, folder = set(recipe['ids']), str(recipe.get('folder') or '')[:60]
@@ -1528,7 +1668,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1650,6 +1790,15 @@ def reads(recipe, current):
         return {recipe['id']} | sketches
     if kind == 'text':
         return set()
+    if kind == 'ply_panel':
+        ids = set(recipe.get('spent', ()))
+        for spec in recipe['profiles']:
+            ids |= sketches if spec['k'] in ('region', 'textgroup') else {spec['id']}
+        return ids
+    if kind == 'ply_between':
+        return {recipe['a']['id'], recipe['b']['id']}
+    if kind == 'ply_joints':
+        return set(recipe['ids'])
     return None
 
 

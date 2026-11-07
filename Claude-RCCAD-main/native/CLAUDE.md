@@ -15,3 +15,4 @@
   (kolejność w liście = kolejność przycisków); zakładkę z pasującym trybem program przełącza sam (`TAB_OF`). Przycisk Plik stoi poza zakładkami.
 - Nowe narzędzie: ikona `t_nazwa` (+ `_w`), wpis w `_build_overlays` (lista ikon), tryb w `set_mode`/`view_clicked`, panel dopisany do `self.panels`, wpis w Pomocy i test.
 - Przesuń / obróć, siatka i historia są w dolnym pasku (`self.pad`), nie w zakładkach.
+- Zakładka Sklejka: geometria w `rccad/plywood.py`, okno w `rccad/plywood_ui.py` (mixin `PlywoodTools`), kroki historii `run_ply_*` w `rccad/history.py`.

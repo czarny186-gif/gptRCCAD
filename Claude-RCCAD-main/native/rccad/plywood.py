@@ -1,0 +1,740 @@
+"""Konstrukcje ze sklejki (zakładka Sklejka): płyty, połączenia między nimi i części do cięcia.
+
+Płyta to zwykła bryła z opisem meta['ply'] = {'t': grubość, 'method': metoda produkcji}. Połączenia program rozpoznaje sam
+z tego, jak płyty się stykają:
+  L - koniec płyty dotyka płaskiej strony drugiej płyty przy jej krawędzi (narożnik),
+  T - koniec płyty dotyka płaskiej strony drugiej płyty z dala od krawędzi (półka, przegroda),
+  X - płyty przechodzą przez siebie (krzyżują się).
+Metoda produkcji decyduje, jakie połączenia da się wykonać (laser tnie tylko na wylot) i jak wyglądają szczegóły
+(luz pasowania, „psie kości” pod frez).
+"""
+from __future__ import annotations
+
+import math
+
+import cadquery as cq
+import numpy as np
+
+from . import kernel
+
+# ---------------------------------------------------------------------------------------------------------------
+# metody produkcji i rodzaje połączeń
+# ---------------------------------------------------------------------------------------------------------------
+METHODS = {
+    'laser': dict(title='Cięcie laserowe', short='Laser', t=4.0, fit=0.0, kerf=0.15, tool=0.0,
+                  note='Tnie tylko na wylot: wczepy, czopy w gniazdach przelotowych i nacięcia krzyżowe.'),
+    'cnc': dict(title='Frezowanie CNC', short='Frezarka', t=18.0, fit=0.1, kerf=0.0, tool=6.0,
+                note='Wszystkie połączenia; narożniki gniazd dostają „psie kości” na promień frezu.'),
+    'print': dict(title='Druk 3D', short='Druk 3D', t=4.0, fit=0.2, kerf=0.0, tool=0.0,
+                  note='Wszystkie połączenia; luz pasowania zamiast szerokości cięcia.'),
+}
+
+JOINTS = {
+    'finger': ('Wczepy', 'Noski na przemian na obu płytach (narożnik)'),
+    'tab': ('Czopy i gniazda', 'Czopy na końcu płyty, gniazda przelotowe w drugiej płycie'),
+    'blind': ('Gniazda nieprzelotowe', 'Czopy w gniazdach na głębokość - niewidoczne z zewnątrz'),
+    'groove': ('Rowek', 'Cała krawędź płyty wsunięta w rowek (plecy, dno szuflady)'),
+    'halving': ('Nacięcia krzyżowe', 'Obie płyty nacięte do połowy i wsunięte w siebie'),
+    'none': ('Bez połączenia', 'Samo stykanie - pod wkręty, kołki albo klej'),
+}
+
+KIND_TITLES = {'L': 'Narożnik', 'T': 'Płyta w płycie', 'X': 'Krzyż'}
+KIND_JOINTS = {'L': ['finger', 'tab', 'blind', 'groove', 'none'], 'T': ['tab', 'blind', 'groove', 'none'], 'X': ['halving', 'none']}
+ALLOWED = {'laser': {'finger', 'tab', 'halving', 'none'},
+           'cnc': {'finger', 'tab', 'blind', 'groove', 'halving', 'none'},
+           'print': {'finger', 'tab', 'blind', 'groove', 'halving', 'none'}}
+WHY_NOT = {'laser': 'laser tnie tylko na wylot - nie zrobi gniazda ani rowka na głębokość'}
+# zamiana połączeń przy zmianie metody na taką, która ich nie potrafi
+FALLBACK = {'blind': 'tab', 'groove': 'tab'}
+
+TOL = 1e-3
+
+
+def method(name):
+    return METHODS.get(name) or METHODS['cnc']
+
+
+def allowed(method_name, joint):
+    return joint in ALLOWED.get(method_name, ALLOWED['cnc'])
+
+
+def joint_for(method_name, kind, joint=None):
+    """Połączenie dostępne dla metody i rodzaju styku: wskazane (gdy wolno), jego zamiennik albo domyślne."""
+    choices = [j for j in KIND_JOINTS[kind] if allowed(method_name, j)]
+    if joint in choices:
+        return joint
+    if joint in FALLBACK and FALLBACK[joint] in choices:
+        return FALLBACK[joint]
+    return choices[0]
+
+
+def is_panel(body):
+    return getattr(body, 'kind', None) == 'solid' and bool(body.meta) and isinstance(body.meta.get('ply'), dict)
+
+
+def ply_meta(t, method_name):
+    return {'ply': {'t': float(t), 'method': str(method_name)}}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# geometria pomocnicza
+# ---------------------------------------------------------------------------------------------------------------
+def _unit(v):
+    v = np.asarray(v, float)
+    n = float(np.linalg.norm(v))
+    if n < 1e-12:
+        raise kernel.CadError('Nieokreślony kierunek.')
+    return v / n
+
+
+def _canon(n):
+    """Kierunek bez zwrotu (pierwsza niezerowa składowa dodatnia) - do grupowania ścian równoległych."""
+    n = _unit(n)
+    for c in n:
+        if abs(c) > 1e-6:
+            return n if c > 0 else -n
+    return n
+
+
+def frame_box(u, v, ru, rv, rw):
+    """Prostopadłościan w układzie (u, v, w = u × v): zakresy współrzędnych ru, rv, rw."""
+    u, v = _unit(u), _unit(v)
+    w = np.cross(u, v)
+    sizes = [float(r[1] - r[0]) for r in (ru, rv, rw)]
+    if min(sizes) <= 1e-6:
+        raise kernel.CadError('Płyta ma zerowy wymiar.')
+    solid = cq.Solid.makeBox(*sizes, pnt=cq.Vector(float(ru[0]), float(rv[0]), float(rw[0])))
+    return kernel.transformed(solid, np.column_stack([u, v, w]), np.zeros(3))
+
+
+def _points(shape):
+    pts = [v.toTuple() for v in shape.Vertices()]
+    for e in shape.Edges():
+        if e.geomType() != 'LINE':
+            pts += [e.positionAt(t).toTuple() for t in (.25, .5, .75)]
+    return np.asarray(pts, float)
+
+
+def extent(shape, direction, pts=None):
+    p = _points(shape) if pts is None else pts
+    s = p @ _unit(direction)
+    return float(s.min()), float(s.max())
+
+
+def panel_info(shape, t=None):
+    """Kierunek grubości płyty: normalna największych równoległych płaskich ścian; lo / hi - położenie obu stron."""
+    groups = {}
+    for f in shape.Faces():
+        if f.geomType() != 'PLANE':
+            continue
+        try:
+            n = np.array(f.normalAt().toTuple(), float)
+        except Exception:
+            continue
+        c = _canon(n)
+        key = tuple(np.round(c, 4))
+        g = groups.setdefault(key, dict(n=c, area=0.0, offsets=[]))
+        g['area'] += f.Area()
+        g['offsets'].append(float(np.array(f.Center().toTuple()) @ c))
+    best = None
+    for g in groups.values():
+        if len(g['offsets']) < 2:
+            continue
+        lo, hi = min(g['offsets']), max(g['offsets'])
+        if hi - lo < 1e-6:
+            continue
+        score = g['area']
+        if t is not None and abs((hi - lo) - float(t)) < 1e-3:
+            score *= 1e6           # grubość z opisu płyty wygrywa (np. płyta węższa niż grubsza)
+        if best is None or score > best[0]:
+            best = (score, g['n'], lo, hi)
+    if best is None:
+        raise kernel.CadError('To nie jest płaska płyta.')
+    _, n, lo, hi = best
+    return dict(n=n, lo=lo, hi=hi, t=hi - lo)
+
+
+def panels_of(bodies):
+    out = []
+    for b in bodies:
+        if is_panel(b) and b.visible:
+            info = panel_info(b.shape, b.meta['ply'].get('t'))
+            out.append(dict(id=b.id, name=b.name, shape=b.shape, method=b.meta['ply'].get('method', 'cnc'),
+                            joined=set(b.meta['ply'].get('joined', ())), **info))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# płyta na krawędzi (ścianka) i płyta pomiędzy (półka, przegroda)
+# ---------------------------------------------------------------------------------------------------------------
+def edge_wall(base_shape, edge, t, height, side='on', flip=False, base_t=None):
+    """Ścianka na prostej krawędzi płaskiej strony płyty-podstawy.
+    side: 'on' - stoi na podstawie (licuje z jej krawędzią), 'side' - przy boku podstawy (zakrywa jej brzeg).
+    Wysokość liczona od strony podstawy, na której leży krawędź. Zwraca (bryła, kierunek do góry)."""
+    info = panel_info(base_shape, base_t)
+    n = info['n']
+    if edge.geomType() != 'LINE':
+        raise kernel.CadError('Ścianka powstaje na prostej krawędzi płyty.')
+    a = np.array(edge.startPoint().toTuple(), float)
+    b = np.array(edge.endPoint().toTuple(), float)
+    if abs(float(_unit(b - a) @ n)) > 1e-3:
+        raise kernel.CadError('Kliknij krawędź płaskiej strony płyty (nie krawędź grubości).')
+    level = float(a @ n)
+    if abs(level - info['hi']) < 1e-3:
+        up = n.copy()
+    elif abs(level - info['lo']) < 1e-3:
+        up = -n
+    else:
+        raise kernel.CadError('Kliknij krawędź płaskiej strony płyty.')
+    e = _unit(b - a)
+    out = np.cross(e, up)                    # w płaszczyźnie płyty, prostopadle do krawędzi
+    probe = (a + b) / 2 + out * 1e-2 - up * min(info['t'] / 2, 1e-2)
+    if kernel.point_state(base_shape, tuple(probe)) == 'in':
+        out = -out                           # na zewnątrz podstawy
+    if flip:                                 # ścianka po drugiej stronie podstawy (od jej przeciwnej strony)
+        a, b = a - up * info['t'], b - up * info['t']
+        up = -up
+    length = float(np.linalg.norm(b - a))
+    thick = float(t)
+    if side == 'on':
+        rw = (-thick, 0.0)                   # od krawędzi w głąb podstawy
+        rup = (0.0, float(height))
+    else:
+        rw = (0.0, thick)                    # na zewnątrz krawędzi, zakrywa brzeg podstawy
+        rup = (-info['t'], float(height))
+    # układ: u = e, v = out, w = e × out = up (prawoskrętny)
+    w = np.cross(e, out)
+    sign = 1.0 if float(w @ up) > 0 else -1.0
+    ru = (float(a @ e), float(a @ e) + length)
+    rv = (float(a @ out) + rw[0], float(a @ out) + rw[1])
+    base_w = float(a @ w)
+    rz = sorted((base_w + sign * rup[0], base_w + sign * rup[1]))
+    return frame_box(e, out, ru, rv, rz), up
+
+
+def face_extents(face, u, v):
+    p = _points(face)
+    su, sv = p @ u, p @ v
+    return (float(su.min()), float(su.max())), (float(sv.min()), float(sv.max()))
+
+
+def between_axes(na, prefer=None, turn=False):
+    """Kierunek grubości półki (s) i jej szerokości (w) dla szczeliny o kierunku na."""
+    g = _unit(na)
+    candidates = [np.array(prefer, float)] if prefer is not None else []
+    candidates += [np.array(c, float) for c in ((0, 0, 1), (0, 1, 0), (1, 0, 0))]
+    for c in candidates:
+        s = c - g * float(c @ g)
+        if np.linalg.norm(s) > 1e-3:
+            s = _unit(s)
+            break
+    w = np.cross(g, s)
+    if turn:
+        s, w = w, -s
+    return g, s, w
+
+
+def between_panels(face_a, point_a, normal_a, face_b, point_b, t, position=None, count=1, turn=False):
+    """Półki / przegrody między dwiema równoległymi ścianami zwróconymi do siebie.
+    position: odległość spodu (pierwszej) półki od dolnego brzegu wspólnego obszaru; None - środek.
+    count > 1: tyle płyt rozłożonych równo. Zwraca (lista brył, opis do strzałki)."""
+    g = _unit(normal_a)
+    pa, pb = np.asarray(point_a, float), np.asarray(point_b, float)
+    gap = float((pb - pa) @ g)
+    if gap <= 1e-3:
+        raise kernel.CadError('Druga ściana musi stać naprzeciw pierwszej (po stronie, w którą ona patrzy).')
+    nb = np.array(face_b.normalAt().toTuple(), float)
+    if abs(abs(float(_unit(nb) @ g)) - 1) > 1e-3:
+        raise kernel.CadError('Ściany muszą być równoległe.')
+    g, s, w = between_axes(g, turn=turn)
+    (sa, wa), (sb, wb) = face_extents(face_a, s, w), face_extents(face_b, s, w)
+    rs = (max(sa[0], sb[0]), min(sa[1], sb[1]))
+    rw = (max(wa[0], wb[0]), min(wa[1], wb[1]))
+    if rs[1] - rs[0] < t + 1e-3 or rw[1] - rw[0] < 1e-3:
+        raise kernel.CadError('Ściany nie mają wspólnego obszaru, w którym zmieści się płyta.')
+    t = float(t)
+    span = rs[1] - rs[0]
+    count = max(1, int(count))
+    if count == 1:
+        pos = (span - t) / 2 if position is None else min(max(float(position), 0.0), span - t)
+        starts = [rs[0] + pos]
+    else:
+        step = (span - count * t) / (count + 1)
+        if step < 0:
+            raise kernel.CadError('Tyle płyt się nie zmieści.')
+        starts = [rs[0] + step * (i + 1) + t * i for i in range(count)]
+    rg = (float(pa @ g), float(pa @ g) + gap)
+    # układ (g, s, g × s = w')
+    w2 = np.cross(g, s)
+    sign = 1.0 if float(w2 @ w) > 0 else -1.0
+    rw2 = sorted((sign * rw[0], sign * rw[1]))
+    solids = [frame_box(g, s, rg, (z, z + t), rw2) for z in starts]
+    mid_w = (rw[0] + rw[1]) / 2
+    centre = g * (rg[0] + rg[1]) / 2 + w * mid_w
+    return solids, dict(s=s, low=rs[0], span=span, starts=starts, centre=centre, g=g, w=w, gap=gap, depth=rw[1] - rw[0])
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# rozpoznawanie styków
+# ---------------------------------------------------------------------------------------------------------------
+def _boxes_near(a, b, tol=1e-2):
+    ba, bb = a.BoundingBox(), b.BoundingBox()
+    return not (ba.xmax < bb.xmin - tol or bb.xmax < ba.xmin - tol or ba.ymax < bb.ymin - tol or bb.ymax < ba.ymin - tol
+                or ba.zmax < bb.zmin - tol or bb.zmax < ba.zmin - tol)
+
+
+def _abut(A, B, pa, pb):
+    """Koniec płyty A na płaskiej stronie płyty B: opis styku albo None."""
+    na, nb = A['n'], B['n']
+    d = _unit(np.cross(na, nb))
+    m = np.cross(nb, d)                     # w płaszczyźnie B, prostopadle do linii styku (∥ ±na)
+    a_lo, a_hi = extent(None, nb, pa) if pa is not None else extent(A['shape'], nb)
+    if abs(a_lo - B['hi']) < TOL:
+        plane, into = B['hi'], -1.0
+    elif abs(a_hi - B['lo']) < TOL:
+        plane, into = B['lo'], 1.0
+    else:
+        return None
+    # ściany końca A leżące na płaszczyźnie styku
+    ends = []
+    for f in A['shape'].Faces():
+        if f.geomType() != 'PLANE':
+            continue
+        fn = np.array(f.normalAt().toTuple(), float)
+        if abs(abs(float(fn @ nb)) - 1) > 1e-4:
+            continue
+        if abs(float(np.array(f.Center().toTuple()) @ nb) - plane) > TOL:
+            continue
+        ends.append(f)
+    if not ends:
+        return None
+    ep = np.concatenate([_points(f) for f in ends])
+    s0, s1 = float((ep @ d).min()), float((ep @ d).max())
+    r0, r1 = float((ep @ m).min()), float((ep @ m).max())
+    bd = extent(None, d, pb)
+    bm = extent(None, m, pb)
+    s0, s1 = max(s0, bd[0]), min(s1, bd[1])
+    r0, r1 = max(r0, bm[0]), min(r1, bm[1])
+    if s1 - s0 < 1e-2 or r1 - r0 < 1e-2:
+        return None
+    kind = 'L' if (r0 <= bm[0] + TOL or r1 >= bm[1] - TOL) else 'T'
+    return dict(a=A['id'], b=B['id'], kind=kind, d=d.tolist(), m=m.tolist(), nb=nb.tolist(), plane=plane, into=into,
+                s=[s0, s1], r=[r0, r1], ta=A['t'], tb=B['t'])
+
+
+def _cross(A, B, pa, pb):
+    na, nb = A['n'], B['n']
+    try:
+        common = A['shape'].intersect(B['shape'])
+        vol = common.Volume() if common.Solids() else 0.0
+    except Exception:
+        return None
+    if vol <= 1e-6:
+        return None
+    d = _unit(np.cross(na, nb))
+    cp = _points(common)
+    ia, ib, s = extent(None, na, cp), extent(None, nb, cp), extent(None, d, cp)
+    if abs((ia[1] - ia[0]) - A['t']) > 2e-3 or abs((ib[1] - ib[0]) - B['t']) > 2e-3:
+        return dict(a=A['id'], b=B['id'], kind='overlap')
+    return dict(a=A['id'], b=B['id'], kind='X', d=d.tolist(), na=na.tolist(), nb=nb.tolist(), s=list(s), ia=list(ia), ib=list(ib),
+                ad=list(extent(None, d, pa)), bd=list(extent(None, d, pb)), ta=A['t'], tb=B['t'])
+
+
+def find_contacts(panels):
+    """Styki między płytami: lista opisów (L, T, X). Płyty równoległe i ustawione pod innym kątem niż 90° są pomijane."""
+    out, skipped = [], []
+    pts = {p['id']: _points(p['shape']) for p in panels}
+    for i, A in enumerate(panels):
+        for B in panels[i + 1:]:
+            if not _boxes_near(A['shape'], B['shape']):
+                continue
+            if B['id'] in A.get('joined', ()) or A['id'] in B.get('joined', ()):
+                continue                     # te płyty są już połączone (wcześniejszy krok)
+            if abs(float(A['n'] @ B['n'])) > 1 - 1e-6:
+                continue                     # równoległe: leżą na sobie albo obok siebie
+            if abs(float(A['n'] @ B['n'])) > 1e-4:
+                skipped.append((A['id'], B['id'], 'Płyty pod kątem innym niż 90° - połączenie pominięte.'))
+                continue
+            found = _cross(A, B, pts[A['id']], pts[B['id']])
+            if found is not None:
+                if found['kind'] == 'overlap':
+                    skipped.append((A['id'], B['id'], 'Płyty nachodzą na siebie - popraw ich położenie.'))
+                else:
+                    out.append(found)
+                continue
+            found = _abut(A, B, pts[A['id']], pts[B['id']]) or _abut(B, A, pts[B['id']], pts[A['id']])
+            if found is not None:
+                out.append(found)
+    for c in out:
+        c['key'] = f"{c['a']}:{c['b']}"
+    return out, skipped
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# wykonanie połączeń
+# ---------------------------------------------------------------------------------------------------------------
+def finger_count(length, width):
+    """Nieparzysta liczba odcinków (najmniej 3) o szerokości możliwie bliskiej zadanej."""
+    n = max(3, int(round(length / max(width, 1e-6))))
+    if n % 2 == 0:
+        lower, upper = n - 1, n + 1
+        n = upper if lower < 3 or abs(length / upper - width) < abs(length / lower - width) else lower
+    return n
+
+
+def default_width(t):
+    return round(3.0 * float(t), 1)
+
+
+def _seg_box(c, s0, s1, r0, r1, depth, pre=0.0, grow_s=0.0, grow_r=0.0):
+    """Fragment obszaru styku: wzdłuż linii (s), w poprzek (r = grubość płyty A) i w głąb płyty B (od płaszczyzny styku;
+    pre - zapas po stronie płyty A, żeby wycięcie zaczynało się poza płytą B)."""
+    d, m = np.array(c['d']), np.array(c['m'])
+    plane, into = float(c['plane']), float(c['into'])
+    z = sorted((plane - into * pre, plane + into * depth))
+    # układ (d, m, d × m): d × m = d × (nb × d) = nb
+    return frame_box(d, m, (s0 - grow_s, s1 + grow_s), (r0 - grow_r, r1 + grow_r), z)
+
+
+def _joint_parts(c, joint, width, fit, depth_ratio):
+    """(dla A: bryły dodawane, dla B: bryły wycinane, obszar do „psich kości”) dla styku L / T."""
+    s0, s1 = c['s']
+    r0, r1 = c['r']
+    tb = float(c['tb'])
+    if joint == 'none':
+        return [], [], None
+    through = joint in ('finger', 'tab')
+    depth = tb if through else max(.5, min(tb - .5, tb * depth_ratio))
+    deeper = .05 if through else fit / 2         # wycięcie przelotowe wychodzi poza płytę, nieprzelotowe ma luz na dnie
+    if joint == 'groove':
+        add = [_seg_box(c, s0, s1, r0, r1, depth, 1e-4)]
+        cut = [_seg_box(c, s0, s1, r0, r1, depth + deeper, .05, 0.0, fit / 2)]
+        return add, cut, (s0, s1, r0, r1, depth)
+    n = finger_count(s1 - s0, width)
+    step = (s1 - s0) / n
+    first = 0 if joint == 'finger' else 1       # wczepy: A zaczyna i kończy noskiem; czopy: końce zostają przy B
+    add, cut = [], []
+    for k in range(first, n, 2):
+        a, b = s0 + k * step, s0 + (k + 1) * step
+        add.append(_seg_box(c, a, b, r0, r1, depth, 1e-4))
+        box = _seg_box(c, a - (fit / 2 if k > 0 else .05), b + (fit / 2 if k < n - 1 else .05), r0, r1, depth + deeper, .05, 0.0, fit / 2)
+        cut.append(box)
+    return add, cut, (s0, s1, r0, r1, depth)
+
+
+def _halving_parts(c, fit):
+    """Nacięcia krzyżowe: (wycięcie w A, wycięcie w B, obszar)."""
+    d, na, nb = np.array(c['d']), np.array(c['na']), np.array(c['nb'])
+    s0, s1 = c['s']
+    mid = (s0 + s1) / 2
+    ad, bd = c['ad'], c['bd']
+    a_top, a_bot = s1 >= ad[1] - TOL, s0 <= ad[0] + TOL
+    b_top, b_bot = s1 >= bd[1] - TOL, s0 <= bd[0] + TOL
+    if a_top and b_bot:
+        ra, rb = (mid, s1 + 1.0), (s0 - 1.0, mid)
+    elif a_bot and b_top:
+        ra, rb = (s0 - 1.0, mid), (mid, s1 + 1.0)
+    else:
+        raise kernel.CadError('Nacięcia krzyżowe: płyty muszą przecinać się aż do swoich krawędzi (jedna od góry, druga od dołu).')
+    ia, ib = c['ia'], c['ib']
+    # w A wycinamy pas grubości B (kierunek nb), przez całą grubość A (na); w B - pas grubości A, przez całą grubość B
+    # układ (d, nb, d × nb = -na) - zakres na podany ze zmienionym znakiem
+    cut_a = frame_box(d, nb, ra, (ib[0] - fit / 2, ib[1] + fit / 2), (-ia[1] - 1.0, -ia[0] + 1.0))
+    cut_b = frame_box(d, nb, rb, (ib[0] - 1.0, ib[1] + 1.0), (-ia[1] - fit / 2, -ia[0] + fit / 2))
+    return cut_a, cut_b, (ra, rb)
+
+
+def _region_box(c, extra, info=None):
+    """Prostopadłościan wokół miejsca styku (do wyboru krawędzi pod „psie kości”)."""
+    if c['kind'] == 'X':
+        d, nb = np.array(c['d']), np.array(c['nb'])
+        s0, s1 = c['s']
+        ia, ib = c['ia'], c['ib']
+        return frame_box(d, nb, (s0 - extra - 1, s1 + extra + 1), (ib[0] - extra, ib[1] + extra), (-ia[1] - extra, -ia[0] + extra))
+    s0, s1, r0, r1, depth = info
+    return _seg_box(c, s0 - extra, s1 + extra, r0 - extra, r1 + extra, depth + extra, extra)
+
+
+def _inside(shape, p):
+    return kernel.point_state(shape, tuple(float(x) for x in p), 1e-5) == 'in'
+
+
+def dogbones(shape, axis, regions, radius):
+    """„Psie kości”: walce o promieniu freza w narożnikach wewnętrznych (krawędzie równoległe do osi freza) w obszarach
+    połączeń - frez nie zrobi ostrego kąta wewnętrznego, więc czop nie wszedłby do końca gniazda."""
+    if radius <= 0 or not regions:
+        return shape
+    axis = _unit(axis)
+    cutters = []
+    for edge in shape.Edges():
+        if edge.geomType() != 'LINE':
+            continue
+        a = np.array(edge.startPoint().toTuple(), float)
+        b = np.array(edge.endPoint().toTuple(), float)
+        length = float(np.linalg.norm(b - a))
+        if length < 1e-3 or abs(float(_unit(b - a) @ axis)) < 1 - 1e-6:
+            continue
+        mid = (a + b) / 2
+        if not any(_inside(r, mid) for r in regions):
+            continue
+        faces = edge.ancestors(shape, 'Face').Faces()
+        normals = []
+        for f in faces:
+            if f.geomType() != 'PLANE':
+                continue
+            fn = np.array(f.normalAt(cq.Vector(*mid)).toTuple(), float)
+            if abs(float(fn @ axis)) < 1e-6:
+                normals.append(fn)
+        if len(normals) != 2:
+            continue
+        n1, n2 = normals
+        eps = 2e-3
+        inside = sum(_inside(shape, mid + eps * (s1 * n1 + s2 * n2)) for s1 in (-1, 1) for s2 in (-1, 1))
+        if inside != 3:
+            continue                     # tylko narożnik wewnętrzny (materiał z trzech stron)
+        bis = n1 + n2
+        if np.linalg.norm(bis) < 1e-6:
+            continue
+        centre = mid + _unit(bis) * radius
+        lo, hi = sorted((float(a @ axis), float(b @ axis)))
+        base = centre - axis * float(centre @ axis) + axis * lo
+        cutters.append(cq.Solid.makeCylinder(radius, hi - lo, cq.Vector(*base), cq.Vector(*axis)))
+    if not cutters:
+        return shape
+    return kernel.boolean('subtract', shape, cutters)
+
+
+def apply_joints(panels, contacts, params):
+    """Wykonuje połączenia na kształtach płyt. panels: {id: (kształt, normalna)}; contacts: styki z polem 'joint'.
+    params: method, width (0 = auto), fit, depth (ułamek grubości dla gniazd nieprzelotowych / rowków), tool (średnica freza).
+    Zwraca {id: nowy kształt} (tylko zmienione płyty)."""
+    shapes = {pid: shp for pid, (shp, _) in panels.items()}
+    axes = {pid: np.asarray(n, float) for pid, (_, n) in panels.items()}
+    regions = {}
+    fit = max(0.0, float(params.get('fit', 0.0)))
+    ratio = min(max(float(params.get('depth', .5)), .1), .9)
+    meth = params.get('method', 'cnc')
+    changed = set()
+    for c in contacts:
+        joint = c.get('joint') or 'none'
+        if joint == 'none':
+            continue
+        if not allowed(meth, joint):
+            raise kernel.CadError(f"{JOINTS[joint][0]}: {WHY_NOT.get(meth, 'niedostępne dla tej metody')}.")
+        a, b = c['a'], c['b']
+        if c['kind'] == 'X':
+            cut_a, cut_b, _ = _halving_parts(c, fit)
+            shapes[a] = kernel.boolean('subtract', shapes[a], [cut_a])
+            shapes[b] = kernel.boolean('subtract', shapes[b], [cut_b])
+            box = _region_box(c, 1.0)
+            regions.setdefault(a, []).append(box)
+            regions.setdefault(b, []).append(box)
+        else:
+            width = float(params.get('width') or 0) or default_width(c['ta'])
+            add, cut, info = _joint_parts(c, joint, width, fit, ratio)
+            if cut:
+                shapes[b] = kernel.boolean('subtract', shapes[b], cut)
+            if add:
+                shapes[a] = kernel.boolean('union', shapes[a], add)
+            box = _region_box(c, fit + 1.0, info)
+            regions.setdefault(a, []).append(box)
+            regions.setdefault(b, []).append(box)
+        changed |= {a, b}
+    tool = float(params.get('tool', 0) or 0)
+    if meth == 'cnc' and tool > 0:
+        for pid in changed:
+            shapes[pid] = dogbones(shapes[pid], axes[pid], regions.get(pid, []), tool / 2)
+    return {pid: shapes[pid] for pid in changed}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# części do cięcia: płasko, lista, DXF / STL
+# ---------------------------------------------------------------------------------------------------------------
+def flat_part(shape, t=None):
+    """Płyta położona płasko: grubość wzdłuż Z (od 0 do t), najdłuższa prosta krawędź wzdłuż X, róg obrysu w (0, 0)."""
+    info = panel_info(shape, t)
+    n = info['n']
+    rot = kernel.rotation_between(n, (0, 0, 1))
+    best, length = None, 0.0
+    for e in shape.Edges():
+        if e.geomType() != 'LINE':
+            continue
+        a, b = np.array(e.startPoint().toTuple()), np.array(e.endPoint().toTuple())
+        v = rot @ (b - a)
+        if abs(v[2]) > 1e-6:
+            continue
+        L = float(np.linalg.norm(v))
+        if L > length + 1e-6:
+            best, length = v, L
+    if best is not None:
+        ang = -math.atan2(best[1], best[0])
+        ca, sa = math.cos(ang), math.sin(ang)
+        rot = np.array([[ca, -sa, 0], [sa, ca, 0], [0, 0, 1]]) @ rot
+    flat = kernel.transformed(shape, rot, np.zeros(3))
+    bb = flat.BoundingBox()
+    flat = flat.translate(cq.Vector(-bb.xmin, -bb.ymin, -bb.zmin))
+    return flat, info['t']
+
+
+def part_layers(flat, t):
+    """Warstwy części płaskiej: CUT - obrys i otwory przelotowe; POCKET (głębokość) - gniazda / rowki z góry lub z dołu."""
+    faces = []
+    for f in flat.Faces():
+        if f.geomType() != 'PLANE':
+            continue
+        nz = f.normalAt().z
+        if abs(abs(nz) - 1) > 1e-6:
+            continue
+        faces.append((f, nz, f.Center().z))
+    if not faces:
+        raise kernel.CadError('Płyta nie ma płaskich stron.')
+    flatten = lambda f: f.translate(cq.Vector(0, 0, -f.Center().z))
+    union = flatten(faces[0][0])
+    if len(faces) > 1:
+        union = union.fuse(*[flatten(f) for f, *_ in faces[1:]]).clean()
+    pockets = []
+    for f, nz, z in faces:
+        if nz > 0 and z < t - 1e-3:
+            pockets.append((round(t - z, 3), 'top', flatten(f)))
+        elif nz < 0 and z > 1e-3:
+            pockets.append((round(z, 3), 'bottom', flatten(f)))
+    return union, pockets
+
+
+def _offset_face(face, delta):
+    """Obrys przesunięty na zewnątrz o delta (otwory do środka) - kompensacja szerokości cięcia lasera."""
+    if abs(delta) < 1e-9:
+        return [face.outerWire()], list(face.innerWires())
+    outer = face.outerWire().offset2D(delta, 'intersection')
+    inner = []
+    for w in face.innerWires():
+        grown = w.offset2D(-delta, 'intersection')
+        area = lambda ws: sum(cq.Face.makeFromWires(x).Area() for x in ws)
+        try:
+            if area(grown) > cq.Face.makeFromWires(w).Area():
+                grown = w.offset2D(delta, 'intersection')     # kierunek przesunięcia zależy od orientacji obwodu
+        except Exception:
+            pass
+        inner += grown
+    return outer, inner
+
+
+def _add_edges(space, edges, layer, dx, dy):
+    for e in edges:
+        kind = e.geomType()
+        if kind == 'LINE':
+            a, b = e.startPoint(), e.endPoint()
+            space.add_line((a.x + dx, a.y + dy), (b.x + dx, b.y + dy), dxfattribs={'layer': layer})
+        elif kind == 'CIRCLE':
+            circ = e._geomAdaptor().Circle()
+            c, r = circ.Location(), circ.Radius()
+            if e.IsClosed():
+                space.add_circle((c.X() + dx, c.Y() + dy), r, dxfattribs={'layer': layer})
+                continue
+            p0, p1, pm = e.startPoint(), e.endPoint(), e.positionAt(.5)
+            a0 = math.degrees(math.atan2(p0.y - c.Y(), p0.x - c.X()))
+            a1 = math.degrees(math.atan2(p1.y - c.Y(), p1.x - c.X()))
+            am = math.degrees(math.atan2(pm.y - c.Y(), pm.x - c.X()))
+            ccw = lambda s, x: (x - s) % 360
+            if ccw(a0, am) > ccw(a0, a1):
+                a0, a1 = a1, a0              # łuk zgodny z ruchem wskazówek: zamiana końców
+            space.add_arc((c.X() + dx, c.Y() + dy), r, a0, a1, dxfattribs={'layer': layer})
+        else:
+            pts = [e.positionAt(t) for t in np.linspace(0, 1, max(8, int(e.Length() / .5)))]
+            space.add_lwpolyline([(p.x + dx, p.y + dy) for p in pts], dxfattribs={'layer': layer})
+
+
+def layout(parts, gap=10.0, width=1200.0):
+    """Proste ułożenie części w rzędach o szerokości width (od lewej do prawej, potem kolejny rząd)."""
+    x = y = row = 0.0
+    out = []
+    for item in parts:
+        bb = item['flat'].BoundingBox()
+        w, h = bb.xlen, bb.ylen
+        if x > 0 and x + w > width:
+            x, y, row = 0.0, y + row + gap, 0.0
+        out.append((x, y))
+        x += w + gap
+        row = max(row, h)
+    return out
+
+
+def export_dxf(parts, path, meth='cnc', labels=True, sheet_width=1200.0, kerf=None):
+    """Wszystkie płyty płasko w jednym pliku DXF 1:1 mm. Warstwy: CUT (cięcie na wylot), POCKET_<głębokość>_<strona>
+    (gniazda, rowki), OPIS (nazwy płyt). Laser: obrysy przesunięte o połowę szerokości cięcia."""
+    import os
+    import tempfile
+    from pathlib import Path
+    import ezdxf
+    doc = ezdxf.new('R2010')
+    doc.units = ezdxf.units.MM
+    doc.layers.new('CUT', dxfattribs={'color': 7})
+    doc.layers.new('OPIS', dxfattribs={'color': 3})
+    space = doc.modelspace()
+    if kerf is None:
+        kerf = float(method(meth).get('kerf', 0.0)) if meth == 'laser' else 0.0
+    places = layout(parts, width=sheet_width)
+    for item, (dx, dy) in zip(parts, places):
+        union, pockets = part_layers(item['flat'], item['t'])
+        for face in union.Faces():
+            outer, inner = _offset_face(face, kerf / 2)
+            for w in [*outer, *inner]:
+                _add_edges(space, w.Edges(), 'CUT', dx, dy)
+        for depth, side, face in pockets:
+            layer = f"POCKET_{depth:g}mm_{'GORA' if side == 'top' else 'DOL'}"
+            if layer not in doc.layers:
+                doc.layers.new(layer, dxfattribs={'color': 5 if side == 'top' else 1})
+            for w in face.Wires():
+                _add_edges(space, w.Edges(), layer, dx, dy)
+        if labels:
+            bb = item['flat'].BoundingBox()
+            h = max(3.0, min(12.0, min(bb.xlen, bb.ylen) / 6))
+            space.add_text(item['name'], height=h, dxfattribs={'layer': 'OPIS'}).set_placement((dx + bb.xlen / 2, dy + bb.ylen / 2),
+                                                                                                  align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER)
+    target = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix='.rccad-ply-', suffix='.dxf', dir=target.parent)
+    os.close(fd)
+    try:
+        doc.saveas(temporary)
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def export_stl(parts, folder):
+    """Druk 3D: każda płyta jako osobny plik STL, położona płasko na stole. Zwraca listę zapisanych plików."""
+    from pathlib import Path
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    used, out = set(), []
+    for item in parts:
+        base = ''.join(ch if ch.isalnum() or ch in ' -_' else '_' for ch in item['name']).strip() or 'plyta'
+        name, k = base, 2
+        while name.lower() in used:
+            name, k = f'{base} {k}', k + 1
+        used.add(name.lower())
+        path = folder / f'{name}.stl'
+        kernel.export_shapes([item['flat']], str(path))
+        out.append(path)
+    return out
+
+
+def cut_list(bodies):
+    """Lista elementów: nazwa, wymiary w płaszczyźnie (dł. × szer.), grubość, metoda; takie same płyty zliczone razem."""
+    rows = {}
+    for b in bodies:
+        if not is_panel(b):
+            continue
+        flat, t = flat_part(b.shape, b.meta['ply'].get('t'))
+        bb = flat.BoundingBox()
+        size = (round(max(bb.xlen, bb.ylen), 1), round(min(bb.xlen, bb.ylen), 1), round(t, 2))
+        key = (size, round(flat.Volume(), 1))
+        row = rows.setdefault(key, dict(names=[], size=size, count=0))
+        row['names'].append(b.name)
+        row['count'] += 1
+    return sorted(rows.values(), key=lambda r: (-r['size'][2], -r['size'][0], -r['size'][1]))
+
+
+def parts_for(bodies):
+    return [dict(id=b.id, name=b.name, flat=flat_part(b.shape, b.meta['ply'].get('t'))[0], t=panel_info(b.shape, b.meta['ply'].get('t'))['t'])
+            for b in bodies if is_panel(b)]
