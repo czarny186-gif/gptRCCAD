@@ -2171,6 +2171,26 @@ class StudioTests(unittest.TestCase):
         o.strip.click();self.app.processEvents()
         self.assertTrue(o.open);self.assertGreater(o.width(),200);self.assertFalse(o.strip.isVisible())
 
+    def test_pattern_arrows_set_spacing_in_three_directions(self):
+        w=self.w;a=Body('A',k.box(10,10,10)).prepared();w.document.commit([a]);w.refresh()
+        w.toggle_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=a.id),patch.object(w.view,'nearest_edge',return_value=None):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.pat_id,a.id);w.update_pattern_preview()
+        self.assertEqual(sorted(h['id'] for h in w.view.handles),['patX','patY','patZ'])
+        hx=next(h for h in w.view.handles if h['id']=='patX')
+        self.assertTrue(np.allclose(hx['tip'],np.array(hx['start'])+[w.pat_gaps[0].value(),0,0]),(hx,w.pat_gaps[0].value(),w.pat_counts[0].value()))     # koniec strzałki X na pierwszej kopii
+        g=[x.value() for x in w.pat_gaps]
+        w.handle_dragged('patX',5);self.assertAlmostEqual(w.pat_gaps[0].value(),g[0]+5)
+        w.handle_dragged('patX',8);self.assertAlmostEqual(w.pat_gaps[0].value(),g[0]+8);w.handle_released('patX')
+        w.handle_dragged('patY',15);w.handle_released('patY')
+        self.assertEqual((w.pat_counts[1].value(),w.pat_gaps[1].value()),(2,g[1]+15))   # jedna kopia w Y -> przeciągnięcie dodaje kopię
+        w.handle_dragged('patZ',-(g[2]+30));w.handle_released('patZ')
+        self.assertAlmostEqual(w.pat_gaps[2].value(),30);self.assertEqual(next(b.sign for b in w.pat_dirs[2] if b.isChecked()),-1)   # przez zero: w dół
+        w.update_pattern_preview()
+        hz=next(h for h in w.view.handles if h['id']=='patZ');self.assertLess(hz['dir'][2],0)
+        ops,_=w._pattern_ops(a);self.assertEqual(len(ops),3*2*2-1)
+        w.pat_kind.setCurrentIndex(1);w.update_pattern_preview();self.assertFalse([h for h in w.view.handles if h['id'].startswith('pat')])
+
 
 
 if __name__=='__main__':

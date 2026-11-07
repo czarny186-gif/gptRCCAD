@@ -6168,12 +6168,52 @@ class StudioWindow(QMainWindow):
         return kernel.pattern_ops('path', dict(points=self.pat_path if self.pat_path is not None else [], count=int(round(self.pat_lcount.value())),
                                                fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())), None
 
+    PAT_COLORS = {'X': (.87, .30, .32, 1), 'Y': (.20, .64, .45, 1), 'Z': (.27, .54, .89, 1)}
+
+    def _place_pattern_handles(self):
+        """Szyk prostokątny: strzałki X, Y, Z na obiekcie - przeciągnięcie zmienia odstęp w tym kierunku (przez zero:
+        kopie przechodzą na drugą stronę). Koniec strzałki stoi na pierwszej kopii."""
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        if self.mode != 'pattern' or body is None or body.mesh is None or self.pat_kind.currentData() != 'rect':
+            self.view.set_handles([])
+            return
+        center, size = self._pattern_center(body)
+        base = max(float(np.max(size)) * .45, 4.0)
+        axes = self._pattern_axes(body)
+        handles = []
+        for i, axis in enumerate('XYZ'):
+            sign = next(b.sign for b in self.pat_dirs[i] if b.isChecked())
+            direction = np.array(axes[axis], float) * sign
+            gap = self.pat_gaps[i].value()
+            count = int(round(self.pat_counts[i].value()))
+            length = gap if count > 1 and gap > base * .5 else base       # krótka strzałka też daje się złapać
+            handles.append(dict(id='pat' + axis, start=center, tip=center + direction * length, dir=direction,
+                                color=self.PAT_COLORS[axis], label=f'{axis} {gap:g}' if count > 1 else axis))
+        self.view.set_handles(handles)
+
+    def _pattern_drag(self, axis, delta):
+        i = 'XYZ'.index(axis)
+        pair = self.pat_dirs[i]
+        if self._hv is None or self._hv[0] != axis:
+            sign = next(b.sign for b in pair if b.isChecked())
+            self._hv = (axis, sign * self.pat_gaps[i].value(), sign)
+        signed = self._hv[1] + delta * self._hv[2]           # odstęp ze znakiem wzdłuż osi
+        if int(round(self.pat_counts[i].value())) < 2 and abs(signed) > 1e-6:
+            self.pat_counts[i].setValue(2)                    # przeciągnięcie strzałki przy jednej kopii dodaje kopię
+        new_sign = 1 if signed >= 0 else -1
+        for b in pair:
+            b.setChecked(b.sign == new_sign)
+        self.pat_gaps[i].setValue(round(abs(signed), 1))
+        self._timers['pattern'].start()
+
     def update_pattern_preview(self):
         """Podgląd na żywo: kopie siatki obiektu przekształcone macierzami (bez OCC), więc zmiana parametru jest natychmiastowa."""
         if self.mode != 'pattern':
             return
         body = self.document.get(self.pat_id) if self.pat_id else None
         self.view.sel_vertices = [np.array([s.value() for s in self.pat_pivot], float)] if body is not None and self.pat_kind.currentData() == 'circ' else []
+        if self._hv is None:
+            self._place_pattern_handles()
         if body is None or body.mesh is None or (self.pat_kind.currentData() == 'path' and self.pat_path is None):
             self.view.set_preview_mesh(None)
             return
@@ -6336,6 +6376,8 @@ class StudioWindow(QMainWindow):
             if self._hv is None:
                 self._hv = self.mod_size.value()
             self.mod_size.setValue(max(.1, round(self._hv + delta, 1)))
+        elif hid in ('patX', 'patY', 'patZ'):
+            self._pattern_drag(hid[3], delta)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -6365,6 +6407,8 @@ class StudioWindow(QMainWindow):
             self._place_mod_handle()
         elif hid == 'split':
             self._place_split_handle()
+        elif hid.startswith('pat'):
+            self._place_pattern_handles()
         else:
             self._place_gizmo()
 

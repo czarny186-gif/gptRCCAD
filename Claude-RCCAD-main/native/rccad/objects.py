@@ -427,7 +427,9 @@ class ObjectsPanel(QFrame):
             self.strip.setFixedSize(self.STRIP - 4, min(room, 150) - 8)
             return
         content = self.scroll.widget().sizeHint().height() if self.scroll.widget() else 60
-        self.setFixedHeight(int(min(room, max(110, content + 84 + (self.scroll.horizontalScrollBar().height() if self.scroll.horizontalScrollBar().isVisible() else 0)))))
+        hint = self.hint.heightForWidth(max(100, self.width() - 26)) if self.hint.isVisible() else 0
+        bar = self.scroll.horizontalScrollBar().height() if self.scroll.horizontalScrollBar().isVisible() else 0
+        self.setFixedHeight(int(min(room, max(110, content + 64 + hint + bar))))
 
     def update_items(self, items, selected, hidden, locked):
         """items: lista (id, kategoria, numer, nazwa, grupa szyku, folder)."""

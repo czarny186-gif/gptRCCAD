@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.51 — grupy dla tekstu i nowych brył, nietykalne ukryte obiekty, eksport widocznych
+# RCCAD Desktop 0.4.52 — strzałki odstępu w szyku
+
+## Zmiany 0.4.52
+
+- **Szyk prostokątny: strzałki X, Y, Z na obiekcie** (czerwona, zielona, niebieska; dla szkicu w układzie jego płaszczyzny). Koniec strzałki stoi na pierwszej kopii, przeciągnięcie zmienia odstęp w tym kierunku na żywo (wartość przy strzałce i w panelu). Przeciągnięcie przez zero przenosi kopie na drugą stronę, a przy ilości 1 dodaje kopię.
+- Lista obiektów: wysokość okna uwzględnia podpowiedź na dole (przy krótkiej liście nie zachodzi już na wiersze).
+
+## RCCAD Desktop 0.4.51 — grupy dla tekstu i nowych brył, nietykalne ukryte obiekty, eksport widocznych
 
 ## Zmiany 0.4.51
 
