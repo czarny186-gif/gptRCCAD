@@ -34,6 +34,7 @@ class Body:
     mesh: DisplayMesh | None = field(default=None, compare=False, repr=False)
     meta: dict | None = field(default=None, compare=False, repr=False)   # parametry szkicu (narzędzie, punkty, liczba boków) do edycji wymiarów
     group: str = field(default='', compare=False)       # wspólna grupa (np. szyk „jako jeden element”): zaznaczanie, wyciąganie i przenoszenie razem
+    folder: str = field(default='', compare=False)      # grupa (folder) na liście obiektów - tylko porządek na liście, nie zmienia geometrii
 
     def prepared(self):
         return replace(self, mesh=_mesh(self.shape))
@@ -300,6 +301,8 @@ class Document:
         entry = dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, shape=shape_index)
         if body.group:
             entry['group'] = body.group
+        if body.folder:
+            entry['folder'] = body.folder
         if body.meta:
             entry['meta'] = body.meta
         if isinstance(body.plane, Frame):
@@ -437,8 +440,10 @@ class Document:
         meta = item.get('meta')
         group = item.get('group', '')
         group = group if isinstance(group, str) and re.fullmatch('[0-9a-f]{1,40}', group) else ''
+        folder = item.get('folder', '')
+        folder = folder.strip()[:60] if isinstance(folder, str) else ''
         return Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)), mesh=mesh,
-                    meta=meta if isinstance(meta, dict) else None, group=group)
+                    meta=meta if isinstance(meta, dict) else None, group=group, folder=folder)
 
     @classmethod
     def load(cls, path):

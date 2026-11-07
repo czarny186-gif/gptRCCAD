@@ -2078,6 +2078,56 @@ class StudioTests(unittest.TestCase):
         w.apply_transform();self.wait()
         self.assertAlmostEqual(w.document.bodies[0].shape.BoundingBox().xmin,80,3)
 
+    # 0.4.50: kostka (obrót w płaszczyźnie, góra do góry), grupy na liście, szyk jako jedna pozycja, pogrubiony tekst
+    def test_cube_roll_and_upright_plane_view(self):
+        w=self.w;v=w.view
+        v.look_along('XY');r,u,b=v.screen_axes()
+        self.assertTrue(np.allclose(u,[0,1,0],atol=1e-6))                  # GÓRA na kostce stoi prosto
+        n=np.array([.02,.01,1]);n/=np.linalg.norm(n);x=np.cross([0,1,0],n);x/=np.linalg.norm(x)
+        frame=k.Frame.from_dict(dict(origin=(0,0,5),normal=tuple(n),xdir=tuple(x)))
+        v.look_along(frame);r,u,b=v.screen_axes()
+        self.assertGreater(u[1],.99)                                        # prawie pozioma ściana też „Y do góry”
+        v.look_along(k.Frame.from_dict(dict(origin=(0,0,0),normal=(.7071067811865476,.7071067811865476,0),xdir=(0,0,1))));r,u,b=v.screen_axes()
+        self.assertGreater(u[2],.99)                                        # pionowa ściana: Z do góry
+        v.look_along('XY');w._cube_roll(90);r,u,b=v.screen_axes()
+        self.assertTrue(np.allclose(u,[1,0,0],atol=1e-6));self.assertAlmostEqual(v.roll(),90)
+        p0=np.array(v.project_one((0,0,0)));v.pan(20,0,0,relative='view');p1=np.array(v.project_one((0,0,0)))
+        self.assertTrue(np.allclose(p1-p0,[20,0],atol=.5))                 # przesuwanie dalej idzie za myszą
+        w._cube_rotate(0,90);r,u,b=v.screen_axes()
+        self.assertAlmostEqual(abs(float(np.dot(b,[0,0,1]))),0,6)            # strzałka w górę przerzuca z widoku z góry na bok
+        v.set_view('-Y');w._cube_rotate(-90,0)
+        self.assertTrue(np.allclose(v.screen_axes()[2],[-1,0,0],atol=1e-6))  # strzałka w lewo: widok z lewej
+        from PySide6.QtCore import QPointF
+        hits={w.cube._hit(w.cube._roll_center(s)) for s in (1,-1)}
+        self.assertEqual(hits,{('roll',1),('roll',-1)})
+
+    def test_objects_list_pattern_unit_and_folders(self):
+        w=self.w
+        s1=Body('Szkic 1',k.sketch('rectangle','XY',10,10),'sketch','XY').prepared()
+        s2=Body('Szkic 2',k.sketch('circle','XY',4,4).translate((40,0,0)),'sketch','XY').prepared()
+        w.document.commit([s1,s2])
+        a=hist.run_pattern(list(w.document.bodies),dict(type='pattern',id=s1.id,kind='rect',params=dict(counts=[4,1,1],spacing=[15,0,0]),group='abc1',join=False,out=[]))
+        b=hist.run_pattern(a,dict(type='pattern',id=s2.id,kind='rect',params=dict(counts=[1,3,1],spacing=[0,15,0]),join=False,out=[]))
+        w.document.commit(b);w.refresh();self.app.processEvents()
+        rows=w.objects.rows
+        self.assertIn(s1.id,rows);self.assertEqual(sum(1 for i in rows if w.document.get(i).group=='abc1'),1)  # szyk jako jeden szkic
+        self.assertEqual(w.objects.folders(),['Szkic 2 — szyk'])
+        w.objects_hide(s1.id);self.assertTrue(all(x.id in w.hidden_ids for x in w.document.bodies if x.group=='abc1'))
+        w.objects_hide(s1.id)
+        w.selected=[s2.id];w.objects_folder_new(None)
+        self.assertEqual(w.document.get(s2.id).folder,'Grupa 1')
+        infos,cur=w.document.infos();self.assertEqual(infos[-1]['op']['type'],'folder')
+        w.objects_folder_move([s1.id],'Grupa 1')
+        self.assertEqual({x.folder for x in w.document.bodies if x.group=='abc1'},{'Grupa 1'})   # cały szyk razem
+        w.objects_folder_rename('Grupa 1','Mocowania')
+        self.assertEqual({x.folder for x in w.document.bodies if x.folder},{'Mocowania','Szkic 2 — szyk'})
+        w.undo();self.wait();self.assertIn('Grupa 1',{x.folder for x in w.document.bodies})
+        w.redo();self.wait()
+        w.objects_folder_move([s2.id],'');self.assertEqual(w.document.get(s2.id).folder,'')
+
+    def test_text_starts_bold(self):
+        self.assertTrue(self.w.text_bold.isChecked())
+
 
 
 if __name__=='__main__':

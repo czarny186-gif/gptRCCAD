@@ -568,11 +568,18 @@ class StudioWindow(QMainWindow):
         self.objects.group_delete.connect(self.objects_group_delete)
         self.objects.rename.connect(self.objects_rename)
         self.objects.hover.connect(self.objects_hover)
+        self.objects.folder_move.connect(self.objects_folder_move)
+        self.objects.folder_new.connect(self.objects_folder_new)
+        self.objects.folder_rename.connect(self.objects_folder_rename)
+        self.objects.folder_hide.connect(self.objects_folder_hide)
+        self.objects.folder_delete.connect(self.objects_folder_delete)
+        self.objects.folder_select.connect(self.objects_folder_select)
         ui.shadow(self.cube, 22, 5, 32)
         self.cube_buttons = {}
         self.cube.faceClicked.connect(self._cube_clicked)
         self.cube.directionClicked.connect(lambda az, el: (self.view.setCameraPosition(azimuth=az, elevation=el), self.view.update()))
         self.cube.rotateClicked.connect(self._cube_rotate)
+        self.cube.rollClicked.connect(self._cube_roll)
         self.view.cameraMoved.connect(self.cube.update)
         self.view.cameraMoved.connect(self._camera_changed)
 
@@ -1474,6 +1481,7 @@ class StudioWindow(QMainWindow):
             chip.setMinimumWidth(56)
             style_row.addWidget(chip, 1)
         self.text_bold.setStyleSheet('font-weight:900;')
+        self.text_bold.setChecked(True)          # napis od razu pogrubiony: grubsze litery łatwiej wyciągnąć i wyciąć
         self.text_italic.setStyleSheet('font-style:italic;font-family:serif;')
         form.addWidget(_label('Styl'))
         form.addLayout(style_row)
@@ -3189,14 +3197,19 @@ class StudioWindow(QMainWindow):
         return groups
 
     def _regions_for(self, key, plane, bodies):
-        sig = tuple((b.id, id(b.shape)) for b in bodies)
+        solids = tuple((b.id, id(b.shape)) for b in self.document.bodies if b.kind == 'solid' and b.visible)
+        sig = (tuple((b.id, id(b.shape)) for b in bodies), solids)
         cached = self._region_cache.get(key)
         if cached and cached[0] == sig:
             return cached[1]
         try:
             faces = kernel.regions(plane, [e for b in bodies for e in b.shape.Edges()], [b.shape for b in bodies if b.shape.IsClosed()])
         except Exception:
+            faces = []
+        if not faces:
             faces = [f for f in (profile_face(b.shape) for b in bodies if b.shape.IsClosed()) if f is not None]
+        # szkic na ścianie bryły, wychodzący poza nią: część na ścianie i część poza nią to osobne obszary
+        faces = hist.split_on_solids(plane, faces, self.document.bodies)
         self._region_cache[key] = (sig, faces)
         return faces
 
@@ -3603,16 +3616,32 @@ class StudioWindow(QMainWindow):
         self.ex_bar.adjustSize()
         self._timers['extrude'].start()
 
+    def _cube_roll(self, degrees):
+        """Strzałki obrotu przy kostce: obraz obraca się o 90° wokół osi patrzenia (np. żeby ustawić szkic tak, jak trzeba)."""
+        self.view.set_roll(round((self.view.roll() + degrees) / 90.0) * 90.0)
+        self.cube.update()
+
     def _cube_rotate(self, daz, delev):
-        """Strzałki kostki: obrót widoku o 90° (przerzucenie kostki na niewidoczną ścianę)."""
-        az = float(self.view.opts['azimuth'])
-        el = float(self.view.opts['elevation'])
+        """Strzałki kostki: przerzucenie widoku o 90° w kierunku strzałki na ekranie (także po obróceniu obrazu)."""
+        right, up, back = self.view.screen_axes()
+
+        def snap(v):
+            v = np.asarray(v, float)
+            k = int(np.argmax(np.abs(v)))
+            if abs(v[k]) > .9:                       # prawie wzdłuż osi: dokładnie na oś (widok ściany kostki)
+                out = np.zeros(3)
+                out[k] = np.sign(v[k])
+                return out
+            return v
+
+        back, up, right = snap(back), snap(up), snap(right)
         if daz:
-            az = round(az / 90.0) * 90.0 + daz
+            a = math.radians(daz)
+            back = back * math.cos(a) + right * math.sin(a)
         if delev:
-            el = max(-90.0, min(90.0, round(el / 90.0) * 90.0 + delev))
-        self.view.setCameraPosition(azimuth=az, elevation=el)
-        self.view.update()
+            back, up = (up, -back) if delev > 0 else (-up, back)
+        self.view.orient(snap(back), snap(up))
+        self.cube.update()
 
     def _auto_extrude_op(self):
         """Wciąganie w bryłę = wycinanie, na zewnątrz = połączenie (dopóki użytkownik sam nie wybrał operacji)."""
@@ -7482,7 +7511,7 @@ class StudioWindow(QMainWindow):
 
     def objects_update(self):
         numbers = self._objects_numbers()
-        items = [(b.id, category(b), numbers[b.id], b.name) for b in self.document.bodies]
+        items = [(b.id, category(b), numbers[b.id], b.name, b.group, b.folder) for b in self.document.bodies]
         self.objects.update_items(items, self.selected, self.hidden_ids, self.locked_ids)
 
     def _objects_ready(self):
@@ -7513,15 +7542,102 @@ class StudioWindow(QMainWindow):
         self.refresh()
 
     def objects_hide(self, oid):
-        self.hidden_ids.symmetric_difference_update({oid})
+        members = self._group_ids(oid)          # szyk „jako jeden element” to jedna pozycja listy
         if oid in self.hidden_ids:
-            self.selected = [i for i in self.selected if i != oid]
+            self.hidden_ids.difference_update(members)
+        else:
+            self.hidden_ids.update(members)
+            self.selected = [i for i in self.selected if i not in members]
         self.refresh()
 
     def objects_lock(self, oid):
-        self.locked_ids.symmetric_difference_update({oid})
+        members = self._group_ids(oid)
         if oid in self.locked_ids:
-            self.selected = [i for i in self.selected if i != oid]
+            self.locked_ids.difference_update(members)
+        else:
+            self.locked_ids.update(members)
+            self.selected = [i for i in self.selected if i not in members]
+        self.refresh()
+
+    # ---------- grupy (foldery) na liście obiektów ----------
+    def _folder_targets(self, ids):
+        """Elementy, których dotyczy polecenie grupy: kliknięta pozycja (z całym szykiem „jako jeden element”);
+        gdy jest wśród zaznaczonych - wszystkie zaznaczone. Bez pozycji - zaznaczone."""
+        ids = list(ids or [])
+        if not ids or any(i in self.selected for i in ids):
+            ids = [*ids, *self.selected]
+        out = []
+        for i in ids:
+            for m in self._group_ids(i):
+                if m not in out and self.document.get(m) is not None:
+                    out.append(m)
+        return out
+
+    def objects_folder_move(self, ids, folder):
+        if not self._objects_ready():
+            return
+        targets = self._folder_targets(ids) if folder else [i for i in ids if self.document.get(i) is not None]
+        if not targets:
+            return
+        if not folder:
+            targets = [m for i in targets for m in self._group_ids(i)]
+        self._set_folder(targets, folder, f'Do grupy: {folder}' if folder else 'Wyjęcie z grupy')
+
+    def objects_folder_new(self, ids):
+        if not self._objects_ready():
+            return
+        targets = self._folder_targets(ids)
+        if not targets:
+            self.toast('Zaznacz na liście elementy, które mają trafić do nowej grupy (Shift / Ctrl + klik).', 4000)
+            return
+        names = {b.folder for b in self.document.bodies}
+        n = 1
+        while f'Grupa {n}' in names:
+            n += 1
+        self._set_folder(targets, f'Grupa {n}', f'Nowa grupa: Grupa {n}')
+
+    def objects_folder_rename(self, old, new):
+        new = new.strip()[:60]
+        if not new or new == old or not self._objects_ready():
+            return
+        ids = [b.id for b in self.document.bodies if b.folder == old]
+        if ids:
+            self._set_folder(ids, new, f'Zmiana nazwy grupy: {old} → {new}')
+
+    def _set_folder(self, ids, folder, label):
+        """Przeniesienie do grupy to krok historii (cofanie / ponawianie jak przy zmianie nazwy)."""
+        ids = set(ids)
+        if all(self.document.get(i).folder == folder for i in ids):
+            return
+        self.document.pending_op = dict(type='folder', ids=sorted(ids), folder=folder)
+        self.document.pending_label, self.document.pending_icon = label, 'layers'
+        self.document.commit([replace(b, folder=folder) if b.id in ids else b for b in self.document.bodies])
+        self.refresh()
+
+    def objects_folder_hide(self, ids):
+        ids = [i for i in ids if self.document.get(i) is not None]
+        if all(i in self.hidden_ids for i in ids):
+            self.hidden_ids.difference_update(ids)
+        else:
+            self.hidden_ids.update(ids)
+            self.selected = [i for i in self.selected if i not in ids]
+        self.refresh()
+
+    def objects_folder_delete(self, ids):
+        if not self._objects_ready():
+            return
+        ids = [i for i in ids if self.document.get(i) is not None]
+        if ids:
+            self.selected = ids
+            self.delete_selected()
+
+    def objects_folder_select(self, ids):
+        if self.busy:
+            return
+        if self.mode is not None:
+            self.set_mode(None)
+        ids = [i for i in ids if self.document.get(i) is not None]
+        self.selected = [] if sorted(self.selected) == sorted(ids) else ids
         self.refresh()
 
     def objects_group_hide(self, cat):
@@ -7556,7 +7672,7 @@ class StudioWindow(QMainWindow):
         if self.busy or self.mode is not None:
             return
         if oid not in self.selected:
-            self.selected = [oid]
+            self.selected = self._group_ids(oid)
         self.delete_selected()
 
     def delete_selected(self):

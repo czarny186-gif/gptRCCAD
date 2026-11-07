@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.49 — podglądy w tle, płynne przesuwanie i obracanie
+# RCCAD Desktop 0.4.50 — nowa kostka nawigacji, grupy na liście obiektów, porządki w szkicach
+
+## Zmiany 0.4.50
+
+- **Kostka nawigacji**: nowy wygląd (fazowane krawędzie, cieniowanie, wyraźniejsze napisy, pierścień orientacji) i strzałki obrotu obrazu o 90° w płaszczyźnie ekranu (lewy / prawy górny róg). Przerzucanie trójkątami działa względem ekranu także po obróceniu obrazu; przesuwanie i obracanie myszą idą za kursorem.
+- **„Góra do góry” przy wyborze płaszczyzny / ściany**: widok ustawia się prosto na płaszczyznę bez przekręcenia - na ścianach pionowych oś Z w górę, na poziomych napis GÓRA na kostce stoi prosto (wcześniej leżał na boku). Obrót można potem dopasować nowymi strzałkami.
+- **Szyk na liście obiektów**: „Jeden element” to jedna pozycja (z liczbą ×N; oko, blokada i kosz działają na całość), „Osobno” tworzy grupę (folder) z oryginałem i kopiami.
+- **Grupy na liście obiektów**: nowa grupa z zaznaczonych (przycisk z folderem), prawy przycisk na elemencie - przenieś do grupy / nowa grupa / wyjmij z grupy; grupy zwijane, z okiem i koszem dla całości, zmiana nazwy dwuklikiem, rozgrupowanie. Zmiany grup są krokami historii (cofanie / ponawianie) i zapisują się w pliku.
+- **Nożyczki**: kawałki kilku kształtów, które po przycięciu tworzą jeden zamknięty obrys, stają się jednym szkicem.
+- **Szkic wychodzący poza ścianę bryły**: część na ścianie i część poza nią to osobne obszary - każdą można wyciągnąć niezależnie (stare kroki historii przeliczają się bez zmian).
+- **Tekst domyślnie pogrubiony.**
+
+## RCCAD Desktop 0.4.49 — podglądy w tle, płynne przesuwanie i obracanie
 
 ## Zmiany 0.4.49
 

@@ -1666,6 +1666,57 @@ def regions(plane, edges, wires=()):
     return alt if len(alt) > len(out) else out
 
 
+def coplanar_faces(plane, solids, tol=1e-4):
+    """Płaskie ściany brył leżące w płaszczyźnie szkicu (szkic narysowany na ścianie bryły)."""
+    frame = frame_of(plane)
+    n, o = np.array(frame.normal, float), np.array(frame.origin, float)
+    out = []
+    for solid in solids:
+        try:
+            box = solid.BoundingBox()
+        except Exception:
+            continue
+        corners = np.array([[x, y, z] for x in (box.xmin, box.xmax) for y in (box.ymin, box.ymax) for z in (box.zmin, box.zmax)])
+        side = (corners - o) @ n
+        if side.min() > tol or side.max() < -tol:          # bryła w ogóle nie sięga płaszczyzny
+            continue
+        for face in solid.Faces():
+            if face.geomType() != 'PLANE':
+                continue
+            fn = np.array(face.normalAt().toTuple(), float)
+            if abs(abs(float(fn @ n)) - 1) > 1e-6:
+                continue
+            if abs(float((np.array(face.Center().toTuple()) - o) @ n)) > tol:
+                continue
+            out.append(face)
+    return out
+
+
+def split_by_faces(regions, faces):
+    """Obszary szkicu podzielone obrysem ścian bryły, na której leży szkic: część na ścianie i część poza nią są osobnymi
+    obszarami (każdą można wyciągnąć niezależnie). Obszary w całości na ścianie albo poza nią zostają bez zmian."""
+    from OCP.BOPAlgo import BOPAlgo_Builder
+    if not regions or not faces:
+        return regions
+    builder = BOPAlgo_Builder()
+    for f in [*regions, *faces]:
+        builder.AddArgument(f.wrapped)
+    builder.SetRunParallel(False)
+    builder.SetFuzzyValue(1e-6)
+    builder.Perform()
+    if builder.HasErrors():
+        return regions
+    out = []
+    for region in regions:
+        pieces = []
+        for piece in _fromlist(builder.Modified(region.wrapped)) or [region.wrapped]:
+            f = cq.Face(piece) if piece.ShapeType() == 4 else None
+            if f is not None and f.Area() > 1e-6 and not any(f.isSame(q) for q in pieces):
+                pieces.append(f)
+        out.extend(pieces or [region])
+    return out
+
+
 def _regions_from_wires(wires):
     """Obszary z zamkniętych konturów: ściany tną się nawzajem (General Fuse), więc część wspólna i reszty są osobnymi obszarami."""
     from OCP.BOPAlgo import BOPAlgo_Builder
@@ -1895,6 +1946,59 @@ def _chains(edges, tol=1e-4):
         except Exception:
             wires += [cq.Wire.assembleEdges([e]) for e in chain]
     return wires
+
+
+def closed_groups(shapes_edges, tol=1e-4):
+    """Grupy otwartych szkiców, które razem tworzą zamknięty obrys (np. po przycięciu nożyczkami dwóch nachodzących
+    kształtów): każdy koniec spotyka dokładnie jeden inny koniec. Zwraca listy numerów szkiców (co najmniej dwóch)."""
+    key = lambda p: (round(p.x / tol), round(p.y / tol), round(p.z / tol))
+
+    def ends(edges):
+        degree = {}
+        for e in edges:
+            if e.IsClosed():
+                continue
+            for p in (e.startPoint(), e.endPoint()):
+                k = key(p)
+                degree[k] = degree.get(k, 0) + 1
+        return degree
+
+    items = []
+    for i, edges in enumerate(shapes_edges):
+        degree = ends(edges)
+        free = {k for k, d in degree.items() if d % 2}
+        if free and edges:                      # tylko szkice otwarte (zamknięte są już osobnym obrysem)
+            items.append((i, free, degree))
+    parent = {i: i for i, _, _ in items}
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    owner = {}
+    for i, free, _ in items:
+        for k in free:
+            if k in owner:
+                parent[find(i)] = find(owner[k])
+            else:
+                owner[k] = i
+    groups = {}
+    for i, _, _ in items:
+        groups.setdefault(find(i), []).append(i)
+    out = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        total = {}
+        for i, _, degree in items:
+            if i in members:
+                for k, d in degree.items():
+                    total[k] = total.get(k, 0) + d
+        if all(d == 2 for d in total.values()):
+            out.append(sorted(members))
+    return out
 
 
 def trim_pieces(bodies_edges, target):

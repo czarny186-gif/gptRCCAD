@@ -970,6 +970,17 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             st(ink, 2.4); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 16, 16)
             st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 13)); p.drawLine(QPointF(24, 24), QPointF(32, 28))
             st(acc, 3.0); p.drawPolyline(poly([(6, 12), (8, 21), (16, 18)]))
+        elif name in ('folder', 'folderadd'):
+            body = QPainterPath()
+            body.moveTo(6, 15); body.lineTo(6, 37); body.quadTo(6, 40, 9, 40); body.lineTo(39, 40); body.quadTo(42, 40, 42, 37)
+            body.lineTo(42, 18); body.quadTo(42, 15, 39, 15); body.lineTo(23, 15); body.lineTo(19, 10); body.lineTo(9, 10)
+            body.quadTo(6, 10, 6, 13); body.closeSubpath()
+            p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawPath(body)
+            st(ink, 2.0); p.drawLine(QPointF(6, 20), QPointF(42, 20))
+            if name == 'folderadd':
+                st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 36)); p.drawLine(QPointF(18, 30), QPointF(30, 30))
+            else:
+                st(acc, 2.6); p.drawLine(QPointF(14, 30), QPointF(34, 30))
         elif name == 'layers':
             for k, y in enumerate((30, 20, 10)):
                 q = poly([(24, y + 8), (42, y), (24, y - 8 + 0), (6, y)])

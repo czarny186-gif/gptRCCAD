@@ -73,6 +73,17 @@ VIEWS = {  # (elewacja, azymut) kamery pyqtgraph
 
 
 
+def camera_for_normal(n):
+    """Elewacja i azymut kamery patrzącej z kierunku `n` z „górą do góry” (bez przekręcenia obrazu)."""
+    n = np.asarray(n, float)
+    elevation = math.degrees(math.asin(max(-1.0, min(1.0, float(n[2])))))
+    if math.hypot(n[0], n[1]) < 1e-6:
+        azimuth = -90.0                       # widok z góry / z dołu: X w prawo, Y w górę - jak ściana GÓRA kostki
+    else:
+        azimuth = math.degrees(math.atan2(n[1], n[0]))
+    return dict(elevation=elevation, azimuth=azimuth)
+
+
 class Overlay2D(QWidget):
     """Przezroczysta warstwa 2D nad widokiem 3D (jak <canvas> w wersji HTML): strzałki i uchwyty są ZAWSZE na wierzchu,
     nigdy nie chowają się za bryłą. Rysuje też środki szkiców i znacznik przyciągania."""
@@ -1035,6 +1046,72 @@ class CadView(gl.GLViewWidget):
     def set_handle(self, tip, direction):
         self.set_handles([] if tip is None else [dict(id='ex', tip=tip, dir=direction)])
 
+    # ---------- obrót widoku w płaszczyźnie ekranu (wokół osi patrzenia) ----------
+    def roll(self):
+        return float(self.opts.get('roll', 0.0))
+
+    def set_roll(self, degrees):
+        self.opts['roll'] = ((float(degrees) + 180.0) % 360.0) - 180.0
+        self.update()
+
+    def roll_by(self, degrees):
+        self.set_roll(self.roll() + degrees)
+
+    def viewMatrix(self):
+        tr = QMatrix4x4()
+        tr.translate(0.0, 0.0, -self.opts['distance'])
+        roll = self.roll()
+        if roll:
+            tr.rotate(roll, 0, 0, 1)            # obraz obrócony wokół osi patrzenia
+        tr.rotate(self.opts['elevation'] - 90, 1, 0, 0)
+        tr.rotate(self.opts['azimuth'] + 90, 0, 0, -1)
+        center = self.opts['center']
+        tr.translate(-center.x(), -center.y(), -center.z())
+        return tr
+
+    def _unroll(self, dx, dy):
+        """Ruch myszy na ekranie -> ruch w układzie kamery bez obrotu (przesuwanie i obracanie idą za kursorem także po obróceniu widoku)."""
+        roll = math.radians(self.roll())
+        if not roll:
+            return dx, dy
+        c, s = math.cos(roll), math.sin(roll)
+        return c * dx - s * dy, s * dx + c * dy
+
+    def pan(self, dx, dy, dz, relative='global'):
+        if relative == 'view':
+            dx, dy = self._unroll(dx, dy)
+        super().pan(dx, dy, dz, relative)
+
+    def orbit(self, azim, elev):
+        if self.roll():
+            ox, oy = self._unroll(-azim, elev)
+            azim, elev = -ox, oy
+        super().orbit(azim, elev)
+
+    def setCameraPosition(self, pos=None, distance=None, elevation=None, azimuth=None, rotation=None):
+        if elevation is not None or azimuth is not None:
+            self.opts['roll'] = 0.0             # nowy kierunek patrzenia: napisy kostki znowu prosto, obrót można potem dodać strzałkami
+        super().setCameraPosition(pos=pos, distance=distance, elevation=elevation, azimuth=azimuth, rotation=rotation)
+
+    def orient(self, back, up):
+        """Kamera patrzy z kierunku `back` (wersor od celu do kamery), a `up` jest u góry ekranu."""
+        back = np.asarray(back, float)
+        back = back / max(np.linalg.norm(back), 1e-12)
+        super().setCameraPosition(**camera_for_normal(back))
+        self.opts['roll'] = 0.0
+        right, cur_up, _ = self.screen_axes()
+        up = np.asarray(up, float)
+        x, y = float(up @ right), float(up @ cur_up)
+        if math.hypot(x, y) > 1e-6:
+            self.set_roll(round(-math.degrees(math.atan2(-x, y)), 6))
+        self.update()
+
+    def screen_axes(self):
+        """Wersory świata: w prawo i w górę ekranu oraz do kamery (z uwzględnieniem obrotu widoku)."""
+        m = self.viewMatrix()
+        rows = [np.array([m.row(i).x(), m.row(i).y(), m.row(i).z()]) for i in range(3)]
+        return rows[0], rows[1], rows[2]
+
     def camera_dir(self):
         """Wersor od celu do kamery (świat)."""
         az, el = math.radians(float(self.opts['azimuth'])), math.radians(float(self.opts['elevation']))
@@ -1299,11 +1376,27 @@ class CadView(gl.GLViewWidget):
         self.update()
 
     def look_along(self, plane):
-        """Kamera patrzy na płaszczyznę szkicu wprost (z jej strony normalnej)."""
+        """Kamera patrzy na płaszczyznę szkicu wprost (z jej strony normalnej). Najpierw zawsze „góra do góry”: na ścianach
+        pionowych i ukośnych oś Z świata wskazuje w górę ekranu, na poziomych - oś Y (napis GÓRA na kostce stoi prosto);
+        obrót w płaszczyźnie dopasowuje się potem strzałkami przy kostce."""
         frame = kernel.frame_of(plane)
         n = np.array(frame.normal, float)
+        n = n / max(np.linalg.norm(n), 1e-12)
         self.opts['center'] = QVector3D(*[float(c) for c in frame.origin])
-        self.setCameraPosition(elevation=math.degrees(math.asin(max(-1, min(1, n[2])))), azimuth=math.degrees(math.atan2(n[1], n[0])))
+        self.setCameraPosition(**camera_for_normal(n))
+        self.upright(n)
+
+    def upright(self, n=None):
+        """Obraca obraz wokół osi patrzenia tak, żeby „góra” była u góry: przy patrzeniu z góry / z dołu oś Y (±),
+        w pozostałych widokach oś Z świata."""
+        n = self.camera_dir() if n is None else np.asarray(n, float)
+        want = np.array([0.0, 1.0 if n[2] > 0 else -1.0, 0.0]) if abs(n[2]) > .9 else np.array([0.0, 0.0, 1.0])
+        self.opts['roll'] = 0.0
+        right, up, back = self.screen_axes()
+        x, y = float(want @ right), float(want @ up)
+        if math.hypot(x, y) < 1e-6:
+            return
+        self.set_roll(round(-math.degrees(math.atan2(-x, y)), 6))
 
     def set_marker(self, point, color=None, label=None):
         """Znacznik przyciągania (pomarańczowe kółko z etykietą) - tylko gdy kursor złapał punkt, jak w wersji HTML."""

@@ -255,23 +255,32 @@ def text_group_of(identifier):
     return identifier[:24] if isinstance(identifier, str) and len(identifier) == 32 and identifier[12] == 'f' else None
 
 
-def _group_regions(plane, members):
+def _group_regions(plane, members, bodies=None):
     """Obszary szkiców w płaszczyźnie. Pojedynczy kształt (np. jeden okrąg) nie przechodzi przez General Fuse - wtedy obszarem jest ściana z jego konturu
-    (tak samo jak przy wskazywaniu obszaru w oknie), inaczej przeliczenie historii gubiłoby takie kroki."""
+    (tak samo jak przy wskazywaniu obszaru w oknie), inaczej przeliczenie historii gubiłoby takie kroki.
+    bodies: gdy podane, obszary dzieli też obrys ścian brył leżących w tej płaszczyźnie (szkic wychodzący poza ścianę)."""
     try:
         faces = kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
     except Exception:
         faces = []
-    if faces:
+    if not faces:
+        for b in members:
+            try:
+                if b.shape.IsClosed():
+                    faces.append(cq.Face.makeFromWires(b.shape))
+            except Exception:
+                continue
+    if bodies is not None and faces:
+        faces = split_on_solids(plane, faces, bodies)
+    return faces
+
+
+def split_on_solids(plane, faces, bodies):
+    solids = [b.shape for b in bodies if b.kind == 'solid' and b.visible]
+    try:
+        return kernel.split_by_faces(faces, kernel.coplanar_faces(plane, solids))
+    except Exception:
         return faces
-    out = []
-    for b in members:
-        try:
-            if b.shape.IsClosed():
-                out.append(cq.Face.makeFromWires(b.shape))
-        except Exception:
-            continue
-    return out
 
 
 def _inner_point(face):
@@ -381,7 +390,7 @@ def describe_profiles(profiles, bodies=(), merge=True):
             out.append({'k': 'sketch', 'id': src['id']})
         elif src['kind'] == 'region':
             center = np.array(src['center'], float)
-            spec = {'k': 'region', 'plane': plane_to_json(src['plane']), 'center': [float(c) for c in center]}
+            spec = {'k': 'region', 'plane': plane_to_json(src['plane']), 'center': [float(c) for c in center], 'split': 1}
             if groups is None:
                 groups = sketch_groups(bodies)
             group = groups.get(plane_key(src['plane']))
@@ -488,7 +497,7 @@ def resolve_profile(bodies, spec):
         if group is None:
             raise kernel.CadError('Brak szkiców w płaszczyźnie tego kroku.')
         plane, members = group
-        faces = _group_regions(plane, members)
+        faces = _group_regions(plane, members, bodies if spec.get('split') else None)   # nowe kroki: obszar podzielony obrysem ściany
         if not faces:
             raise kernel.CadError('Szkic nie tworzy już zamkniętego obszaru.')
         center = np.array(spec['center'], float)
@@ -668,7 +677,7 @@ def _remote_bodies(module, name, bodies, args, kwargs):
     for b in result:
         source = sources.get(id(b.shape))
         if source is not None:
-            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group)))
+            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder)))
         else:
             packed.append(('body', b))
     return packed, extra
@@ -1001,11 +1010,16 @@ def run_pattern(bodies, recipe):
         return _replace(bodies, body.changed(merged))
     out = pad_ids(recipe.get('out', ()), len(copies), (recipe.get('out') or [body.id])[0])
     group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
-    made = prepared_many(Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group) for i, sh in enumerate(copies))
+    # osobne elementy: oryginał i kopie trafiają do wspólnej grupy (folderu) na liście obiektów
+    folder = body.folder or ('' if group else (recipe.get('folder') or f'{body.name} — szyk'))
+    made = prepared_many(Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder)
+                         for i, sh in enumerate(copies))
     source_body = body.changed(source) if moved else body
     if group:
         source_body = replace(source_body, group=group)
-    current = _replace(bodies, source_body) if (moved or group) else list(bodies)
+    if folder != body.folder:
+        source_body = replace(source_body, folder=folder)
+    current = _replace(bodies, source_body) if (moved or group or folder != body.folder) else list(bodies)
     return [*current, *made]
 
 
@@ -1361,6 +1375,12 @@ def run_rename(bodies, recipe):
     return _replace(bodies, replace(body, name=recipe['name']))
 
 
+def run_folder(bodies, recipe):
+    """Grupa (folder) na liście obiektów: przeniesienie do grupy, wyjęcie z niej (pusta nazwa) albo zmiana nazwy."""
+    ids, folder = set(recipe['ids']), str(recipe.get('folder') or '')[:60]
+    return [replace(b, folder=folder) if b.id in ids else b for b in bodies]
+
+
 def run_sketchmeta(bodies, recipe):
     body = _body(bodies, recipe['id'])
     meta = recipe['meta']
@@ -1387,7 +1407,30 @@ def run_trim(bodies, recipe):
     out = []
     for b in bodies:
         out.extend(made if b.id == body.id else [b])
-    return out
+    return merge_closed(out, plane)
+
+
+def merge_closed(bodies, plane):
+    """Otwarte kawałki szkiców w jednej płaszczyźnie, które razem tworzą zamknięty obrys, stają się jednym szkicem
+    (na liście obiektów jedna pozycja). Nazwę i numer dostaje najstarszy z nich."""
+    group = sketch_groups(bodies).get(plane_key(plane))
+    if group is None:
+        return bodies
+    members = [b for b in group[1] if b.kind == 'sketch']
+    joined = kernel.closed_groups([b.shape.Edges() for b in members])
+    if not joined:
+        return bodies
+    replace_by, gone = {}, set()
+    for indices in joined:
+        parts = [members[i] for i in indices]
+        try:
+            wire = cq.Wire.assembleEdges([e for b in parts for e in b.shape.Edges()])
+        except Exception:
+            continue
+        first = parts[0]
+        replace_by[first.id] = replace(first, shape=wire, mesh=None, meta=None).prepared()
+        gone |= {b.id for b in parts[1:]}
+    return [replace_by.get(b.id, b) for b in bodies if b.id not in gone]
 
 
 def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
@@ -1410,7 +1453,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1522,7 +1565,7 @@ def reads(recipe, current):
         return {recipe['id'], recipe['target']}
     if kind == 'split':
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
-    if kind == 'delete':
+    if kind in ('delete', 'folder'):
         return set(recipe['ids'])
     if kind == 'trim':
         return {recipe['id']} | sketches

@@ -106,6 +106,53 @@ class KernelTests(unittest.TestCase):
         curved = [i for i, e in enumerate(round_edge.Edges()) if e.geomType() != 'LINE']
         self.assertIsNone(k.quick_blend_mesh(round_edge, curved[:1], 1, 'fillet'))   # nieobsługiwana -> czeka na dokładny
 
+
+    def test_trimmed_shapes_forming_one_outline_become_one_sketch(self):
+        from rccad import history as h
+        r = Body('Prostokąt', k.sketch('rectangle', 'XY', 20, 20), 'sketch', 'XY').prepared()
+        c = Body('Okrąg', k.sketch('circle', 'XY', 8, 8).translate((10, 10, 0)), 'sketch', 'XY').prepared()
+        b = h.run_trim([r, c], dict(type='trim', id=c.id, mid=(10 - 4 * .7071, 10 - 4 * .7071, 0), out=[]))
+        b = h.run_trim(b, dict(type='trim', id=r.id, mid=(8, 10, 0), out=[]))
+        self.assertEqual(len(b), 2)                                   # jeszcze otwarte: dwa szkice
+        rid = next(x.id for x in b if x.name == 'Prostokąt')
+        b = h.run_trim(b, dict(type='trim', id=rid, mid=(10, 8, 0), out=[]))
+        self.assertEqual([x.name for x in b], ['Prostokąt'])          # zamknięty obrys: jeden szkic
+        self.assertTrue(b[0].shape.IsClosed())
+        import cadquery as cq
+        self.assertAlmostEqual(cq.Face.makeFromWires(b[0].shape).Area(), 400 + 3 / 4 * math.pi * 16, 2)   # suma obu kształtów (okrąg o promieniu 4)
+
+    def test_sketch_overhanging_a_face_splits_into_regions(self):
+        from rccad import history as h
+        box = Body('Kostka', k.box(20, 20, 10)).prepared()
+        plane = k.Frame.from_dict(dict(origin=(10, 10, 10), normal=(0, 0, 1), xdir=(1, 0, 0)))
+        circle = Body('Okrąg', k.sketch('circle', plane, 8, 8).translate((10, 0, 0)), 'sketch', plane).prepared()
+        pl, members = list(h.sketch_groups([box, circle]).values())[0]
+        self.assertEqual(len(h._group_regions(pl, members)), 1)                     # stare kroki: bez podziału
+        parts = h._group_regions(pl, members, [box, circle])
+        self.assertEqual(sorted(round(f.Area(), 2) for f in parts), [25.13, 25.13])  # na ścianie i poza nią
+        outside = h.resolve_profile([box, circle], dict(k='region', plane=h.plane_to_json(pl), center=[22, 10, 10], split=1))
+        self.assertAlmostEqual(outside['face'].Area(), 8 * math.pi, 2)
+        self.assertLess(outside['face'].Center().x, 25)
+        self.assertGreater(outside['face'].Center().x, 20)
+
+    def test_pattern_separate_goes_to_folder_and_folder_step(self):
+        from rccad import history as h
+        s = Body('Szkic', k.sketch('rectangle', 'XY', 5, 5), 'sketch', 'XY').prepared()
+        sep = h.run_pattern([s], dict(type='pattern', id=s.id, kind='rect', params=dict(counts=[3, 1, 1], spacing=[10, 0, 0]), join=False, out=[]))
+        self.assertEqual({b.folder for b in sep}, {'Szkic — szyk'})
+        one = h.run_pattern([s], dict(type='pattern', id=s.id, kind='rect', params=dict(counts=[3, 1, 1], spacing=[10, 0, 0]), join=False, out=[], group='ab12'))
+        self.assertEqual({(b.folder, b.group) for b in one}, {('', 'ab12')})
+        moved = h.run_folder(sep, dict(type='folder', ids=[sep[0].id], folder='Moje'))
+        self.assertEqual([b.folder for b in moved], ['Moje', 'Szkic — szyk', 'Szkic — szyk'])
+        doc = Document()
+        doc.commit(moved)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'f.rccad'
+            doc.save(path)
+            again = Document.load(path) if hasattr(Document, 'load') else None
+        if again is not None:
+            self.assertEqual(sorted(b.folder for b in again.bodies), sorted(b.folder for b in moved))
+
     def test_all_edges_fillet_true_spherical_corners(self):
         s=k.box(30,30,30);r=k.blend(s,range(12),3)
         exact=24**3+6*24**2*3+3*math.pi*24*9+4*math.pi*27/3
