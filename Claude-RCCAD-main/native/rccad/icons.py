@@ -970,6 +970,47 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             st(ink, 2.4); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 16, 16)
             st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 13)); p.drawLine(QPointF(24, 24), QPointF(32, 28))
             st(acc, 3.0); p.drawPolyline(poly([(6, 12), (8, 21), (16, 18)]))
+        elif name in ('libobj', 'libsketch', 'libimport', 'libtake', 'libplace', 'libfile', 'libsketchfile'):
+            # biblioteka: półka z książkami-segregatorami; obiekt = sześcian, szkic = kontur, import = strzałka w dół
+            if name in ('libobj', 'libsketch'):
+                p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawRoundedRect(QRectF(5, 7, 38, 34), 4, 4)
+                st(ink, 2.2); p.drawLine(QPointF(5, 16), QPointF(43, 16))
+                for x in (11, 16):
+                    p.drawLine(QPointF(x, 9.5), QPointF(x, 13.5))
+            if name in ('libobj', 'libfile'):
+                top = poly([(24, 19), (35, 24), (24, 29), (13, 24)]) if name == 'libobj' else poly([(24, 8), (38, 15), (24, 22), (10, 15)])
+                dy = 0 if name == 'libobj' else 0
+                p.setBrush(QColor(acc)); p.setPen(pen(ink, 2.0)); p.drawPolygon(top)
+                if name == 'libobj':
+                    p.setBrush(soft); p.drawPolygon(poly([(13, 24), (24, 29), (24, 38), (13, 33)])); p.drawPolygon(poly([(35, 24), (24, 29), (24, 38), (35, 33)]))
+                else:
+                    p.setBrush(soft); p.drawPolygon(poly([(10, 15), (24, 22), (24, 40), (10, 33)])); p.drawPolygon(poly([(38, 15), (24, 22), (24, 40), (38, 33)]))
+            if name in ('libsketch', 'libsketchfile'):
+                y0 = 20 if name == 'libsketch' else 8
+                h = 18 if name == 'libsketch' else 32
+                st(ink, 2.4); p.drawRoundedRect(QRectF(11, y0, 26, h), 3, 3)
+                st(acc, 2.8); p.drawEllipse(QPointF(24, y0 + h / 2), h / 4, h / 4)
+                p.setBrush(QColor(acc)); p.setPen(Qt.NoPen)
+                for q in ((11, y0), (37, y0), (11, y0 + h), (37, y0 + h)):
+                    p.drawEllipse(QPointF(*q), 2.4, 2.4)
+            if name == 'libimport':
+                fl(_rounded(8, 24, 32, 18, 3), soft, ink, 2.4)
+                st(acc, 3.2); p.drawLine(QPointF(24, 5), QPointF(24, 30)); p.drawPolyline(poly([(16, 22), (24, 30), (32, 22)]))
+            if name in ('libtake', 'libplace'):
+                fl(_rounded(5, 26, 22, 16, 3), soft, ink, 2.2)            # pole robocze
+                p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawRoundedRect(QRectF(27, 5, 16, 16), 3, 3)   # biblioteka
+                st(ink, 1.8); p.drawLine(QPointF(27, 10), QPointF(43, 10))
+                st(acc, 3.0)
+                if name == 'libtake':      # z pola do biblioteki
+                    p.drawLine(QPointF(16, 26), QPointF(16, 13)); p.drawLine(QPointF(16, 13), QPointF(26, 13)); p.drawPolyline(poly([(21, 8.5), (26, 13), (21, 17.5)]))
+                else:                       # z biblioteki na pole
+                    p.drawLine(QPointF(35, 21), QPointF(35, 34)); p.drawLine(QPointF(35, 34), QPointF(25, 34)); p.drawPolyline(poly([(30, 29.5), (25, 34), (30, 38.5)]))
+        elif name in ('libback', 'libhome'):
+            if name == 'libback':
+                st(ink, 3.2); p.drawLine(QPointF(38, 24), QPointF(11, 24)); p.drawPolyline(poly([(21, 13), (10, 24), (21, 35)]))
+            else:
+                p.setBrush(soft); p.setPen(pen(ink, 2.6)); p.drawPolygon(poly([(8, 23), (24, 9), (40, 23), (36, 23), (36, 40), (12, 40), (12, 23)]))
+                p.setBrush(QColor(acc)); p.setPen(pen(ink, 2.0)); p.drawRect(QRectF(20, 29, 8, 11))
         elif name in ('folder', 'folderadd'):
             body = QPainterPath()
             body.moveTo(6, 15); body.lineTo(6, 37); body.quadTo(6, 40, 9, 40); body.lineTo(39, 40); body.quadTo(42, 40, 42, 37)

@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.52 — strzałki odstępu w szyku
+# RCCAD Desktop 0.4.53 — Biblioteka obiektów i szkiców
+
+## Zmiany 0.4.53
+
+- **Nowa zakładka Biblioteka**: Importuj (jak w menu Plik), Wstaw obiekt, Wstaw szkic.
+- **Okno biblioteki** (osobne dla obiektów i szkiców): foldery i pliki z ikonami i plakietką formatu; Nowy folder z od razu wpisywaną nazwą, wchodzenie dwuklikiem, strzałka „cofnij o jeden folder” i domek „strona startowa”, zmiana nazw (F2), prawy przycisk - Kopiuj / Wytnij / Wklej / Usuń / Zmień nazwę / Nowy folder (także skróty klawiszowe).
+- **Importuj** kopiuje pliki do bieżącego folderu bez zmiany formatu: obiekty STEP / STL / BREP, szkice DXF / SVG.
+- **Wstaw z pola roboczego**: okno chowa się do czasu kliknięcia bryły / szkicu (prawy przycisk albo Esc anuluje); element zapisuje się w bieżącym folderze w formacie programu (szyk „jako jeden element” i napis w całości).
+- **Wstaw na pole robocze** (też dwuklik na pliku): okno chowa się, element idzie za kursorem, kliknięcie stawia go na ścianie / płaszczyźnie / podłożu (obiekt spodem, szkic środkiem razem z płaszczyzną), potem okno wraca.
+- **Eksportuj**: pliki z własnym formatem bez zmian, obiekty z pola roboczego jako STEP, szkice jako DXF; foldery z całą zawartością.
+- Biblioteka to zwykłe foldery w „Ustawienia/Biblioteka” (Obiekty, Szkice) - przenosi się do nowej wersji razem z folderem Ustawienia.
+
+## RCCAD Desktop 0.4.52 — strzałki odstępu w szyku
 
 ## Zmiany 0.4.52
 

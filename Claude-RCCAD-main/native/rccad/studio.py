@@ -209,7 +209,8 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
-        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing']}
+        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing'],
+        'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 # narzędzia, które można dodać do Ulubionych (bez Pliku, Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu)
 FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for tool in tools if tool != 'surface']
@@ -483,10 +484,13 @@ class StudioWindow(QMainWindow):
                  ('drawing', ui.style_icon('drawing', 38), 'Utwórz rysunek techniczny — rzuty, wymiary, pomiary, zapis'),
                  ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku'),
                  ('sheetdrawing', ui.style_icon('sheetdrawing', 38), 'Rysunek blachy do gięcia — rozwinięcie z liniami gięcia, wymiarami, promieniem i grubością'),
-                 ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera')]
+                 ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera'),
+                 ('libimport', ui.style_icon('libimport', 38), 'Importuj — model STEP, STL, BREP albo szkic DXF, SVG na pole robocze'),
+                 ('libobj', ui.style_icon('libobj', 38), 'Wstaw obiekt — biblioteka obiektów: foldery, import, eksport, wstawianie'),
+                 ('libsketch', ui.style_icon('libsketch', 38), 'Wstaw szkic — biblioteka szkiców: foldery, import DXF / SVG, wstawianie')]
         self.tools = {}
         for key, icon, tip in icons:
-            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'importdrawing', 'toolbox'))
+            button = ui.big_tool(icon, tip, checkable=key not in ('file', 'surface', 'importdrawing', 'toolbox', 'libimport', 'libobj', 'libsketch'))
             button.setParent(v)
             ui.shadow(button, 12, 3, 36)
             self.tools[key] = button
@@ -498,6 +502,10 @@ class StudioWindow(QMainWindow):
                 button.clicked.connect(lambda _=False: self.pick_other_surface())
             elif key == 'toolbox':
                 button.clicked.connect(lambda _=False: self.open_toolbox())
+            elif key == 'libimport':
+                button.clicked.connect(lambda _=False: self.import_model())
+            elif key in ('libobj', 'libsketch'):
+                button.clicked.connect(lambda _=False, k=key: self.open_library('object' if k == 'libobj' else 'sketch'))
             elif key != 'file':
                 button.clicked.connect(lambda _=False, k=key: self.toggle_mode(k))
         self.tools['file'].clicked.connect(self.file_menu)
@@ -718,6 +726,8 @@ class StudioWindow(QMainWindow):
         self.hist_vars.setFixedWidth(360)
         self.hist_vars.hide()
         self._repick = None
+        self._lib_action = None        # biblioteka: wskazywanie obiektu na polu albo wybór miejsca wstawienia
+        self.libraries = {}
         ui.shadow(self.hist_vars, 19, 5, 43)
         ui.shadow(self.hist_edit, 19, 5, 43)
         self._hist_sig = None
@@ -2973,6 +2983,9 @@ class StudioWindow(QMainWindow):
     def view_hover(self, x, y):
         if self.busy:
             return
+        if self._lib_action is not None:
+            self._library_hover(x, y)
+            return
         try:
             if self.mode == 'plane' or (self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'surface'):
                 frame, face = self.pick_surface(x, y)
@@ -3081,6 +3094,9 @@ class StudioWindow(QMainWindow):
             return
         if self._repick is not None:
             self._repick_click(x, y)
+            return
+        if self._lib_action is not None:
+            self._library_click(x, y)
             return
         if self.mode == 'sketch' and self.tool == 'text' and self.txt is not None:
             if self.txt['stage'] == 'surface':
@@ -7830,6 +7846,9 @@ class StudioWindow(QMainWindow):
     def context_menu(self, x, y):
         if self.busy:
             return
+        if self._lib_action is not None:          # prawy przycisk anuluje wskazywanie dla biblioteki
+            self.library_cancel()
+            return
         if self.mode == 'sketch':
             if self.points or self.tangent_lines:
                 self.end_current_shape()
@@ -7947,6 +7966,151 @@ class StudioWindow(QMainWindow):
 
         self.run_operation('Importowanie modelu', build, add, True)
 
+    # =====================================================================
+    # biblioteka obiektów i szkiców (zakładka Biblioteka)
+    # =====================================================================
+    def open_library(self, kind):
+        from .library import LibraryDialog
+        if self.busy:
+            return
+        dialog = self.libraries.get(kind)
+        if dialog is None:
+            dialog = self.libraries[kind] = LibraryDialog(self, kind)
+        dialog.refresh()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
+
+    def library_pick(self, dialog):
+        """Wstaw z pola roboczego: okno chowa się, kliknięty obiekt (bryła albo szkic) trafia do bieżącego folderu."""
+        if self.busy:
+            return
+        self.set_mode(None)
+        dialog.hide()
+        self._lib_action = dict(kind='pick', dialog=dialog)
+        what = 'bryłę' if dialog.kind == 'object' else 'szkic'
+        self.toast(f'Kliknij {what} na polu roboczym, aby zapisać ją w bibliotece · prawy przycisk albo Esc - anuluj.', 6000)
+
+    def library_place(self, dialog, path):
+        """Wstaw na pole robocze: element z biblioteki idzie za kursorem, kliknięcie stawia go w tym miejscu."""
+        from . import library
+        if self.busy:
+            return
+        self.set_mode(None)
+        dialog.hide()
+
+        def load():
+            try:
+                return library.load_bodies(dialog.kind, path)
+            except Exception as exc:          # błąd odczytu: komunikat i powrót do okna biblioteki
+                return str(exc) or 'Nie można odczytać pliku.'
+
+        def start(bodies):
+            if isinstance(bodies, str):
+                raise kernel.CadError(bodies)
+            if not bodies:
+                raise kernel.CadError('Plik nie zawiera obsługiwanej geometrii.')
+            meshes = [b.mesh for b in bodies if b.mesh is not None]
+            lows, highs = zip(*(self._mesh_bounds(m) for m in meshes)) if meshes else ((np.zeros(3),), (np.zeros(3),))
+            low, high = np.min(lows, axis=0), np.max(highs, axis=0)
+            # punkt zaczepienia: obiekt stoi spodem na wskazanym miejscu, szkic - środkiem
+            ref = np.array([(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2] if dialog.kind == 'object' else (low[2] + high[2]) / 2])
+            self._lib_action = dict(kind='place', dialog=dialog, bodies=bodies, ref=ref, offset=None, name=library.display_name(path),
+                                    mesh=_merge_meshes(meshes) if meshes else None)
+            self.toast('Kliknij miejsce na polu roboczym (ścianę, płaszczyznę albo podłoże) · prawy przycisk albo Esc - anuluj.', 6000)
+
+        def failed_back():
+            if self._lib_action is None and not dialog.isVisible():
+                dialog.show()
+
+        self.run_operation('Wczytywanie z biblioteki', load, start, after=failed_back)
+
+    def library_cancel(self):
+        action, self._lib_action = self._lib_action, None
+        self.view.set_preview_mesh(None)
+        if action is not None:
+            self.toast('Anulowano.', 1500)
+            action['dialog'].show()
+            action['dialog'].raise_()
+
+    def _library_target(self, x, y):
+        point = self._pattern_target(x, y)          # wierzchołek, ściana, płaszczyzna albo podłoże
+        return None if point is None else np.asarray(point, float)
+
+    def _library_hover(self, x, y):
+        action = self._lib_action
+        if action['kind'] != 'place' or action['mesh'] is None:
+            return
+        target = self._library_target(x, y)
+        if target is None:
+            return
+        offset = target - action['ref']
+        action['offset'] = offset
+        mesh = action['mesh']
+        moved = kernel.DisplayMesh(mesh.vertices + offset.astype(mesh.vertices.dtype), mesh.triangles,
+                                   {k: v + offset.astype(v.dtype) for k, v in mesh.edges.items()},
+                                   tuple(float(c) for c in np.asarray(mesh.center) + offset), mesh.size)
+        self.view.set_preview_mesh(moved, color=(.3, .62, .95, .45), line_color=(.12, .36, .7, 1), width=1.6)
+
+    def _library_click(self, x, y):
+        from . import library
+        action = self._lib_action
+        dialog = action['dialog']
+        if action['kind'] == 'pick':
+            bid = self.pick_object(x, y)
+            body = self.document.get(bid) if bid else None
+            want = 'solid' if dialog.kind == 'object' else 'sketch'
+            if body is None or body.kind != want:
+                self.toast('Kliknij ' + ('bryłę.' if want == 'solid' else 'szkic.') + ' (prawy przycisk albo Esc - anuluj)', 3000)
+                return
+            ids = list(self._group_ids(bid))
+            group = hist.text_group_of(bid)
+            if group:                       # napis: wszystkie litery razem
+                ids += [b.id for b in self.document.bodies if hist.text_group_of(b.id) == group and b.id not in ids]
+            members = [self.document.get(i) for i in ids if self.document.get(i) is not None]
+            name = body.folder if (group and body.folder) else body.name.split(' — szyk')[0]
+            try:
+                path = library.save_bodies(members, dialog.folder, name)
+            except Exception as exc:
+                self.toast(f'Nie udało się zapisać w bibliotece: {exc}', 5000)
+                return
+            self._lib_action = None
+            dialog.picked(path)
+            return
+        target = self._library_target(x, y)
+        if target is None:
+            self.toast('Kliknij miejsce na polu roboczym.')
+            return
+        offset = target - action['ref']
+        self._lib_action = None
+        self.view.set_preview_mesh(None)
+        self._library_insert(action, offset)
+        dialog.show()
+        dialog.raise_()
+
+    def _library_insert(self, action, offset):
+        """Kopie elementu z biblioteki przesunięte na wskazane miejsce (nowe identyfikatory, wspólna grupa / folder)."""
+        move = tuple(float(c) for c in offset)
+        groups = {}
+        made = []
+        for b in action['bodies']:
+            plane = b.plane
+            if b.kind == 'sketch':
+                frame = kernel.frame_of(plane)
+                plane = kernel.Frame(tuple(float(o + m) for o, m in zip(frame.origin, move)), tuple(frame.xdir), tuple(frame.normal))
+            group = groups.setdefault(b.group, uuid.uuid4().hex) if b.group else ''
+            made.append(Body(b.name, b.shape.translate(move), b.kind, plane, group=group, meta=None))
+        folder = action['name'] if len(made) > 1 else ''
+        made = [replace(b, folder=folder) for b in made]
+
+        def add(bodies):
+            self.document.pending_label, self.document.pending_icon = f'Z biblioteki: {action["name"]}', 'libobj'
+            self.document.commit((*self.document.bodies, *bodies))
+            self._tool_select([b.id for b in bodies])
+
+        self.run_operation('Wstawianie z biblioteki', lambda: [b.prepared() for b in made], add)
+
     def import_svg(self):
         self.import_model()
 
@@ -7977,6 +8141,10 @@ class StudioWindow(QMainWindow):
         if event.modifiers() & Qt.AltModifier and not self.busy and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Home, Qt.Key_End):
             {Qt.Key_Left: lambda: self.history_step(-1), Qt.Key_Right: lambda: self.history_step(1),
              Qt.Key_Home: lambda: self.history_step(0, True), Qt.Key_End: lambda: self.history_step(10 ** 6, True)}[key]()
+            event.accept()
+            return
+        if key == Qt.Key_Escape and self._lib_action is not None:
+            self.library_cancel()
             event.accept()
             return
         if key == Qt.Key_Escape and self._repick is not None and not self.busy:
