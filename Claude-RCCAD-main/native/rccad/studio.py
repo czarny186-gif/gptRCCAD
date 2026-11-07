@@ -1481,7 +1481,6 @@ class StudioWindow(QMainWindow):
             chip.setMinimumWidth(56)
             style_row.addWidget(chip, 1)
         self.text_bold.setStyleSheet('font-weight:900;')
-        self.text_bold.setChecked(True)          # napis od razu pogrubiony: grubsze litery łatwiej wyciągnąć i wyciąć
         self.text_italic.setStyleSheet('font-style:italic;font-family:serif;')
         form.addWidget(_label('Styl'))
         form.addLayout(style_row)
@@ -1549,7 +1548,7 @@ class StudioWindow(QMainWindow):
         self.cube.move(W - 160, 20)
         self.busy_bar.move(W - 160 + (138 - self.busy_bar.width()) // 2, 164)
         self.objects.relayout()
-        self.objects.move(W - 18 - self.objects.width(), 212)
+        self.objects.move(W - (18 if self.objects.open else 0) - self.objects.width(), 212)   # zwinięta lista: pasek przy samej krawędzi
         self.pad.adjustSize()
         self.pad.move((W - self.pad.width()) // 2, H - 113 - self.pad.height())
         self.t_editor.adjustSize()
@@ -2520,7 +2519,16 @@ class StudioWindow(QMainWindow):
                 self._update_grips()
                 self.sk_hint.setText('Tekst: przesuń, skaluj lub obróć uchwytami · Tab – wysokość i kąt')
 
+        if op and op.get('type') == 'text':          # napis od razu jako grupa na liście obiektów
+            folder = hist.text_folder(op['params']['text'])
+            if made:
+                made = [replace(b, folder=folder) for b in made]
+        else:
+            folder = ''
+
         def commit_new(bodies):
+            if folder:
+                bodies = [replace(b, folder=folder) for b in bodies]
             self.document.pending_op = op
             if op and op.get('type') == 'text':
                 self.document.pending_icon = 'text'
@@ -3683,6 +3691,30 @@ class StudioWindow(QMainWindow):
             finally:
                 self._ex_auto = False
 
+    def _protected(self):
+        """Bryły ukryte na liście obiektów: żadna operacja ich nie zmienia (wycięcie przechodzące przez ukrytą bryłę jej nie tnie)."""
+        return {b.id for b in self.document.bodies if b.id in self.hidden_ids and b.kind == 'solid'}
+
+    def _new_folder(self, profiles, spent, count, op, label):
+        """Grupa na liście obiektów dla kilku nowych brył z jednej operacji (napis, szyk szkiców, kilka profili)."""
+        if op != 'new' or count < 2:
+            return ''
+        names = [self.document.get(i).name for i in spent if self.document.get(i) is not None]
+        folders = [self.document.get(i).folder for i in spent if self.document.get(i) is not None and self.document.get(i).folder]
+        for p in profiles:
+            b = self.document.get(p.get('id')) if p.get('id') else None
+            if b is not None:
+                names.append(b.name)
+                if b.folder:
+                    folders.append(b.folder)
+        if folders:
+            base = folders[0]
+        elif names:
+            base = names[0].split(' — szyk')[0]
+        else:
+            base = label
+        return f'{base} — bryły'
+
     def _gap_pad(self, src):
         """Odstęp szkicu od skręconej ściany (hist.gap_pad) - zapamiętany dla profilu i stanu modelu (to drogie liczenie)."""
         key = (id(src), self.document._revision)
@@ -3812,10 +3844,14 @@ class StudioWindow(QMainWindow):
         target = self.ex_target
         upto = None if target is None else dict(kind=target['kind'], point=[float(c) for c in target['point']])
         skip = self._extent_skip() if op == 'join' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
+        skip = sorted(set(skip) | self._protected())             # ukrytych brył operacja nie zmienia
+        folder = self._new_folder(profiles, spent, len(makers), op, 'Wyciągnięcie')
 
         def build():
-            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, skip=skip)
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, skip=skip, folder=folder)
             recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            if folder:
+                recipe['folder'] = folder
             if upto is not None:
                 recipe['upto'] = upto      # skąd wzięła się odległość (wyciągnięcie do elementu)
             if skip:
@@ -4007,9 +4043,16 @@ class StudioWindow(QMainWindow):
         profiles, angle = list(self.rev_profiles), self.rev_angle.value()
         out = [uuid.uuid4().hex for _ in makers]
 
+        skip = sorted(self._protected())
+        folder = self._new_folder(profiles, spent, len(makers), op, 'Obrót')
+
         def build():
-            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Obrót')
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Obrót', skip=skip, folder=folder)
             recipe = dict(type='revolve', mode=op, axis=axis, angle=angle, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            if skip:
+                recipe['skip'] = skip
+            if folder:
+                recipe['folder'] = folder
             return bodies, recipe
 
         def apply(result):
@@ -5042,9 +5085,17 @@ class StudioWindow(QMainWindow):
         spent = self._consumed_sketches(profiles)
         out = [uuid.uuid4().hex for _ in makers]
 
+        skip = sorted(self._protected())
+        folder = self._new_folder(profiles, spent, len(makers), op, 'Przeciągnięcie')
+
         def build():
-            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Przeciągnięcie')
-            return bodies, dict(type='sweep', mode=op, path=path, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Przeciągnięcie', skip=skip, folder=folder)
+            recipe = dict(type='sweep', mode=op, path=path, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            if skip:
+                recipe['skip'] = skip
+            if folder:
+                recipe['folder'] = folder
+            return bodies, recipe
 
         self._finish_solid_op({'new': 'Przeciągnięcie', 'join': 'Przeciągnięcie (dodaj)', 'cut': 'Przeciągnięcie (wytnij)', 'intersect': 'Przeciągnięcie (część wspólna)'}[op], build, op)
 
@@ -5161,10 +5212,14 @@ class StudioWindow(QMainWindow):
         spent = self._consumed_sketches(profiles)
         out = [uuid.uuid4().hex]
 
+        skip = sorted(self._protected())
+
         def build():
-            bodies = hist.combine(existing, [maker()], op, spent, out, 'Wyciągnięcie złożone')
+            bodies = hist.combine(existing, [maker()], op, spent, out, 'Wyciągnięcie złożone', skip=skip)
             specs = [hist.describe_profiles([p], existing, merge=False)[0] for p in profiles]
             recipe = dict(type='loft', mode=op, ruled=ruled, profiles=specs, spent=sorted(spent), out=out)
+            if skip:
+                recipe['skip'] = skip
             if point is not None:
                 recipe['point'] = dict(p=[float(c) for c in point])
             return bodies, recipe
@@ -7851,11 +7906,20 @@ class StudioWindow(QMainWindow):
     def import_svg(self):
         self.import_model()
 
+    def export_bodies(self):
+        """Co trafia do eksportu: tylko obiekty widoczne na polu roboczym (bez ukrytych na liście obiektów i wygaszonych
+        szkiców); gdy któreś z nich są zaznaczone - tylko zaznaczone."""
+        visible = [b for b in self.document.bodies if b.visible and b.id not in self.hidden_ids]
+        chosen = [b for b in visible if b.id in self.selected]
+        return chosen or visible
+
     def export_model(self):
-        bodies = [b for b in self.document.bodies if b.id in self.selected] if self.selected else [b for b in self.document.bodies if b.visible]
+        bodies = self.export_bodies()
         if not bodies:
-            self.toast('Brak geometrii do eksportu.')
+            self.toast('Brak widocznych obiektów do eksportu.')
             return
+        n = len(bodies)
+        self.toast(f'Eksport: {"zaznaczone" if any(b.id in self.selected for b in bodies) else "widoczne"} obiekty ({n}).', 2500)
         path, _ = QFileDialog.getSaveFileName(self, 'Eksportuj zaznaczone lub widoczne obiekty', 'Model.step',
                                               'STEP (*.step);;STL (*.stl);;BREP (*.brep);;DXF — szkice (*.dxf)')
         if path:

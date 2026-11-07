@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.50 — nowa kostka nawigacji, grupy na liście obiektów, porządki w szkicach
+# RCCAD Desktop 0.4.51 — grupy dla tekstu i nowych brył, nietykalne ukryte obiekty, eksport widocznych
+
+## Zmiany 0.4.51
+
+- **Tekst od razu jako grupa** na liście obiektów (Tekst „…”), zamiast osobnych liter. Cofnięte domyślne pogrubienie tekstu z 0.4.50.
+- **Nowe bryły z jednej operacji w grupie**: wyciągnięcie (także obrót i przeciągnięcie) kilku profili naraz jako nowe bryły - napisu, szyku szkiców - od razu tworzy grupę „… — bryły”.
+- **Okno Obiekty zwija się do paska**: strzałka ▸ w nagłówku chowa okno w cienki pasek przy prawej krawędzi, strzałka na środku paska je rozwija.
+- **Ukryte obiekty są nietykalne**: wycięcie, połączenie, obrót, przeciągnięcie i wyciągnięcie złożone nie zmieniają brył ukrytych okiem na liście (zapisane w kroku, więc także przy przeliczaniu historii).
+- **Eksport**: tylko obiekty widoczne na polu roboczym; gdy któreś z nich są zaznaczone - tylko zaznaczone.
+
+## RCCAD Desktop 0.4.50 — nowa kostka nawigacji, grupy na liście obiektów, porządki w szkicach
 
 ## Zmiany 0.4.50
 
@@ -8,7 +18,6 @@
 - **Grupy na liście obiektów**: nowa grupa z zaznaczonych (przycisk z folderem), prawy przycisk na elemencie - przenieś do grupy / nowa grupa / wyjmij z grupy; grupy zwijane, z okiem i koszem dla całości, zmiana nazwy dwuklikiem, rozgrupowanie. Zmiany grup są krokami historii (cofanie / ponawianie) i zapisują się w pliku.
 - **Nożyczki**: kawałki kilku kształtów, które po przycięciu tworzą jeden zamknięty obrys, stają się jednym szkicem.
 - **Szkic wychodzący poza ścianę bryły**: część na ścianie i część poza nią to osobne obszary - każdą można wyciągnąć niezależnie (stare kroki historii przeliczają się bez zmian).
-- **Tekst domyślnie pogrubiony.**
 
 ## RCCAD Desktop 0.4.49 — podglądy w tle, płynne przesuwanie i obracanie
 

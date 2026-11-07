@@ -1569,6 +1569,8 @@ class StudioTests(unittest.TestCase):
         before=len(w.document.bodies);ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier);w.keyPressEvent(ev);self.wait()
         self.assertGreater(len(w.document.bodies),before);self.assertEqual(w.txt['stage'],'area')
         infos,cur=w.document.infos();self.assertEqual((infos[-1]['icon'],infos[-1]['op']['type']),('text','text'))
+        letters=[b for b in w.document.bodies if b.name.startswith('Tekst')]
+        self.assertTrue(letters);self.assertEqual({b.folder for b in letters},{'Tekst „Tekst”'})   # napis od razu jako grupa
         w.history_edit(cur);w._hist_text['text'].setText('Xy');w._hist_text['size'].setValue(7);w._history_edit_apply(cur,w._hist_fields);self.wait()
         self.assertEqual(w.document.infos()[0][-1]['op']['params']['text'],'Xy');self.assertEqual(w.document.infos()[0][-1]['op']['params']['size'],7)
 
@@ -2125,8 +2127,49 @@ class StudioTests(unittest.TestCase):
         w.redo();self.wait()
         w.objects_folder_move([s2.id],'');self.assertEqual(w.document.get(s2.id).folder,'')
 
-    def test_text_starts_bold(self):
-        self.assertTrue(self.w.text_bold.isChecked())
+
+    # 0.4.51: ukryte bryły nietykalne, grupy dla wielu nowych brył, eksport widocznych / zaznaczonych, lista zwijana do paska
+    def test_hidden_body_is_not_cut_and_new_bodies_get_folder(self):
+        w=self.w
+        a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(20,20,20).translate((30,0,0))).prepared()
+        sk=Body('Szkic',k.sketch('rectangle','XY',60,8).translate((25,10,20)),'sketch','XY').prepared()
+        w.document.commit([a,b,sk]);w.refresh()
+        w.hidden_ids.add(b.id)
+        w.set_mode('extrude')
+        with patch.object(w.view,'pick_profile',return_value=sk.id):w.view_clicked(5,5,False,False)
+        w.ex_op.setCurrentIndex(w.ex_op.findData('cut'));w.ex_value.setValue(-5);w.apply_extrude();self.wait()
+        self.assertLess(w.document.get(a.id).shape.Volume(),8000-1)
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),8000,3)         # ukryta bryła bez zmian
+        infos,cur=w.document.infos();self.assertIn(b.id,infos[-1]['op'].get('skip',[]))
+        again=hist.run_recipe(w.document.states()[cur-1][0],infos[-1]['op'])
+        self.assertAlmostEqual(next(x for x in again if x.id==b.id).shape.Volume(),8000,3)   # także przy przeliczaniu historii
+        s1=Body('Okrąg',k.sketch('circle','XY',4,4).translate((0,-30,0)),'sketch','XY').prepared()
+        w.document.commit([*w.document.bodies,s1]);w.refresh()
+        pat=hist.run_pattern(list(w.document.bodies),dict(type='pattern',id=s1.id,kind='rect',params=dict(counts=[3,1,1],spacing=[10,0,0]),join=False,out=[],group='9f'))
+        w.document.commit(pat);w.refresh()
+        w.set_mode('extrude')
+        with patch.object(w.view,'pick_profile',return_value=s1.id):w.view_clicked(5,5,False,False)
+        self.assertEqual(len(w.ex_profiles),3)
+        w.ex_op.setCurrentIndex(w.ex_op.findData('new'));w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        made=[x for x in w.document.bodies if x.kind=='solid' and x.folder]
+        self.assertEqual(len(made),3);self.assertEqual({x.folder for x in made},{'Okrąg — bryły'})  # wyciągnięty szyk od razu w grupie
+
+    def test_export_takes_visible_or_selected_only(self):
+        w=self.w
+        a=Body('A',k.box(5,5,5)).prepared();b=Body('B',k.box(5,5,5).translate((10,0,0))).prepared();c=Body('C',k.box(5,5,5).translate((20,0,0))).prepared()
+        w.document.commit([a,b,c]);w.hidden_ids={c.id}
+        self.assertEqual([x.id for x in w.export_bodies()],[a.id,b.id])
+        w.selected=[b.id,c.id];self.assertEqual([x.id for x in w.export_bodies()],[b.id])
+        with patch('rccad.studio.QFileDialog.getSaveFileName',return_value=('',None)) as dlg:w.export_model()
+        dlg.assert_called_once()
+
+    def test_objects_panel_collapses_to_strip(self):
+        w=self.w;o=w.objects;W=w.view.width() if w.objects.parentWidget() is w.view else o.parentWidget().width()
+        o._toggle_collapse();self.app.processEvents()
+        self.assertFalse(o.open);self.assertEqual(o.width(),o.STRIP);self.assertTrue(o.strip.isVisible())
+        self.assertEqual(o.x()+o.width(),o.parentWidget().width())                  # pasek przy samej prawej krawędzi
+        o.strip.click();self.app.processEvents()
+        self.assertTrue(o.open);self.assertGreater(o.width(),200);self.assertFalse(o.strip.isVisible())
 
 
 

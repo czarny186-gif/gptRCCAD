@@ -11,6 +11,9 @@ WIDTH = 292
 
 QSS = """
 QFrame#objects { background:rgba(255,255,255,0.97); border:1px solid #b9cde0; border-radius:15px; }
+QFrame#objects[strip="true"] { border-radius:11px; border-top-right-radius:0; border-bottom-right-radius:0; border-right:0; }
+QFrame#objects QToolButton#stripbtn { color:#2f87e8; font-size:15px; font-weight:900; border-radius:9px; }
+QFrame#objects QToolButton#stripbtn:hover { background:#e6f1fc; }
 QFrame#objects QLabel { background:transparent; border:0; color:#29475e; }
 QFrame#objects QLabel#title { font-size:13px; font-weight:700; color:#1d3a56; }
 QFrame#objects QLabel#count { background:#e3f0fd; color:#1f6fc9; border-radius:9px; font-size:11px; font-weight:700; padding:1px 8px; }
@@ -339,7 +342,19 @@ class ObjectsPanel(QFrame):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 8, 8)
         outer.setSpacing(6)
-        head = QHBoxLayout()
+        self._outer = outer
+        # zwinięte okno: cienki pasek przy prawej krawędzi ze strzałką na środku (klik rozwija)
+        self.strip = QToolButton()
+        self.strip.setObjectName('stripbtn')
+        self.strip.setText('◂')
+        self.strip.setToolTip('Rozwiń listę obiektów')
+        self.strip.setCursor(Qt.PointingHandCursor)
+        self.strip.setSizePolicy(self.strip.sizePolicy().horizontalPolicy(), self.strip.sizePolicy().verticalPolicy())
+        self.strip.clicked.connect(self._toggle_collapse)
+        self.strip.hide()
+        outer.addWidget(self.strip)
+        self.head_box = QWidget()
+        head = QHBoxLayout(self.head_box)
         head.setContentsMargins(4, 0, 2, 0)
         pic = QLabel()
         pic.setPixmap(icons.pixmap('t_layers', 22))
@@ -348,10 +363,10 @@ class ObjectsPanel(QFrame):
         self.count = QLabel('0')
         self.count.setObjectName('count')
         self.collapse = QToolButton()
-        self.collapse.setText('▾')
+        self.collapse.setText('▸')
         self.collapse.setObjectName('fold')
         self.collapse.setFixedSize(24, 24)
-        self.collapse.setToolTip('Zwiń / rozwiń listę')
+        self.collapse.setToolTip('Zwiń listę do paska przy prawej krawędzi')
         self.collapse.clicked.connect(self._toggle_collapse)
         head.addWidget(pic)
         head.addWidget(title)
@@ -366,7 +381,7 @@ class ObjectsPanel(QFrame):
         self.new_folder.clicked.connect(lambda: QTimer.singleShot(0, lambda: self.folder_new.emit(None)))
         head.addWidget(self.new_folder)
         head.addWidget(self.collapse)
-        outer.addLayout(head)
+        outer.addWidget(self.head_box)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -381,19 +396,35 @@ class ObjectsPanel(QFrame):
         ui.shadow(self, 22, 5, 44)
 
     # ------------------------------------------------------------------
+    STRIP = 22
+
     def _toggle_collapse(self):
+        """Zwinięcie: okno chowa się w cienki pasek przy prawej krawędzi (strzałka na środku rozwija je z powrotem)."""
         self.open = not self.open
-        self.collapse.setText('▾' if self.open else '▸')
-        self.scroll.setVisible(self.open)
-        self.hint.setVisible(self.open)
+        for w in (self.head_box, self.scroll, self.hint):
+            w.setVisible(self.open)
+        self.strip.setVisible(not self.open)
+        self.setProperty('strip', not self.open)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if self.open:
+            self._outer.setContentsMargins(10, 10, 8, 8)
+            self.setFixedWidth(WIDTH)
+        else:
+            self._outer.setContentsMargins(2, 4, 2, 4)
+            self.setFixedWidth(self.STRIP)
         self.relayout()
+        window = self.window()
+        if hasattr(window, '_layout_overlays'):
+            window._layout_overlays()
 
     def relayout(self):
         """Wysokość zależy od liczby pozycji, ale nie przekracza dostępnego miejsca (parent.height - 320)."""
         parent = self.parentWidget()
         room = max(120, (parent.height() if parent else 700) - 320)
         if not self.open:
-            self.setFixedHeight(46)
+            self.setFixedHeight(min(room, 150))
+            self.strip.setFixedSize(self.STRIP - 4, min(room, 150) - 8)
             return
         content = self.scroll.widget().sizeHint().height() if self.scroll.widget() else 60
         self.setFixedHeight(int(min(room, max(110, content + 84 + (self.scroll.horizontalScrollBar().height() if self.scroll.horizontalScrollBar().isVisible() else 0)))))

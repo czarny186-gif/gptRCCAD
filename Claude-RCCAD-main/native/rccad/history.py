@@ -624,14 +624,16 @@ def split_parts(bodies, only=None):
     return out
 
 
-def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=()):
+def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(), folder=''):
     """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają.
-    skip: bryły, których operacja nie zmienia (np. bryła wskazana tylko jako wysokość przy wyciąganiu do elementu)."""
+    skip: bryły, których operacja nie zmienia (bryła wskazana tylko jako wysokość przy wyciąganiu do elementu, bryły ukryte na liście obiektów).
+    folder: grupa na liście obiektów dla kilku nowych brył naraz (napis, szyk szkiców)."""
     skip = set(skip or ())
     fade = lambda bodies: [replace(b, visible=False) if b.id in spent else b for b in bodies]
     if op == 'new':
         ids2 = pad_ids(ids, len(tools), list(ids)[0] if ids else None)
-        return fade([*existing, *prepared_many(Body(name, t, id=ids2[i]) for i, t in enumerate(tools))])
+        group = folder if len(tools) > 1 else ''
+        return fade([*existing, *prepared_many(Body(name, t, id=ids2[i], folder=group) for i, t in enumerate(tools))])
     if op in ('cut', 'join') and len(tools) > 1:
         batched = _combine_batched(existing, tools, op, skip)
         if batched is not None:
@@ -869,7 +871,7 @@ def run_extrude(bodies, recipe):
         spent |= set(src.get('spent', ()))
     groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] == 'textgroup'}
     spent |= {b.id for b in bodies if text_group_of(b.id) in groups}      # wszystkie litery napisu (także nowe po zmianie treści)
-    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()))
+    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()), folder=recipe.get('folder', ''))
 
 
 def profile_face(wire):
@@ -925,7 +927,7 @@ def run_revolve(bodies, recipe):
         spent |= set(src.get('spent', ()))
     groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] == 'textgroup'}
     spent |= {b.id for b in bodies if text_group_of(b.id) in groups}
-    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), 'Obrót')
+    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), 'Obrót', skip=recipe.get('skip', ()), folder=recipe.get('folder', ''))
 
 
 def profile_outer(src):
@@ -952,7 +954,7 @@ def run_sweep(bodies, recipe):
     spent = set(recipe.get('spent', ()))
     for src in sources:
         spent |= set(src.get('spent', ()))
-    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), 'Przeciągnięcie')
+    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), 'Przeciągnięcie', skip=recipe.get('skip', ()), folder=recipe.get('folder', ''))
 
 
 def run_loft(bodies, recipe):
@@ -961,7 +963,7 @@ def run_loft(bodies, recipe):
     point = recipe.get('point')
     tool = kernel.loft_wires(wires, point['p'] if point else None, bool(recipe.get('ruled')))
     spent = set(recipe.get('spent', ()))
-    return combine(bodies, [tool], recipe['mode'], spent, recipe.get('out', ()), 'Wyciągnięcie złożone')
+    return combine(bodies, [tool], recipe['mode'], spent, recipe.get('out', ()), 'Wyciągnięcie złożone', skip=recipe.get('skip', ()))
 
 
 def _body(bodies, identifier):
@@ -1362,7 +1364,13 @@ def run_text(bodies, recipe):
         ids = text_ids(group, len(shapes))
     else:
         ids = pad_ids(ids, len(shapes), ids[0] if ids else None)
-    return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i]).prepared() for i, sh in enumerate(shapes)]]
+    folder = text_folder(q['text'])        # napis od razu jako grupa na liście obiektów
+    return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i], folder=folder).prepared() for i, sh in enumerate(shapes)]]
+
+
+def text_folder(text):
+    text = ' '.join(str(text).split())
+    return f'Tekst „{text[:28]}{"…" if len(text) > 28 else ""}”'
 
 
 def run_delete(bodies, recipe):
