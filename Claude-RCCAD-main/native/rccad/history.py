@@ -679,7 +679,7 @@ def _remote_bodies(module, name, bodies, args, kwargs):
     for b in result:
         source = sources.get(id(b.shape))
         if source is not None:
-            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder)))
+            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder, threads=b.threads)))
         else:
             packed.append(('body', b))
     return packed, extra
@@ -1002,6 +1002,22 @@ def pattern_ops_for(body, recipe):
     return kernel.pattern_ops(kind, p), None
 
 
+def _moved_threads(threads, matrix):
+    """Gwinty kosmetyczne kopii (szyk, lustro): przeniesione macierzą 4x4."""
+    if not threads:
+        return ()
+    from . import threads as th
+    return tuple(th.transformed(t, matrix) for t in threads)
+
+
+def _mirror_matrix(normal, origin):
+    n = _unit(normal)
+    m = np.eye(4)
+    m[:3, :3] = np.eye(3) - 2 * np.outer(n, n)
+    m[:3, 3] = 2 * float(np.asarray(origin, float) @ n) * n
+    return m
+
+
 def run_pattern(bodies, recipe):
     body = _body(bodies, recipe['id'])
     ops, moved = pattern_ops_for(body, recipe)
@@ -1014,7 +1030,8 @@ def run_pattern(bodies, recipe):
     group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
     # osobne elementy: oryginał i kopie trafiają do wspólnej grupy (folderu) na liście obiektów
     folder = body.folder or ('' if group else (recipe.get('folder') or f'{body.name} — szyk'))
-    made = prepared_many(Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder)
+    made = prepared_many(Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder,
+                              threads=_moved_threads(body.threads, kernel.op_matrix(ops[i])))
                          for i, sh in enumerate(copies))
     source_body = body.changed(source) if moved else body
     if group:
@@ -1211,7 +1228,8 @@ def run_mirror(bodies, recipe):
     shape = kernel.mirror_plane(body.shape, recipe['normal'], recipe['origin'])
     if recipe.get('join') and body.kind == 'solid':
         return _replace(bodies, body.changed(kernel.boolean('union', body.shape, [shape])))
-    mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane, id=recipe.get('out') or uuid.uuid4().hex).prepared()
+    mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane, id=recipe.get('out') or uuid.uuid4().hex,
+                    threads=_moved_threads(body.threads, _mirror_matrix(recipe['normal'], recipe['origin']))).prepared()
     if recipe.get('keep'):
         return [*bodies, mirrored]
     return [mirrored if b.id == body.id else b for b in bodies]
@@ -1383,6 +1401,26 @@ def run_rename(bodies, recipe):
     return _replace(bodies, replace(body, name=recipe['name']))
 
 
+def run_thread(bodies, recipe):
+    """Gwint kosmetyczny na walcu bryły: opcjonalnie otwór / wałek na właściwą średnicę, opis gwintu przy bryle."""
+    from . import threads as th
+    body = _body(bodies, recipe['id'])
+    c = recipe['cylinder']
+    info = th.find_cylinder(body.shape, c['origin'], c['axis'], c['radius'])
+    if info is None:
+        raise kernel.CadError('Nie znaleziono otworu / wałka pod gwint.')
+    info['internal'] = bool(c.get('internal', info['internal']))
+    spec = recipe['spec']
+    _, d, pitch = th.size(spec['standard'], spec['size'])
+    shape = body.shape
+    want = th.bore(spec['standard'], d, pitch, info['internal'])
+    if recipe.get('adjust') and abs(want - 2 * info['radius']) > 1e-3:
+        shape = th.set_diameter(shape, info, want)
+    thread = th.make_thread(info, spec['standard'], spec['size'], spec.get('hand', 'right'), spec['start'], spec['end'])
+    new = body.changed(shape) if shape is not body.shape else body
+    return _replace(bodies, replace(new, threads=(*body.threads, thread)))
+
+
 def run_folder(bodies, recipe):
     """Grupa (folder) na liście obiektów: przeniesienie do grupy, wyjęcie z niej (pusta nazwa) albo zmiana nazwy."""
     ids, folder = set(recipe['ids']), str(recipe.get('folder') or '')[:60]
@@ -1461,7 +1499,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1575,6 +1613,8 @@ def reads(recipe, current):
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
     if kind in ('delete', 'folder'):
         return set(recipe['ids'])
+    if kind == 'thread':
+        return {recipe['id']}
     if kind == 'trim':
         return {recipe['id']} | sketches
     if kind == 'text':

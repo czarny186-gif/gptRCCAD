@@ -130,17 +130,21 @@ class LibraryWindowTests(unittest.TestCase):
         self.assertIsNone(w._lib_action)
         d.take_from_workspace()
         with patch.object(w, 'pick_object', return_value=box.id):
+            w.view_hover(5, 5)
+            self.assertEqual(w._obj_hover, box.id)                  # podświetlenie przed kliknięciem
             w.view_clicked(5, 5, False, False)
         self.assertTrue(d.isVisible())
+        self.assertEqual(w._obj_hover, '')
         files = [p for p in lib.entries('object', folder) if p.is_file()]
         self.assertEqual([p.name for p in files], ['Wspornik.rccadx'])
         self.assertEqual([Path(i.data(Qt.UserRole)) for i in d.view.selectedItems()], files)
         d.place_selected()
         self.wait()
         self.assertFalse(d.isVisible())
-        with patch.object(w, '_pattern_target', return_value=np.array([100.0, 0.0, 0.0])):
+        with patch.object(w, '_library_target', return_value=(np.array([100.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]), 'Siatka')):
             w.view_hover(5, 5)
             self.assertTrue(w.view.preview_items)                  # element idzie za kursorem
+            self.assertEqual(w.view.snap_marker[1], 'Siatka')      # znacznik miejsca na siatce
             w.view_clicked(5, 5, False, False)
         self.wait()
         self.assertTrue(d.isVisible())
@@ -162,6 +166,8 @@ class LibraryWindowTests(unittest.TestCase):
         d = w.open_library('sketch')
         d.take_from_workspace()
         with patch.object(w, 'pick_object', return_value=solid.id):
+            w.view_hover(5, 5)
+            self.assertEqual(w._obj_hover, '')                     # bryła nie podświetla się w bibliotece szkiców
             w.view_clicked(5, 5, False, False)                     # bryła nie jest szkicem - czeka dalej
         self.assertIsNotNone(w._lib_action)
         with patch.object(w, 'pick_object', return_value=sk.id):
@@ -182,12 +188,16 @@ class LibraryWindowTests(unittest.TestCase):
         self.assertFalse(saved[0].exists())
         d.place_selected()
         self.wait()
-        with patch.object(w, '_pattern_target', return_value=np.array([0.0, 0.0, 20.0])):
+        with patch.object(w, '_library_target', return_value=(np.array([30.0, 0.0, 20.0]), np.array([1.0, 0.0, 0.0]), 'Ściana')):
             w.view_clicked(5, 5, False, False)
         self.wait()
         new = w.document.bodies[-1]
         self.assertEqual(new.kind, 'sketch')
-        self.assertAlmostEqual(k.frame_of(new.plane).origin[2], 20, 4)      # płaszczyzna szkicu przeniesiona razem z nim
+        frame = k.frame_of(new.plane)
+        self.assertTrue(np.allclose(frame.normal, [1, 0, 0], atol=1e-9))         # szkic położony na ścianie bocznej
+        bb = new.shape.BoundingBox()
+        self.assertAlmostEqual(bb.xmin, 30, 4); self.assertAlmostEqual(bb.xmax, 30, 4)
+        self.assertAlmostEqual((bb.zmin + bb.zmax) / 2, 20, 4)
         with patch.object(lib.QMessageBox, 'question', return_value=lib.QMessageBox.Yes):
             d.go_home()
             for i in range(d.view.count()):

@@ -628,7 +628,50 @@ class CadView(gl.GLViewWidget):
         self._parts.clear()
         self.set_models(self.bodies, self.selected_bodies, self.selected_edges)
 
+    THREAD_COLOR = (.95, .55, .12, 1)
+
+    def set_threads(self, items):
+        """Gwinty kosmetyczne: linie śrubowe przy bryłach ({id bryły: opisy gwintów}). Elementy GL powstają tylko
+        przy zmianie gwintów - obracanie widoku nic nie kosztuje."""
+        from .threads import thread_lines
+        store = self.__dict__.setdefault('_thread_items', {})
+        for bid in list(store):
+            if bid not in items:
+                self.removeItem(store.pop(bid)[1])
+        for bid, threads in items.items():
+            key = repr(threads)
+            old = store.get(bid)
+            if old is not None and old[0] == key:
+                continue
+            if old is not None:
+                self.removeItem(old[1])
+            segs = np.concatenate([thread_lines(t) for t in threads]) if threads else np.zeros((0, 2, 3), np.float32)
+            item = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=self.THREAD_COLOR, width=1.5, antialias=True, mode='lines')
+            self.addItem(item)
+            store[bid] = (key, item)
+            m = self._body_m.get(bid)
+            if m is not None:
+                item.setTransform(m)
+        self.update()
+
+    def set_thread_preview(self, thread):
+        """Podgląd gwintu przed zatwierdzeniem (niebieski, rysowany od razu - bez liczenia geometrii)."""
+        from .threads import thread_lines
+        old = self.__dict__.get('_thread_preview')
+        if old is not None:
+            self.removeItem(old)
+            self._thread_preview = None
+        if thread is not None:
+            segs = thread_lines(thread)
+            self._thread_preview = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=(.18, .53, .91, 1), width=2.0, antialias=True, mode='lines')
+            self.addItem(self._thread_preview)
+        self.update()
+
     def _apply_body_matrix(self, bid):
+        thread = self.__dict__.get('_thread_items', {}).get(bid)
+        if thread is not None:
+            m = self._body_m.get(bid)
+            thread[1].resetTransform() if m is None else thread[1].setTransform(m)
         cached = self._cache.get(bid)
         if not cached:
             return

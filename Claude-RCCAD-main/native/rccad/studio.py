@@ -208,7 +208,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
@@ -468,6 +468,7 @@ class StudioWindow(QMainWindow):
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
                  ('split', ui.style_icon('split', 38), 'Przetnij bryłę — płaszczyzną, ścianą, szkicem albo inną bryłą'),
                  ('shell', ui.style_icon('shell', 38), 'Skorupa — wydrąż bryłę i otwórz ściany'),
+                 ('thread', ui.style_icon('thread', 38), 'Gwint — gwint wewnętrzny lub zewnętrzny na otworze albo wałku'),
                  ('sheet', ui.style_icon('sheet', 38), 'Konwertuj na blachę — wybierz płaski prostokąt prostopadłościanu'),
                  ('flange', ui.style_icon('flange', 38), 'Kołnierz — wybierz krawędź blachy'),
                  ('hem', ui.style_icon('hem', 38), 'Zawinięcie — zawiń krawędź blachy o 180°, z przerwą albo zaciśnięte'),
@@ -997,6 +998,59 @@ class StudioWindow(QMainWindow):
         self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_shell, lambda: self.set_mode(None))
         self.sh_thick.valueChanged.connect(lambda *_: self._timers['shell'].start())
         self.sh_dir.currentIndexChanged.connect(lambda *_: self._timers['shell'].start())
+
+        # --- gwint ---
+        from . import threads as th
+        self.th_pick = None             # wybrany walec: id bryły i opis (oś, promień, zakres, otwór / wałek)
+        self.thread_panel, lay = self._panel(330, 'Gwint', 'x_thread', 'Otwór lub wałek · szybki gwint kosmetyczny', plain=True, scroll=True)
+        self.th_step1 = ui.StepRow(1, 'x_object', 'Otwór albo wałek', plain=True)
+        lay.addWidget(self.th_step1)
+        self.th_standard = QComboBox()
+        for key, info in th.STANDARDS.items():
+            self.th_standard.addItem(info['title'], key)
+        self._field(lay, 'Rodzaj gwintu', self.th_standard)
+        self.th_size = QComboBox()
+        self.th_size.setMaxVisibleItems(16)
+        self._field(lay, 'Rozmiar', self.th_size)
+        self.th_info = QLabel('—')
+        self.th_info.setObjectName('readout')
+        self.th_info.setWordWrap(True)
+        self.th_info.setStyleSheet('QLabel#readout{background:#f3f6fa;border:1.4px solid #d6e0ea;border-radius:8px;padding:7px 10px;font-weight:700;color:#27415a;}')
+        lay.addWidget(self.th_info)
+        self.th_auto = QCheckBox('Dopasuj gwint do otworu automatycznie')
+        self.th_auto.setChecked(True)
+        self.th_auto.setToolTip('Włączone: rozmiar dobiera się do średnicy otworu / wałka. Wyłączone: wybierasz rozmiar sam, '
+                                'a otwór / wałek zostanie dopasowany do gwintu przy zatwierdzeniu.')
+        lay.addWidget(self.th_auto)
+        self.th_side = ui.Segmented([('Wewnętrzny', 'in', 'th_in'), ('Zewnętrzny', 'out', 'th_out')], 30)
+        self._field(lay, 'Gwint', self.th_side)
+        self.th_hand = ui.Segmented([('Prawy', 'right', 'th_rh'), ('Lewy (LH)', 'left', 'th_lh')], 30)
+        self._field(lay, 'Kierunek zwojów', self.th_hand)
+        self.th_extent = ui.Segmented([('Cała długość', 'full', 'th_full'), ('Określona', 'len', 'th_len')], 30)
+        self._field(lay, 'Długość gwintu', self.th_extent)
+        self.th_len_box = QWidget()
+        box = QVBoxLayout(self.th_len_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        self.th_length = _spin(10, .1, 1e5, 2, 1)
+        self.th_length.setToolTip('Długość gwintu; można też przeciągać strzałki na końcach w widoku.')
+        self._field(box, 'Długość (mm)', self.th_length)
+        self.th_offset = _spin(0, 0, 1e5, 2, 1)
+        self.th_offset.setToolTip('Odsunięcie początku gwintu od końca otworu / wałka.')
+        self._field(box, 'Odsunięcie od początku (mm)', self.th_offset)
+        lay.addWidget(self.th_len_box)
+        self.th_status = _label('Kliknij otwór albo wałek (walcową ścianę bryły).', 'status')
+        lay.addWidget(self.th_status)
+        self._buttons(self.thread_panel.footer, 'Zastosuj', 'Zamknij', self.apply_thread, lambda: self.set_mode(None))
+        self.th_standard.currentIndexChanged.connect(lambda *_: self._th_standard_changed())
+        self.th_size.currentIndexChanged.connect(lambda *_: self._th_size_changed())
+        self.th_auto.toggled.connect(lambda *_: self._th_fit())
+        self.th_side.currentIndexChanged.connect(lambda *_: self._th_fit())
+        self.th_hand.currentIndexChanged.connect(lambda *_: self._th_update())
+        self.th_extent.currentIndexChanged.connect(lambda *_: self._th_update())
+        self.th_length.valueChanged.connect(lambda *_: self._th_update())
+        self.th_offset.valueChanged.connect(lambda *_: self._th_update())
+        self._th_standard_changed()
 
         # --- blacha: konwersja i kołnierz ---
         self.sheet_meta = {}        # id bryły -> normalna i grubość blachy (z konwersji), potrzebne do kołnierzy
@@ -1529,7 +1583,7 @@ class StudioWindow(QMainWindow):
         self.off_side.currentIndexChanged.connect(lambda *_: self._off_update())
         self.off_value.valueChanged.connect(lambda *_: self._off_update())
 
-        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1572,7 +1626,7 @@ class StudioWindow(QMainWindow):
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values()):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1855,6 +1909,12 @@ class StudioWindow(QMainWindow):
             self.hm_status.setText('Kliknij Zaginaj, potem klikaj krawędzie blachy.')
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Zawinięcie: kliknij krawędź blachy. Krawędź zawija się do środka o 180°.')
+        elif mode == 'thread':
+            self.thread_panel.show()
+            self.th_pick = None
+            self._th_update()
+            self.view.setCursor(Qt.PointingHandCursor)
+            self.hint('Gwint: kliknij otwór albo wałek. Strzałki w widoku ustawiają długość i rozmiar; gwint powstaje po Zastosuj.')
         elif mode == 'shell':
             self.shell_panel.show()
             self._sh_update()
@@ -3045,6 +3105,8 @@ class StudioWindow(QMainWindow):
                     self._hover_extrude(x, y)
             elif self.mode == 'shell':
                 self._hover_face_only(x, y) if self.sh_id else self._hover_shell_solid(x, y)
+            elif self.mode == 'thread':
+                self._th_hover(x, y)
             elif self.mode == 'sheet':
                 self._hover_face_only(x, y)
             elif self.mode in ('flange', 'hem'):
@@ -3140,6 +3202,8 @@ class StudioWindow(QMainWindow):
             self.pick_measure(x, y)
         elif self.mode == 'loft':
             self.pick_loft(x, y)
+        elif self.mode == 'thread':
+            self.pick_thread(x, y)
         elif self.mode == 'shell':
             self.pick_shell(x, y)
         elif self.mode == 'sheet':
@@ -6184,6 +6248,222 @@ class StudioWindow(QMainWindow):
         return kernel.pattern_ops('path', dict(points=self.pat_path if self.pat_path is not None else [], count=int(round(self.pat_lcount.value())),
                                                fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())), None
 
+    # ---------- gwint ----------
+    def _th_standard_changed(self):
+        from . import threads as th
+        current = self.th_size.currentData()
+        self.th_size.blockSignals(True)
+        self.th_size.clear()
+        for name, d, pitch in th.STANDARDS[self.th_standard.currentData()]['sizes']:
+            self.th_size.addItem(f'{name}   (skok {pitch:.3g} mm)', name)
+        index = self.th_size.findData(current)
+        self.th_size.setCurrentIndex(index if index >= 0 else min(8, self.th_size.count() - 1))
+        self.th_size.blockSignals(False)
+        self._th_fit()
+
+    def _th_size_changed(self):
+        if getattr(self, '_th_auto_set', False):
+            return
+        if self.th_pick is not None and self.th_auto.isChecked():
+            self.th_auto.blockSignals(True)
+            self.th_auto.setChecked(False)          # rozmiar wybrany ręcznie: otwór dopasuje się do gwintu
+            self.th_auto.blockSignals(False)
+        self._th_update()
+
+    def _th_internal(self):
+        return self.th_side.currentData() == 'in'
+
+    def _th_fit(self):
+        """Automatyczne dopasowanie: rozmiar gwintu do średnicy wybranego otworu / wałka."""
+        from . import threads as th
+        if self.th_pick is not None and self.th_auto.isChecked():
+            name, _ = th.fit(self.th_standard.currentData(), 2 * self.th_pick['info']['radius'], self._th_internal())
+            self._th_auto_set = True
+            self.th_size.setCurrentIndex(self.th_size.findData(name))
+            self._th_auto_set = False
+        self._th_update()
+
+    def _th_spec(self):
+        """Bieżące ustawienia gwintu (bez liczenia geometrii): opis gwintu, docelowa średnica, czy otwór się zmieni."""
+        from . import threads as th
+        if self.th_pick is None or self.th_size.currentData() is None:
+            return None
+        info = dict(self.th_pick['info'], internal=self._th_internal())
+        t0, t1 = info['t0'], info['t1']
+        if self.th_extent.currentData() == 'full':
+            start, end = t0, t1
+        else:
+            start = min(t0 + self.th_offset.value(), t1 - .1)
+            end = min(start + self.th_length.value(), t1)
+        standard, name = self.th_standard.currentData(), self.th_size.currentData()
+        thread = th.make_thread(info, standard, name, self.th_hand.currentData(), start, end)
+        _, d, pitch = th.size(standard, name)
+        want = th.bore(standard, d, pitch, info['internal'])
+        return dict(info=info, thread=thread, want=want, change=abs(want - 2 * info['radius']) > 1e-3, d=d, pitch=pitch)
+
+    def _th_update(self):
+        """Podgląd na żywo: linie gwintu, strzałki długości i rozmiaru, opis - bez tworzenia gwintu w bryle."""
+        from . import threads as th
+        self.th_len_box.setVisible(self.th_extent.currentData() == 'len')
+        if self.th_pick is None:
+            self.th_step1.set_state('active', 'Kliknij otwór albo wałek')
+        else:
+            body = self.document.get(self.th_pick['id'])
+            info = self.th_pick['info']
+            self.th_step1.set_state('done', f"{'Otwór' if info['internal'] else 'Wałek'} Ø{2 * info['radius']:.2f} · {body.name if body else ''}")
+        spec = self._th_spec()
+        if spec is None:
+            standard = self.th_standard.currentData()
+            name = self.th_size.currentData()
+            if name:
+                _, d, pitch = th.size(standard, name)
+                self.th_info.setText(f'{name} · skok {pitch:.3g} mm · otwór Ø{th.drill(standard, d, pitch):g} · wałek Ø{d:g}')
+            self.view.set_thread_preview(None)
+            if self.mode == 'thread':
+                self.view.set_handles([])
+            return
+        info, thread = spec['info'], spec['thread']
+        length = thread['end'] - thread['start']
+        kind = 'otwór' if info['internal'] else 'wałek'
+        self.th_info.setText(f"{th.label(thread)} · skok {spec['pitch']:.3g} mm · długość {length:.2f} mm\n"
+                             f"{kind} Ø{2 * info['radius']:.2f}" + (f" → Ø{spec['want']:.2f}" if spec['change'] else ' (pasuje)'))
+        if not self.th_pick['info']['full']:
+            self.th_status.setText('To nie jest pełny walec - gwint wymaga pełnego otworu albo wałka.')
+        elif spec['change']:
+            self.th_status.setText(f"{kind.capitalize()} zostanie dopasowany do gwintu: Ø{2 * info['radius']:.2f} → Ø{spec['want']:.2f} (po Zastosuj).")
+        else:
+            self.th_status.setText(f'Gwint {th.label(thread)} pasuje do {"otworu" if info["internal"] else "wałka"}. Zastosuj tworzy gwint.')
+        self.view.set_thread_preview(thread)
+        if self._hv is None:
+            self._th_handles(spec)
+
+    def _th_handles(self, spec):
+        from . import threads as th
+        thread = spec['thread']
+        origin, axis = np.asarray(thread['origin'], float), np.asarray(thread['axis'], float)
+        helper = np.array([1.0, 0, 0]) if abs(axis[0]) < .9 else np.array([0, 1.0, 0])
+        radial = np.cross(axis, helper)
+        radial /= np.linalg.norm(radial)
+        reach = max(spec['d'] * .8, 4.0)
+        a, b = origin + axis * thread['start'], origin + axis * thread['end']
+        r = thread['radius']
+        mid = origin + axis * (thread['start'] + thread['end']) / 2
+        length = thread['end'] - thread['start']
+        self.view.set_handles([
+            dict(id='thS', start=a + radial * r, tip=a + radial * r - axis * reach, dir=-axis, color=(.95, .55, .12, 1), label=f'{length:.1f}'),
+            dict(id='thE', start=b + radial * r, tip=b + radial * r + axis * reach, dir=axis, color=(.95, .55, .12, 1), label=f'{length:.1f}'),
+            dict(id='thD', start=mid, tip=mid + radial * (r + reach), dir=radial, color=(.18, .53, .91, 1), label=th.label(thread))])
+
+    def _th_drag(self, hid, delta):
+        """Strzałki gwintu: końce zmieniają zakres (przechodzi na „Określona”), strzałka promieniowa - rozmiar gwintu."""
+        from . import threads as th
+        spec = self._th_spec()
+        if spec is None:
+            return
+        info, thread = spec['info'], spec['thread']
+        if self._hv is None or self._hv[0] != hid:
+            self._hv = (hid, thread['start'], thread['end'], spec['d'])
+        _, start0, end0, d0 = self._hv
+        t0, t1 = info['t0'], info['t1']
+        if hid == 'thD':
+            target = d0 + 2 * delta
+            standard = self.th_standard.currentData()
+            name = min(th.STANDARDS[standard]['sizes'], key=lambda s: abs(s[1] - target))[0]
+            if name != self.th_size.currentData():
+                self.th_auto.blockSignals(True)
+                self.th_auto.setChecked(False)
+                self.th_auto.blockSignals(False)
+                self._th_auto_set = True
+                self.th_size.setCurrentIndex(self.th_size.findData(name))
+                self._th_auto_set = False
+            self._th_update()
+            return
+        if hid == 'thS':
+            start, end = min(max(t0, start0 - delta), end0 - .1), end0
+        else:
+            start, end = start0, max(min(t1, end0 + delta), start0 + .1)
+        for w in (self.th_extent, self.th_offset, self.th_length):
+            w.blockSignals(True)
+        self.th_extent.setCurrentIndex(1)
+        self.th_offset.setValue(round(start - t0, 2))
+        self.th_length.setValue(round(end - start, 2))
+        for w in (self.th_extent, self.th_offset, self.th_length):
+            w.blockSignals(False)
+        self._th_update()
+
+    def _th_face(self, x, y):
+        """Walcowa ściana bryły pod kursorem: (bryła, opis walca) albo None."""
+        from . import threads as th
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid':
+            return None
+        cache = self.__dict__.setdefault('_th_cyl', {})
+        key = (body.id, id(body.shape))
+        if key not in cache:                     # walce bryły liczone raz - najechanie kursorem to tylko rachunek na liczbach
+            if len(cache) > 32:
+                cache.clear()
+            cache[key] = (body.shape, th.cylinders(body.shape))
+        bb = body.mesh.size if body.mesh is not None else 100.0
+        info = th.cylinder_at(cache[key][1], hit[2], max(.02, 2e-3 * float(bb)))
+        return (body, dict(info)) if info is not None else None
+
+    def _th_hover(self, x, y):
+        found = self._th_face(x, y)
+        key = ('th', found[0].id, found[1]['index']) if found else None
+        if key != self._hover_key:
+            self._hover_key = key
+            face = found[0].shape.Faces()[found[1]['index']] if found else None
+            self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, color=(1, .55, .1, .30), line_color=SKETCH_ORANGE, width=2)
+
+    def pick_thread(self, x, y):
+        found = self._th_face(x, y)
+        if found is None:
+            self.th_status.setText('Kliknij walcową ścianę: wnętrze otworu albo powierzchnię wałka.')
+            return
+        body, info = found
+        self.th_pick = dict(id=body.id, info=info)
+        self._hover_key = None
+        self.view.set_preview_mesh(None)
+        self.th_side.blockSignals(True)
+        self.th_side.setCurrentIndex(0 if info['internal'] else 1)
+        self.th_side.blockSignals(False)
+        self.th_length.blockSignals(True)
+        self.th_length.setValue(round(min(self.th_length.value(), info['t1'] - info['t0']) if self.th_extent.currentData() == 'len'
+                                      else info['t1'] - info['t0'], 2))
+        self.th_length.blockSignals(False)
+        self._th_fit()
+
+    def apply_thread(self):
+        from . import threads as th
+        spec = self._th_spec()
+        if spec is None:
+            self.toast('Najpierw kliknij otwór albo wałek.')
+            return
+        if not self.th_pick['info']['full']:
+            self.toast('Gwint wymaga pełnego otworu albo wałka.')
+            return
+        info, thread = spec['info'], spec['thread']
+        recipe = dict(type='thread', id=self.th_pick['id'],
+                      cylinder=dict(origin=info['origin'], axis=info['axis'], radius=info['radius'], internal=info['internal']),
+                      spec=dict(standard=thread['standard'], size=thread['size'], hand=thread['hand'], start=thread['start'], end=thread['end']),
+                      adjust=bool(spec['change']))
+        existing = list(self.document.bodies)
+
+        def build():
+            return hist.offloaded(hist.run_thread, existing, recipe)
+
+        def done(bodies):
+            self.document.pending_op = recipe
+            self.document.pending_label, self.document.pending_icon = f'Gwint {th.label(thread)}', 'thread'
+            self.document.commit(bodies)
+            self.th_pick = None
+            self.view.set_thread_preview(None)
+            self.view.set_handles([])
+            self.th_status.setText(f'Dodano gwint {th.label(thread)}. Kliknij kolejny otwór albo wałek.')
+
+        self.run_operation(f'Gwint {th.label(thread)}', build, done)
+
     PAT_COLORS = {'X': (.87, .30, .32, 1), 'Y': (.20, .64, .45, 1), 'Z': (.27, .54, .89, 1)}
 
     def _place_pattern_handles(self):
@@ -6394,6 +6674,8 @@ class StudioWindow(QMainWindow):
             self.mod_size.setValue(max(.1, round(self._hv + delta, 1)))
         elif hid in ('patX', 'patY', 'patZ'):
             self._pattern_drag(hid[3], delta)
+        elif hid in ('thS', 'thE', 'thD'):
+            self._th_drag(hid, delta)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -6425,6 +6707,8 @@ class StudioWindow(QMainWindow):
             self._place_split_handle()
         elif hid.startswith('pat'):
             self._place_pattern_handles()
+        elif hid.startswith('th'):
+            self._th_update()
         else:
             self._place_gizmo()
 
@@ -6532,6 +6816,7 @@ class StudioWindow(QMainWindow):
         if self._obj_hover and self.mode not in ('sheet', 'flange', 'hem'):
             highlighted = [*highlighted, self._obj_hover]
         self.view.set_models(bodies, highlighted, self.edges)
+        self.view.set_threads({b.id: b.threads for b in bodies if b.threads and b.visible})   # gwinty: lekkie linie, bez geometrii
         if fit:
             self.view.fit_all()
         if hasattr(self, '_refine_timer') and any(b.mesh is not None and not b.mesh.fine for b in self.document.bodies):
@@ -8015,9 +8300,10 @@ class StudioWindow(QMainWindow):
             lows, highs = zip(*(self._mesh_bounds(m) for m in meshes)) if meshes else ((np.zeros(3),), (np.zeros(3),))
             low, high = np.min(lows, axis=0), np.max(highs, axis=0)
             # punkt zaczepienia: obiekt stoi spodem na wskazanym miejscu, szkic - środkiem
-            ref = np.array([(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2] if dialog.kind == 'object' else (low[2] + high[2]) / 2])
-            self._lib_action = dict(kind='place', dialog=dialog, bodies=bodies, ref=ref, offset=None, name=library.display_name(path),
-                                    mesh=_merge_meshes(meshes) if meshes else None)
+            sketch = next((b for b in bodies if b.kind == 'sketch'), None)
+            normal = np.array(kernel.frame_of(sketch.plane).normal, float) if sketch is not None else np.array([0.0, 0.0, 1.0])
+            self._lib_action = dict(kind='place', dialog=dialog, bodies=bodies, low=np.asarray(low, float), high=np.asarray(high, float),
+                                    normal=normal, name=library.display_name(path), mesh=_merge_meshes(meshes) if meshes else None)
             self.toast('Kliknij miejsce na polu roboczym (ścianę, płaszczyznę albo podłoże) · prawy przycisk albo Esc - anuluj.', 6000)
 
         def failed_back():
@@ -8027,31 +8313,80 @@ class StudioWindow(QMainWindow):
         self.run_operation('Wczytywanie z biblioteki', load, start, after=failed_back)
 
     def library_cancel(self):
-        action, self._lib_action = self._lib_action, None
-        self.view.set_preview_mesh(None)
+        action = self._lib_action
+        self._library_end()
         if action is not None:
             self.toast('Anulowano.', 1500)
             action['dialog'].show()
             action['dialog'].raise_()
 
     def _library_target(self, x, y):
-        point = self._pattern_target(x, y)          # wierzchołek, ściana, płaszczyzna albo podłoże
-        return None if point is None else np.asarray(point, float)
+        """Miejsce pod kursorem: (punkt, normalna, opis). Wierzchołek, ściana bryły, płaszczyzna albo podłoże - podłoże
+        przyciągane do kratki siatki (krok zależny od powiększenia)."""
+        vertex = self.view.nearest_vertex(x, y, solids_only=False)
+        if vertex is not None:
+            return np.array(vertex[1], float), np.array([0.0, 0.0, 1.0]), 'Wierzchołek'
+        hit = self.view.pick_face(x, y)
+        if hit is not None:
+            return np.array(hit[2], float), np.asarray(hit[1], float), 'Ściana'
+        name = self.view.plane_at(x, y)
+        found = self.view._plane_hit(name, x, y) if name else None
+        if found:
+            return np.array(found[1], float), np.array(kernel.frame_of(name).normal, float), f'Płaszczyzna {name}'
+        ray = self.view._ray(x, y)
+        ground = self.view._ray_plane(ray, np.zeros(3), np.array([0.0, 0.0, 1.0])) if ray is not None else None
+        if ground is None:
+            return None
+        step = 10 ** math.floor(math.log10(max(float(self.view.opts['distance']) / 40, 1e-3)))
+        point = np.array([round(ground[0] / step) * step, round(ground[1] / step) * step, 0.0])
+        return point, np.array([0.0, 0.0, 1.0]), 'Siatka'
+
+    def _library_pose(self, x, y):
+        """Położenie wstawianego elementu: obiekt dotyka wskazanej ściany / siatki od zewnątrz (bez obracania),
+        szkic kładzie się środkiem na ścianie albo płaszczyźnie (obrócony do niej)."""
+        action = self._lib_action
+        found = self._library_target(x, y)
+        if found is None:
+            return None
+        point, normal, label = found
+        normal = normal / max(np.linalg.norm(normal), 1e-12)
+        low, high = action['low'], action['high']
+        centre, half = (low + high) / 2, (high - low) / 2
+        rotation = np.eye(3)
+        if action['dialog'].kind == 'sketch':
+            if label != 'Siatka':
+                rotation = kernel.rotation_between(action['normal'], normal)
+            translation = point - rotation @ centre
+        else:
+            reach = float(np.abs(half) @ np.abs(normal))
+            translation = point - (centre - normal * reach)
+        return rotation, translation, point, label
 
     def _library_hover(self, x, y):
         action = self._lib_action
-        if action['kind'] != 'place' or action['mesh'] is None:
+        if action['kind'] == 'pick':           # podświetlenie obiektu, który zostanie dodany po kliknięciu
+            bid = self.pick_object(x, y)
+            body = self.document.get(bid) if bid else None
+            want = 'solid' if action['dialog'].kind == 'object' else 'sketch'
+            hover = bid if body is not None and body.kind == want else ''
+            if hover != self._obj_hover:
+                self._obj_hover = hover
+                self.refresh()
+            self.view.setCursor(Qt.PointingHandCursor if hover else Qt.ArrowCursor)
             return
-        target = self._library_target(x, y)
-        if target is None:
+        if action['mesh'] is None:
             return
-        offset = target - action['ref']
-        action['offset'] = offset
+        pose = self._library_pose(x, y)
+        if pose is None:
+            self.view.set_marker(None)
+            return
+        rotation, translation, point, label = pose
         mesh = action['mesh']
-        moved = kernel.DisplayMesh(mesh.vertices + offset.astype(mesh.vertices.dtype), mesh.triangles,
-                                   {k: v + offset.astype(v.dtype) for k, v in mesh.edges.items()},
-                                   tuple(float(c) for c in np.asarray(mesh.center) + offset), mesh.size)
+        r, t = rotation.astype(np.float32), translation.astype(np.float32)
+        moved = kernel.DisplayMesh(mesh.vertices @ r.T + t, mesh.triangles, {k: v @ r.T + t for k, v in mesh.edges.items()},
+                                   tuple(float(c) for c in rotation @ np.asarray(mesh.center, float) + translation), mesh.size)
         self.view.set_preview_mesh(moved, color=(.3, .62, .95, .45), line_color=(.12, .36, .7, 1), width=1.6)
+        self.view.set_marker(point, label=label)          # miejsce na siatce / ścianie, w którym stanie element
 
     def _library_click(self, x, y):
         from . import library
@@ -8075,32 +8410,40 @@ class StudioWindow(QMainWindow):
             except Exception as exc:
                 self.toast(f'Nie udało się zapisać w bibliotece: {exc}', 5000)
                 return
-            self._lib_action = None
+            self._library_end()
             dialog.picked(path)
             return
-        target = self._library_target(x, y)
-        if target is None:
+        pose = self._library_pose(x, y)
+        if pose is None:
             self.toast('Kliknij miejsce na polu roboczym.')
             return
-        offset = target - action['ref']
-        self._lib_action = None
-        self.view.set_preview_mesh(None)
-        self._library_insert(action, offset)
+        self._library_end()
+        self._library_insert(action, pose[0], pose[1])
         dialog.show()
         dialog.raise_()
 
-    def _library_insert(self, action, offset):
-        """Kopie elementu z biblioteki przesunięte na wskazane miejsce (nowe identyfikatory, wspólna grupa / folder)."""
-        move = tuple(float(c) for c in offset)
+    def _library_end(self):
+        self._lib_action = None
+        self.view.set_preview_mesh(None)
+        self.view.set_marker(None)
+        self.view.unsetCursor()
+        if self._obj_hover:
+            self._obj_hover = ''
+            self.refresh()
+
+    def _library_insert(self, action, rotation, translation):
+        """Kopie elementu z biblioteki ustawione na wskazanym miejscu (nowe identyfikatory, wspólna grupa / folder)."""
         groups = {}
         made = []
         for b in action['bodies']:
             plane = b.plane
             if b.kind == 'sketch':
                 frame = kernel.frame_of(plane)
-                plane = kernel.Frame(tuple(float(o + m) for o, m in zip(frame.origin, move)), tuple(frame.xdir), tuple(frame.normal))
+                plane = kernel.Frame(tuple(float(c) for c in rotation @ np.asarray(frame.origin, float) + translation),
+                                     tuple(float(c) for c in rotation @ np.asarray(frame.xdir, float)),
+                                     tuple(float(c) for c in rotation @ np.asarray(frame.normal, float)))
             group = groups.setdefault(b.group, uuid.uuid4().hex) if b.group else ''
-            made.append(Body(b.name, b.shape.translate(move), b.kind, plane, group=group, meta=None))
+            made.append(Body(b.name, kernel.transformed(b.shape, rotation, translation), b.kind, plane, group=group, meta=None))
         folder = action['name'] if len(made) > 1 else ''
         made = [replace(b, folder=folder) for b in made]
 

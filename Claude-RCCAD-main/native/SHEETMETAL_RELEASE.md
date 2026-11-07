@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.53 — Biblioteka obiektów i szkiców
+# RCCAD Desktop 0.4.54 — gwinty, podświetlanie i znacznik miejsca w Bibliotece
+
+## Zmiany 0.4.54
+
+- **Gwint (zakładka Edycja)**: wewnętrzny i zewnętrzny na otworze albo wałku; rodzaje M, M×P (drobnozwojny), UNC, UNF, G (BSPP), Tr; kierunek prawy / lewy; automatyczne dopasowanie rozmiaru do otworu albo - po wyłączeniu - dopasowanie otworu / wałka do wybranego gwintu; cała długość albo określona (długość, odsunięcie). Strzałki w widoku: końce zakresu z obu stron i rozmiar; podgląd i opis na żywo, gwint powstaje po Zastosuj.
+- **Gwint bez spowalniania**: kosmetyczny - bryła dostaje tylko właściwą średnicę (szybka operacja na walcu), a zwoje to lekka linia śrubowa zapisana przy bryle (długie gwinty rysują się rzadziej). Gwint przesuwa się, obraca, kopiuje w szyku i odbija razem z bryłą; zapisuje się w projekcie i w historii (cofanie).
+- **Biblioteka - Wstaw z pola roboczego**: obiekt pod kursorem podświetla się jak przy zaznaczeniu, dodaje się dopiero po kliknięciu.
+- **Biblioteka - Wstaw na pole robocze**: znacznik pokazuje miejsce (Siatka - przyciągana do kratki, Ściana, Wierzchołek, Płaszczyzna). Obiekt staje przy ścianie od jej zewnętrznej strony, szkic kładzie się na ścianie / płaszczyźnie (obrócony do niej).
+
+## RCCAD Desktop 0.4.53 — Biblioteka obiektów i szkiców
 
 ## Zmiany 0.4.53
 

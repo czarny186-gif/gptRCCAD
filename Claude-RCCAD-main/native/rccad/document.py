@@ -9,6 +9,7 @@ import tempfile
 import uuid
 from zipfile import ZipFile, ZIP_DEFLATED
 import cadquery as cq
+import numpy as np
 from .kernel import CadError, DisplayMesh, Frame, display_mesh, heavy, mesh_deferred, valid
 
 
@@ -35,6 +36,7 @@ class Body:
     meta: dict | None = field(default=None, compare=False, repr=False)   # parametry szkicu (narzędzie, punkty, liczba boków) do edycji wymiarów
     group: str = field(default='', compare=False)       # wspólna grupa (np. szyk „jako jeden element”): zaznaczanie, wyciąganie i przenoszenie razem
     folder: str = field(default='', compare=False)      # grupa (folder) na liście obiektów - tylko porządek na liście, nie zmienia geometrii
+    threads: tuple = field(default=(), compare=False)   # gwinty kosmetyczne (opisy z rccad.threads) - przesuwają się razem z bryłą
 
     def prepared(self):
         return replace(self, mesh=_mesh(self.shape))
@@ -42,6 +44,11 @@ class Body:
     def placed(self, shape, matrix):
         """Bryła po sztywnym przesunięciu / obrocie (macierz 3x4): blacha przenosi swój przepis razem z kształtem
         i dalej daje się rozkładać i zginać (zwykła zmiana kształtu - changed() - oznacza ją jako edytowaną)."""
+        if self.threads:
+            from .threads import transformed
+            m = np.eye(4)
+            m[:3, :4] = np.asarray(matrix, float)[:3, :4]
+            self = replace(self, threads=tuple(transformed(t, m) for t in self.threads))
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             from .sheetedit import placed_state
             return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
@@ -303,6 +310,8 @@ class Document:
             entry['group'] = body.group
         if body.folder:
             entry['folder'] = body.folder
+        if body.threads:
+            entry['threads'] = [dict(t) for t in body.threads]
         if body.meta:
             entry['meta'] = body.meta
         if isinstance(body.plane, Frame):
@@ -442,8 +451,9 @@ class Document:
         group = group if isinstance(group, str) and re.fullmatch('[0-9a-f]{1,40}', group) else ''
         folder = item.get('folder', '')
         folder = folder.strip()[:60] if isinstance(folder, str) else ''
+        threads = tuple(t for t in item.get('threads', ()) if isinstance(t, dict) and {'origin', 'axis', 'radius', 'start', 'end', 'pitch'} <= set(t))
         return Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)), mesh=mesh,
-                    meta=meta if isinstance(meta, dict) else None, group=group, folder=folder)
+                    meta=meta if isinstance(meta, dict) else None, group=group, folder=folder, threads=threads)
 
     @classmethod
     def load(cls, path):

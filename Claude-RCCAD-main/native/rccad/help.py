@@ -55,6 +55,12 @@ TOPICS = [
         'Wydrąża bryłę, pozostawiając ścianki o zadanej grubości, i może otworzyć wybrane ściany. Służy do pudełek, pokryw i innych części cienkościennych.',
         'Kliknij Skorupa, wskaż bryłę, a potem klikaj płaskie ściany, które mają zostać otwarte (pomarańczowe; ponowne kliknięcie cofa). Bez otwartych ścian bryła zostaje szczelnie wydrążona w środku.',
         'Wpisz grubość ścianki i wybierz kierunek: do wewnątrz (rozmiar zewnętrzny bez zmian) albo na zewnątrz. Podgląd widać na żywo, Enter zatwierdza, Esc anuluje. Gdy ścianka jest za gruba dla bryły, program pokaże komunikat.']),
+    ('t_thread', 'Gwint', 'Gwint wewnętrzny i zewnętrzny (zakładka Edycja)', [
+        'Kliknij Gwint, potem walcową ścianę: wnętrze otworu (gwint wewnętrzny) albo powierzchnię wałka (zewnętrzny) - ściana podświetla się pod kursorem. Rodzaj ustawia się sam, można go zmienić.',
+        'Rodzaje: metryczny zwykły (M), metryczny drobnozwojny (M×P), calowy UNC i UNF, rurowy calowy G (BSPP) i trapezowy Tr; kierunek prawy albo lewy (LH).',
+        'Dopasuj gwint do otworu automatycznie: rozmiar dobiera się do średnicy otworu (wiertła) albo wałka. Po wyłączeniu wybierasz rozmiar sam - jeśli otwór / wałek do niego nie pasuje, przy zatwierdzeniu zostanie rozwiercony, zwężony, pogrubiony albo ztoczony do właściwej średnicy (opis pokazuje Ø przed i po).',
+        'Długość: na całej długości albo określona (długość i odsunięcie od początku). Pomarańczowe strzałki na końcach zmieniają zakres gwintu z obu stron, niebieska strzałka promieniowa - rozmiar gwintu. Wszystko pokazuje się na bieżąco, a gwint powstaje dopiero po Zastosuj.',
+        'Gwint jest kosmetyczny, jak w programach CAD do produkcji: bryła dostaje tylko właściwą średnicę, a zwoje rysują się lekką pomarańczową linią śrubową i są zapisane w projekcie (norma, rozmiar, skok, kierunek, zakres). Dzięki temu gwinty nie spowalniają obracania, przeliczania ani eksportu. Gwint przesuwa się, obraca, kopiuje w szyku i odbija razem z bryłą (w lustrze staje się lewy).']),
     ('t_sheet', 'Konwertuj na blachę', 'Blacha: zamiana prostopadłościanu na blachę do gięcia', [
         'Zamienia prostopadłościan na blachę. Wybrana płaska ściana staje się górą blachy, a grubość to odległość od ściany przeciwnej.',
         'Najpierw zrób szkic prostokąta albo kwadratu i wyciągnij go na grubość blachy. Potem wybierz KONWERTUJ NA BLACHĘ i kliknij płaską ścianę (prostokąt albo kwadrat). Inne kształty są odrzucane.',

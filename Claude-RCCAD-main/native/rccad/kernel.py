@@ -1666,6 +1666,32 @@ def regions(plane, edges, wires=()):
     return alt if len(alt) > len(out) else out
 
 
+def transformed(shape, rotation, translation):
+    """Kształt obrócony macierzą 3x3 (bez skalowania) i przesunięty."""
+    from OCP.gp import gp_Trsf
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    r = np.asarray(rotation, float)
+    t = np.asarray(translation, float)
+    trsf = gp_Trsf()
+    trsf.SetValues(*[float(v) for v in (r[0, 0], r[0, 1], r[0, 2], t[0], r[1, 0], r[1, 1], r[1, 2], t[1], r[2, 0], r[2, 1], r[2, 2], t[2])])
+    return cq.Shape.cast(BRepBuilderAPI_Transform(shape.wrapped, trsf, True).Shape())
+
+
+def rotation_between(a, b):
+    """Najmniejszy obrót przenoszący kierunek a na kierunek b (macierz 3x3)."""
+    a = np.asarray(a, float) / max(np.linalg.norm(a), 1e-12)
+    b = np.asarray(b, float) / max(np.linalg.norm(b), 1e-12)
+    v, c = np.cross(a, b), float(a @ b)
+    if c > 1 - 1e-12:
+        return np.eye(3)
+    if c < -1 + 1e-12:
+        axis = np.cross(a, [1.0, 0, 0]) if abs(a[0]) < .9 else np.cross(a, [0, 1.0, 0])
+        axis /= np.linalg.norm(axis)
+        return 2 * np.outer(axis, axis) - np.eye(3)
+    k = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + k + k @ k / (1 + c)
+
+
 def coplanar_faces(plane, solids, tol=1e-4):
     """Płaskie ściany brył leżące w płaszczyźnie szkicu (szkic narysowany na ścianie bryły)."""
     frame = frame_of(plane)

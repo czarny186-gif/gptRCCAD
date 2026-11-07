@@ -2191,6 +2191,42 @@ class StudioTests(unittest.TestCase):
         ops,_=w._pattern_ops(a);self.assertEqual(len(ops),3*2*2-1)
         w.pat_kind.setCurrentIndex(1);w.update_pattern_preview();self.assertFalse([h for h in w.view.handles if h['id'].startswith('pat')])
 
+    # 0.4.54: gwint
+    def test_thread_tool_live_preview_arrows_and_apply(self):
+        import cadquery as cq
+        w=self.w
+        plate=cq.Workplane().box(40,40,10).faces('>Z').workplane().hole(8).val()
+        a=Body('Płyta',plate).prepared();w.document.commit([a]);w.refresh()
+        from rccad.studio import TABS;self.assertIn('thread',TABS['Edycja'])
+        w.toggle_mode('thread');self.assertTrue(w.thread_panel.isVisible())
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([4.0,0,0]))):
+            w.view_hover(5,5);self.assertTrue(w.view.preview_items)          # podświetlona ściana otworu
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.th_side.currentData(),'in')
+        self.assertEqual(w.th_size.currentData(),'M10')                       # dopasowanie do otworu Ø8 -> M10 (wiertło 8.5)
+        self.assertIn('Ø8.50',w.th_status.text())
+        self.assertIsNotNone(w.view._thread_preview)                          # podgląd od razu, bez geometrii
+        self.assertEqual(w.document.bodies[0].shape.Volume(),plate.Volume())  # nic nie policzone przed Zastosuj
+        self.assertEqual(sorted(h['id'] for h in w.view.handles),['thD','thE','thS'])
+        w.handle_dragged('thS',-3);w.handle_released('thS')
+        self.assertEqual(w.th_extent.currentData(),'len');self.assertAlmostEqual(w.th_offset.value(),3);self.assertAlmostEqual(w.th_length.value(),7)
+        w.handle_dragged('thD',1);w.handle_released('thD')
+        self.assertEqual(w.th_size.currentData(),'M12');self.assertFalse(w.th_auto.isChecked())
+        w.th_hand.setCurrentIndex(1)
+        w.apply_thread();self.wait()
+        b=w.document.bodies[0]
+        self.assertEqual((b.threads[0]['size'],b.threads[0]['hand']),('M12','left'))
+        self.assertAlmostEqual(b.threads[0]['end']-b.threads[0]['start'],7,6)
+        self.assertAlmostEqual(th_cyl_radius(b.shape),(12-1.75)/2,4)          # otwór dopasowany do M12
+        self.assertIn(a.id,w.view._thread_items)
+        infos,cur=w.document.infos();self.assertEqual(infos[-1]['op']['type'],'thread')
+        w.undo();self.wait();self.assertFalse(w.document.bodies[0].threads);self.assertNotIn(a.id,w.view._thread_items)
+
+
+
+def th_cyl_radius(shape):
+    from rccad import threads
+    return threads.cylinders(shape)[0]['radius']
 
 
 if __name__=='__main__':

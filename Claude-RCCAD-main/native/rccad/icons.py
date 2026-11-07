@@ -365,6 +365,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         else:
             p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 2.6)); p.drawRoundedRect(QRectF(4, 6, 40, 38), 3, 3)
             fill(_rounded(13, 15, 22, 20, 2), BLUE_SOFT, BLUE)
+    elif kind in ('x_thread', 'th_in', 'th_out', 'th_rh', 'th_lh', 'th_full', 'th_len'):
+        _draw_thread_icon(p, kind, pen, fill)
     elif kind == 'x_shell':
         cup = QPainterPath(); cup.moveTo(6, 8); cup.lineTo(6, 42); cup.lineTo(42, 42); cup.lineTo(42, 8); cup.lineTo(33, 8); cup.lineTo(33, 33); cup.lineTo(15, 33); cup.lineTo(15, 8); cup.closeSubpath()
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawPath(cup)
@@ -776,6 +778,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             pn = pen(ink, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawLine(QPointF(24, 4), QPointF(24, 44))
             st(acc, 3.0); p.drawArc(QRectF(5, 29, 38, 14), 200 * 16, 140 * 16)
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(42, 33), (35, 31), (40, 40)]))
+        elif name == 'thread':
+            # śruba: łeb sześciokątny i trzpień z ukośnymi zwojami
+            p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawPolygon(poly([(12, 6), (36, 6), (40, 12), (36, 18), (12, 18), (8, 12)]))
+            p.drawRect(QRectF(16, 18, 16, 25))
+            st(acc, 2.6)
+            for y in (22, 28, 34, 40):
+                p.drawLine(QPointF(16, y + 2.5), QPointF(32, y - 2.5))
         elif name == 'shell':
             cup = QPainterPath(); cup.moveTo(8, 9); cup.lineTo(8, 42); cup.lineTo(40, 42); cup.lineTo(40, 9); cup.lineTo(33, 9); cup.lineTo(33, 34); cup.lineTo(15, 34); cup.lineTo(15, 9); cup.closeSubpath()
             fl(cup, soft)
@@ -1096,3 +1105,40 @@ def badge(kind: str, color: str = BLUE, size: int = 34, plain: bool = False) -> 
     q.end()
     pm.setDevicePixelRatio(scale)
     return pm
+
+
+def _draw_thread_icon(p, kind, pen, fill):
+    """Ikony gwintu: nagłówek panelu, wewnętrzny / zewnętrzny, prawy / lewy, cała długość / określona."""
+    blue, soft, orange, ink = QColor(BLUE), QColor(BLUE_SOFT), QColor(ORANGE), QColor(INK)
+
+    def stripes(x0, x1, ys, slope, colour, width=2.4):
+        p.setPen(pen(colour, width))
+        for y in ys:
+            p.drawLine(QPointF(x0, y + slope), QPointF(x1, y - slope))
+
+    if kind in ('x_thread', 'th_out'):
+        p.setBrush(soft); p.setPen(pen(blue, 2.4)); p.drawPolygon(QPolygonF([QPointF(*q) for q in ((12, 5), (36, 5), (40, 11), (36, 17), (12, 17), (8, 11))]))
+        p.drawRect(QRectF(16, 17, 16, 27))
+        stripes(16, 32, (22, 28, 34, 40), 2.6, orange)
+    elif kind == 'th_in':
+        fill(_rounded(5, 7, 38, 36, 3), BLUE_SOFT, BLUE)
+        p.setBrush(QColor('#ffffff')); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(17, 7, 14, 36))
+        stripes(17, 31, (13, 20, 27, 34), 2.4, orange)
+    elif kind in ('th_rh', 'th_lh'):
+        p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(17, 6, 14, 36))
+        stripes(17, 31, (12, 19, 26, 33, 40), 2.6 if kind == 'th_rh' else -2.6, orange)
+        p.setPen(pen(ink, 2.2)); p.setBrush(Qt.NoBrush)
+        arc = QPainterPath()
+        rect = QRectF(5, 18, 38, 14)
+        arc.arcMoveTo(rect, 200); arc.arcTo(rect, 200, 140 if kind == 'th_rh' else -140)
+        p.drawPath(arc)
+    elif kind in ('th_full', 'th_len'):
+        p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(6, 15, 36, 18))
+        span = (6, 42) if kind == 'th_full' else (6, 26)
+        p.setPen(pen(orange, 2.4))
+        for x in range(int(span[0]) + 3, int(span[1]), 5):
+            p.drawLine(QPointF(x - 2, 33), QPointF(x + 2, 15))
+        p.setPen(pen(ink, 2.0))
+        p.drawLine(QPointF(span[0], 40), QPointF(span[1], 40))
+        for x in span:
+            p.drawLine(QPointF(x, 37), QPointF(x, 43))
