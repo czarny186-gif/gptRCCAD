@@ -180,6 +180,40 @@ def face_index_at(shape, point, tol=None):
     return None if best is None else best[1]
 
 
+def same_axis(a, b, tol=1e-3):
+    """Czy dwa opisy (gwint / walec) leżą na tej samej osi."""
+    oa, aa = np.asarray(a['origin'], float), np.asarray(a['axis'], float)
+    ob, ab = np.asarray(b['origin'], float), np.asarray(b['axis'], float)
+    if abs(abs(float(aa @ ab)) - 1) > 1e-6:
+        return False
+    d = ob - oa
+    return float(np.linalg.norm(d - aa * float(d @ aa))) <= tol
+
+
+def thread_index(threads, ref, tol=1e-3):
+    """Numer gwintu bryły odpowiadającego opisowi ref (oś, zakres) - do zamiany na prawdziwy."""
+    for i, t in enumerate(threads):
+        if same_axis(t, ref, tol) and abs(float(t['start']) - float(ref['start'])) < tol and abs(float(t['end']) - float(ref['end'])) < tol \
+                and abs(float(t['d']) - float(ref['d'])) < tol:
+            return i
+    return None
+
+
+def threads_on(threads, info):
+    """Gwinty kosmetyczne leżące na wskazanym walcu (ta sama oś, zakres zachodzi na ścianę)."""
+    out = []
+    for t in threads:
+        if not same_axis(t, info, max(1e-3, 1e-3 * info['radius'])):
+            continue
+        a = np.asarray(info['axis'], float)
+        shift = float((np.asarray(info['origin'], float) - np.asarray(t['origin'], float)) @ np.asarray(t['axis'], float))
+        sign = 1.0 if float(a @ np.asarray(t['axis'], float)) > 0 else -1.0
+        lo, hi = sorted((shift + sign * info['t0'], shift + sign * info['t1']))
+        if min(hi, float(t['end'])) - max(lo, float(t['start'])) > -1e-6 and abs(t['d'] / 2 - info['radius']) < t['d'] / 2:
+            out.append(t)
+    return out
+
+
 def find_cylinder(shape, origin, axis, radius, tol=1e-3):
     """Numer walcowej ściany o danej osi i promieniu (odtwarzanie kroku historii)."""
     origin, axis = np.asarray(origin, float), np.asarray(axis, float)
@@ -389,3 +423,33 @@ def export_job(items, path):
         shapes.append(shape)
     kernel.export_shapes(shapes, path)
     return failed
+
+
+def cut_threads(base, tool_threads):
+    """Wycięcie bryłą z gwintem zewnętrznym zostawia w wycinanej bryle otwór z gwintem wewnętrznym (ten sam rozmiar,
+    skok i kierunek) - na tej długości, na której gwint przechodzi przez bryłę. base: kształt przed wycięciem."""
+    import cadquery as cq
+    out = []
+    for t in tool_threads:
+        if t.get('internal'):
+            continue
+        axis = np.asarray(t['axis'], float)
+        origin = np.asarray(t['origin'], float)
+        start, end = float(t['start']), float(t['end'])
+        probe = cq.Solid.makeCylinder(t['d'] / 2, end - start, cq.Vector(*(origin + axis * start)), cq.Vector(*axis))
+        try:
+            common = base.intersect(probe)
+            if common.Volume() < 1e-6:
+                continue
+            ts = [float((np.array(v.toTuple()) - origin) @ axis) for v in common.Vertices()]
+            bb = common.BoundingBox()
+            corners = np.array([[x, y, z] for x in (bb.xmin, bb.xmax) for y in (bb.ymin, bb.ymax) for z in (bb.zmin, bb.zmax)])
+            ts += [] if ts else list((corners - origin) @ axis)
+        except Exception:
+            continue
+        lo, hi = max(start, min(ts)), min(end, max(ts))
+        if hi - lo <= t['pitch'] * .5:
+            continue
+        out.append(dict(t, internal=True, radius=float(t['d']) / 2, other=float(core(t['standard'], t['d'], t['pitch'], True)),
+                        start=lo, end=hi))
+    return out

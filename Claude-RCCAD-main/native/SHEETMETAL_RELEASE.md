@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.4.55 — wymiary pod Tab, nowy wielokąt, prawdziwy gwint w eksporcie
+# RCCAD Desktop 0.4.56 — biblioteka z gwintami i blachą, więcej opcji gwintu
+
+## Zmiany 0.4.56
+
+- **Biblioteka zachowuje gwinty i blachę**: obiekt z gwintem wirtualnym wraca z biblioteki z tym samym gwintem (przeniesionym na nowe miejsce), a wygięta blacha dalej jest blachą - można ją rozłożyć i zgiąć.
+- **Wielokąt**: wierzchołek przykleja się do punktu, do którego przyciągnął się kursor (kratka siatki, wierzchołek szkicu lub bryły); poza punktami - wielkość w poziomie, obrót w pionie jak dotąd.
+- **Gwint - Shift**: kilka otworów / wałków naraz, jednym krokiem (każdy z dopasowanym rozmiarem przy automatycznym dopasowaniu).
+- **Gwint - „Od razu prawdziwy gwint”** (domyślnie wyłączone): zwoje od razu w bryle.
+- **Gwint - zamiana wirtualnego na prawdziwy**: po wskazaniu otworu z gwintem wirtualnym przycisk zamienia go na taki sam prawdziwy (w tle).
+- **Wycięcie bryłą z gwintem** (np. śrubą) zostawia w wycinanej bryle gwint wewnętrzny tego samego rozmiaru na długości przejścia.
+
+## RCCAD Desktop 0.4.55 — wymiary pod Tab, nowy wielokąt, prawdziwy gwint w eksporcie
 
 ## Zmiany 0.4.55
 

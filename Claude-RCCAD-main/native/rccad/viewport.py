@@ -661,8 +661,9 @@ class CadView(gl.GLViewWidget):
         if old is not None:
             self.removeItem(old)
             self._thread_preview = None
-        if thread is not None:
-            segs = thread_lines(thread)
+        threads = [t for t in (thread if isinstance(thread, (list, tuple)) else [thread]) if t is not None]
+        if threads:
+            segs = np.concatenate([thread_lines(t) for t in threads])
             self._thread_preview = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=(.35, .68, 1.0, 1), width=2.2, antialias=True, mode='lines')
             self.addItem(self._thread_preview)
         self.update()

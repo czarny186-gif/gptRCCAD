@@ -1280,6 +1280,11 @@ def run_bool(bodies, recipe):
     base = _body(bodies, recipe['base'])
     tools = [_body(bodies, i) for i in recipe['tools']]
     result = base.changed(kernel.boolean(recipe['op'], base.shape, [t.shape for t in tools]))
+    if recipe['op'] == 'subtract' and any(t.threads for t in tools):
+        from . import threads as th        # wycięcie bryłą z gwintem: w otworze zostaje gwint wewnętrzny
+        made = th.cut_threads(base.shape, [g for t in tools for g in t.threads])
+        if made:
+            result = replace(result, threads=(*result.threads, *made))
     gone = set(recipe['tools'])
     out = [result if b.id == base.id else b for b in bodies if recipe.get('keep') or b.id not in gone]
     return split_parts(out, {base.id}) if recipe['op'] != 'union' else out
@@ -1402,23 +1407,43 @@ def run_rename(bodies, recipe):
 
 
 def run_thread(bodies, recipe):
-    """Gwint kosmetyczny na walcu bryły: opcjonalnie otwór / wałek na właściwą średnicę, opis gwintu przy bryle."""
+    """Gwinty na walcach brył (jeden albo kilka naraz - items): opcjonalnie otwór / wałek na właściwą średnicę;
+    gwint kosmetyczny (opis przy bryle) albo od razu prawdziwe zwoje (real)."""
+    from . import threads as th
+    out = list(bodies)
+    for item in recipe.get('items') or [recipe]:
+        body = _body(out, item['id'])
+        c = item['cylinder']
+        info = th.find_cylinder(body.shape, c['origin'], c['axis'], c['radius'])
+        if info is None:
+            raise kernel.CadError('Nie znaleziono otworu / wałka pod gwint.')
+        info['internal'] = bool(c.get('internal', info['internal']))
+        spec = item['spec']
+        _, d, pitch = th.size(spec['standard'], spec['size'])
+        shape = body.shape
+        want = th.bore(spec['standard'], d, pitch, info['internal'])
+        if item.get('adjust') and abs(want - 2 * info['radius']) > 1e-3:
+            shape = th.set_diameter(shape, info, want)
+        thread = th.make_thread(info, spec['standard'], spec['size'], spec.get('hand', 'right'), spec['start'], spec['end'])
+        if recipe.get('real'):
+            out = _replace(out, body.changed(th.real_shape(shape, [thread])))       # od razu prawdziwe zwoje
+        else:
+            new = body.changed(shape) if shape is not body.shape else body
+            out = _replace(out, replace(new, threads=(*body.threads, thread)))
+    return out
+
+
+def run_thread_real(bodies, recipe):
+    """Gwint kosmetyczny zamieniony na prawdziwe zwoje (ten sam rozmiar, zakres i kierunek)."""
     from . import threads as th
     body = _body(bodies, recipe['id'])
-    c = recipe['cylinder']
-    info = th.find_cylinder(body.shape, c['origin'], c['axis'], c['radius'])
-    if info is None:
-        raise kernel.CadError('Nie znaleziono otworu / wałka pod gwint.')
-    info['internal'] = bool(c.get('internal', info['internal']))
-    spec = recipe['spec']
-    _, d, pitch = th.size(spec['standard'], spec['size'])
-    shape = body.shape
-    want = th.bore(spec['standard'], d, pitch, info['internal'])
-    if recipe.get('adjust') and abs(want - 2 * info['radius']) > 1e-3:
-        shape = th.set_diameter(shape, info, want)
-    thread = th.make_thread(info, spec['standard'], spec['size'], spec.get('hand', 'right'), spec['start'], spec['end'])
-    new = body.changed(shape) if shape is not body.shape else body
-    return _replace(bodies, replace(new, threads=(*body.threads, thread)))
+    index = th.thread_index(body.threads, recipe['thread'])
+    if index is None:
+        raise kernel.CadError('Ta bryła nie ma już tego gwintu.')
+    thread = body.threads[index]
+    shape = th.real_shape(body.shape, [thread])
+    rest = tuple(t for k, t in enumerate(body.threads) if k != index)
+    return _replace(bodies, replace(body.changed(shape), threads=rest))
 
 
 def run_folder(bodies, recipe):
@@ -1499,7 +1524,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1614,6 +1639,8 @@ def reads(recipe, current):
     if kind in ('delete', 'folder'):
         return set(recipe['ids'])
     if kind == 'thread':
+        return {item['id'] for item in recipe.get('items') or [recipe]}
+    if kind == 'thread_real':
         return {recipe['id']}
     if kind == 'trim':
         return {recipe['id']} | sketches

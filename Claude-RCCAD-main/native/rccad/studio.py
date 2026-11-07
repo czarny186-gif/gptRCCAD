@@ -40,7 +40,7 @@ HINTS = {
     'ellipse': ['Kliknij środek elipsy.', 'Kliknij narożnik opisanego prostokąta.'],
     'slot': ['Kliknij środek pierwszego końca.', 'Kliknij środek drugiego końca.', 'Kliknij punkt określający szerokość.'],
     'polygon': ['Kliknij środek wielokąta (liczbę kątów ustawisz strzałką przy wielokącie na pasku).',
-                'Ruch w prawo / w lewo - wielkość, w górę / w dół - obrót · kliknij, aby zatwierdzić · Tab - wpisz wymiary'],
+                'W prawo / w lewo - wielkość, w górę / w dół - obrót; przy punkcie wierzchołek się przykleja · klik zatwierdza · Tab - wymiary'],
     'arc': ['Kliknij początek łuku.', 'Kliknij punkt na łuku.', 'Kliknij koniec łuku.'],
     'point': ['Kliknij miejsce punktu.'],
     'construction': ['Kliknij początek linii konstrukcyjnej.', 'Kliknij koniec.'],
@@ -1063,6 +1063,7 @@ class StudioWindow(QMainWindow):
         # --- gwint ---
         from . import threads as th
         self.th_pick = None             # wybrany walec: id bryły i opis (oś, promień, zakres, otwór / wałek)
+        self.th_extra = []              # kolejne walce dodane z Shift (ten sam gwint na kilku otworach naraz)
         self.thread_panel, lay = self._panel(330, 'Gwint', 'x_thread', 'Otwór lub wałek · szybki gwint kosmetyczny', plain=True, scroll=True)
         self.th_step1 = ui.StepRow(1, 'x_object', 'Otwór albo wałek', plain=True)
         lay.addWidget(self.th_step1)
@@ -1100,7 +1101,17 @@ class StudioWindow(QMainWindow):
         self.th_offset.setToolTip('Odsunięcie początku gwintu od końca otworu / wałka.')
         self._field(box, 'Odsunięcie od początku (mm)', self.th_offset)
         lay.addWidget(self.th_len_box)
-        self.th_status = _label('Kliknij otwór albo wałek (walcową ścianę bryły).', 'status')
+        self.th_real = QCheckBox('Od razu prawdziwy gwint (zwoje w bryle)')
+        self.th_real.setChecked(False)
+        self.th_real.setToolTip('Zamiast lekkiego gwintu kosmetycznego od razu tworzy prawdziwe zwoje w modelu - '
+                                'wolniej i cięższy model; gwint kosmetyczny i tak zamienia się w prawdziwy przy eksporcie STL / STEP.')
+        lay.addWidget(self.th_real)
+        self.th_convert = QPushButton('Zamień wirtualny gwint na prawdziwy')
+        self.th_convert.setToolTip('Wskazany otwór / wałek ma gwint kosmetyczny - zamień go na taki sam, ale prawdziwy (zwoje w bryle).')
+        self.th_convert.clicked.connect(lambda _=False: self.convert_thread())
+        self.th_convert.hide()
+        lay.addWidget(self.th_convert)
+        self.th_status = _label('Kliknij otwór albo wałek (walcową ścianę bryły). Shift + klik dodaje kolejne.', 'status')
         lay.addWidget(self.th_status)
         self._buttons(self.thread_panel.footer, 'Zastosuj', 'Zamknij', self.apply_thread, lambda: self.set_mode(None))
         self.th_standard.currentIndexChanged.connect(lambda *_: self._th_standard_changed())
@@ -1973,6 +1984,7 @@ class StudioWindow(QMainWindow):
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
+            self.th_extra = []
             self._th_update()
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Gwint: kliknij otwór albo wałek. Strzałki w widoku ustawiają długość i rozmiar; gwint powstaje po Zastosuj.')
@@ -2519,17 +2531,24 @@ class StudioWindow(QMainWindow):
         if not self.points or self.dim_panel.isVisible():
             return          # wartości wpisane z klawiatury mają pierwszeństwo przed kursorem
         if self.tool == 'polygon' and len(self.points) == 1:
-            end = self._polygon_end()
+            end = self._polygon_end((u, v))
             if end is not None:
                 u, v = end
         pts = [*self.points, (u, v)]
         self._show_sketch_preview(pts)
         self.show_dimension(pts)
 
-    def _polygon_end(self):
+    def _polygon_end(self, snapped=None):
         """Wielokąt: ruch kursora w prawo / w lewo od środka ustala wielkość, w górę / w dół - obrót na płaszczyźnie.
-        Zwraca punkt pierwszego wierzchołka (u, v)."""
+        Gdy kursor przyciągnął się do punktu (kratka siatki, wierzchołek, punkt szkicu lub bryły), wierzchołek wielokąta
+        przykleja się do tego punktu. Zwraca punkt pierwszego wierzchołka (u, v)."""
         center = self.points[0]
+        if snapped is not None and self.view.snap_label:
+            du, dv = snapped[0] - center[0], snapped[1] - center[1]
+            if math.hypot(du, dv) > 1e-6:
+                self._poly_end = (float(snapped[0]), float(snapped[1]))
+                self._poly_angle = round(math.degrees(math.atan2(dv, du)) - 90, 2)
+                return self._poly_end
         xy = self.view.project_one(kernel.to_world(self.sketch_plane, *center))
         if xy is None:
             return None
@@ -2620,7 +2639,7 @@ class StudioWindow(QMainWindow):
             self.show_sketch_hint()
             return
         if t == 'polygon' and len(self.points) == 1:
-            end = self._polygon_end()
+            end = self._polygon_end((u, v))
             if end is not None:
                 u, v = end
         self.points.append((u, v))
@@ -3322,7 +3341,7 @@ class StudioWindow(QMainWindow):
         elif self.mode == 'loft':
             self.pick_loft(x, y)
         elif self.mode == 'thread':
-            self.pick_thread(x, y)
+            self.pick_thread(x, y, shift)
         elif self.mode == 'shell':
             self.pick_shell(x, y)
         elif self.mode == 'sheet':
@@ -6402,12 +6421,15 @@ class StudioWindow(QMainWindow):
             self._th_auto_set = False
         self._th_update()
 
-    def _th_spec(self):
-        """Bieżące ustawienia gwintu (bez liczenia geometrii): opis gwintu, docelowa średnica, czy otwór się zmieni."""
+    def _th_spec(self, pick=None):
+        """Bieżące ustawienia gwintu (bez liczenia geometrii): opis gwintu, docelowa średnica, czy otwór się zmieni.
+        pick: inny wybrany walec (Shift) - ten sam gwint, przy automatycznym dopasowaniu rozmiar dobrany do niego."""
         from . import threads as th
-        if self.th_pick is None or self.th_size.currentData() is None:
+        primary = pick is None
+        pick = pick or self.th_pick
+        if pick is None or self.th_size.currentData() is None:
             return None
-        info = dict(self.th_pick['info'], internal=self._th_internal())
+        info = dict(pick['info'], internal=self._th_internal() if primary else pick['info']['internal'])
         t0, t1 = info['t0'], info['t1']
         if self.th_extent.currentData() == 'full':
             start, end = t0, t1
@@ -6415,6 +6437,8 @@ class StudioWindow(QMainWindow):
             start = min(t0 + self.th_offset.value(), t1 - .1)
             end = min(start + self.th_length.value(), t1)
         standard, name = self.th_standard.currentData(), self.th_size.currentData()
+        if not primary and self.th_auto.isChecked():
+            name = th.fit(standard, 2 * info['radius'], info['internal'])[0]
         thread = th.make_thread(info, standard, name, self.th_hand.currentData(), start, end)
         _, d, pitch = th.size(standard, name)
         want = th.bore(standard, d, pitch, info['internal'])
@@ -6438,6 +6462,7 @@ class StudioWindow(QMainWindow):
                 _, d, pitch = th.size(standard, name)
                 self.th_info.setText(f'{name} · skok {pitch:.3g} mm · otwór Ø{th.drill(standard, d, pitch):g} · wałek Ø{d:g}')
             self.view.set_thread_preview(None)
+            self.th_convert.hide()
             if self.mode == 'thread':
                 self.view.set_handles([])
             return
@@ -6452,7 +6477,15 @@ class StudioWindow(QMainWindow):
             self.th_status.setText(f"{kind.capitalize()} zostanie dopasowany do gwintu: Ø{2 * info['radius']:.2f} → Ø{spec['want']:.2f} (po Zastosuj).")
         else:
             self.th_status.setText(f'Gwint {th.label(thread)} pasuje do {"otworu" if info["internal"] else "wałka"}. Zastosuj tworzy gwint.')
-        self.view.set_thread_preview(thread)
+        extra = [x for x in (self._th_spec(p) for p in self.th_extra) if x is not None]
+        self.view.set_thread_preview([thread, *[x['thread'] for x in extra]])
+        if extra:
+            self.th_status.setText(f'Gwinty na {1 + len(extra)} otworach / wałkach · ' + self.th_status.text())
+        body = self.document.get(self.th_pick['id'])
+        existing = th.threads_on(body.threads, self.th_pick['info']) if body is not None else []
+        self.th_convert.setVisible(bool(existing))
+        if existing:
+            self.th_convert.setText(f'Zamień wirtualny gwint {th.label(existing[0])} na prawdziwy')
         if self._hv is None:
             self._th_handles(spec)
 
@@ -6535,12 +6568,22 @@ class StudioWindow(QMainWindow):
             face = found[0].shape.Faces()[found[1]['index']] if found else None
             self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, color=(1, .55, .1, .30), line_color=SKETCH_ORANGE, width=2)
 
-    def pick_thread(self, x, y):
+    def pick_thread(self, x, y, shift=False):
         found = self._th_face(x, y)
         if found is None:
             self.th_status.setText('Kliknij walcową ścianę: wnętrze otworu albo powierzchnię wałka.')
             return
         body, info = found
+        same = lambda p: p['id'] == body.id and p['info']['index'] == info['index']
+        if shift and self.th_pick is not None:
+            if same(self.th_pick) or any(same(p) for p in self.th_extra):     # Shift na wybranym: usuń z wyboru
+                picks = [p for p in (*self.th_extra, self.th_pick) if not same(p)]
+                self.th_extra, self.th_pick = picks[:-1], (picks[-1] if picks else None)
+                self._th_update()
+                return
+            self.th_extra.append(self.th_pick)
+        else:
+            self.th_extra = []
         self.th_pick = dict(id=body.id, info=info)
         self._hover_key = None
         self.view.set_preview_mesh(None)
@@ -6563,10 +6606,17 @@ class StudioWindow(QMainWindow):
             self.toast('Gwint wymaga pełnego otworu albo wałka.')
             return
         info, thread = spec['info'], spec['thread']
-        recipe = dict(type='thread', id=self.th_pick['id'],
-                      cylinder=dict(origin=info['origin'], axis=info['axis'], radius=info['radius'], internal=info['internal']),
-                      spec=dict(standard=thread['standard'], size=thread['size'], hand=thread['hand'], start=thread['start'], end=thread['end']),
-                      adjust=bool(spec['change']))
+
+        def item(pick, spec):
+            info, thread = spec['info'], spec['thread']
+            return dict(id=pick['id'], cylinder=dict(origin=info['origin'], axis=info['axis'], radius=info['radius'], internal=info['internal']),
+                        spec=dict(standard=thread['standard'], size=thread['size'], hand=thread['hand'], start=thread['start'], end=thread['end']),
+                        adjust=bool(spec['change']))
+
+        items = [item(p, self._th_spec(p)) for p in self.th_extra] + [item(self.th_pick, spec)]
+        recipe = dict(type='thread', items=items)
+        if self.th_real.isChecked():
+            recipe['real'] = True
         existing = list(self.document.bodies)
 
         def build():
@@ -6574,14 +6624,43 @@ class StudioWindow(QMainWindow):
 
         def done(bodies):
             self.document.pending_op = recipe
-            self.document.pending_label, self.document.pending_icon = f'Gwint {th.label(thread)}', 'thread'
+            many = f' ×{len(items)}' if len(items) > 1 else ''
+            self.document.pending_label, self.document.pending_icon = f'Gwint {th.label(thread)}{many}' + (' (prawdziwy)' if recipe.get('real') else ''), 'thread'
             self.document.commit(bodies)
             self.th_pick = None
+            self.th_extra = []
             self.view.set_thread_preview(None)
             self.view.set_handles([])
             self.th_status.setText(f'Dodano gwint {th.label(thread)}. Kliknij kolejny otwór albo wałek.')
 
         self.run_operation(f'Gwint {th.label(thread)}', build, done)
+
+    def convert_thread(self):
+        """Gwint kosmetyczny wskazanego otworu / wałka zamieniony na taki sam, ale prawdziwy (zwoje w bryle) - w tle."""
+        from . import threads as th
+        if self.th_pick is None:
+            return
+        body = self.document.get(self.th_pick['id'])
+        existing = th.threads_on(body.threads, self.th_pick['info']) if body is not None else []
+        if not existing:
+            self.toast('Ten otwór / wałek nie ma gwintu wirtualnego.')
+            return
+        thread = existing[0]
+        recipe = dict(type='thread_real', id=body.id, thread=dict(origin=thread['origin'], axis=thread['axis'], start=thread['start'],
+                                                                 end=thread['end'], d=thread['d']))
+        existing_bodies = list(self.document.bodies)
+
+        def done(bodies):
+            self.document.pending_op = recipe
+            self.document.pending_label, self.document.pending_icon = f'Gwint {th.label(thread)} → prawdziwy', 'thread'
+            self.document.commit(bodies)
+            self.th_pick = None
+            self.th_extra = []
+            self.view.set_thread_preview(None)
+            self.view.set_handles([])
+            self.th_status.setText(f'Gwint {th.label(thread)} zamieniony na prawdziwy.')
+
+        self.run_operation(f'Prawdziwy gwint {th.label(thread)}', lambda: hist.offloaded(hist.run_thread_real, existing_bodies, recipe), done)
 
     PAT_COLORS = {'X': (.87, .30, .32, 1), 'Y': (.20, .64, .45, 1), 'Z': (.27, .54, .89, 1)}
 
@@ -8575,7 +8654,13 @@ class StudioWindow(QMainWindow):
                                      tuple(float(c) for c in rotation @ np.asarray(frame.xdir, float)),
                                      tuple(float(c) for c in rotation @ np.asarray(frame.normal, float)))
             group = groups.setdefault(b.group, uuid.uuid4().hex) if b.group else ''
-            made.append(Body(b.name, kernel.transformed(b.shape, rotation, translation), b.kind, plane, group=group, meta=None))
+            shape = kernel.transformed(b.shape, rotation, translation)
+            if b.kind == 'sketch':
+                made.append(Body(b.name, shape, b.kind, plane, group=group, meta=b.meta))
+            else:
+                # bryła przenosi swoje dane: gwinty kosmetyczne i przepis blachy (dalej daje się rozkładać i zginać)
+                matrix = np.column_stack([rotation, translation])
+                made.append(replace(b, id=uuid.uuid4().hex, group=group, mesh=None).placed(shape, matrix))
         folder = action['name'] if len(made) > 1 else ''
         made = [replace(b, folder=folder) for b in made]
 

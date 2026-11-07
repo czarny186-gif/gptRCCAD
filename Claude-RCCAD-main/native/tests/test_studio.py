@@ -2266,6 +2266,12 @@ class StudioTests(unittest.TestCase):
         sk=w.document.bodies[-1];self.assertEqual(len(sk.shape.Edges()),5)
         v=[p.toTuple() for p in sk.shape.Vertices()]
         self.assertTrue(any(abs(math.degrees(math.atan2(y,x))-120)<1e-3 for x,y,_ in v))   # 90° + 30°
+        w.sketch_clicked('XY',50,0)
+        w.view.snap_label='Siatka'                                           # kursor przyciągnięty do kratki / punktu
+        w.sketch_moved('XY',60,0);self.assertEqual(w._poly_end,(60.0,0.0))   # wierzchołek przyklejony do punktu
+        w.sketch_clicked('XY',60,0);self.wait();w.view.snap_label=None
+        vs=[p.toTuple() for p in w.document.bodies[-1].shape.Vertices()]
+        self.assertTrue(any(abs(x-60)<1e-6 and abs(y)<1e-6 for x,y,_ in vs))
         w._sides_menu(w.shape_buttons['polygon'])
         from PySide6.QtWidgets import QSpinBox
         spin=w._popup.findChild(QSpinBox);spin.setValue(8);self.assertEqual(w.sides,8);w._popup.close()
@@ -2303,6 +2309,77 @@ class StudioTests(unittest.TestCase):
             back=k.import_shapes(Path(path))[0][0]
             self.assertGreater(len(back.Faces()),len(shaft.Faces())+4)            # prawdziwe zwoje w pliku
             self.assertTrue(back.isValid())
+
+    # 0.4.56: biblioteka zachowuje gwinty i blachę
+    def test_library_keeps_threads_and_bent_sheet(self):
+        import tempfile,cadquery as cq
+        from pathlib import Path
+        from rccad import library,threads
+        w=self.w;body=self.converted_sheet();w.apply_flange();self.wait()
+        plate=cq.Workplane().box(30,30,8).translate((0,0,-60)).faces('>Z').workplane().hole(8.5).val()
+        info=threads.cylinder_info(plate,[i for i,f in enumerate(plate.Faces()) if f.geomType()=='CYLINDER'][0])
+        nut=Body('Nakrętka',plate,threads=(threads.make_thread(info,'M','M10','right',info['t0'],info['t1']),)).prepared()
+        w.document.commit([*w.document.bodies,nut]);w.refresh()
+        with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,{'RCCAD_CONFIG_DIR':d}):
+            dialog=w.open_library('object')
+            for src,target in ((w.document.get(body.id),(200.0,0.0,0.0)),(nut,(0.0,200.0,0.0))):
+                dialog.take_from_workspace()
+                with patch.object(w,'pick_object',return_value=src.id):w.view_clicked(5,5,False,False)
+                path=max((p for p in library.entries('object',dialog.folder) if p.is_file()),key=lambda p:p.stat().st_mtime_ns)
+                for i in range(dialog.view.count()):
+                    it=dialog.view.item(i);it.setSelected(Path(it.data(Qt.UserRole))==path)
+                dialog.place_selected();self.wait()
+                with patch.object(w,'_library_target',return_value=(np.array(target),np.array([0.0,0,1]),'Siatka')):w.view_clicked(5,5,False,False)
+                self.wait()
+            dialog.close()
+        sheet2,nut2=w.document.bodies[-2],w.document.bodies[-1]
+        self.assertTrue(sheet2.meta and sheet2.meta.get('sheet'))                      # dalej blacha
+        self.assertEqual(nut2.threads[0]['size'],'M10')                                # gwint zachowany
+        bb=nut2.shape.BoundingBox();self.assertAlmostEqual(nut2.threads[0]['origin'][1],(bb.ymin+bb.ymax)/2,4)   # i przeniesiony z bryłą
+        w.set_mode(None);w.selected=[sheet2.id];w.tools['unfold_sheet'].click();self.wait()
+        self.assertTrue(w._sheet_state(sheet2.id)['flat'])                            # da się rozłożyć
+
+    def test_thread_shift_multi_real_option_and_convert(self):
+        import cadquery as cq
+        w=self.w
+        plate=cq.Workplane().box(80,30,10).faces('>Z').workplane().pushPoints([(-15,0),(15,0),(30,0)]).hole(8.5).val()
+        a=Body('Płyta',plate).prepared();w.document.commit([a]);w.refresh()
+        w.toggle_mode('thread');self.assertFalse(w.th_real.isChecked())          # prawdziwy gwint domyślnie wyłączony
+        for x,shift in ((-15+4.25,False),(15+4.25,True)):
+            with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([x,0,0]))):
+                w.view_clicked(5,5,shift,False)
+        self.assertEqual(len(w.th_extra),1)
+        self.assertIn('2 otworach',w.th_status.text())
+        w.apply_thread();self.wait()
+        b=w.document.bodies[0];self.assertEqual(len(b.threads),2)                # dwa gwinty jednym krokiem
+        self.assertEqual({t['size'] for t in b.threads},{'M10'})
+        faces=len(b.shape.Faces())
+        # wskazanie otworu z gwintem wirtualnym: przycisk zamiany na prawdziwy
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([-15+4.25,0,0]))):
+            w.view_clicked(5,5,False,False)
+        self.assertTrue(w.th_convert.isVisibleTo(w.thread_panel))
+        w.convert_thread();self.wait()
+        b=w.document.bodies[0];self.assertEqual(len(b.threads),1)                # jeden został wirtualny
+        self.assertGreater(len(b.shape.Faces()),faces)                            # drugi to prawdziwe zwoje
+        self.assertEqual(w.document.infos()[0][-1]['op']['type'],'thread_real')
+        # opcja „od razu prawdziwy” (trzeci, jeszcze pusty otwór)
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([30+4.25,0,0]))):
+            w.view_clicked(5,5,False,False)
+        w.th_real.setChecked(True);before=len(w.document.bodies[0].threads);faces=len(w.document.bodies[0].shape.Faces())
+        w.apply_thread();self.wait()
+        self.assertEqual(len(w.document.bodies[0].threads),before);self.assertGreater(len(w.document.bodies[0].shape.Faces()),faces)
+
+    def test_cutting_with_threaded_bolt_leaves_internal_thread(self):
+        import cadquery as cq
+        from rccad import threads
+        shaft=cq.Workplane().cylinder(40,5).val()
+        info=threads.cylinder_info(shaft,[i for i,f in enumerate(shaft.Faces()) if f.geomType()=='CYLINDER'][0])
+        bolt=Body('Śruba',shaft,threads=(threads.make_thread(info,'M','M10','right',info['t0'],info['t1']),)).prepared()
+        plate=Body('Płyta',cq.Workplane().box(30,30,8).val()).prepared()
+        out=hist.run_bool([plate,bolt],dict(type='bool',op='subtract',base=plate.id,tools=[bolt.id],keep=True))
+        t=out[0].threads[0]
+        self.assertTrue(t['internal']);self.assertEqual(t['size'],'M10');self.assertAlmostEqual(t['end']-t['start'],8,6)
+        real=threads.real_shape(out[0].shape,[t]);self.assertTrue(real.isValid());self.assertGreater(real.Volume(),out[0].shape.Volume())
 
 
 
