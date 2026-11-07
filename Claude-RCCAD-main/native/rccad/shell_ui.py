@@ -359,11 +359,49 @@ class Segmented(QFrame):
             self.currentIndexChanged.emit(index)
 
 
-class RichMenu(QFrame):
+class PopupFrame(QFrame):
+    """Okienko wyskakujące przy strzałce (anchor). Kliknięcie tej samej strzałki przy otwartym okienku tylko je chowa:
+    naciśnięcie, które zamyka okienko, nie trafia już do strzałki (inaczej okienko zamykało się i od razu otwierało ponownie)."""
+
+    def __init__(self, parent):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.anchor = None
+        self.closed_by_anchor = False
+
+    def _over_anchor(self, global_pos):
+        a = self.anchor
+        try:
+            return a is not None and a.isVisible() and a.rect().contains(a.mapFromGlobal(global_pos))
+        except RuntimeError:
+            return False
+
+    def mousePressEvent(self, event):
+        pos = event.position().toPoint()
+        card = getattr(self, 'card', None)
+        outside = not (card.geometry() if card is not None else self.rect()).contains(pos)   # przezroczysty margines cienia = poza okienkiem
+        if outside and self._over_anchor(event.globalPosition().toPoint()):
+            self.closed_by_anchor = True
+            self.setAttribute(Qt.WA_NoMouseReplay, True)
+            self.close()
+            event.accept()
+            return
+        if outside and self.rect().contains(pos):
+            self.close()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def hideEvent(self, event):
+        import time
+        self.closed_at = time.monotonic()
+        super().hideEvent(event)
+
+
+class RichMenu(PopupFrame):
     """Graficzne menu: kafelek z ikoną + tytuł + opis w każdym wierszu, nagłówek i separatory (plik, warianty kształtów)."""
 
     def __init__(self, parent, entries, title='', min_width=300):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        super().__init__(parent)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(*MENU_MARGIN)
@@ -424,6 +462,111 @@ class RichMenu(QFrame):
         self.adjustSize()
         self.move(global_pos - QPoint(MENU_MARGIN[0], MENU_MARGIN[1]))
         self.show()
+
+
+class PolygonGlyph(QWidget):
+    """Grafika wielokąta foremnego o zadanej liczbie kątów (podgląd w okienku liczby kątów)."""
+
+    def __init__(self, sides=6, size=112):
+        super().__init__()
+        self.sides = sides
+        self.setFixedSize(size, size)
+
+    def set_sides(self, sides):
+        self.sides = sides
+        self.update()
+
+    def paintEvent(self, event):
+        import math
+        from PySide6.QtGui import QPen, QPolygonF
+        from PySide6.QtCore import QPointF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        c, r = w / 2, w / 2 - 12
+        p.setPen(QPen(QColor('#d5e3f0'), 1, Qt.DashLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(c, c), r, r)
+        n = max(3, int(self.sides))
+        pts = [QPointF(c + r * math.cos(math.pi / 2 + 2 * math.pi * i / n), c - r * math.sin(math.pi / 2 + 2 * math.pi * i / n)) for i in range(n)]
+        p.setPen(QPen(QColor(icons.INK), 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(QColor('#dcecfb'))
+        p.drawPolygon(QPolygonF(pts))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(icons.BLUE))
+        dot = 3.2 if n <= 24 else 2.0
+        for q in pts[1:]:
+            p.drawEllipse(q, dot, dot)
+        p.setBrush(QColor(icons.ORANGE))
+        p.drawEllipse(pts[0], dot + 1.6, dot + 1.6)        # pierwszy wierzchołek = kliknięty punkt
+        p.setPen(QColor(icons.INK))
+        f = p.font()
+        f.setPixelSize(22)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(self.rect(), Qt.AlignCenter, str(n))
+        p.end()
+
+
+class SidesPopup(PopupFrame):
+    """Okienko liczby kątów wielokąta: grafika + pole do wpisania (3-64). Wartość działa od razu, Enter zamyka."""
+
+    def __init__(self, parent, sides, on_change, low=3, high=64):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QLineEdit
+        from PySide6.QtGui import QIntValidator
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.low, self.high, self.on_change = low, high, on_change
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(*MENU_MARGIN)
+        self.card = QFrame()
+        self.card.setObjectName('rich')
+        outer.addWidget(self.card)
+        lay = QVBoxLayout(self.card)
+        lay.setContentsMargins(14, 10, 14, 14)
+        lay.setSpacing(8)
+        head = QLabel('LICZBA KĄTÓW')
+        head.setObjectName('richhead')
+        lay.addWidget(head)
+        self.glyph = PolygonGlyph(sides)
+        lay.addWidget(self.glyph, 0, Qt.AlignHCenter)
+        self.edit = QLineEdit(str(int(sides)))
+        self.edit.setObjectName('sidesEdit')
+        self.edit.setValidator(QIntValidator(0, 999, self.edit))
+        self.edit.setAlignment(Qt.AlignCenter)
+        self.edit.setFixedSize(150, 38)
+        self.edit.setStyleSheet('QLineEdit#sidesEdit{font-size:18px;font-weight:700;color:#0969d9;background:#f6faff;'
+                                'border:1px solid #9ab5d0;border-radius:9px;padding:0 8px;}'
+                                'QLineEdit#sidesEdit:focus{border:2px solid #2f87e8;background:#ffffff;}')
+        self.edit.textEdited.connect(self._edited)
+        self.edit.returnPressed.connect(self.close)
+        lay.addWidget(self.edit, 0, Qt.AlignHCenter)
+        hint = QLabel(f'Wpisz {low}–{high} · Enter zamyka')
+        hint.setObjectName('richhint')
+        hint.setAlignment(Qt.AlignCenter)
+        lay.addWidget(hint)
+        shadow(self.card, 24, 6, 60)
+
+    def value(self):
+        try:
+            n = int(self.edit.text())
+        except ValueError:
+            return None
+        return n if self.low <= n <= self.high else None
+
+    def _edited(self, _text):
+        n = self.value()
+        self.edit.setProperty('bad', n is None)
+        if n is not None:
+            self.glyph.set_sides(n)
+            self.on_change(n)
+
+    def popup_at(self, global_pos):
+        self.adjustSize()
+        self.move(global_pos - QPoint(MENU_MARGIN[0], MENU_MARGIN[1]))
+        self.show()
+        self.edit.setFocus()
+        self.edit.selectAll()
 
 
 class StepRow(QFrame):

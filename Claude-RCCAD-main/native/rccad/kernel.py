@@ -1104,6 +1104,26 @@ def _fast_triangles(shape):
     return points[first].astype(np.float32), inverse.reshape(-1, 3).astype(np.uint32)
 
 
+def edge_points(edge, length=None):
+    """Punkty linii krawędzi do wyświetlania. Długie krzywe (np. linie śrubowe gwintu) próbkowane wg ugięcia, nie stałą liczbą punktów
+    - inaczej cięciwy przecinały bryłę i wyglądały jak siatka trójkątów."""
+    if edge.geomType() == "LINE":
+        points = edge.positions([0.0, 1.0])
+        return np.asarray([p.toTuple() for p in points], dtype=np.float32)
+    length = edge.Length() if length is None else length
+    count = min(96, max(16, int(length / 1.0)))
+    if edge.geomType() not in ("CIRCLE", "ELLIPSE"):
+        try:
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GCPnts import GCPnts_TangentialDeflection
+            sampler = GCPnts_TangentialDeflection(BRepAdaptor_Curve(edge.wrapped), .12, min(.02, max(length, 1e-3) * .002), 16)
+            count = max(count, min(20000, sampler.NbPoints()))     # tyle punktów, ile potrzeba wg krzywizny - równo rozłożonych
+        except Exception:
+            count = max(count, min(4000, int(length / .5)))
+    points = edge.positions(np.linspace(0, 1, count))
+    return np.asarray([p.toTuple() for p in points], dtype=np.float32)
+
+
 def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
     """Siatka do wyświetlania. angular domyślnie: dokładna dla zwykłej tolerancji, rzadsza dla podglądów (tolerancja >= .25).
     coarse=True: zgrubna siatka (fine=False) - pokazana od razu, dokładna przychodzi później."""
@@ -1142,9 +1162,7 @@ def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
         length = edge.Length()
         if length < 1e-6:
             continue
-        count = 2 if edge.geomType() == "LINE" else min(96, max(16, int(length / 1.0)))
-        points = edge.positions(np.linspace(0, 1, count))
-        edges[i] = np.asarray([p.toTuple() for p in points], dtype=np.float32)
+        edges[i] = edge_points(edge, length)
     box_bounds = bounds(shape)
     return DisplayMesh(vertices, triangles, edges, box_bounds.center.toTuple(), max(box_bounds.xlen, box_bounds.ylen, box_bounds.zlen, 1),
                        fine=not coarse)

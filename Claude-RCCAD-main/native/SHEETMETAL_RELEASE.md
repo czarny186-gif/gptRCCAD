@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.56 — biblioteka z gwintami i blachą, więcej opcji gwintu
+# RCCAD Desktop 0.4.57 — czysty gwint po imporcie, okienko liczby kątów
+
+## Zmiany 0.4.57
+
+- **Gwint po eksporcie i imporcie STEP**: długie krawędzie śrubowe (np. gwint 50 mm) rysowały się zbyt małą liczbą punktów - ich cięciwy przecinały bryłę i wyglądały jak mieszanka linii i siatki trójkątów (w otworze wyciętym wzdłuż gwintu, w sześcianie wyciętym kształtem gwintu). Teraz krawędzie są próbkowane wg ugięcia i leżą dokładnie na zwojach. Sama geometria była poprawna.
+- **Linie gwintu nie zostają**: podgląd gwintu znika po wyjściu z narzędzia Gwint (Esc, inne narzędzie), po usunięciu albo ukryciu wskazanego walca i po wyczyszczeniu pola roboczego.
+- **Liczba kątów wielokąta**: nowe okienko z grafiką wielokąta i polem do wpisania (3–64), bez strzałek pola liczbowego.
+- **Strzałki przy kształtach**: ponowne kliknięcie strzałki przy wielokącie, prostokącie i okręgu chowa okienko (wcześniej zamykało się i od razu otwierało).
+
+## RCCAD Desktop 0.4.56 — biblioteka z gwintami i blachą, więcej opcji gwintu
 
 ## Zmiany 0.4.56
 

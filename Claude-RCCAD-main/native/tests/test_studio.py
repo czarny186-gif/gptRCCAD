@@ -15,7 +15,7 @@ from dataclasses import replace
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication,QMessageBox,QCheckBox,QLabel
+from PySide6.QtWidgets import QApplication,QMessageBox,QCheckBox,QLabel,QToolButton,QSpinBox
 from rccad import kernel as k
 from rccad import history as hist
 from rccad import sheetmetal as shm
@@ -2223,6 +2223,41 @@ class StudioTests(unittest.TestCase):
         infos,cur=w.document.infos();self.assertEqual(infos[-1]['op']['type'],'thread')
         w.undo();self.wait();self.assertFalse(w.document.bodies[0].threads);self.assertNotIn(a.id,w.view._thread_items)
 
+    # 0.4.57: linie gwintu nie zostają po usunięciu walca / wyczyszczeniu pola; krawędzie śrubowe bez cięciw
+    def test_thread_lines_vanish_with_body_and_clear(self):
+        import cadquery as cq
+        w=self.w
+        rod=cq.Workplane().circle(5).extrude(30).val()
+        a=Body('Wałek',rod).prepared();w.document.commit([a]);w.refresh()
+        w.toggle_mode('thread')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([5.0,0,10]))):
+            w.view_clicked(5,5,False,False)
+        w.apply_thread();self.wait()
+        self.assertIn(a.id,w.view._thread_items)
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([5.0,0,10]))):
+            w.view_clicked(5,5,False,False)                                   # znowu wskazany: podgląd na walcu
+        self.assertIsNotNone(w.view._thread_preview)
+        w.set_mode(None);self.assertIsNone(w.view._thread_preview)            # Esc / wyjście z narzędzia gasi podgląd
+        w.objects_delete(a.id);self.wait()
+        self.assertEqual(w.view._thread_items,{});self.assertIsNone(w.view._thread_preview)
+        w.undo();self.wait();self.assertIn(a.id,w.view._thread_items)
+        w.toggle_mode('thread')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([5.0,0,10]))):
+            w.view_clicked(5,5,False,False)
+        w._set_hidden([a.id],True);w.refresh();self.assertIsNone(w.view._thread_preview)   # ukryty walec: bez podglądu
+        w._set_hidden([a.id],False);w.refresh()
+        w.toggle_mode('thread')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([1.,0,0]),np.array([5.0,0,10]))):
+            w.view_clicked(5,5,False,False)
+        with patch('rccad.studio.QMessageBox.question',return_value=QMessageBox.Yes):
+            w.clear_all()
+        self.wait();self.assertEqual(w.view._thread_items,{});self.assertIsNone(w.view._thread_preview)
+        from rccad import kernel as k
+        helix=cq.Wire.makeHelix(1.0,40,5).Edges()[0]                          # długa linia śrubowa: punkty wzdłuż krzywej, nie cięciwy
+        pts=k.edge_points(helix)
+        self.assertTrue(np.allclose(np.hypot(pts[:,0],pts[:,1]),5,atol=.05))
+        mids=(pts[:-1]+pts[1:])/2;self.assertTrue(np.all(np.hypot(mids[:,0],mids[:,1])>4.95))
+
     # 0.4.55: okno wymiarów pod Tab, wielokąt, ukrywanie szkicu po wyciągnięciu, prawdziwy gwint przy eksporcie
     def test_tab_dimension_window_prefilled_live_and_enter(self):
         from PySide6.QtGui import QKeyEvent
@@ -2272,9 +2307,33 @@ class StudioTests(unittest.TestCase):
         w.sketch_clicked('XY',60,0);self.wait();w.view.snap_label=None
         vs=[p.toTuple() for p in w.document.bodies[-1].shape.Vertices()]
         self.assertTrue(any(abs(x-60)<1e-6 and abs(y)<1e-6 for x,y,_ in vs))
-        w._sides_menu(w.shape_buttons['polygon'])
-        from PySide6.QtWidgets import QSpinBox
-        spin=w._popup.findChild(QSpinBox);spin.setValue(8);self.assertEqual(w.sides,8);w._popup.close()
+        self._check_sides_popup_and_toggle()
+
+    def _check_sides_popup_and_toggle(self):
+        from PySide6.QtTest import QTest
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QEvent, QPointF
+        from rccad import shell_ui
+        w=self.w
+        arrow=w.shape_buttons['polygon'].parent().findChildren(QToolButton)[-1]
+        w._sides_menu(arrow);pop=w._popup
+        self.assertIsInstance(pop,shell_ui.SidesPopup);self.assertTrue(pop.isVisible())
+        self.assertIsNone(pop.findChild(QSpinBox))                            # tylko grafika i pole
+        pop.edit.selectAll();QTest.keyClicks(pop.edit,'8')
+        self.assertEqual(w.sides,8);self.assertEqual(pop.glyph.sides,8)
+        QTest.keyClicks(pop.edit,'0');self.assertEqual(w.sides,8)             # 80 poza zakresem - bez zmiany
+        pop.edit.setText('');QTest.keyClicks(pop.edit,'12');self.assertEqual(w.sides,12)
+        w._sides_menu(arrow);self.assertFalse(pop.isVisible())                # strzałka przy otwartym okienku: chowa
+        w._sides_menu(arrow);pop=w._popup;self.assertTrue(pop.isVisible())    # i znowu otwiera
+        g=arrow.mapToGlobal(arrow.rect().center());local=pop.mapFromGlobal(g)
+        pop.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress,QPointF(local),QPointF(g),Qt.LeftButton,Qt.LeftButton,Qt.NoModifier))
+        self.assertFalse(pop.isVisible())                                     # kliknięcie strzałki zamyka okienko...
+        w._sides_menu(arrow);self.assertFalse(w._popup is not None and w._popup.isVisible())   # ...i to samo kliknięcie nie otwiera go od nowa
+        QTest.keyClick(w,Qt.Key_Escape)
+        rect=w.shape_buttons['rect'].parent().findChildren(QToolButton)[-1]
+        rect.click();menu=w._popup;self.assertIsInstance(menu,shell_ui.RichMenu);self.assertTrue(menu.isVisible())
+        rect.click();self.assertFalse(menu.isVisible())                       # warianty prostokąta / koła: to samo
+        rect.click();self.assertTrue(w._popup.isVisible());w._popup.close()
 
     def test_extruded_sketch_is_hidden_with_crossed_eye_and_can_be_shown(self):
         w=self.w;sk=Body('Szkic',k.sketch('rectangle','XY',10,10),'sketch','XY').prepared();w.document.commit([sk]);w.refresh()

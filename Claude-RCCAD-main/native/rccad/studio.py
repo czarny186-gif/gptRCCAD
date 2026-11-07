@@ -878,58 +878,49 @@ class StudioWindow(QMainWindow):
     VARIANT_ICONS = {'rect': 'v_rect2', 'centerRect': 'v_rectC', 'rect3': 'v_rect3', 'circle': 'v_circle', 'circle2': 'v_circle2', 'circle3': 'v_circle3',
                      'circleTangent2': 'v_tan'}
 
+    def _popup_toggle(self, anchor):
+        """Strzałka przy otwartym okienku wariantów / liczby kątów: okienko się chowa i nie otwiera ponownie."""
+        import time
+        pop = self._popup
+        if pop is None or getattr(pop, 'anchor', None) is not anchor:
+            return False
+        try:
+            if pop.isVisible():
+                pop.close()
+                return True
+        except RuntimeError:
+            return False
+        return pop.closed_by_anchor and time.monotonic() - getattr(pop, 'closed_at', 0) < .4   # to samo kliknięcie, które je zamknęło
+
+    def _set_sides(self, value):
+        self.sides = int(value)
+        self.shape_buttons['polygon'].setToolTip(f'Wielokąt ({self.sides} kątów)')
+        if self.points and self.tool == 'polygon' and self.last_uv is not None:
+            self.sketch_moved(self.sketch_plane, *self.last_uv)
+
     def _sides_menu(self, anchor):
-        """Strzałka przy wielokącie: pole liczby kątów (3-64), jak warianty przy kole i prostokącie."""
-        from PySide6.QtWidgets import QMenu, QSpinBox, QWidgetAction
-        menu = QMenu(self)
-        menu.setStyleSheet('QMenu{background:white;border:1px solid #c9d9e8;border-radius:10px;padding:8px;}')
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(6)
-        title = QLabel('Liczba kątów wielokąta')
-        title.setStyleSheet('font-weight:700;color:#1d3a56;')
-        spin = QSpinBox()
-        spin.setRange(3, 64)
-        spin.setValue(int(self.sides))
-        spin.setFixedHeight(34)
-        spin.setStyleSheet('QSpinBox{font-size:16px;font-weight:700;color:#0969d9;padding:2px 8px;border:1px solid #9ab5d0;border-radius:7px;}')
-        presets = QHBoxLayout()
-        presets.setSpacing(4)
-        for n in (3, 4, 5, 6, 8, 12):
-            b = QPushButton(str(n))
-            b.setObjectName('chip')
-            b.setFixedSize(34, 30)
-            b.clicked.connect(lambda _=False, n=n: spin.setValue(n))
-            presets.addWidget(b)
-        lay.addWidget(title)
-        lay.addWidget(spin)
-        lay.addLayout(presets)
-        action = QWidgetAction(menu)
-        action.setDefaultWidget(box)
-        menu.addAction(action)
-
-        def changed(value):
-            self.sides = int(value)
-            self.shape_buttons['polygon'].setToolTip(f'Wielokąt ({self.sides} kątów)')
-            if self.points and self.tool == 'polygon' and self.last_uv is not None:
-                self.sketch_moved(self.sketch_plane, *self.last_uv)
-
-        spin.valueChanged.connect(changed)
-        spin.lineEdit().returnPressed.connect(menu.close)
-        self._popup = menu
+        """Strzałka przy wielokącie: grafika i pole liczby kątów (3-64). Ponowne kliknięcie strzałki chowa okienko."""
+        if self._popup_toggle(anchor):
+            self._popup = None
+            return
         if self.tool != 'polygon' and self.mode == 'sketch':
             self.choose_tool('polygon')
-        QTimer.singleShot(0, lambda: (spin.setFocus(), spin.selectAll()))
-        menu.popup(anchor.mapToGlobal(QPoint(anchor.width() + 8, 0)))
+        menu = ui.SidesPopup(self, int(self.sides), self._set_sides)
+        menu.anchor = anchor
+        self._popup = menu
+        menu.popup_at(anchor.mapToGlobal(QPoint(anchor.width() + 8, 0)))
 
     def _variants_menu(self, items, anchor, main):
+        if self._popup_toggle(anchor):
+            self._popup = None
+            return
         entries = []
         for item in items:
             name = item['shape']
             icon = ui.icons.pixmap(self.VARIANT_ICONS.get(name, 'v_rect2'), 34)
             entries.append((icon, VARIANT_LABELS.get(name, item['title']), self.VARIANT_HINTS.get(name, ''), lambda n=name: self.choose_tool(n, main)))
         menu = ui.RichMenu(self, entries, 'Sposób rysowania', 290)
+        menu.anchor = anchor
         self._popup = menu
         menu.popup_at(anchor.mapToGlobal(QPoint(anchor.width() + 8, 0)))
 
@@ -1865,6 +1856,7 @@ class StudioWindow(QMainWindow):
         self.view.drag_hook = None
         self.view.sketch_grips = []
         self.view.set_handles([])
+        self.view.set_thread_preview(None)      # podgląd gwintu nie zostaje po wyjściu z narzędzia
         self.view.set_marker(None)
         self.view.sketch_plane = None
         self.view.sketch_tool = None
@@ -7018,6 +7010,14 @@ class StudioWindow(QMainWindow):
             highlighted = [*highlighted, self._obj_hover]
         self.view.set_models(bodies, highlighted, self.edges)
         self.view.set_threads({b.id: b.threads for b in bodies if b.threads and b.visible})   # gwinty: lekkie linie, bez geometrii
+        if getattr(self, 'th_pick', None) is not None:
+            alive = {b.id for b in bodies if b.visible}
+            if self.th_pick['id'] not in alive or any(x['id'] not in alive for x in self.th_extra):
+                self.th_pick, self.th_extra = None, []   # walec z podglądem gwintu usunięty / ukryty: znika też podgląd
+                if hasattr(self, 'th_status'):
+                    self._th_update()
+                else:
+                    self.view.set_thread_preview(None)
         if fit:
             self.view.fit_all()
         if hasattr(self, '_refine_timer') and any(b.mesh is not None and not b.mesh.fine for b in self.document.bodies):
