@@ -1247,7 +1247,11 @@ def split_shapes(bodies, recipe):
     if method == 'sketch':
         tool = _body(bodies, recipe['tool'])
         members = [b.shape for b in bodies if tool.group and b.group == tool.group and b.kind == 'sketch' and b.visible] or [tool.shape]
-        return kernel.split_sketch(body.shape, members[0] if len(members) == 1 else kernel.compound(members))
+        try:
+            normal = np.asarray(kernel.frame_of(tool.plane).normal, float)   # płaszczyzna szkicu - także dla pojedynczej linii
+        except Exception:
+            normal = None
+        return kernel.split_sketch(body.shape, members[0] if len(members) == 1 else kernel.compound(members), normal)
     if method == 'body':
         return kernel.split_body(body.shape, _body(bodies, recipe['tool']).shape)
     raise kernel.CadError('Nieznana metoda przecięcia.')

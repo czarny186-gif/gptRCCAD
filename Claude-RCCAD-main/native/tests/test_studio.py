@@ -1886,6 +1886,38 @@ class StudioTests(unittest.TestCase):
         info=w.document.states()[-1][1];self.assertEqual(info['op']['type'],'split')
         again=hist.run_recipe(w.document.states()[-2][0],info['op']);self.assertEqual(len(again),3)
 
+    # 0.4.58: szkic pod kursorem podświetlony, cięcie jedną linią (także kończącą się na bryle)
+    def test_split_sketch_hover_and_single_line(self):
+        w=self.w;a=Body('Kostka',k.box(40,20,10)).prepared()
+        top=k.Frame((0,0,10),(1,0,0),(0,0,1))
+        line=Body('Linia',k.polyline(top,[(10,-3),(10,25)]),'sketch',top).prepared()     # zaczyna się w środku bryły
+        w.document.commit([a,line]);w.refresh()
+        w.selected=[a.id];w.toggle_mode('split');w.sp_method.setCurrentIndex(2)
+        with patch.object(w.view,'nearest_edge',return_value=(line.id,0)):w.view_hover(5,5)
+        self.assertEqual(w.view._hover_key,('body',line.id))                  # szkic pod kursorem świeci
+        with patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_body',return_value=None):w.view_hover(6,6)
+        self.assertIsNone(w.view._hover_key)
+        with patch.object(w.view,'nearest_edge',return_value=(line.id,0)):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.sp_ref['tool'],line.id)
+        w.apply_split();self.wait()
+        vols=sorted(round(b.shape.Volume()) for b in w.document.bodies if b.kind=='solid');self.assertEqual(vols,[2000,6000])
+        w.set_mode('split');self.assertIsNone(w.view._hover_key)
+
+    def test_shell_thickness_arrow_and_panel_fits(self):
+        w=self.w;a=Body('Kostka',k.box(30,30,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('shell')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array([0,0,1.]),np.array([15,15,20.]))):
+            w.view_clicked(5,5,False,False);w.view_clicked(5,5,False,False)        # bryła, potem otwarta górna ściana
+        h=[x for x in w.view.handles if x['id']=='shell'];self.assertEqual(len(h),1)
+        self.assertAlmostEqual(abs(float(h[0]['dir'][2])),0,6)                   # strzałka na ścianie, która zostaje (nie na otwartej)
+        w.handle_dragged('shell',1.5);self.assertAlmostEqual(w.sh_thick.value(),3.5)
+        w.handle_dragged('shell',-5);self.assertAlmostEqual(w.sh_thick.value(),.1);w.handle_released('shell')
+        self.assertTrue(w._timers['shell'].isActive())
+        w.sh_dir.setCurrentIndex(1);h2=w.view.handles[0]
+        self.assertTrue(np.allclose(np.array(h2['dir']),-np.array(h[0]['dir'])))   # na zewnątrz: strzałka odwrócona
+        w.shell_panel.show();self.app.processEvents()
+        seg=w.sh_dir;self.assertGreaterEqual(seg.height(),seg.minimumSizeHint().height())
+        self.assertLessEqual(seg.geometry().bottom(),w.sh_status.geometry().top())   # opis pod przyciskami, nie na nich
+
     def test_fillet_preview_shows_only_created_surface(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
         with patch.object(w.view,'nearest_edge',return_value=(a.id,0)):w.view_clicked(5,5,False,False)
@@ -2278,25 +2310,21 @@ class StudioTests(unittest.TestCase):
         w.eventFilter(w.view,tab);self.assertEqual([x.isVisible() for x in e],[True,False,False])         # okrąg: jeden wymiar
         self.assertEqual(e[0].text(),'8,000')
 
-    def test_polygon_size_by_horizontal_and_rotation_by_vertical_motion(self):
+    def test_polygon_vertex_follows_cursor_and_snap_point(self):
         import math
-        from PySide6.QtCore import QPoint
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('polygon')
         w.sides=5
         w.sketch_clicked('XY',0,0)
-        c=w.view.project_one((0,0,0));ppm=w.view._cam_ppm()
-        def at(dx,dy):
-            return patch('rccad.studio.QCursor.pos',return_value=w.view.mapToGlobal(QPoint(int(c[0]+dx),int(c[1]+dy))))
-        with at(20*ppm,0):
-            w.sketch_moved('XY',99,99)
-            r1=math.hypot(*w._poly_end);self.assertAlmostEqual(r1,20,0);self.assertEqual(w._poly_angle,0)
-            self.assertAlmostEqual(w._poly_end[0],0,4)                       # bez obrotu: wierzchołek u góry
-        with at(-20*ppm,-60):
-            w.sketch_moved('XY',99,99)
-            self.assertAlmostEqual(math.hypot(*w._poly_end),r1,6)            # w lewo też ta sama wielkość
-            self.assertEqual(w._poly_angle,30)                               # w górę - obrót
-            self.assertIn('30°',w.dim.text());self.assertIn('5 kątów',w.dim.text())
-            w.sketch_clicked('XY',99,99)
+        w.sketch_moved('XY',0,20)
+        self.assertEqual(w._poly_end,(0.0,20.0));self.assertEqual(w._poly_angle,0)   # wierzchołek u góry, w kursorze
+        w.view.snap_label='Siatka';w.sketch_moved('XY',10,0);w.view.snap_label=None
+        self.assertEqual(w._poly_end,(10.0,0.0))                             # przyciągnięty punkt = wierzchołek
+        w.sketch_moved('XY',10.4,0.3)
+        self.assertAlmostEqual(math.hypot(*w._poly_end),math.hypot(10.4,.3),6)   # bez przeskoku wielkości po zejściu z punktu
+        w.sketch_moved('XY',-10,10*math.sqrt(3))
+        self.assertAlmostEqual(w._poly_angle,30,6)                           # kierunek kursora = obrót
+        self.assertIn('30°',w.dim.text());self.assertIn('5 kątów',w.dim.text())
+        w.sketch_clicked('XY',-10,10*math.sqrt(3))
         self.wait()
         sk=w.document.bodies[-1];self.assertEqual(len(sk.shape.Edges()),5)
         v=[p.toTuple() for p in sk.shape.Vertices()]

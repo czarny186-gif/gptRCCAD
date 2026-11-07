@@ -784,9 +784,16 @@ def split_sketch(shape, sketch, normal=None):
     n = np.asarray(normal, float)
     n = n / np.linalg.norm(n)
     L = _span(shape) * 2 + float(np.linalg.norm(np.array(shape.Center().toTuple()) - np.array(sketch.Center().toTuple()))) * 2
-    back = cq.Compound.makeCompound(edges).translate(cq.Vector(*(-n * L)))
-    curtain = cq.Shape.cast(BRepPrimAPI_MakePrism(back.wrapped, gp_Vec(*(n * 2 * L))).Shape())
-    parts = _splitter(shape, [curtain])
+    def curtain(edge_list):
+        back = cq.Compound.makeCompound(edge_list).translate(cq.Vector(*(-n * L)))
+        return cq.Shape.cast(BRepPrimAPI_MakePrism(back.wrapped, gp_Vec(*(n * 2 * L))).Shape())
+
+    parts = _splitter(shape, [curtain(edges)])
+    if len(parts) < 2:
+        longer = _extended_ends(edges, L)      # linia kończąca się na bryle: wolne końce prostych przedłużone przez całą bryłę
+        if longer is not None:
+            edges = longer
+            parts = _splitter(shape, [curtain(edges)])
     if len(parts) < 2:
         raise CadError("Szkic nie przecina bryły na części - linia musi przejść przez całą bryłę (albo profil musi być zamknięty).")
     wires = [w for w in sketch.Wires() if w.IsClosed()] if hasattr(sketch, 'Wires') else []
@@ -815,6 +822,32 @@ def split_sketch(shape, sketch, normal=None):
         _, q, tan = best
         out.append((s, 1 if float(np.cross(tan, c - q) @ n) >= 0 else 2))
     return out
+
+
+def _extended_ends(edges, length):
+    """Krawędzie otwartego szkicu z wolnymi końcami prostych odcinków przedłużonymi o length (None, gdy nie ma czego przedłużyć)."""
+    def key(p):
+        return tuple(np.round(np.asarray(p, float), 5))
+    ends = {}
+    for e in edges:
+        for p in (e.startPoint().toTuple(), e.endPoint().toTuple()):
+            ends[key(p)] = ends.get(key(p), 0) + 1
+    out, changed = [], False
+    for e in edges:
+        if e.geomType() != "LINE":
+            out.append(e)
+            continue
+        a, b = np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float)
+        d = b - a
+        if np.linalg.norm(d) < 1e-9:
+            out.append(e)
+            continue
+        d = d / np.linalg.norm(d)
+        a2 = a - d * length if ends.get(key(a), 0) == 1 else a
+        b2 = b + d * length if ends.get(key(b), 0) == 1 else b
+        changed = changed or a2 is not a or b2 is not b
+        out.append(cq.Edge.makeLine(cq.Vector(*a2), cq.Vector(*b2)))
+    return out if changed else None
 
 
 def _inside_share(solid, tool):

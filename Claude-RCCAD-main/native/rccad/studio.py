@@ -40,7 +40,7 @@ HINTS = {
     'ellipse': ['Kliknij środek elipsy.', 'Kliknij narożnik opisanego prostokąta.'],
     'slot': ['Kliknij środek pierwszego końca.', 'Kliknij środek drugiego końca.', 'Kliknij punkt określający szerokość.'],
     'polygon': ['Kliknij środek wielokąta (liczbę kątów ustawisz strzałką przy wielokącie na pasku).',
-                'W prawo / w lewo - wielkość, w górę / w dół - obrót; przy punkcie wierzchołek się przykleja · klik zatwierdza · Tab - wymiary'],
+                'Wierzchołek idzie za kursorem (także przyciągniętym do kratki / punktu): odległość - wielkość, kierunek - obrót · klik zatwierdza · Tab - wymiary'],
     'arc': ['Kliknij początek łuku.', 'Kliknij punkt na łuku.', 'Kliknij koniec łuku.'],
     'point': ['Kliknij miejsce punktu.'],
     'construction': ['Kliknij początek linii konstrukcyjnej.', 'Kliknij koniec.'],
@@ -1048,8 +1048,8 @@ class StudioWindow(QMainWindow):
         self.sh_status = _label('Kliknij bryłę, którą chcesz wydrążyć.', 'status')
         lay.addWidget(self.sh_status)
         self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_shell, lambda: self.set_mode(None))
-        self.sh_thick.valueChanged.connect(lambda *_: self._timers['shell'].start())
-        self.sh_dir.currentIndexChanged.connect(lambda *_: self._timers['shell'].start())
+        self.sh_thick.valueChanged.connect(lambda *_: (self._place_shell_handle(), self._timers['shell'].start()))
+        self.sh_dir.currentIndexChanged.connect(lambda *_: (self._place_shell_handle(), self._timers['shell'].start()))
 
         # --- gwint ---
         from . import threads as th
@@ -1857,6 +1857,8 @@ class StudioWindow(QMainWindow):
         self.view.sketch_grips = []
         self.view.set_handles([])
         self.view.set_thread_preview(None)      # podgląd gwintu nie zostaje po wyjściu z narzędzia
+        self.view._set_hover_edge(None)
+        self._sp_hover = None
         self.view.set_marker(None)
         self.view.sketch_plane = None
         self.view.sketch_tool = None
@@ -2531,28 +2533,17 @@ class StudioWindow(QMainWindow):
         self.show_dimension(pts)
 
     def _polygon_end(self, snapped=None):
-        """Wielokąt: ruch kursora w prawo / w lewo od środka ustala wielkość, w górę / w dół - obrót na płaszczyźnie.
-        Gdy kursor przyciągnął się do punktu (kratka siatki, wierzchołek, punkt szkicu lub bryły), wierzchołek wielokąta
-        przykleja się do tego punktu. Zwraca punkt pierwszego wierzchołka (u, v)."""
+        """Wielokąt: pierwszy wierzchołek jest zawsze w punkcie kursora - także przyciągniętym (kratka siatki, krawędź,
+        wierzchołek szkicu lub bryły). Odległość od środka to wielkość, kierunek - obrót; nic nie przeskakuje,
+        gdy przyciąganie się włącza / wyłącza. Zwraca punkt pierwszego wierzchołka (u, v)."""
         center = self.points[0]
-        if snapped is not None and self.view.snap_label:
-            du, dv = snapped[0] - center[0], snapped[1] - center[1]
-            if math.hypot(du, dv) > 1e-6:
-                self._poly_end = (float(snapped[0]), float(snapped[1]))
-                self._poly_angle = round(math.degrees(math.atan2(dv, du)) - 90, 2)
-                return self._poly_end
-        xy = self.view.project_one(kernel.to_world(self.sketch_plane, *center))
-        if xy is None:
+        if snapped is None:
             return None
-        pos = self.view.mapFromGlobal(QCursor.pos())
-        dx, dy = pos.x() - xy[0], pos.y() - xy[1]
-        ppm = max(self.view._cam_ppm(), 1e-6)
-        step = 10 ** math.floor(math.log10(max(float(self.view.opts['distance']) / 40, 1e-3)))
-        radius = max(step, round(abs(dx) / ppm / step) * step)
-        angle = round(-dy * .5)                     # 2 piksele w pionie = 1° obrotu
-        a = math.radians(90 + angle)                # bez obrotu: wierzchołek u góry
-        self._poly_end = (center[0] + radius * math.cos(a), center[1] + radius * math.sin(a))
-        self._poly_angle = angle
+        du, dv = snapped[0] - center[0], snapped[1] - center[1]
+        if math.hypot(du, dv) <= 1e-6:
+            return None
+        self._poly_end = (float(snapped[0]), float(snapped[1]))
+        self._poly_angle = round(math.degrees(math.atan2(dv, du)) - 90, 2)
         return self._poly_end
 
     def show_dimension(self, pts):
@@ -3237,6 +3228,8 @@ class StudioWindow(QMainWindow):
                 self._hover_face_only(x, y) if self.sh_id else self._hover_shell_solid(x, y)
             elif self.mode == 'thread':
                 self._th_hover(x, y)
+            elif self.mode == 'split':
+                self._split_hover(x, y)
             elif self.mode == 'sheet':
                 self._hover_face_only(x, y)
             elif self.mode in ('flange', 'hem'):
@@ -5101,7 +5094,30 @@ class StudioWindow(QMainWindow):
             except Exception:
                 pass
         self.view.set_selection_meshes(meshes or None, color=(.94, .6, .13, .55), line_color=(.8, .4, .05, 1))
+        self.shell_panel.adjustSize()           # dłuższy opis nie może zasłonić przycisków kierunku
+        self._place_shell_handle()
         self._timers['shell'].start()
+
+    def _place_shell_handle(self):
+        """Strzałka grubości ścianki na wydrążanej bryle: przeciąganie pogrubia / pocienia ścianki (podgląd na żywo)."""
+        body = self.document.get(self.sh_id) if self.mode == 'shell' and self.sh_id else None
+        if body is None:
+            self.view.set_handles([])
+            return
+        b = kernel.bounds(body.shape)
+        c = np.array(b.center.toTuple(), float)
+        opened = [np.array(f['normal'], float) for f in self.sh_faces]
+        sides = [((0, 0, 1), b.zmax - c[2]), ((1, 0, 0), b.xmax - c[0]), ((0, -1, 0), c[1] - b.ymin), ((-1, 0, 0), c[0] - b.xmin),
+                 ((0, 1, 0), b.ymax - c[1]), ((0, 0, -1), c[2] - b.zmin)]
+        n, reach = next(((np.array(v, float), r) for v, r in sides if not any(float(o @ np.array(v, float)) > .9 for o in opened)),
+                        (np.array((0., 0., 1.)), b.zmax - c[2]))
+        point = c + n * reach                           # środek boku bryły (ściany, która zostaje)
+        inward = self.sh_dir.currentData() == 'in'
+        d = -n if inward else n                         # strzałka w stronę, w którą rośnie ścianka
+        t = float(self.sh_thick.value())
+        base = point + d * t                            # podstawa strzałki na wewnętrznej / zewnętrznej powierzchni ścianki
+        length = max(b.xlen, b.ylen, b.zlen) * .3
+        self.view.set_handles([dict(id='shell', start=base, tip=base + d * length, dir=d, color=(.94, .6, .13, 1))])
 
     def update_shell_preview(self):
         body = self.document.get(self.sh_id) if self.mode == 'shell' and self.sh_id else None
@@ -5794,7 +5810,39 @@ class StudioWindow(QMainWindow):
             self.sp_panel.adjustSize()
         self.update_split_status()
 
+    def _split_hover(self, x, y):
+        """Przecinanie: to, co zostanie wskazane kliknięciem, podświetla się pod kursorem (bryła, ściana, szkic, bryła tnąca)."""
+        method = self.sp_method.currentData()
+        if self.sp_id is not None and method == 'face':
+            self.view.set_hover_body(None)
+            self._sp_hover = None
+            self._hover_face_only(x, y)
+            return
+        if self.sp_id is not None and method == 'sketch':
+            hit = self.view.nearest_edge(x, y, kinds=('sketch',))
+            bid = hit[0] if hit else None
+            body = self.document.get(bid) if bid else None
+            bid = bid if body is not None and body.kind == 'sketch' else None
+        else:
+            bid = self.pick_object(x, y)
+            body = self.document.get(bid) if bid else None
+            ok = body is not None and body.kind == 'solid' and (self.sp_id is None or method == 'plane' or (method == 'body' and body.id != self.sp_id))
+            bid = bid if ok else None
+        if getattr(self, '_sp_hover', None) != bid:
+            self._sp_hover = bid
+            body = self.document.get(bid) if bid else None
+            sketch = body is not None and body.kind == 'sketch'
+            self.view.set_hover_body(bid if sketch else None)
+            if body is not None and not sketch and body.mesh is not None:
+                self.view.set_selection_meshes([body.mesh], color=(1, .55, .1, .35), line_color=(.95, .42, .02, 1))
+            else:
+                self.view.set_selection_meshes(None)
+        self.view.setCursor(Qt.PointingHandCursor if bid else Qt.ArrowCursor)
+
     def pick_split(self, x, y):
+        self._sp_hover = None
+        self.view.set_hover_body(None)
+        self.view.set_selection_meshes(None)
         method = self.sp_method.currentData()
         if self.sp_id is None or method == 'plane':
             bid = self.pick_object(x, y)
@@ -6858,6 +6906,10 @@ class StudioWindow(QMainWindow):
             if self._hv is None:
                 self._hv = self.sp_offset.value()
             self.sp_offset.setValue(round(self._hv + delta, 1))
+        elif hid == 'shell':
+            if self._hv is None:
+                self._hv = self.sh_thick.value()
+            self.sh_thick.setValue(max(.1, round(self._hv + delta, 1)))
         elif hid == 'mod':
             if self._hv is None:
                 self._hv = self.mod_size.value()
@@ -6895,6 +6947,8 @@ class StudioWindow(QMainWindow):
             self._place_mod_handle()
         elif hid == 'split':
             self._place_split_handle()
+        elif hid == 'shell':
+            self._place_shell_handle()
         elif hid.startswith('pat'):
             self._place_pattern_handles()
         elif hid.startswith('th'):

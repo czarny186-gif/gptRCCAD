@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.57 — czysty gwint po imporcie, okienko liczby kątów
+# RCCAD Desktop 0.4.58 — cięcie szkicem, strzałka skorupy, wierzchołek wielokąta w kursorze
+
+## Zmiany 0.4.58
+
+- **Przetnij bryłę szkicem**: szkic pod kursorem podświetla się na pomarańczowo (tak samo bryła do przecięcia, ściana i bryła tnąca) - widać, co zostanie wskazane.
+- **Cięcie jedną linią**: pojedyncza prosta linia przecina bryłę (płaszczyzna cięcia z płaszczyzny szkicu); linia kończąca się na bryle jest przedłużana przez całą bryłę.
+- **Skorupa - strzałka grubości**: pomarańczowa strzałka na wydrążanej bryle; przeciąganie pogrubia albo pocienia ścianki z podglądem na żywo.
+- **Skorupa - panel**: opis nad przyciskami nie zasłania już wyboru Do wewnątrz / Na zewnątrz.
+- **Wielokąt**: pierwszy wierzchołek jest zawsze w punkcie kursora, także przyciągniętym do kratki siatki, krawędzi lub wierzchołka - wielkość nie przeskakuje, a punkt idzie razem z wielkością; odległość od środka to wielkość, kierunek to obrót.
+
+## RCCAD Desktop 0.4.57 — czysty gwint po imporcie, okienko liczby kątów
 
 ## Zmiany 0.4.57
 
