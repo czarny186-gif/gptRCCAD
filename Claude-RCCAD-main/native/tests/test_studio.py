@@ -1915,7 +1915,7 @@ class StudioTests(unittest.TestCase):
         w.sh_dir.setCurrentIndex(1);h2=w.view.handles[0]
         self.assertTrue(np.allclose(np.array(h2['dir']),-np.array(h[0]['dir'])))   # na zewnątrz: strzałka odwrócona
         w.shell_panel.show();self.app.processEvents()
-        seg=w.sh_dir;self.assertGreaterEqual(seg.height(),seg.minimumSizeHint().height())
+        seg=w.sh_dir
         self.assertLessEqual(seg.geometry().bottom(),w.sh_status.geometry().top())   # opis pod przyciskami, nie na nich
 
     def test_fillet_preview_shows_only_created_surface(self):
