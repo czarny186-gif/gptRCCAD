@@ -628,7 +628,7 @@ class CadView(gl.GLViewWidget):
         self._parts.clear()
         self.set_models(self.bodies, self.selected_bodies, self.selected_edges)
 
-    THREAD_COLOR = (.95, .55, .12, 1)
+    THREAD_COLOR = (.16, .45, .86, 1)      # gwint: niebieska linia śrubowa
 
     def set_threads(self, items):
         """Gwinty kosmetyczne: linie śrubowe przy bryłach ({id bryły: opisy gwintów}). Elementy GL powstają tylko
@@ -663,7 +663,7 @@ class CadView(gl.GLViewWidget):
             self._thread_preview = None
         if thread is not None:
             segs = thread_lines(thread)
-            self._thread_preview = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=(.18, .53, .91, 1), width=2.0, antialias=True, mode='lines')
+            self._thread_preview = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=(.35, .68, 1.0, 1), width=2.2, antialias=True, mode='lines')
             self.addItem(self._thread_preview)
         self.update()
 

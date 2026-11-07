@@ -298,3 +298,94 @@ def transformed(thread, matrix):
     if np.linalg.det(m[:3, :3]) < 0:
         out['hand'] = 'left' if thread.get('hand', 'right') == 'right' else 'right'
     return out
+
+
+# ---------------------------------------------------------------------------
+# prawdziwy gwint - tylko przy eksporcie (STL do druku 3D, STEP), w procesie liczącym w tle
+# ---------------------------------------------------------------------------
+OVERLAP = .02          # zwoje wchodzą odrobinę w rdzeń / ściankę - pewne połączenie brył
+
+
+def _ridge(pitch, length, r_root, r_crest, w_root, w_crest, left):
+    """Zwoje jako bryła: cztery linie śrubowe (narożniki profilu) połączone powierzchniami prostokreślnymi i denkami.
+    Tak zbudowane zwoje łączą się z bryłą pewnie (w przeciwieństwie do przeciągania profilu po linii śrubowej)."""
+    import cadquery as cq
+    from OCP.BRepFill import BRepFill
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+    from OCP.ShapeFix import ShapeFix_Solid
+    from OCP.TopoDS import TopoDS
+    profile = [(r_root, -w_root / 2), (r_crest, -w_crest / 2), (r_crest, w_crest / 2), (r_root, w_root / 2)]
+    edges = []
+    for r, z in profile:
+        helix = cq.Wire.makeHelix(pitch, length, r, lefthand=left).translate((0, 0, z))
+        edges.append(helix.Edges()[0])
+    sew = BRepBuilderAPI_Sewing(1e-4)
+    for i in range(4):
+        sew.Add(BRepFill.Face_s(edges[i].wrapped, edges[(i + 1) % 4].wrapped))
+    for end in (0, 1):
+        sew.Add(cq.Face.makeFromWires(cq.Wire.makePolygon([e.positionAt(end) for e in edges], close=True)).wrapped)
+    sew.Perform()
+    solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(sew.SewedShape())).Solid()
+    fix = ShapeFix_Solid(solid)
+    fix.Perform()
+    out = cq.Solid(fix.Solid())
+    return cq.Solid(out.wrapped.Reversed()) if out.Volume() < 0 else out
+
+
+def _profile(thread):
+    """Wymiary zwoju: promień dna i wierzchołka, szerokości u dna i na wierzchołku (wg kąta gwintu)."""
+    standard, d, p, internal = thread['standard'], thread['d'], thread['pitch'], thread['internal']
+    angle = math.radians(STANDARDS.get(standard, {}).get('angle', 60) / 2)
+    if internal:                        # zwój nakrętki: od średnicy nominalnej do średnicy otworu
+        r_root, r_crest = d / 2 + OVERLAP, core(standard, d, p, True) / 2
+        w_crest = p / 4
+    else:                               # zwój śruby: od rdzenia do średnicy nominalnej
+        r_root, r_crest = core(standard, d, p, False) / 2 - OVERLAP, d / 2
+        w_crest = p / 8
+    depth = abs(r_root - r_crest)
+    w_root = min(.9 * p, w_crest + 2 * depth * math.tan(angle))
+    return r_root, r_crest, w_root, w_crest
+
+
+def real_shape(shape, threads):
+    """Bryła z prawdziwymi zwojami w miejscu gwintów kosmetycznych (rdzeń do średnicy dna, potem zwoje)."""
+    import cadquery as cq
+    from . import kernel
+    for thread in threads:
+        length = float(thread['end']) - float(thread['start'])
+        if length <= thread['pitch']:
+            continue
+        r_root, r_crest, w_root, w_crest = _profile(thread)
+        axis = np.asarray(thread['axis'], float)
+        axis = axis / np.linalg.norm(axis)
+        base = np.asarray(thread['origin'], float) + axis * float(thread['start'])
+        # rdzeń: otwór poszerzony do średnicy nominalnej / wałek ztoczony do rdzenia - na długości gwintu
+        if thread['internal']:
+            hollow = cq.Solid.makeCylinder(thread['d'] / 2, length, cq.Vector(*base), cq.Vector(*axis))
+        else:
+            outer = max(thread['d'] / 2, thread['radius']) + .5
+            hollow = cq.Solid.makeCylinder(outer, length, cq.Vector(*base), cq.Vector(*axis)).cut(
+                cq.Solid.makeCylinder(r_root + OVERLAP, length, cq.Vector(*base), cq.Vector(*axis)))
+        shape = kernel.boolean('subtract', shape, [hollow])
+        # zwoje w układzie osi Z, potem na oś gwintu; profil cały w zakresie gwintu
+        ridge = _ridge(thread['pitch'], length - w_root, r_root, r_crest, w_root, w_crest, thread.get('hand', 'right') == 'left')
+        ridge = ridge.translate((0, 0, w_root / 2))
+        rotation = kernel.rotation_between([0, 0, 1], axis)
+        ridge = kernel.transformed(ridge, rotation, base)
+        shape = kernel.boolean('union', shape, [ridge])
+    return shape
+
+
+def export_job(items, path):
+    """Eksport w procesie liczącym: bryły z gwintami dostają prawdziwe zwoje, potem zapis pliku. items: (kształt, gwinty)."""
+    from . import kernel
+    shapes, failed = [], 0
+    for shape, threads in items:
+        if threads:
+            try:
+                shape = real_shape(shape, threads)
+            except Exception:
+                failed += 1             # gwint, którego nie da się zbudować, zostaje kosmetyczny (sam otwór)
+        shapes.append(shape)
+    kernel.export_shapes(shapes, path)
+    return failed

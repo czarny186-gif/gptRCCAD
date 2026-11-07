@@ -1705,10 +1705,11 @@ class StudioTests(unittest.TestCase):
         self.assertEqual([e.text() for e in w.dim_edits if e.isVisible()],['20.0','10.0'])
         w.dim_edits[0].setText('30');w.dim_edits[1].setText('5');w.apply_dim_edit();self.wait()
         b=k.bounds(w.document.bodies[-1].shape);self.assertAlmostEqual(b.xlen,30,3);self.assertAlmostEqual(b.ylen,5,3)
-        w.set_mode('plane');w.plane_picked('XY');w.choose_tool('polygon');w.sketch_clicked('XY',0,0)
-        self.assertTrue(w.open_dim_input());self.assertEqual(len([e for e in w.dim_edits if e.isVisible()]),2)
-        w.dim_edits[0].setText('10');w.dim_edits[1].setText('6');w.apply_typed();self.wait()
+        w.set_mode('plane');w.plane_picked('XY');w.choose_tool('polygon');w.sides=6;w.sketch_clicked('XY',0,0)   # liczba kątów z paska kształtów
+        self.assertTrue(w.open_dim_input());self.assertEqual([w.dim_labels[i].text() for i in range(2)],['Promień (mm)','Obrót (°)'])
+        w.dim_edits[0].setText('10');w.dim_edits[1].setText('0');w.apply_typed();self.wait()
         self.assertEqual(w.document.bodies[-1].meta['sides'],6);self.assertEqual(len(w.document.bodies[-1].shape.Edges()),6)
+        self.assertAlmostEqual(k.bounds(w.document.bodies[-1].shape).ymax,10,4)          # obrót 0°: wierzchołek u góry
         with patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):w.clear_all()
         self.assertEqual(len(w.document.bodies),0)
         labels,cur=w.document.timeline();self.assertEqual((len(labels),cur),(1,0))       # czyszczenie usuwa też historię
@@ -2221,6 +2222,87 @@ class StudioTests(unittest.TestCase):
         self.assertIn(a.id,w.view._thread_items)
         infos,cur=w.document.infos();self.assertEqual(infos[-1]['op']['type'],'thread')
         w.undo();self.wait();self.assertFalse(w.document.bodies[0].threads);self.assertNotIn(a.id,w.view._thread_items)
+
+    # 0.4.55: okno wymiarów pod Tab, wielokąt, ukrywanie szkicu po wyciągnięciu, prawdziwy gwint przy eksporcie
+    def test_tab_dimension_window_prefilled_live_and_enter(self):
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtCore import QEvent
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect')
+        w.sketch_clicked('XY',0,0);w.sketch_moved('XY',20,10)
+        tab=QKeyEvent(QEvent.KeyPress,Qt.Key_Tab,Qt.NoModifier)
+        self.assertTrue(w.eventFilter(w.view,tab))
+        e=w.dim_edits
+        self.assertTrue(w.dim_panel.isVisible());self.assertEqual((e[0].text(),e[1].text()),('20,000','10,000'))   # bieżące wymiary
+        self.assertEqual(e[0].selectedText(),'20,000')                                                    # zaznaczone - od razu wpisywanie
+        w.eventFilter(w.view,tab);self.assertEqual(e[1].selectedText(),'10,000')                           # Tab - kolejne pole
+        e[1].setText('35');w.update_dim_preview();self.assertTrue(w.view.preview_items)                   # podgląd na żywo
+        w.dim_ok.click();self.wait()
+        bb=w.document.bodies[-1].shape.BoundingBox()
+        self.assertAlmostEqual(bb.xlen,20,4);self.assertAlmostEqual(bb.ylen,35,4)
+        w.choose_tool('circle');w.sketch_clicked('XY',50,0);w.sketch_moved('XY',58,0)
+        w.eventFilter(w.view,tab);self.assertEqual([x.isVisible() for x in e],[True,False,False])         # okrąg: jeden wymiar
+        self.assertEqual(e[0].text(),'8,000')
+
+    def test_polygon_size_by_horizontal_and_rotation_by_vertical_motion(self):
+        import math
+        from PySide6.QtCore import QPoint
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('polygon')
+        w.sides=6
+        w.sketch_clicked('XY',0,0)
+        c=w.view.project_one((0,0,0));ppm=w.view._cam_ppm()
+        def at(dx,dy):
+            return patch('rccad.studio.QCursor.pos',return_value=w.view.mapToGlobal(QPoint(int(c[0]+dx),int(c[1]+dy))))
+        with at(20*ppm,0):
+            w.sketch_moved('XY',99,99)
+            r1=math.hypot(*w._poly_end);self.assertAlmostEqual(r1,20,0);self.assertEqual(w._poly_angle,0)
+            self.assertAlmostEqual(w._poly_end[0],0,4)                       # bez obrotu: wierzchołek u góry
+        with at(-20*ppm,-60):
+            w.sketch_moved('XY',99,99)
+            self.assertAlmostEqual(math.hypot(*w._poly_end),r1,6)            # w lewo też ta sama wielkość
+            self.assertEqual(w._poly_angle,30)                               # w górę - obrót
+            self.assertIn('30°',w.dim.text());self.assertIn('6 kątów',w.dim.text())
+            w.sketch_clicked('XY',99,99)
+        self.wait()
+        sk=w.document.bodies[-1];self.assertEqual(len(sk.shape.Edges()),6)
+        v=[p.toTuple() for p in sk.shape.Vertices()]
+        self.assertTrue(any(abs(math.degrees(math.atan2(y,x))-120)<1e-3 for x,y,_ in v))   # 90° + 30°
+        w._sides_menu(w.shape_buttons['polygon'])
+        from PySide6.QtWidgets import QSpinBox
+        spin=w._popup.findChild(QSpinBox);spin.setValue(8);self.assertEqual(w.sides,8);w._popup.close()
+
+    def test_extruded_sketch_is_hidden_with_crossed_eye_and_can_be_shown(self):
+        w=self.w;sk=Body('Szkic',k.sketch('rectangle','XY',10,10),'sketch','XY').prepared();w.document.commit([sk]);w.refresh()
+        w.set_mode('extrude')
+        with patch.object(w.view,'pick_profile',return_value=sk.id):w.view_clicked(5,5,False,False)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait();w.set_mode(None)
+        self.assertIn(sk.id,w.shown_hidden())                                        # oko przekreślone
+        self.assertTrue(w.objects.rows[sk.id].property('off'))
+        w.objects_hide(sk.id)
+        self.assertNotIn(sk.id,w.shown_hidden())
+        self.assertTrue(next(b for b in w.view.bodies if b.id==sk.id).visible)      # znów widoczny
+        w.objects_hide(sk.id);self.assertIn(sk.id,w.shown_hidden())
+        self.assertFalse(next(b for b in w.view.bodies if b.id==sk.id).visible)
+
+    def test_export_builds_real_threads_in_background(self):
+        import cadquery as cq,tempfile
+        from pathlib import Path
+        from rccad import threads
+        w=self.w
+        shaft=cq.Workplane().cylinder(20,5).val()
+        info=threads.cylinder_info(shaft,[i for i,f in enumerate(shaft.Faces()) if f.geomType()=='CYLINDER'][0])
+        t=threads.make_thread(info,'M','M10','right',info['t0'],info['t1'])
+        w.document.commit([Body('Śruba',shaft,threads=(t,)).prepared()]);w.refresh()
+        self.assertEqual(w.view.THREAD_COLOR[:3],(.16,.45,.86))                   # gwint niebieski
+        with tempfile.TemporaryDirectory() as d:
+            path=str(Path(d)/'sruba.step')
+            w.export_in_background(list(w.document.bodies),path)
+            self.assertFalse(w.busy)                                               # można dalej pracować
+            self.assertTrue(w.working())                                           # pasek pracy w tle
+            end=time.monotonic()+60
+            while w._exports and time.monotonic()<end:self.app.processEvents();time.sleep(.01)
+            back=k.import_shapes(Path(path))[0][0]
+            self.assertGreater(len(back.Faces()),len(shaft.Faces())+4)            # prawdziwe zwoje w pliku
+            self.assertTrue(back.isValid())
 
 
 

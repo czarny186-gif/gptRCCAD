@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.54 — gwinty, podświetlanie i znacznik miejsca w Bibliotece
+# RCCAD Desktop 0.4.55 — wymiary pod Tab, nowy wielokąt, prawdziwy gwint w eksporcie
+
+## Zmiany 0.4.55
+
+- **Okno wymiarów pod Tab w trakcie rysowania**: pola od razu z bieżącymi wymiarami kształtu, zaznaczone (wpisanie liczby je zastępuje); Tab przechodzi do kolejnego wymiaru, kształt zmienia się na bieżąco, Enter albo nowy przycisk Zatwierdź tworzy kształt.
+- **Wielokąt**: po kliknięciu środka ruch w prawo / w lewo ustala wielkość, w górę / w dół obraca wielokąt na płaszczyźnie; Tab - promień i obrót. Liczba kątów ustawiana strzałką przy wielokącie na pasku kształtów (pole 3–64 i szybkie wybory).
+- **Szkic po wyciągnięciu**: ukryty jak zwykły obiekt - przekreślone oko na liście Obiekty; kliknięcie oka go pokazuje.
+- **Gwint niebieski** (linia śrubowa gwintu kosmetycznego).
+- **Prawdziwy gwint w eksporcie STL / STEP**: w tle, w osobnym procesie, bryły z gwintami dostają w pliku prawdziwe zwoje (do druku 3D) - w tym czasie można normalnie pracować (eksport nie blokuje okna).
+
+## RCCAD Desktop 0.4.54 — gwinty, podświetlanie i znacznik miejsca w Bibliotece
 
 ## Zmiany 0.4.54
 

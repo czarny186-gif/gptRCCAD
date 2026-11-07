@@ -39,7 +39,8 @@ HINTS = {
     'circleTangent2': ['Kliknij pierwszą linię.', 'Kliknij drugą linię.', 'Kliknij, aby wskazać wielkość okręgu.'],
     'ellipse': ['Kliknij środek elipsy.', 'Kliknij narożnik opisanego prostokąta.'],
     'slot': ['Kliknij środek pierwszego końca.', 'Kliknij środek drugiego końca.', 'Kliknij punkt określający szerokość.'],
-    'polygon': ['Kliknij środek wielokąta.', 'Kliknij wierzchołek.'],
+    'polygon': ['Kliknij środek wielokąta (liczbę kątów ustawisz strzałką przy wielokącie na pasku).',
+                'Ruch w prawo / w lewo - wielkość, w górę / w dół - obrót · kliknij, aby zatwierdzić · Tab - wpisz wymiary'],
     'arc': ['Kliknij początek łuku.', 'Kliknij punkt na łuku.', 'Kliknij koniec łuku.'],
     'point': ['Kliknij miejsce punktu.'],
     'construction': ['Kliknij początek linii konstrukcyjnej.', 'Kliknij koniec.'],
@@ -52,7 +53,7 @@ HINTS = {
 VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '3 punkty', 'circle': 'Środek + promień',
                   'circleTangent2': 'Styczny do 2 elementów', 'circle2': 'Od 2 punktów', 'circle3': 'Od 3 punktów'}
 DIM_LABELS = {'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
-              'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Ilość kątów'), 'circle2': ('Średnica (mm)',),
+              'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Obrót (°)'), 'circle2': ('Średnica (mm)',),
               'line': ('Długość (mm)', 'Kąt (°)'), 'construction': ('Długość (mm)', 'Kąt (°)'), 'measure': ('Długość (mm)', 'Kąt (°)')}
 HEM_DEFAULT = dict(radius=2.0, length=10.0, gap=0.1)     # Zawinięcie: wartości przycisku Reset
 FLANGE_DEFAULT = dict(radius=0.5, angle=90.0, length=5.0, measure='outer')     # Kołnierz: wartości przycisku Reset
@@ -243,6 +244,7 @@ class StudioWindow(QMainWindow):
         self._cancel_op = None
         self.selected: list[str] = []
         self.hidden_ids: set[str] = set()
+        self.revealed_ids: set[str] = set()      # szkice wygaszone po wyciągnięciu, pokazane okiem na liście
         self.locked_ids: set[str] = set()
         self._obj_no: dict[str, int] = {}
         self._obj_count: dict[str, int] = {}
@@ -840,7 +842,7 @@ class StudioWindow(QMainWindow):
             hl = QHBoxLayout(row)
             hl.setContentsMargins(0, 0, 0, 0)
             hl.setSpacing(0)
-            grouped = bool(item['group'] and variants.get(item['group']))
+            grouped = bool(item['group'] and variants.get(item['group'])) or item['shape'] == 'polygon'
             button = QToolButton()
             button.setObjectName('shapeMain')
             button.setProperty('grouped', 'true' if grouped else 'false')
@@ -858,7 +860,11 @@ class StudioWindow(QMainWindow):
                 more.setText('▾')
                 more.setFixedSize(15, 42)
                 more.setToolTip('Warianty')
-                more.clicked.connect(lambda _=False, g=item['group'], b=more, main=button: self._variants_menu(variants[g], b, main))
+                if item['shape'] == 'polygon':
+                    more.setToolTip('Liczba kątów wielokąta')
+                    more.clicked.connect(lambda _=False, b=more: self._sides_menu(b))
+                else:
+                    more.clicked.connect(lambda _=False, g=item['group'], b=more, main=button: self._variants_menu(variants[g], b, main))
                 hl.addWidget(more)
             lay.addWidget(row)
         ui.shadow(self.shape_bar, 15, 4, 36)
@@ -871,6 +877,51 @@ class StudioWindow(QMainWindow):
 
     VARIANT_ICONS = {'rect': 'v_rect2', 'centerRect': 'v_rectC', 'rect3': 'v_rect3', 'circle': 'v_circle', 'circle2': 'v_circle2', 'circle3': 'v_circle3',
                      'circleTangent2': 'v_tan'}
+
+    def _sides_menu(self, anchor):
+        """Strzałka przy wielokącie: pole liczby kątów (3-64), jak warianty przy kole i prostokącie."""
+        from PySide6.QtWidgets import QMenu, QSpinBox, QWidgetAction
+        menu = QMenu(self)
+        menu.setStyleSheet('QMenu{background:white;border:1px solid #c9d9e8;border-radius:10px;padding:8px;}')
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(6)
+        title = QLabel('Liczba kątów wielokąta')
+        title.setStyleSheet('font-weight:700;color:#1d3a56;')
+        spin = QSpinBox()
+        spin.setRange(3, 64)
+        spin.setValue(int(self.sides))
+        spin.setFixedHeight(34)
+        spin.setStyleSheet('QSpinBox{font-size:16px;font-weight:700;color:#0969d9;padding:2px 8px;border:1px solid #9ab5d0;border-radius:7px;}')
+        presets = QHBoxLayout()
+        presets.setSpacing(4)
+        for n in (3, 4, 5, 6, 8, 12):
+            b = QPushButton(str(n))
+            b.setObjectName('chip')
+            b.setFixedSize(34, 30)
+            b.clicked.connect(lambda _=False, n=n: spin.setValue(n))
+            presets.addWidget(b)
+        lay.addWidget(title)
+        lay.addWidget(spin)
+        lay.addLayout(presets)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(box)
+        menu.addAction(action)
+
+        def changed(value):
+            self.sides = int(value)
+            self.shape_buttons['polygon'].setToolTip(f'Wielokąt ({self.sides} kątów)')
+            if self.points and self.tool == 'polygon' and self.last_uv is not None:
+                self.sketch_moved(self.sketch_plane, *self.last_uv)
+
+        spin.valueChanged.connect(changed)
+        spin.lineEdit().returnPressed.connect(menu.close)
+        self._popup = menu
+        if self.tool != 'polygon' and self.mode == 'sketch':
+            self.choose_tool('polygon')
+        QTimer.singleShot(0, lambda: (spin.setFocus(), spin.selectAll()))
+        menu.popup(anchor.mapToGlobal(QPoint(anchor.width() + 8, 0)))
 
     def _variants_menu(self, items, anchor, main):
         entries = []
@@ -901,9 +952,19 @@ class StudioWindow(QMainWindow):
             lay.addLayout(col)
             self.dim_labels.append(label)
             self.dim_edits.append(edit)
+        side = QVBoxLayout()
+        side.setSpacing(6)
         help_ = QLabel('Tab: kolejne pole\nEnter: zatwierdź\nEsc: anuluj')
         help_.setObjectName('help')
-        lay.addWidget(help_)
+        ok = QPushButton('Zatwierdź')
+        ok.setObjectName('primary')
+        ok.setCursor(Qt.PointingHandCursor)
+        ok.setFocusPolicy(Qt.NoFocus)
+        ok.clicked.connect(lambda _=False: self.apply_typed())
+        side.addWidget(help_)
+        side.addWidget(ok)
+        lay.addLayout(side)
+        self.dim_ok = ok
         ui.shadow(self.dim_panel, 20, 5, 37)
         self.dim_panel.hide()
         self.dim_edit = self.dim_edits[0]   # zgodność wsteczna
@@ -2457,9 +2518,31 @@ class StudioWindow(QMainWindow):
             return
         if not self.points or self.dim_panel.isVisible():
             return          # wartości wpisane z klawiatury mają pierwszeństwo przed kursorem
+        if self.tool == 'polygon' and len(self.points) == 1:
+            end = self._polygon_end()
+            if end is not None:
+                u, v = end
         pts = [*self.points, (u, v)]
         self._show_sketch_preview(pts)
         self.show_dimension(pts)
+
+    def _polygon_end(self):
+        """Wielokąt: ruch kursora w prawo / w lewo od środka ustala wielkość, w górę / w dół - obrót na płaszczyźnie.
+        Zwraca punkt pierwszego wierzchołka (u, v)."""
+        center = self.points[0]
+        xy = self.view.project_one(kernel.to_world(self.sketch_plane, *center))
+        if xy is None:
+            return None
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        dx, dy = pos.x() - xy[0], pos.y() - xy[1]
+        ppm = max(self.view._cam_ppm(), 1e-6)
+        step = 10 ** math.floor(math.log10(max(float(self.view.opts['distance']) / 40, 1e-3)))
+        radius = max(step, round(abs(dx) / ppm / step) * step)
+        angle = round(-dy * .5)                     # 2 piksele w pionie = 1° obrotu
+        a = math.radians(90 + angle)                # bez obrotu: wierzchołek u góry
+        self._poly_end = (center[0] + radius * math.cos(a), center[1] + radius * math.sin(a))
+        self._poly_angle = angle
+        return self._poly_end
 
     def show_dimension(self, pts):
         a, b = self.points[0], pts[-1]
@@ -2471,7 +2554,9 @@ class StudioWindow(QMainWindow):
             text = f'{fmt(du)} × {fmt(dv)} mm'
         elif self.tool == 'centerRect':
             text = f'{fmt(2 * du)} × {fmt(2 * dv)} mm'
-        elif self.tool in ('circle', 'polygon'):
+        elif self.tool == 'polygon':
+            text = f'R {fmt(dist)} mm · obrót {getattr(self, "_poly_angle", 0):g}° · {self.sides} kątów'
+        elif self.tool == 'circle':
             text = f'R {fmt(dist)} mm'
         elif self.tool == 'circle2':
             text = f'Ø {fmt(dist)} mm'
@@ -2534,11 +2619,16 @@ class StudioWindow(QMainWindow):
             self.points.append((u, v))
             self.show_sketch_hint()
             return
+        if t == 'polygon' and len(self.points) == 1:
+            end = self._polygon_end()
+            if end is not None:
+                u, v = end
         self.points.append((u, v))
         if len(self.points) < NEED[t]:
             self.show_sketch_hint()
             return
         points, self.points = list(self.points), []
+        self._poly_end = None
         self.complete(points)
 
     def finish_line(self, closed=False):
@@ -2780,6 +2870,7 @@ class StudioWindow(QMainWindow):
         if self.mode != 'sketch' or not self.points or not labels:
             return False
         self._dim_target = None
+        current = self._current_dims()
         for i in range(len(self.dim_edits)):
             visible = i < len(labels)
             self.dim_labels[i].setVisible(visible)
@@ -2787,7 +2878,8 @@ class StudioWindow(QMainWindow):
             if visible:
                 self.dim_labels[i].setText(labels[i])
                 self.dim_edits[i].blockSignals(True)
-                self.dim_edits[i].setText(first if i == 0 else (str(self.sides) if labels[i].startswith('Ilość') else ''))
+                # Tab: pola od razu z bieżącymi wymiarami (zaznaczone - wpisanie liczby je zastępuje); cyfra: zaczyna wpisywanie
+                self.dim_edits[i].setText(first if (first and i == 0) else (current[i] if i < len(current) else ''))
                 self.dim_edits[i].blockSignals(False)
         pos = self.view.mapFromGlobal(QCursor.pos())
         self.dim_panel.adjustSize()
@@ -2796,10 +2888,35 @@ class StudioWindow(QMainWindow):
         self.dim_panel.show()
         self.dim_panel.raise_()
         self.dim_edits[0].setFocus()
-        self.dim_edits[0].setCursorPosition(len(first))
+        if first:
+            self.dim_edits[0].setCursorPosition(len(first))
+        else:
+            self.dim_edits[0].selectAll()
         self.dim.hide()
         self.update_dim_preview()
         return True
+
+    def _current_dims(self):
+        """Wymiary rysowanego kształtu w tej chwili (z położenia kursora) - tekst do pól okna wymiarów."""
+        if not self.points or self.last_uv is None:
+            return []
+        a = self.points[-1] if self.tool == 'line' else self.points[0]
+        b = self._poly_end if (self.tool == 'polygon' and getattr(self, '_poly_end', None) is not None) else self.last_uv
+        du, dv = b[0] - a[0], b[1] - a[1]
+        dist = math.hypot(du, dv)
+        angle = math.degrees(math.atan2(dv, du))
+        t = self.tool
+        if t == 'rect':
+            values = [abs(du), abs(dv)]
+        elif t in ('centerRect', 'ellipse'):
+            values = [2 * abs(du), 2 * abs(dv)]
+        elif t in ('circle', 'circle2'):
+            values = [dist]
+        elif t == 'polygon':
+            values = [dist, angle - 90]           # obrót: 0° = wierzchołek u góry
+        else:
+            values = [dist, angle]
+        return [fmt(v) for v in values]
 
     def _typed_values(self):
         values = []
@@ -2820,8 +2937,7 @@ class StudioWindow(QMainWindow):
         return self._dim_end(self.tool, p0, self.last_uv, v)
 
     def _apply_typed_sides(self, v):
-        if self.tool == 'polygon' and len(v) > 1 and v[1] is not None and 3 <= int(v[1]) <= 64:
-            self.sides = int(v[1])
+        pass        # liczba kątów wielokąta ustawia się na pasku kształtów (strzałka przy wielokącie)
 
     @staticmethod
     def _dim_end(t, p0, ref, v, direction=None):
@@ -2834,7 +2950,10 @@ class StudioWindow(QMainWindow):
             h = v[1] if len(v) > 1 and v[1] is not None else v[0]
             k = .5 if t in ('centerRect', 'ellipse') else 1
             return (u0 + sx * w * k, v0 + sy * h * k)
-        if t in ('circle', 'polygon', 'circle2'):
+        if t == 'polygon':                 # promień i obrót (kąt pierwszego wierzchołka)
+            ang = math.radians(v[1] + 90) if len(v) > 1 and v[1] is not None else math.atan2(ref[1] - v0, ref[0] - u0)
+            return (u0 + v[0] * math.cos(ang), v0 + v[0] * math.sin(ang))
+        if t in ('circle', 'circle2'):
             d = direction or (1.0, 0.0)
             return (u0 + v[0] * d[0], v0 + v[0] * d[1])
         ang = math.radians(v[1]) if len(v) > 1 and v[1] is not None else 0.0
@@ -6801,6 +6920,9 @@ class StudioWindow(QMainWindow):
         bodies = [self.override.get(b.id, b) for b in self.document.bodies]
         if self.hist_ghost.isChecked():       # wygaszone szkice wracają do widoku
             bodies = [replace(b, visible=True) if (b.kind == 'sketch' and not b.visible) else b for b in bodies]
+        revealed = getattr(self, 'revealed_ids', set())
+        if revealed:        # szkic wygaszony po wyciągnięciu, pokazany okiem na liście
+            bodies = [replace(b, visible=True) if (b.id in revealed and not b.visible) else b for b in bodies]
         if self.hidden_ids:
             bodies = [replace(b, visible=False) if b.id in self.hidden_ids else b for b in bodies]
         shown = {*self.selected, self._obj_hover} if self._obj_hover else set(self.selected)
@@ -7809,7 +7931,7 @@ class StudioWindow(QMainWindow):
         """Czy coś liczy się w tle: operacja, podgląd, dopracowanie siatek albo przygotowanie w procesach."""
         from . import workers
         return (self.busy or any(st.get('running') for st in self._pv.values()) or bool(self._refining)
-                or workers.pending())
+                or workers.pending() or getattr(self, '_exports', 0) > 0)
 
     def run_preview(self, key, compute, show):
         """Ostatnie żądanie wygrywa: przy szybkim przeciąganiu pośrednie wyniki są pomijane, a interfejs nie zamarza."""
@@ -7867,6 +7989,7 @@ class StudioWindow(QMainWindow):
         self.document.clear_all()
         self.selected = []
         self.hidden_ids, self.locked_ids, self._obj_doc = set(), set(), None
+        self.revealed_ids = set()
         self.edges = {}
         self.override = {}
         self._repick = None
@@ -7912,7 +8035,7 @@ class StudioWindow(QMainWindow):
     def objects_update(self):
         numbers = self._objects_numbers()
         items = [(b.id, category(b), numbers[b.id], b.name, b.group, b.folder) for b in self.document.bodies]
-        self.objects.update_items(items, self.selected, self.hidden_ids, self.locked_ids)
+        self.objects.update_items(items, self.selected, self.shown_hidden(), self.locked_ids)
 
     def _objects_ready(self):
         if self.busy or self.mode is not None:
@@ -7941,13 +8064,26 @@ class StudioWindow(QMainWindow):
             self.selected = members
         self.refresh()
 
+    def shown_hidden(self):
+        """Obiekty ukryte (przekreślone oko na liście): ukryte okiem oraz szkice wygaszone po wyciągnięciu, których
+        nie pokazano z powrotem. Szkic po wyciągnięciu jest więc zwyczajnie ukryty - kliknięcie oka go pokazuje."""
+        revealed = getattr(self, 'revealed_ids', set())
+        return {b.id for b in self.document.bodies if b.id in self.hidden_ids or (not b.visible and b.id not in revealed)}
+
+    def _set_hidden(self, ids, hide):
+        revealed = self.__dict__.setdefault('revealed_ids', set())
+        ids = [i for i in ids if self.document.get(i) is not None]
+        if hide:
+            self.hidden_ids.update(ids)
+            revealed.difference_update(ids)
+            self.selected = [i for i in self.selected if i not in ids]
+        else:
+            self.hidden_ids.difference_update(ids)
+            revealed.update(i for i in ids if not self.document.get(i).visible)
+
     def objects_hide(self, oid):
         members = self._group_ids(oid)          # szyk „jako jeden element” to jedna pozycja listy
-        if oid in self.hidden_ids:
-            self.hidden_ids.difference_update(members)
-        else:
-            self.hidden_ids.update(members)
-            self.selected = [i for i in self.selected if i not in members]
+        self._set_hidden(members, oid not in self.shown_hidden())
         self.refresh()
 
     def objects_lock(self, oid):
@@ -8015,12 +8151,8 @@ class StudioWindow(QMainWindow):
         self.refresh()
 
     def objects_folder_hide(self, ids):
-        ids = [i for i in ids if self.document.get(i) is not None]
-        if all(i in self.hidden_ids for i in ids):
-            self.hidden_ids.difference_update(ids)
-        else:
-            self.hidden_ids.update(ids)
-            self.selected = [i for i in self.selected if i not in ids]
+        hidden = self.shown_hidden()
+        self._set_hidden(ids, not all(i in hidden for i in ids))
         self.refresh()
 
     def objects_folder_delete(self, ids):
@@ -8042,11 +8174,8 @@ class StudioWindow(QMainWindow):
 
     def objects_group_hide(self, cat):
         ids = [b.id for b in self.document.bodies if category(b) == cat]
-        if all(i in self.hidden_ids for i in ids):
-            self.hidden_ids.difference_update(ids)
-        else:
-            self.hidden_ids.update(ids)
-            self.selected = [i for i in self.selected if i not in ids]
+        hidden = self.shown_hidden()
+        self._set_hidden(ids, not all(i in hidden for i in ids))
         self.refresh()
 
     def objects_group_delete(self, cat):
@@ -8197,6 +8326,7 @@ class StudioWindow(QMainWindow):
             self.document = Document()
             self.selected = []
             self.hidden_ids, self.locked_ids = set(), set()
+            self.revealed_ids = set()
             self.refresh(True)
 
     def open_project(self):
@@ -8210,6 +8340,8 @@ class StudioWindow(QMainWindow):
                 self.document = doc
                 self.selected = []
                 self.hidden_ids, self.locked_ids = set(), set()
+                self.revealed_ids = set()
+            self.revealed_ids = set()
 
             self.run_operation('Otwieranie projektu', lambda: Document.load(path), loaded, True)
 
@@ -8460,7 +8592,8 @@ class StudioWindow(QMainWindow):
     def export_bodies(self):
         """Co trafia do eksportu: tylko obiekty widoczne na polu roboczym (bez ukrytych na liście obiektów i wygaszonych
         szkiców); gdy któreś z nich są zaznaczone - tylko zaznaczone."""
-        visible = [b for b in self.document.bodies if b.visible and b.id not in self.hidden_ids]
+        hidden = self.shown_hidden()
+        visible = [b for b in self.document.bodies if b.id not in hidden]
         chosen = [b for b in visible if b.id in self.selected]
         return chosen or visible
 
@@ -8474,7 +8607,47 @@ class StudioWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, 'Eksportuj zaznaczone lub widoczne obiekty', 'Model.step',
                                               'STEP (*.step);;STL (*.stl);;BREP (*.brep);;DXF — szkice (*.dxf)')
         if path:
-            self.run_operation('Eksportowanie', lambda: kernel.export_shapes([b.shape for b in bodies], path), lambda _: None)
+            self.export_in_background(bodies, path)
+
+    def export_in_background(self, bodies, path):
+        """Eksport w tle bez blokowania pracy: bryły z gwintami dostają prawdziwe zwoje (do druku 3D i STEP) w procesie
+        liczącym; w tym czasie można normalnie pracować dalej (eksportuje się stan z chwili wybrania pliku)."""
+        from . import threads as th
+        items = [(b.shape, tuple(b.threads)) for b in bodies]
+        threaded = sum(len(t) for _, t in items)
+        name = Path(path).name
+
+        def job():
+            try:
+                return workers.call_any(th.export_job, items, path)
+            except workers.Unavailable:
+                return th.export_job(items, path)
+
+        work = _Work(job)
+        self._exports = getattr(self, '_exports', 0) + 1
+        jobs = self.__dict__.setdefault('_export_jobs', [])
+        jobs.append(work)                      # obiekt sygnałów musi żyć do końca pracy w tle
+
+        def finished():
+            self._exports -= 1
+            if work in jobs:
+                jobs.remove(work)
+
+        def done(failed):
+            finished()
+            if failed:
+                self.toast(f'Zapisano {name}. {failed} gwint(ów) nie udało się zbudować - zostały jako otwór.', 6000)
+            else:
+                self.toast(f'Zapisano {name}' + (f' (gwinty: {threaded}, jako prawdziwe zwoje).' if threaded else '.'), 4000)
+
+        def failed(message):
+            finished()
+            self.toast(f'Eksport {name} nie powiódł się: {message}', 6000)
+
+        work.signals.done.connect(done)
+        work.signals.failed.connect(failed)
+        self.pool.start(work)
+        self.toast(f'Eksport {name} w tle' + (' - buduję prawdziwe gwinty, możesz dalej pracować.' if threaded else '…'), 4000)
 
     # =====================================================================
     # klawiatura
