@@ -332,8 +332,17 @@ def sketch_shape(kind, plane, points, sides=5):
         return sketch(**sketch_from_drag("rectangle", plane, u0, v0, u1, v1))
     if kind == "circle":
         return sketch(**sketch_from_drag("circle", plane, *pts[0], *pts[1]))
-    if kind == "polygon":
-        return sketch(**sketch_from_drag("polygon", plane, *pts[0], *pts[1], sides=sides))
+    if kind == "polygon":                 # pierwszy wierzchołek dokładnie w klikniętym punkcie (obrót wielokąta)
+        (u0, v0), (u1, v1) = pts[:2]
+        n = int(sides)
+        if not 3 <= n <= 128:
+            raise CadError("Wielokąt musi mieć od 3 do 128 boków.")
+        r = dist(pts[0], pts[1])
+        if r < tiny:
+            raise CadError("Figura jest za mała.")
+        a0 = math.atan2(v1 - v0, u1 - u0)
+        corners = [(u0 + r * math.cos(a0 + 2 * math.pi * k / n), v0 + r * math.sin(a0 + 2 * math.pi * k / n)) for k in range(n)]
+        return polyline(plane, corners, True)
     wp_ = wp(plane)
     if kind == "circle2":
         (a, b) = pts[:2]

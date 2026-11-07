@@ -2247,7 +2247,7 @@ class StudioTests(unittest.TestCase):
         import math
         from PySide6.QtCore import QPoint
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('polygon')
-        w.sides=6
+        w.sides=5
         w.sketch_clicked('XY',0,0)
         c=w.view.project_one((0,0,0));ppm=w.view._cam_ppm()
         def at(dx,dy):
@@ -2260,10 +2260,10 @@ class StudioTests(unittest.TestCase):
             w.sketch_moved('XY',99,99)
             self.assertAlmostEqual(math.hypot(*w._poly_end),r1,6)            # w lewo też ta sama wielkość
             self.assertEqual(w._poly_angle,30)                               # w górę - obrót
-            self.assertIn('30°',w.dim.text());self.assertIn('6 kątów',w.dim.text())
+            self.assertIn('30°',w.dim.text());self.assertIn('5 kątów',w.dim.text())
             w.sketch_clicked('XY',99,99)
         self.wait()
-        sk=w.document.bodies[-1];self.assertEqual(len(sk.shape.Edges()),6)
+        sk=w.document.bodies[-1];self.assertEqual(len(sk.shape.Edges()),5)
         v=[p.toTuple() for p in sk.shape.Vertices()]
         self.assertTrue(any(abs(math.degrees(math.atan2(y,x))-120)<1e-3 for x,y,_ in v))   # 90° + 30°
         w._sides_menu(w.shape_buttons['polygon'])
