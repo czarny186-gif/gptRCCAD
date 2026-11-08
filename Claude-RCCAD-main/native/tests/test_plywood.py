@@ -315,6 +315,50 @@ def kernel_union(shapes):
     return out.clean()
 
 
+class PlywoodCrossTests(unittest.TestCase):
+    """0.4.62: przegrody na krzyż od razu z nacięciami; płyty ukryte są dla nowych płyt niewidoczne."""
+
+    def _box(self):
+        t = 18.0
+        base = cq.Solid.makeBox(400, 300, t)
+        b = Body('Płyta 1', base, meta=pw.ply_meta(t, 'cnc')).prepared()
+        tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - t) < 1e-6]
+        return hist.run_recipe([b], dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, tops), t=t, h=200.0, side='on', flip=False,
+                                         method='cnc', out=['w1', 'w2', 'w3', 'w4']))
+
+    def _divider(self, bodies, axis, out, ignore=()):
+        walls = [x for x in bodies if x.name.startswith('Ścianka')]
+        pair = sorted([w for w in walls if (w.shape.BoundingBox().xlen if axis == 0 else w.shape.BoundingBox().ylen) < 19],
+                      key=lambda w: w.shape.Center().toTuple()[axis])
+        face = lambda body, sign: max((f for f in body.shape.Faces() if f.geomType() == 'PLANE' and np.array(f.normalAt().toTuple())[axis] * sign > .99),
+                                      key=lambda f: f.Area())
+        ref = lambda body, f: dict(hist.face_ref(f, np.array(f.normalAt().toTuple()), np.array(f.Center().toTuple()), body.shape), id=body.id)
+        recipe = dict(type='ply_between', a=ref(pair[0], face(pair[0], 1)), b=ref(pair[1], face(pair[1], -1)), t=18.0, pos=None, count=1,
+                      turn=True, method='cnc', out=[out], ignore=list(ignore))
+        return hist.run_recipe(bodies, recipe)
+
+    def test_crossing_dividers_get_halving_automatically(self):
+        bodies = self._divider(self._box(), 0, 'd1')
+        d1 = next(x for x in bodies if x.id == 'd1')
+        bodies = self._divider(bodies, 1, 'd2')
+        n1, n2 = next(x for x in bodies if x.id == 'd1'), next(x for x in bodies if x.id == 'd2')
+        self.assertLess(n1.shape.Volume(), d1.shape.Volume() - 18 * 18 * 99)      # nacięcie do połowy w istniejącej przegrodzie
+        self.assertEqual(len(n2.shape.Solids()), 1)                                  # nowa przechodzi przez całą szerokość
+        self.assertAlmostEqual(n1.shape.intersect(n2.shape).Volume(), 0, 3)
+        self.assertEqual((n1.meta['ply']['joined'], n2.meta['ply']['joined']), (['d2'], ['d1']))
+        contacts, _ = pw.find_contacts(pw.panels_of(bodies))
+        self.assertFalse(any(c['kind'] == 'X' for c in contacts))                   # już połączone - nie wraca w Połączeniach
+
+    def test_hidden_panels_are_invisible_for_new_ones(self):
+        bodies = self._divider(self._box(), 0, 'd1')
+        d1 = next(x for x in bodies if x.id == 'd1')
+        bodies = self._divider(bodies, 1, 'd2', ignore=['d1'])
+        n1, n2 = next(x for x in bodies if x.id == 'd1'), next(x for x in bodies if x.id == 'd2')
+        self.assertAlmostEqual(n1.shape.Volume(), d1.shape.Volume(), 3)            # ukryta płyta nietknięta
+        self.assertAlmostEqual(n2.shape.Volume(), 264 * 200 * 18, 0)               # nowa - jakby ukrytej nie było
+        self.assertFalse(n2.meta['ply'].get('joined'))
+
+
 class PlywoodWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -399,6 +443,17 @@ class PlywoodWindowTests(unittest.TestCase):
         self.wait()
         shelf = next(b for b in w.document.bodies if b.name == 'Półka 1')
         self.assertAlmostEqual(shelf.shape.Volume(), 164 * 114 * 18)
+        w.objects_hide(shelf.id)                                                  # ukryta płyta: nowe płyty jej nie widzą
+        self.assertEqual(w._ply_hidden(), [shelf.id])
+        w.set_mode('ply_between')
+        with patch.object(w.view, 'pick_face', return_value=(ys[0].id, np.array([0, 1., 0]), np.array(fa.Center().toTuple()))):
+            w.view_clicked(5, 5, False, False)
+        with patch.object(w.view, 'pick_face', return_value=(ys[1].id, np.array([0, -1., 0]), np.array(fb.Center().toTuple()))):
+            w.view_clicked(5, 5, False, False)
+        self.assertEqual(w._pb_recipe()['ignore'], [shelf.id])
+        self.assertNotIn('W tym miejscu', w.pb_status.text())                   # w tym samym miejscu - bez błędu, bo ukrytej „nie ma”
+        w.set_mode(None)
+        w.objects_hide(shelf.id)
         # połączenia: wykrycie, zmiana metody zamienia niedostępne, podgląd i zapis kroku
         w.toggle_mode('ply_joints')
         self.assertIn('Szukam', w.pj_status.text())                            # styki liczone w tle - okno nie czeka

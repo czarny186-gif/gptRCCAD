@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.61 — wczepy laserowe w wielokątach, szybki import SVG/DXF, Shift w zaokrąglaniu
+# RCCAD Desktop 0.4.62 — akcje na zaznaczonych obiektach, przegrody na krzyż, ukryte płyty
+
+## Zmiany 0.4.62
+
+- **Okno Obiekty**: oko (ukryj / pokaż), kłódka, kosz oraz „Do grupy”, „Nowa grupa”, „Wyjmij z grupy” na pozycji, która jest zaznaczona, działają na wszystkie zaznaczone pozycje naraz. Na pozycji niezaznaczonej - tylko na nią.
+- **Przegrody na krzyż (Sklejka)**: półka / przegroda dodana tak, że przechodzi na wylot przez istniejącą prostopadłą przegrodę, od razu dostaje z nią nacięcia krzyżowe do połowy (obie płyty, z luzem i „psimi kośćmi” przy frezarce). Półka kończąca się w ściance nie jest krzyżem - tylko się z nią styka.
+- **Ukryte płyty**: płyty ukryte na liście obiektów (przekreślone oko) są dla nowych półek, przegród i ścianek niewidoczne - nowe dodają się tak, jakby ich nie było. Pomijają je też Połączenia.
+
+## RCCAD Desktop 0.4.61 — wczepy laserowe w wielokątach, szybki import SVG/DXF, Shift w zaokrąglaniu
 
 ## Zmiany 0.4.61
 

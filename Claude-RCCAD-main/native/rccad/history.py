@@ -1554,7 +1554,7 @@ def ply_walls(bodies, base, indices, recipe):
     from . import plywood as pw
     edges = base.shape.Edges()
     base_t = (base.meta or {}).get('ply', {}).get('t') if base.meta else None
-    others = _ply_others(bodies, {base.id})
+    others = _ply_others(bodies, {base.id, *recipe.get('ignore', ())})     # płyty ukryte na liście obiektów - pomijane
     order = sorted(indices, key=lambda i: -edges[i].Length())
     made = pw.edge_walls(base.shape, [edges[i] for i in order], float(recipe['t']), float(recipe['h']), recipe.get('side', 'on'),
                          bool(recipe.get('flip')), base_t)
@@ -1595,13 +1595,53 @@ def ply_between_shapes(bodies, recipe):
     return pw.between_panels(fa, pa, na, fb, pb, float(recipe['t']), recipe.get('pos'), int(recipe.get('count', 1)), bool(recipe.get('turn')))
 
 
+def ply_between_fit(bodies, shapes, recipe):
+    """Nowe półki / przegrody wpasowane między istniejące płyty: przechodzące na wylot przez prostopadłą płytę dostają
+    z nią nacięcia krzyżowe, a z pozostałymi tylko się stykają (przycięte). Płyty ukryte na liście obiektów (recipe['ignore'])
+    są dla nowych płyt niewidoczne - nowe dodają się tak, jakby ich nie było.
+    Zwraca (kształty nowych płyt, {id: zmieniona istniejąca płyta}, {id: id płyt połączonych krzyżowo})."""
+    from . import plywood as pw
+    ignore = set(recipe.get('ignore', ()))
+    panels = [b for b in bodies if b.kind == 'solid' and b.visible and pw.is_panel(b) and b.id not in ignore]
+    current = {b.id: b.shape for b in panels}
+    joined = {}
+    out = []
+    for k, shp in enumerate(shapes):
+        others = [(b.id, current[b.id], b.meta['ply'].get('t')) for b in panels]
+        shp, changed, crossed = pw.cross_new(shp, float(recipe['t']), others, recipe.get('method', 'cnc'), recipe.get('fit'))
+        current.update(changed)
+        joined[k] = crossed
+        rest = [current[b.id] for b in panels if b.id not in crossed]
+        before = shp.Volume()
+        shp = _ply_trim(shp, rest)
+        if shp.Volume() < .2 * before:
+            raise kernel.CadError('W tym miejscu jest już płyta - nowa by się w niej zmieściła.')
+        out.append(shp)
+    changed = {pid: shape for pid, shape in current.items() if shape is not next(b.shape for b in panels if b.id == pid)}
+    return out, changed, joined
+
+
 def run_ply_between(bodies, recipe):
     shapes, _ = ply_between_shapes(bodies, recipe)
-    others = _ply_others(bodies)
-    shapes = [_ply_trim(shp, others) for shp in shapes]
+    shapes, changed, joined = ply_between_fit(bodies, shapes, recipe)
     a, b = _body(bodies, recipe['a']['id']), _body(bodies, recipe['b']['id'])
     folder = a.folder or b.folder                     # półka w grupie szafki / pudełka
-    return [*bodies, *_ply_bodies(bodies, shapes, 'Półka' if not recipe.get('turn') else 'Przegroda', recipe, folder)]
+    made = _ply_bodies(bodies, shapes, 'Półka' if not recipe.get('turn') else 'Przegroda', recipe, folder)
+    partners = {}
+    for k, crossed in joined.items():
+        for oid in crossed:
+            partners.setdefault(oid, set()).add(made[k].id)
+            partners.setdefault(made[k].id, set()).add(oid)
+    out = []
+    for body in [*bodies, *made]:
+        if body.id in changed:
+            body = body.changed(changed[body.id])
+        if body.id in partners:
+            ply = dict(body.meta['ply'])
+            ply['joined'] = sorted(set(ply.get('joined', ())) | partners[body.id])
+            body = replace(body, meta={**(body.meta or {}), 'ply': ply})
+        out.append(body)
+    return out
 
 
 def ply_contacts(bodies, recipe):
@@ -1870,7 +1910,7 @@ def reads(recipe, current):
             ids |= sketches if spec['k'] in ('region', 'textgroup') else {spec['id']}
         return ids
     if kind == 'ply_between':
-        return {recipe['a']['id'], recipe['b']['id']}
+        return None                      # przycina się do innych płyt i nacina krzyżowo istniejące - zależy od wszystkich
     if kind == 'ply_joints':
         return set(recipe['ids'])
     return None

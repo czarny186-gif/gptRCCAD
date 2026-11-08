@@ -80,6 +80,28 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w._obj_no[c.id],1)
         w.redo();self.wait();self.assertEqual(len(w.objects.rows),2)
 
+    # 0.4.62: oko, kłódka, kosz i grupy na zaznaczonej pozycji działają na wszystkie zaznaczone
+    def test_objects_row_actions_apply_to_all_selected(self):
+        w=self.w
+        bodies=[Body(f'B{i}',k.box(5,5,5),'solid').prepared() for i in range(4)]
+        w.document.commit(bodies);w.refresh();self.app.processEvents()
+        a,b,c,d=[x.id for x in bodies]
+        w.objects_select(a,Qt.NoModifier);w.objects_select(b,Qt.ShiftModifier);w.objects_select(c,Qt.ShiftModifier)
+        w.objects_hide(b);self.assertTrue({a,b,c}<=w.hidden_ids);self.assertNotIn(d,w.hidden_ids)      # jedno kliknięcie - wszystkie zaznaczone
+        w.objects_hide(a);self.assertNotIn(a,w.hidden_ids);self.assertIn(b,w.hidden_ids)               # niezaznaczona pozycja - tylko ona
+        w.objects_hide(b);w.objects_hide(c)
+        w.objects_select(a,Qt.NoModifier);w.objects_select(d,Qt.ShiftModifier)
+        w.objects_lock(d);self.assertTrue({a,d}<=w.locked_ids);self.assertNotIn(b,w.locked_ids)
+        w.objects_select(a,Qt.NoModifier);w.objects_select(d,Qt.ShiftModifier)
+        w.objects_lock(d);self.assertFalse({a,d}&w.locked_ids)
+        w.objects_select(a,Qt.NoModifier);w.objects_select(d,Qt.ShiftModifier)
+        w.objects_folder_new([a]);self.assertEqual(w.document.get(a).folder,w.document.get(d).folder);self.assertTrue(w.document.get(a).folder)
+        w.objects_select(a,Qt.NoModifier);w.objects_select(d,Qt.ShiftModifier)
+        w.objects_folder_move([d],'');self.assertEqual((w.document.get(a).folder,w.document.get(d).folder),('',''))   # wyjęcie z grupy - obie
+        w.objects_select(b,Qt.NoModifier);w.objects_select(c,Qt.ShiftModifier)
+        w.objects_delete(c);self.wait();self.assertEqual({x.id for x in w.document.bodies},{a,d})
+        w.objects_delete(a);self.wait();self.assertEqual({x.id for x in w.document.bodies},{d})       # niezaznaczona - tylko ona
+
     def test_click_on_letter_selects_whole_text_shift_removes_one(self):
         from rccad import history as hist
         w=self.w;shapes=k.text_shape('XY','Abc',0,0,10)

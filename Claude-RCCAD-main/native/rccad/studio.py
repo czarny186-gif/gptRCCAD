@@ -8339,12 +8339,14 @@ class StudioWindow(PlywoodTools, QMainWindow):
             revealed.update(i for i in ids if not self.document.get(i).visible)
 
     def objects_hide(self, oid):
-        members = self._group_ids(oid)          # szyk „jako jeden element” to jedna pozycja listy
+        """Oko na liście: klikniętą pozycję (szyk „jako jeden element” to jedna pozycja); gdy jest wśród zaznaczonych -
+        wszystkie zaznaczone naraz (wszystkie dostają stan klikniętej)."""
+        members = self._folder_targets([oid]) or self._group_ids(oid)
         self._set_hidden(members, oid not in self.shown_hidden())
         self.refresh()
 
     def objects_lock(self, oid):
-        members = self._group_ids(oid)
+        members = self._folder_targets([oid]) or self._group_ids(oid)     # kłódka: też wszystkie zaznaczone
         if oid in self.locked_ids:
             self.locked_ids.difference_update(members)
         else:
@@ -8369,11 +8371,9 @@ class StudioWindow(PlywoodTools, QMainWindow):
     def objects_folder_move(self, ids, folder):
         if not self._objects_ready():
             return
-        targets = self._folder_targets(ids) if folder else [i for i in ids if self.document.get(i) is not None]
+        targets = self._folder_targets(ids)          # wśród zaznaczonych - wszystkie zaznaczone (także „Wyjmij z grupy”)
         if not targets:
             return
-        if not folder:
-            targets = [m for i in targets for m in self._group_ids(i)]
         self._set_folder(targets, folder, f'Do grupy: {folder}' if folder else 'Wyjęcie z grupy')
 
     def objects_folder_new(self, ids):
@@ -8455,10 +8455,13 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.refresh()
 
     def objects_delete(self, oid):
-        if self.busy or self.mode is not None:
+        """Kosz na liście: kliknięta pozycja, a gdy jest wśród zaznaczonych - wszystkie zaznaczone."""
+        if self.busy:
             return
-        if oid not in self.selected:
-            self.selected = self._group_ids(oid)
+        targets = self._folder_targets([oid]) or self._group_ids(oid)
+        if self.mode is not None:
+            self.set_mode(None)
+        self.selected = targets
         self.delete_selected()
 
     def delete_selected(self):

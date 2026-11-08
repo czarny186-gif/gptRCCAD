@@ -384,7 +384,7 @@ class PlywoodTools:
         if base is None or not self.pw_edges:
             return None, None
         return base, dict(type='ply_wall', base=base.id, t=self.ply_thickness(), h=float(self.pw_height.value()), side=self.pw_side.currentData(),
-                          flip=bool(self.pw_flip.isChecked()), method=self.ply_method)
+                          flip=bool(self.pw_flip.isChecked()), method=self.ply_method, ignore=self._ply_hidden())
 
     # ------------------------------------------------------------------ Półka / przegroda
     def _pb_pick(self, x, y):
@@ -415,6 +415,11 @@ class PlywoodTools:
         else:
             self._ply_update()
 
+    def _ply_hidden(self):
+        """Płyty ukryte na liście obiektów (przekreślone oko): nowe płyty ich nie widzą - nie docinają się do nich."""
+        hidden = self.shown_hidden() if hasattr(self, 'shown_hidden') else set()
+        return sorted(b.id for b in self.document.bodies if b.id in hidden and pw.is_panel(b))
+
     def _pb_recipe(self):
         if len(self.pb_faces) < 2:
             return None
@@ -424,7 +429,7 @@ class PlywoodTools:
             refs.append(dict(hist.face_ref(f['face'], f['normal'], f['point'], body.shape if body else None), id=f['id']))
         count = int(round(self.pb_count.value()))
         return dict(type='ply_between', a=refs[0], b=refs[1], t=self.ply_thickness(), pos=None if count > 1 else float(self.pb_pos.value()),
-                    count=count, turn=self.pb_turn.currentData() == 'v', method=self.ply_method)
+                    count=count, turn=self.pb_turn.currentData() == 'v', method=self.ply_method, ignore=self._ply_hidden())
 
     def _pb_reset_pos(self):
         """Nowe ściany albo inny kierunek płyty: położenie na środku wspólnego obszaru."""
@@ -482,15 +487,16 @@ class PlywoodTools:
                     a, b = self.pb_faces
                     shapes, info = pw.between_panels(a['face'], a['point'], a['normal'], b['face'], b['point'], recipe['t'], recipe['pos'],
                                                      recipe['count'], recipe['turn'])
-                    others = hist._ply_others(self.document.bodies)
-                    shapes = [hist._ply_trim(shp, others) for shp in shapes]
+                    shapes, changed, joined = hist.ply_between_fit(list(self.document.bodies), shapes, recipe)
+                    crossed = sum(len(v) for v in joined.values())
+                    shapes = [*shapes, *changed.values()]      # także nacięte istniejące płyty (nacięcia krzyżowe)
                     if recipe['count'] == 1:
                         s = np.array(info['s'], float)
                         start = info['centre'] + s * (info['starts'][0] + recipe['t'])
                         handles.append(dict(id='plyP', start=start, tip=start + s * max(15.0, info['span'] * .2), dir=s, color=(.94, .6, .13, 1)))
                     lo, hi = pw.extent(shapes[0], info['w']) if shapes else (0.0, info['depth'])
                     status = (f"{recipe['count']} × {recipe['t']:g} mm, szerokość {info['gap']:.1f}, głębokość {hi - lo:.1f} mm. "
-                              'Strzałka przesuwa płytę.')
+                              + (f'Nacięcia krzyżowe z istniejącymi płytami: {crossed}. ' if crossed else '') + 'Strzałka przesuwa płytę.')
         except kernel.CadError as exc:
             shapes, status = [], str(exc)
         except Exception as exc:
@@ -584,7 +590,8 @@ class PlywoodTools:
     # ------------------------------------------------------------------ Połączenia
     def _pj_detect(self):
         """Styki płyt liczone w procesie w tle - okno od razu działa, lista połączeń pojawia się po chwili."""
-        ids = [b.id for b in self.document.bodies if pw.is_panel(b) and b.visible]
+        hidden = set(self._ply_hidden())
+        ids = [b.id for b in self.document.bodies if pw.is_panel(b) and b.visible and b.id not in hidden]   # ukryte - bez połączeń
         self.pj_contacts, self.pj_skipped, self.pj_ids = [], [], ids
         self._pj_build_rows()
         self.pj_status.setText('Szukam miejsc, w których płyty się stykają…' if ids else '')

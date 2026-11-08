@@ -432,6 +432,43 @@ def _cross(A, B, pa, pb):
                 ad=list(extent(None, d, pa)), bd=list(extent(None, d, pb)), ta=A['t'], tb=B['t'])
 
 
+def cross_new(new_shape, t, others, meth='cnc', fit=None, tool=None):
+    """Nowa płyta przechodząca na wylot przez istniejące (przegrody na krzyż): od razu nacięcia krzyżowe do połowy
+    w obu płytach. others: [(id, kształt, grubość)] - także płyty ukryte. Zwraca (nowa płyta, {id: zmieniona płyta}, [id])."""
+    m = method(meth)
+    fit = m['fit'] if fit is None else fit
+    tool = m['tool'] if tool is None else tool
+    changed, crossed = {}, []
+    new = dict(id='__new__', shape=new_shape, **panel_info(new_shape, t))
+    for oid, shape, ot in others:
+        if not _boxes_near(new['shape'], shape, 0.0):
+            continue
+        try:
+            other = dict(id=oid, shape=changed.get(oid, shape), **panel_info(shape, ot))
+        except kernel.CadError:
+            continue
+        if abs(float(new['n'] @ other['n'])) > 1e-4:
+            continue                         # tylko płyty prostopadłe
+        pn, po = _points(new['shape']), _points(other['shape'])
+        # prawdziwy krzyż: każda płyta wystaje po obu stronach drugiej (półka kończąca się w ściance to nie krzyż)
+        en, eo = extent(None, other['n'], pn), extent(None, new['n'], po)
+        if not (en[0] < other['lo'] - 1e-3 and en[1] > other['hi'] + 1e-3 and eo[0] < new['lo'] - 1e-3 and eo[1] > new['hi'] + 1e-3):
+            continue
+        c = _cross(new, other, pn, po)
+        if c is None or c['kind'] != 'X':
+            continue
+        c['joint'], c['key'] = 'halving', f'__new__:{oid}'
+        try:
+            out = apply_joints({'__new__': (new['shape'], new['n']), oid: (other['shape'], other['n'])}, [c],
+                               dict(method=meth, fit=fit, tool=tool))
+        except kernel.CadError:
+            continue                         # nie da się naciąć (płyty nie dochodzą do krawędzi) - zostanie przycięta
+        new['shape'] = out['__new__']
+        changed[oid] = out[oid]
+        crossed.append(oid)
+    return new['shape'], changed, crossed
+
+
 def find_contacts(panels):
     """Styki między płytami: lista opisów (L, T, X, M - narożnik na skos). Płyty równoległe są pomijane."""
     out, skipped = [], []
