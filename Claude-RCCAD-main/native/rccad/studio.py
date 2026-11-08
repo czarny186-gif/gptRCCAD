@@ -361,6 +361,9 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
                                'QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }')
             body = QWidget()
             body.setObjectName('panelbody')
+            # treść zawsze na szerokość panelu (szersze czcionki, np. w Windows, nie wypychają pól poza prawą krawędź)
+            from PySide6.QtWidgets import QSizePolicy
+            body.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             inner = QVBoxLayout(body)
             inner.setContentsMargins(0, 0, 12, 0)
             inner.setSpacing(11)

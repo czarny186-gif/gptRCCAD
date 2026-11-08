@@ -4,6 +4,7 @@
 
 - **Do cięcia - „Zaznaczone”**: płyta pod kursorem podświetla się przed kliknięciem, kliknięcie dodaje płytę (bez Shift), wybrane płyty są pomarańczowe, prawy przycisk odznacza.
 - **Skalowanie - strzałki**: pomarańczowa strzałka w rogu obiektu przeciąga skalę jednakową, przy różnej skali w osiach - trzy strzałki w kolorach osi X, Y, Z. Pola X / Y / Z jedno pod drugim - widać je w całości.
+- **Panele z przewijaniem**: treść zawsze na szerokość panelu - przy szerszych czcionkach (Windows) pola nie są już ucinane z prawej strony.
 
 ## RCCAD Desktop 0.4.69 — gięcia na ściankach na noski, narożniki nachodzących ścianek
 
