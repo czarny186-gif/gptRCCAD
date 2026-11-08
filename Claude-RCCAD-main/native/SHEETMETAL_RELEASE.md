@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.69 — gięcia na ściankach na noski, narożniki nachodzących ścianek
+# RCCAD Desktop 0.4.70 — wybór płyt do cięcia, strzałki skalowania
+
+## Zmiany 0.4.70
+
+- **Do cięcia - „Zaznaczone”**: płyta pod kursorem podświetla się przed kliknięciem, kliknięcie dodaje płytę (bez Shift), wybrane płyty są pomarańczowe, prawy przycisk odznacza.
+- **Skalowanie - strzałki**: pomarańczowa strzałka w rogu obiektu przeciąga skalę jednakową, przy różnej skali w osiach - trzy strzałki w kolorach osi X, Y, Z. Pola X / Y / Z jedno pod drugim - widać je w całości.
+
+## RCCAD Desktop 0.4.69 — gięcia na ściankach na noski, narożniki nachodzących ścianek
 
 ## Zmiany 0.4.69
 

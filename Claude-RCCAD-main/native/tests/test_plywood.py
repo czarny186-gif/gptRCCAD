@@ -1049,3 +1049,35 @@ class SheetTabBendTests(SheetTabWallTests):
             w.selected = [sheet.id]; w.sheet_command('unfold_sheet'); self.wait()
             self.assertTrue(w.document.get(sheet.id).meta['sheet'].get('flat'), rule)
             self.assertEqual(_overlaps([x.shape for x in w.document.bodies]), 0, rule)
+
+
+class PlyCutPickTests(PlywoodWindowTests):
+    def test_tab_tools_and_full_flow(self):
+        pass
+
+    def test_cut_selected_hover_color_click_and_right_click(self):
+        """0.4.69: Do cięcia - płyta pod kursorem podświetla się, kliknięcie dodaje (bez Shift), wybrane mają inny kolor,
+        prawy przycisk odznacza."""
+        from rccad.studio import TINT_TOOL
+        w = self.w
+        a = Body('Płyta A', cq.Solid.makeBox(50, 40, 4), meta=pw.ply_meta(4, 'laser')).prepared()
+        b = Body('Płyta B', cq.Solid.makeBox(50, 40, 4).translate(cq.Vector(80, 0, 0)), meta=pw.ply_meta(4, 'laser')).prepared()
+        w.document.commit([a, b]); w.refresh()
+        w.selected = []
+        w.toggle_mode('ply_cut')
+        with patch.object(w.view, 'pick_face', return_value=(a.id, [0, 0, 1], [10, 10, 4])):
+            w.ply_hover(5, 5)
+        self.assertEqual(w._hover_key, ('shellsolid', a.id))                              # podświetlenie przed kliknięciem
+        for bid in (a.id, b.id):
+            with patch.object(w.view, 'pick_body', return_value=bid):
+                w.view_clicked(5, 5, False, False)
+        self.assertEqual(w.pc_scope.currentData(), 'sel')
+        self.assertEqual(sorted(w.selected), sorted([a.id, b.id]))                        # bez Shift - obie
+        self.assertEqual(w.view.tints, {a.id: TINT_TOOL, b.id: TINT_TOOL})
+        with patch.object(w.view, 'pick_body', return_value=a.id):
+            w.context_menu(5, 5)                                                          # prawy przycisk odznacza
+        self.assertEqual(w.selected, [b.id])
+        self.assertEqual(w.view.tints, {b.id: TINT_TOOL})
+        self.assertEqual([x.id for x in w._pc_bodies()], [b.id])
+        w.set_mode(None)
+        self.assertEqual(w.view.tints, {})

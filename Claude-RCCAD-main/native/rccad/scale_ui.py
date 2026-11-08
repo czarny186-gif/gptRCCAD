@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QMatrix4x4
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from . import history as hist
 from . import kernel
@@ -28,19 +28,21 @@ class ScaleTools:
         self.sc_axes = QCheckBox('Różna skala w osiach X, Y, Z')
         lay.addWidget(self.sc_axes)
         self.sc_axes_box = QWidget()
-        row = QHBoxLayout(self.sc_axes_box)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
+        col = QVBoxLayout(self.sc_axes_box)          # osie jedna pod drugą - pola mieszczą się w panelu
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(6)
         self.sc_xyz = []
-        for axis in 'XYZ':
+        for axis, color in zip('XYZ', ('#e5484d', '#2fa56d', '#3b82f6')):
             spin = _spin(100.0, .01, 1e6, 3, 10)
-            spin.setToolTip(f'Skala w osi {axis} (%)')
-            box = QWidget()
-            col = QHBoxLayout(box)
-            col.setContentsMargins(0, 0, 0, 0)
-            col.addWidget(QLabel(axis))
-            col.addWidget(spin, 1)
-            row.addWidget(box, 1)
+            spin.setToolTip(f'Skala w osi {axis} (%) - albo przeciągnij strzałkę osi {axis}')
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            name = QLabel(f'{axis} (%)')
+            name.setStyleSheet(f'color:{color};font-weight:700;')
+            name.setFixedWidth(46)
+            row.addWidget(name)
+            row.addWidget(spin, 1)
+            col.addLayout(row)
             self.sc_xyz.append(spin)
         lay.addWidget(self.sc_axes_box)
         self.sc_axes_box.hide()
@@ -151,6 +153,7 @@ class ScaleTools:
         box = self._sc_box()
         n = len(self.sc_ids)
         if box is None:
+            self.view.set_handles([])
             self.sc_step1.set_state('active', 'Kliknij obiekt (Shift - kolejne)')
             self.sc_size.setText('')
             self.sc_status.setText('Zaznacz obiekty albo kliknij obiekt na polu roboczym (Shift + klik dodaje kolejne).')
@@ -167,6 +170,52 @@ class ScaleTools:
         q = QMatrix4x4(*[float(v) for v in m.flatten()])
         for i in self.sc_ids:
             self.view.set_body_matrix(i, q)
+        self._sc_handles(box, f)
+
+    def _sc_handles(self, box, f):
+        """Strzałki skalowania: jedna (po przekątnej, skala jednakowa) albo trzy - osobno dla osi X, Y, Z."""
+        if self._hv is not None:
+            return                                  # w trakcie przeciągania strzałka zostaje pod kursorem
+        c = np.array(self._sc_center(box), float)
+        lo = np.array([box.xmin, box.ymin, box.zmin], float)
+        hi = np.array([box.xmax, box.ymax, box.zmax], float)
+        f = np.array(f, float)
+        lo2, hi2 = c + (lo - c) * f, c + (hi - c) * f
+        size = float(max(np.max(hi2 - lo2), 1.0))
+        length = max(12.0, size * .3)
+        handles = []
+        if self.sc_axes.isChecked():
+            mid = (lo2 + hi2) / 2
+            for k, (axis, color) in enumerate(zip('XYZ', ((.9, .28, .3, 1), (.18, .65, .43, 1), (.23, .51, .96, 1)))):
+                d = np.eye(3)[k]
+                start = mid.copy()
+                start[k] = hi2[k]
+                handles.append(dict(id='sc' + axis, start=start, tip=start + d * length, dir=d, color=color, label=axis))
+        else:
+            d = np.ones(3) / np.sqrt(3)
+            handles.append(dict(id='scA', start=hi2, tip=hi2 + d * length, dir=d, color=(.94, .6, .13, 1), label=''))
+        self.view.set_handles(handles)
+
+    def scale_handle_dragged(self, hid, delta):
+        """Przeciąganie strzałki skali: przesunięcie końca strzałki o delta mm zmienia skalę tak, żeby róg (koniec) obiektu
+        szedł za kursorem."""
+        box = self._sc_box()
+        if box is None:
+            return
+        c = np.array(self._sc_center(box), float)
+        hi = np.array([box.xmax, box.ymax, box.zmax], float)
+        if hid == 'scA':
+            if self._hv is None:
+                self._hv = self.sc_value.value()
+            reach = float(np.linalg.norm(hi - c)) or 1.0
+            self.sc_value.setValue(max(.01, round(self._hv + delta / reach * 100.0, 1)))
+            return
+        k = 'XYZ'.index(hid[2])
+        spin = self.sc_xyz[k]
+        if self._hv is None:
+            self._hv = spin.value()
+        reach = float(hi[k] - c[k]) or 1.0
+        spin.setValue(max(.01, round(self._hv + delta / reach * 100.0, 1)))
 
     def apply_scale(self):
         if self.busy:

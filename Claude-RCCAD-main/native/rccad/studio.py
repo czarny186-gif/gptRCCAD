@@ -7246,6 +7246,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self._th_drag(hid, delta)
         elif hid in ('plyH', 'plyP'):
             self.ply_handle_dragged(hid, delta)
+        elif hid in ('scA', 'scX', 'scY', 'scZ'):
+            self.scale_handle_dragged(hid, delta)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -7283,6 +7285,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self._th_update()
         elif hid.startswith('ply'):
             self._ply_update()
+        elif hid.startswith('sc'):
+            self._sc_update()
         else:
             self._place_gizmo()
 
@@ -8768,6 +8772,9 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         if self.mode == 'sketch':
             if self.points or self.tangent_lines:
                 self.end_current_shape()
+            return
+        if self.mode == 'ply_cut':
+            self.ply_cut_unpick(x, y)          # Do cięcia: prawy przycisk odznacza płytę
             return
         if self.mode is not None:
             return

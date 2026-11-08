@@ -493,8 +493,16 @@ class PlywoodTools:
             bid = self.view.pick_body(x, y)
             body = self.document.get(bid) if bid else None
             if body is not None and pw.is_panel(body):
-                if self.mode == 'ply_cut' and shift:
-                    ids = [i for i in self.selected if i != body.id] if body.id in self.selected else [*self.selected, body.id]
+                if self.mode == 'ply_cut':
+                    # kliknięcie dodaje płytę do zapisu (bez Shift), prawy przycisk ją odznacza
+                    if self.pc_scope.currentData() != 'sel':
+                        self.pc_scope.blockSignals(True)
+                        self.pc_scope.setCurrentIndex(1)
+                        self.pc_scope.blockSignals(False)
+                        ids = [body.id]
+                    else:
+                        ids = [i for i in self.selected if i != body.id] if (shift and body.id in self.selected) else \
+                            [*[i for i in self.selected if pw.is_panel(self.document.get(i))], *([] if body.id in self.selected else [body.id])]
                     self._tool_select(ids)
                 else:
                     self._tool_select([body.id])
@@ -503,7 +511,28 @@ class PlywoodTools:
                 if self.mode == 'ply_joints':
                     self._pj_hover(next((c['key'] for c in self.pj_contacts if body.id in (c['a'], c['b'])), None))
 
+    def ply_cut_unpick(self, x, y):
+        """Do cięcia: prawy przycisk na płycie odznacza ją."""
+        bid = self.view.pick_body(x, y)
+        if bid and bid in self.selected:
+            self._tool_select([i for i in self.selected if i != bid])
+            self._pc_update()
+
+    def _pc_tints(self):
+        """Do cięcia, „Zaznaczone”: wybrane płyty mają inny kolor - widać, które trafią do pliku."""
+        from .studio import TINT_TOOL
+        if self.mode != 'ply_cut':
+            return
+        chosen = self.pc_scope.currentData() == 'sel'
+        tints = {i: TINT_TOOL for i in self.selected if chosen and pw.is_panel(self.document.get(i))}
+        if tints != self.view.tints:
+            self.view.tints = tints
+            self.refresh()
+
     def ply_hover(self, x, y):
+        if self.mode in ('ply_cut', 'ply_joints'):
+            self._hover_shell_solid(x, y)          # płyta pod kursorem podświetla się przed kliknięciem
+            return
         if self.mode == 'ply' and not self.ply_profiles:
             self._hover_extrude(x, y)
         elif self.mode == 'ply_wall':
@@ -1128,6 +1157,7 @@ class PlywoodTools:
     def _pc_update(self):
         if self.mode != 'ply_cut':
             return
+        self._pc_tints()
         bodies = self._pc_bodies()
         self.pc_export.setText('Zapisz pliki STL…' if self.ply_method == 'print' else 'Zapisz DXF…')
         if not bodies:

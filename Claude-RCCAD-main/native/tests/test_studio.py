@@ -1575,6 +1575,21 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.document.get(s.id).plane,'XY')
         w.undo();self.wait();self.assertAlmostEqual(w.document.get(s.id).shape.BoundingBox().xlen,20,5)
 
+    # 0.4.69: Skalowanie - strzałka do przeciągania (jedna albo trzy - osie), pola osi mieszczą się w panelu
+    def test_scale_handles_drag(self):
+        w=self.w;a=Body('A',k.box(10,10,10)).prepared();w.document.commit([a]);w.refresh()
+        w.selected=[a.id];w.toggle_scale(True)
+        self.assertEqual([h['id'] for h in w.view.handles],['scA'])
+        w.handle_dragged('scA',float(np.linalg.norm([5,5,5])));w.handle_released('scA')     # róg o połowę przekątnej dalej
+        self.assertAlmostEqual(w.sc_value.value(),200,1)
+        w.sc_axes.setChecked(True);self.app.processEvents()
+        self.assertEqual(sorted(h['id'] for h in w.view.handles),['scX','scY','scZ'])
+        w.handle_dragged('scX',-2.5);w.handle_released('scX')                               # połowa wymiaru od środka: 5 mm
+        self.assertAlmostEqual(w.sc_xyz[0].value(),150,1)
+        spin=w.sc_xyz[2];self.assertLessEqual(spin.mapTo(w.scale_panel,spin.rect().topRight()).x(),w.scale_panel.width())   # nie ucięte z prawej
+        w.apply_scale();self.wait()
+        bb=w.document.get(a.id).shape.BoundingBox();self.assertAlmostEqual(bb.xlen,15,4);self.assertAlmostEqual(bb.ylen,20,4)
+
     def test_move_and_rotate_selected_solid_live(self):
         w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('move');self.assertIs(w.t_target.id,a.id)
         w.t_spins[0].setValue(7);self.assertIn(a.id,w.view._body_m)
