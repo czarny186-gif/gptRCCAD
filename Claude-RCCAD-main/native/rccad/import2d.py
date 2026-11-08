@@ -22,6 +22,11 @@ class _Sink:
 
     def __init__(self):
         self.edges = []
+        self.marks = []              # początki kolejnych elementów (SVG: każdy kształt łączony w obwody osobno)
+
+    def mark(self):
+        if not self.marks or self.marks[-1] != len(self.edges):
+            self.marks.append(len(self.edges))
 
     def _check(self):
         if len(self.edges) > MAX_EDGES:
@@ -394,6 +399,8 @@ def _svg_walk(el, matrix, sink, defs):
         return
     m = matrix @ _transform(el.get('transform'))
     out = _SvgOut(sink, m)
+    if tag in ('line', 'polyline', 'polygon', 'rect', 'circle', 'ellipse', 'path'):
+        sink.mark()
     if tag == 'line':
         out.line((_num(el, 'x1'), _num(el, 'y1')), (_num(el, 'x2'), _num(el, 'y2')))
     elif tag in ('polyline', 'polygon'):
@@ -449,16 +456,22 @@ def svg_edges(path):
     except ET.ParseError as exc:
         raise CadError(f'Nie można odczytać pliku SVG: {exc}')
     # skala: jednostki użytkownika → mm (gdy szerokość ma jednostkę i jest viewBox), bez jednostek 1 jednostka = 1 mm
+    # skala: jednostki użytkownika → mm. Długość bez jednostki to piksele (96 na cal, jak w przeglądarce i Inkscape) -
+    # wcześniej liczona jako 1 mm, przez co rysunki z sieci wchodziły prawie 4 razy za duże.
     base = np.eye(3)
     box = [float(v) for v in _NUM.findall(root.get('viewBox', ''))]
     w, wu = _length(root.get('width'))
     h, hu = _length(root.get('height'))
+    wu = 'px' if (w and wu is None) else wu
+    hu = 'px' if (h and hu is None) else hu
     if len(box) == 4 and box[2] > 0 and box[3] > 0:
-        sx = (w * _UNITS[wu]) / box[2] if w and wu in _UNITS else 1.0
+        sx = (w * _UNITS[wu]) / box[2] if w and wu in _UNITS else _UNITS['px']
         sy = (h * _UNITS[hu]) / box[3] if h and hu in _UNITS else sx
+        if not (w and wu in _UNITS) and h and hu in _UNITS:
+            sx = sy
         base = _matrix(sx, 0, 0, sy, 0, 0) @ _matrix(1, 0, 0, 1, -box[0], -box[1])
-    elif w and wu in _UNITS and wu != 'mm':
-        s = _UNITS[wu]
+    else:
+        s = _UNITS[wu] if (w and wu in _UNITS) else _UNITS['px']
         base = _matrix(s, 0, 0, s, 0, 0)
     defs = {el.get('id'): el for el in root.iter() if el.get('id')}
     sink = _Sink()
@@ -660,3 +673,41 @@ def load_flat_parts(path):
 def load_flat(path):
     """Plik SVG albo DXF → płaski kształt (zbiór krawędzi w płaszczyźnie XY, mm) gotowy do rzutu z góry."""
     return load_flat_parts(path)[0]
+
+
+def sketch_wires(path):
+    """Plik SVG albo DXF → kontury szkicu (krawędzie połączone w obwody), w mm, w płaszczyźnie XY.
+    Krzywe Béziera, łuki, przekształcenia i jednostki jak w rysunku technicznym; zamiast setek osobnych odcinków
+    powstaje jeden obwód na kształt (szybsze wyświetlanie, obszary i wyciąganie)."""
+    ext = Path(path).suffix.lower()
+    if ext == '.svg':
+        sink = svg_edges(path)
+    elif ext == '.dxf':
+        sink = dxf_edges(path)
+    else:
+        raise CadError('Obsługiwane są pliki SVG i DXF.')
+    if not sink.edges:
+        raise CadError('W pliku nie znaleziono linii, łuków ani krzywych.')
+    marks = [*sink.marks, len(sink.edges)] if ext == '.svg' and sink.marks else [0, len(sink.edges)]
+    if marks[0] != 0:
+        marks = [0, *marks]
+    wires = []
+    for a, b in zip(marks, marks[1:]):          # SVG: osobno każdy kształt (stykające się kształty się nie zlewają)
+        group = sink.edges[a:b]
+        if not group:
+            continue
+        try:
+            wires += list(cq.Wire.combine(group, tol=1e-4))
+        except Exception:
+            wires += [cq.Wire.assembleEdges([e]) for e in group]
+    out = []
+    for w in wires:
+        try:
+            if w.Length() > _TOL:
+                out.append(w)
+        except Exception:
+            continue
+    if not out:
+        raise CadError('W pliku nie znaleziono linii, łuków ani krzywych.')
+    out.sort(key=lambda w: (-w.BoundingBox().DiagonalLength))
+    return out

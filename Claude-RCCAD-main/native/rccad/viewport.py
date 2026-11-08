@@ -1459,13 +1459,21 @@ class CadView(gl.GLViewWidget):
         self.update()
 
     def _scene_extent(self):
-        """Promień sceny wokół punktu, na który patrzy kamera - zakres głębi rzutu równoległego (bez ucinania brył)."""
+        """Promień sceny wokół punktu, na który patrzy kamera - zakres głębi rzutu równoległego (bez ucinania brył).
+        Zapamiętany dla tych samych brył i środka (liczony był przy każdym rzucie punktu - setki razy na ruch myszy)."""
         center = np.array([self.opts['center'].x(), self.opts['center'].y(), self.opts['center'].z()], float)
+        bodies = getattr(self, 'bodies', ())
+        key = (id(bodies), len(bodies), tuple(np.round(center, 6)))
+        cached = getattr(self, '_extent_cache', None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        meshes = [b.mesh for b in bodies if b.mesh is not None]
         extent = 100.0
-        for body in getattr(self, 'bodies', ()):
-            mesh = body.mesh
-            if mesh is not None:
-                extent = max(extent, float(np.linalg.norm(np.asarray(mesh.center, float) - center)) + float(mesh.size))
+        if meshes:
+            centres = np.array([np.asarray(m.center, float) for m in meshes])
+            sizes = np.array([float(m.size) for m in meshes])
+            extent = max(extent, float((np.linalg.norm(centres - center, axis=1) + sizes).max()))
+        self._extent_cache = (key, extent)
         return extent
 
     def projectionMatrix(self, region=None, viewport=None):

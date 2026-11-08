@@ -574,6 +574,85 @@ def _mitre_fingers(c, A, B, width, fit):
     return A2, B2
 
 
+def _clip_polygon(poly, normal, lo, hi):
+    """Wielokąt (punkty 3D w jednej płaszczyźnie) przycięty do pasa lo <= p·normal <= hi (Sutherland-Hodgman)."""
+    def clip(points, keep):
+        out = []
+        for i, p in enumerate(points):
+            q = points[(i + 1) % len(points)]
+            fp, fq = keep(p), keep(q)
+            if fp >= 0:
+                out.append(p)
+            if (fp >= 0) != (fq >= 0):
+                out.append(p + (q - p) * (fp / (fp - fq)))
+        return out
+    poly = clip(poly, lambda p: float(p @ normal) - lo)
+    return clip(poly, lambda p: hi - float(p @ normal)) if poly else poly
+
+
+def _square_corner(c, A, B, width, fit):
+    """Narożnik pod kątem do cięcia prostopadłego (laser, frezarka): końce obu ścianek prostopadłe do ich stron.
+    Wzdłuż linii narożnika pasy (wczepy) należą na przemian do jednej i drugiej ścianki: właściciel pasa sięga do
+    zewnętrznego wierzchołka narożnika, a druga ścianka jest w tym pasie cofnięta tak, żeby się z nim nie zderzyć
+    (z luzem). width None - jeden pas: ścianka A zachodzi na B na całej wysokości. Zwraca (A, B, obszar narożnika)."""
+    d = _unit(c['d'])
+    s0, s1 = c['s']
+    walls = {}
+    rh = [np.linalg.solve(np.array([c['na'], c['nb'], d]), np.array([a, b, s0], float))
+          for a, b in ((c['sa'][0], c['sb'][0]), (c['sa'][1], c['sb'][0]), (c['sa'][1], c['sb'][1]), (c['sa'][0], c['sb'][1]))]
+    centre = sum(rh) / 4
+    for key, shape, n, slab in (('a', A, np.array(c['na'], float), c['sa']), ('b', B, np.array(c['nb'], float), c['sb'])):
+        u = _unit(np.cross(d, n))
+        body = np.array(shape.Center().toTuple(), float)
+        if float((centre - body) @ u) < 0:
+            u = -u                                  # w stronę narożnika
+        walls[key] = dict(n=n, u=u, slab=slab)
+    ua, ub = walls['a']['u'], walls['b']['u']
+    outer = max(rh, key=lambda p: float(p @ (ua + ub)))       # zewnętrzny wierzchołek narożnika
+    full, reach = {}, {}
+    for key, w in walls.items():
+        proj = [float(p @ w['u']) for p in rh]
+        w['start'], w['end'] = min(proj) - 1.0, float(outer @ w['u'])
+        reach[key] = max(proj) + 5.0
+        third = np.cross(w['u'], w['n'])
+        sign = 1.0 if float(third @ d) > 0 else -1.0
+        full[key] = frame_box(w['u'], w['n'], (w['start'], w['end']), tuple(w['slab']), sorted((sign * s0, sign * s1)))
+        base = d * s0
+        # przekrój końca ścianki dochodzącej do narożnika (prostokąt w płaszczyźnie prostopadłej do linii narożnika)
+        w['section'] = [base + w['u'] * uu + w['n'] * (vv - float(base @ w['n'])) for uu, vv in
+                        ((w['start'], w['slab'][0]), (w['end'], w['slab'][0]), (w['end'], w['slab'][1]), (w['start'], w['slab'][1]))]
+    A2 = kernel.boolean('union', A, [full['a']])
+    B2 = kernel.boolean('union', B, [full['b']])
+    # gdzie druga ścianka musi się cofnąć, gdy właścicielem pasa jest ta ścianka
+    back = {}
+    for owner, other in (('a', 'b'), ('b', 'a')):
+        o = walls[other]
+        part = _clip_polygon(walls[owner]['section'], o['n'], o['slab'][0], o['slab'][1])
+        back[other] = (min(float(p @ o['u']) for p in part) - fit) if part else None
+    n = 1 if width is None else finger_count(s1 - s0, width)
+    step = (s1 - s0) / n
+    cuts = {'a': [], 'b': []}
+    for k in range(n):
+        owner = 'a' if k % 2 == 0 else 'b'
+        other = 'b' if owner == 'a' else 'a'
+        if back[other] is None:
+            continue
+        lo = s0 + k * step - (fit / 2 if k > 0 else 1.0)
+        hi = s0 + (k + 1) * step + (fit / 2 if k < n - 1 else 1.0)
+        w = walls[other]
+        third = np.cross(w['u'], w['n'])
+        sign = 1.0 if float(third @ d) > 0 else -1.0
+        cuts[other].append(frame_box(w['u'], w['n'], (back[other], reach[other]), (w['slab'][0] - 1, w['slab'][1] + 1), sorted((sign * lo, sign * hi))))
+    if cuts['a']:
+        A2 = kernel.boolean('subtract', A2, cuts['a'])
+    if cuts['b']:
+        B2 = kernel.boolean('subtract', B2, cuts['b'])
+    region = kernel.boolean('union', full['a'], [full['b']])
+    bb = region.BoundingBox()
+    box = cq.Solid.makeBox(bb.xlen + 2, bb.ylen + 2, bb.zlen + 2, pnt=cq.Vector(bb.xmin - 1, bb.ymin - 1, bb.zmin - 1))
+    return A2, B2, box
+
+
 def _region_box(c, extra, info=None):
     """Prostopadłościan wokół miejsca styku (do wyboru krawędzi pod „psie kości”)."""
     if c['kind'] == 'X':
@@ -583,6 +662,31 @@ def _region_box(c, extra, info=None):
         return frame_box(d, nb, (s0 - extra - 1, s1 + extra + 1), (ib[0] - extra, ib[1] + extra), (-ia[1] - extra, -ia[0] + extra))
     s0, s1, r0, r1, depth = info
     return _seg_box(c, s0 - extra, s1 + extra, r0 - extra, r1 + extra, depth + extra, extra)
+
+
+def _main_solid(shape):
+    """Płyta po połączeniach jako jedna bryła: drobne odcięte okruchy (np. róg podstawy między dwoma noskami
+    w narożniku wielokąta) odpadają - przy cięciu i tak by wypadły."""
+    solids = shape.Solids()
+    if len(solids) <= 1:
+        return shape
+    solids = sorted(solids, key=lambda x: -x.Volume())
+    if sum(x.Volume() for x in solids[1:]) > .05 * solids[0].Volume():
+        return shape                     # duże części - nie okruchy; zostawiamy (widać, że coś jest nie tak)
+    return solids[0]
+
+
+def _ends_on_plane(shape, c):
+    nb, plane = np.array(c['nb'], float), float(c['plane'])
+    out = []
+    for f in shape.Faces():
+        if f.geomType() != 'PLANE':
+            continue
+        if abs(abs(float(np.array(f.normalAt().toTuple()) @ nb)) - 1) > 1e-4:
+            continue
+        if abs(float(np.array(f.Center().toTuple()) @ nb) - plane) <= TOL:
+            out.append(f)
+    return out
 
 
 def _footprint(c, depth, grow=0.0):
@@ -675,13 +779,25 @@ def apply_joints(panels, contacts, params):
     ratio = min(max(float(params.get('depth', .5)), .1), .9)
     meth = params.get('method', 'cnc')
     changed = set()
-    for c in contacts:
+    flat_cut = meth in ('laser', 'cnc')
+    # narożniki na skos najpierw: przy laserze / frezarce zmieniają końce ścianek (cięcie prostopadłe), na których
+    # potem opierają się noski do podstawy
+    for c in sorted(contacts, key=lambda c: c['kind'] != 'M'):
         joint = c.get('joint') or 'none'
+        a, b = c['a'], c['b']
+        if c['kind'] == 'M' and flat_cut:
+            # laser / frezarka tną prostopadle do płyty: skos zamieniony na końce proste - na przemian jedna ścianka
+            # dochodzi do narożnika, druga jest cofnięta; „bez połączenia” - jedna ścianka zachodzi na całej wysokości
+            width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
+            shapes[a], shapes[b], box = _square_corner(c, shapes[a], shapes[b], width if joint != 'none' else None, fit)
+            regions.setdefault(a, []).append(box)
+            regions.setdefault(b, []).append(box)
+            changed |= {a, b}
+            continue
         if joint == 'none':
             continue
         if not allowed(meth, joint):
             raise kernel.CadError(f"{JOINTS[joint][0]}: {WHY_NOT.get(meth, 'niedostępne dla tej metody')}.")
-        a, b = c['a'], c['b']
         if c['kind'] == 'M':
             width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
             shapes[a], shapes[b] = _mitre_fingers(c, shapes[a], shapes[b], width, fit)
@@ -698,6 +814,9 @@ def apply_joints(panels, contacts, params):
             width = float(params.get('width') or 0) or default_width(c['ta'])
             add, cut, info = _joint_parts(c, joint, width, fit, ratio)
             if c.get('ends') and add:
+                current = _ends_on_plane(shapes[a], c)      # koniec płyty po wcześniejszych zmianach (np. narożnik prostowany pod laser)
+                if current:
+                    c = dict(c, ends=current)
                 foot = _footprint(c, info[4] + .05)     # nosek nie wychodzi poza koniec płyty przyciętej na skos
                 add = [x for x in (kernel.boolean('intersect', seg, [foot]) for seg in add) if x.Solids()]
                 cut = [x for x in (kernel.boolean('intersect', seg, [_footprint(c, info[4] + .1, fit / 2)]) for seg in cut) if x.Solids()]
@@ -711,6 +830,8 @@ def apply_joints(panels, contacts, params):
             regions.setdefault(a, []).append(box)
             regions.setdefault(b, []).append(box)
         changed |= {a, b}
+    for pid in changed:
+        shapes[pid] = _main_solid(shapes[pid])
     tool = float(params.get('tool', 0) or 0)
     if meth == 'cnc' and tool > 0:
         for pid in changed:

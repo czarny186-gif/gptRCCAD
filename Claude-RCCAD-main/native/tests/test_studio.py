@@ -1801,6 +1801,40 @@ class StudioTests(unittest.TestCase):
             f=os.path.join(d,'a.svg');open(f,'w').write('<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="20" height="10"/><circle cx="5" cy="5" r="2"/><path d="M0 0 L10 0 L10 10 Z"/></svg>')
             self.assertEqual(len(k.svg_profiles(f)),3)
 
+    # 0.4.61: SVG / DXF jako szkic - krzywe, transformacje, jednostki (bez jednostki = piksele), obwody, grupa
+    def test_svg_import_units_curves_transforms_and_group(self):
+        import tempfile,ezdxf,time as _t
+        import cadquery as cq
+        w=self.w
+        with tempfile.TemporaryDirectory() as d:
+            f=os.path.join(d,'logo.svg')
+            Path(f).write_text('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">'
+                               '<g transform="translate(10,10) scale(2)"><path d="M0 0 C 10 -10 20 10 30 0 L 30 20 Q 15 30 0 20 Z"/></g>'
+                               '<circle cx="80" cy="80" r="8"/></svg>',encoding='utf-8')
+            wires=k.svg_profiles(f)
+            self.assertEqual(len(wires),2);self.assertTrue(all(x.IsClosed() for x in wires))
+            kinds={e.geomType() for x in wires for e in x.Edges()};self.assertIn('BEZIER',kinds);self.assertIn('CIRCLE',kinds)
+            circle=next(x for x in wires if any(e.geomType()=='CIRCLE' for e in x.Edges()))
+            self.assertAlmostEqual(circle.Edges()[0].radius(),8*25.4/96,4)          # 96 px = 1 cal = 25,4 mm
+            path=next(x for x in wires if x is not circle);bb=path.BoundingBox()
+            self.assertAlmostEqual(bb.xlen,60*25.4/96,3)                               # scale(2) z transform
+            mm=os.path.join(d,'mm.svg');Path(mm).write_text('<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="20mm" viewBox="0 0 100 40"><rect width="100" height="40"/></svg>',encoding='utf-8')
+            bb=cq.Compound.makeCompound(k.svg_profiles(mm)).BoundingBox();self.assertAlmostEqual(bb.xlen,50,4);self.assertAlmostEqual(bb.ylen,20,4)
+            # duży plik: setki konturów z krzywymi - szybko i jako grupa na liście obiektów
+            many=os.path.join(d,'duzo.svg')
+            Path(many).write_text('<svg xmlns="http://www.w3.org/2000/svg" width="300mm" height="300mm" viewBox="0 0 300 300">'+''.join(
+                f'<path d="M{x} {y} C {x+3} {y-2} {x+6} {y+2} {x+8} {y} L {x+8} {y+8} L {x} {y+8} Z"/>' for x in range(0,300,15) for y in range(0,300,15))+'</svg>',encoding='utf-8')
+            start=_t.monotonic()
+            with patch('rccad.studio.QFileDialog.getOpenFileName',return_value=(many,'')):w.import_model()
+            self.wait();self.assertLess(_t.monotonic()-start,30)
+            sk=[b for b in w.document.bodies if b.kind=='sketch'];self.assertEqual(len(sk),400)
+            self.assertEqual({b.folder for b in sk},{'duzo'})
+            edges=[e for b in sk for e in b.shape.Edges()]
+            start=_t.monotonic();reg=k.regions('XY',edges);self.assertLess(_t.monotonic()-start,15);self.assertEqual(len(reg),400)
+            dxf=os.path.join(d,'cm.dxf');doc=ezdxf.new('R2010');doc.units=ezdxf.units.CM;doc.modelspace().add_lwpolyline([(0,0),(6,0),(6,3),(0,3)],close=True);doc.saveas(dxf)
+            shapes=k.import_shapes(dxf);self.assertEqual(len(shapes),1)
+            bb=shapes[0][0].BoundingBox();self.assertAlmostEqual(bb.xlen,60,4)                 # centymetry -> mm
+
     def test_file_menu_and_context_menu_open(self):
         from rccad import shell_ui as ui
         seen=[]
@@ -1917,6 +1951,33 @@ class StudioTests(unittest.TestCase):
         w.shell_panel.show();self.app.processEvents()
         seg=w.sh_dir
         self.assertLessEqual(seg.geometry().bottom(),w.sh_status.geometry().top())   # opis pod przyciskami, nie na nich
+
+    # 0.4.61: Shift - kilka krawędzi i narożników, także na różnych bryłach, w jednym kroku
+    def test_fillet_shift_many_edges_corners_and_bodies(self):
+        import cadquery as cq
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();b=Body('B',cq.Solid.makeBox(10,10,10,pnt=cq.Vector(40,0,0))).prepared()
+        w.document.commit([a,b]);w.refresh();w.set_mode('mod')
+        top=next(i for i,e in enumerate(a.shape.Edges()) if e.Center().z>19.9)
+        corner=np.array(next(v.toTuple() for v in a.shape.Vertices() if v.Z<1e-6))
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(a.id,top)):w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'nearest_vertex',return_value=(a.id,corner)):w.view_clicked(5,5,True,False)         # Shift: narożnik do krawędzi
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)   # Shift: druga bryła
+        self.assertEqual(len(w._mod_items()),2);self.assertIn('krawędzie: 2',w.mod_status.text());self.assertIn('narożniki: 1',w.mod_status.text())
+        self.assertEqual(len(w.view.sel_vertices),1)
+        w.mod_size.setValue(1.5);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)   # Shift drugi raz: odznacza
+        self.assertEqual(len(w._mod_items()),1)
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)
+        va,vb=a.shape.Volume(),b.shape.Volume()
+        w.apply_mod();self.wait()
+        na,nb=w.document.get(a.id),w.document.get(b.id)
+        self.assertLess(na.shape.Volume(),va-1);self.assertLess(nb.shape.Volume(),vb-.1)
+        self.assertGreater(len(na.shape.Faces()),7)                                  # krawędź + narożnik
+        op=w.document.info['op'];self.assertEqual(len(op['items']),2)
+        from rccad import history as hist
+        again=hist.run_recipe([a,b],op);self.assertAlmostEqual(again[0].shape.Volume(),na.shape.Volume(),3)
+        self.assertEqual(hist.reads(op,[a,b]),{a.id,b.id})
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),va,3)
 
     def test_fillet_preview_shows_only_created_surface(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')

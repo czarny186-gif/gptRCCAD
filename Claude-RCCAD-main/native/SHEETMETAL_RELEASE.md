@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.4.60 — pudełka z wielokąta, wczepy na skos, rysunek płyt
+# RCCAD Desktop 0.4.61 — wczepy laserowe w wielokątach, szybki import SVG/DXF, Shift w zaokrąglaniu
+
+## Zmiany 0.4.61
+
+- **Wczepy pod laser w narożnikach wielokąta** (wg przykładowego modelu): przy laserze i frezarce końce ścianek są cięte prostopadle do płyty; na przemian jedna ścianka dochodzi do zewnętrznego wierzchołka narożnika, a druga jest w tym pasie cofnięta (z luzem). Żadnych skosów - każdą płytę da się wyciąć laserem. Druk 3D zostaje przy wczepach na skos. „Bez połączenia” przy laserze: jedna ścianka zachodzi na drugą na całej wysokości.
+- **Połączenia w tle**: wykrywanie styków i podgląd połączeń liczy osobny proces (inny rdzeń procesora), siatki przychodzą gotowe - wpisywanie ustawień w panelu nie zwalnia.
+- **Zaokrąglanie i fazowanie**: Shift + klik dodaje kolejne krawędzie i narożniki - także razem i na kilku bryłach naraz; całość jednym krokiem historii.
+- **Import SVG / DXF**: krzywe Béziera, łuki, przekształcenia (transform) i jednostki - koniec ze zniekształceniami; długość bez jednostki to piksele (96 na cal), więc rysunki nie są już za duże. Kontury łączone w obwody, wiele konturów trafia do jednej grupy na liście obiektów. DXF z jednostkami z nagłówka.
+- **Szybkość przy złożonych szkicach**: obszary szkicu liczą się wielokrotnie szybciej (np. 400 krzywych: z ok. 45 s do ok. 1 s), widok nie przelicza zakresu sceny przy każdym punkcie, krawędzie krzywych próbkowane szybciej.
+
+## RCCAD Desktop 0.4.60 — pudełka z wielokąta, wczepy na skos, rysunek płyt
 
 ## Zmiany 0.4.60
 

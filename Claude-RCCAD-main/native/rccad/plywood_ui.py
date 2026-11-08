@@ -6,6 +6,7 @@ kroki historii (przeliczane po zmianie wcześniejszych kroków): rccad.history.r
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -582,26 +583,41 @@ class PlywoodTools:
 
     # ------------------------------------------------------------------ Połączenia
     def _pj_detect(self):
-        panels = pw.panels_of(self.document.bodies)
-        try:
-            contacts, skipped = pw.find_contacts(panels)
-        except Exception as exc:
-            contacts, skipped = [], [(None, None, str(exc))]
-        if panels:
-            counts = {}
-            for p in panels:
-                counts[p['method']] = counts.get(p['method'], 0) + 1
-            common = max(counts, key=counts.get)
-            if common != self.ply_method and common in pw.METHODS:
-                self.ply_cfg['method'] = common
-                self._ply_sync()
-        names = {p['id']: p['name'] for p in panels}
-        for c in contacts:
-            c['joint'] = pw.joint_for(self.ply_method, c['kind'])
-            c['title'] = f"{pw.KIND_TITLES[c['kind']]}: {names.get(c['a'], '?')} ↔ {names.get(c['b'], '?')}"
-        self.pj_contacts, self.pj_skipped, self.pj_ids = contacts, skipped, [p['id'] for p in panels]
+        """Styki płyt liczone w procesie w tle - okno od razu działa, lista połączeń pojawia się po chwili."""
+        ids = [b.id for b in self.document.bodies if pw.is_panel(b) and b.visible]
+        self.pj_contacts, self.pj_skipped, self.pj_ids = [], [], ids
         self._pj_build_rows()
-        self._pj_params_changed(save=False)
+        self.pj_status.setText('Szukam miejsc, w których płyty się stykają…' if ids else '')
+        if not ids:
+            return
+        existing = hist.light(self.document.bodies)
+
+        def compute():
+            return hist.background(hist.ply_detect_job, existing, ids)
+
+        def show(value, error):
+            if self.mode != 'ply_joints':
+                return
+            if error:
+                self.pj_status.setText(str(error))
+                return
+            found_ids, names, methods, contacts, skipped = value
+            counts = {}
+            for m in methods.values():
+                counts[m] = counts.get(m, 0) + 1
+            if counts:
+                common = max(counts, key=counts.get)
+                if common != self.ply_method and common in pw.METHODS:
+                    self.ply_cfg['method'] = common
+                    self._ply_sync()
+            for c in contacts:
+                c['joint'] = pw.joint_for(self.ply_method, c['kind'])
+                c['title'] = f"{pw.KIND_TITLES[c['kind']]}: {names.get(c['a'], '?')} ↔ {names.get(c['b'], '?')}"
+            self.pj_contacts, self.pj_skipped, self.pj_ids = contacts, skipped, found_ids
+            self._pj_build_rows()
+            self._pj_params_changed(save=False)
+
+        self.run_preview('ply_detect', compute, show)
 
     def _pj_build_rows(self):
         while self.pj_list_lay.count():
@@ -622,8 +638,8 @@ class PlywoodTools:
             combo.currentIndexChanged.connect(lambda *_, key=c['key'], cb=combo: self._pj_joint_changed(key, cb.currentData()))
             lay.addWidget(title)
             if c['kind'] == 'M':
-                note = QLabel(f"Narożnik {180 - c.get('angle', 90):g}°: końce nosków są skośne. Laser i zwykła frezarka tną prostopadle "
-                              'do płyty - skos dokładnie zrobi druk 3D albo frezarka z głowicą uchylną.')
+                note = QLabel(f"Narożnik {180 - c.get('angle', 90):g}°. Laser i frezarka: końce cięte prostopadle, ścianki na przemian "
+                              'dochodzą do narożnika (druga cofnięta). Druk 3D: wczepy na skos.')
                 note.setWordWrap(True)
                 note.setStyleSheet('color:#6b7d90;font-size:11px;background:transparent;')
                 lay.addWidget(note)
@@ -706,19 +722,21 @@ class PlywoodTools:
         return dict(type='ply_joints', ids=list(self.pj_ids), joints={c['key']: c['joint'] for c in self.pj_contacts}, params=self._pj_params())
 
     def update_ply_joints_preview(self):
-        """Połączenia liczone w tle i pokazane na płytach (zamiast oryginałów), zanim krok zostanie zapisany."""
+        """Połączenia liczone w osobnym procesie (inny rdzeń procesora) i pokazane na płytach, zanim krok zostanie zapisany.
+        Wpisywanie ustawień nie czeka: liczy się tylko ostatnia wartość, a siatki przychodzą gotowe z procesu."""
         if self.mode != 'ply_joints':
             return
         recipe = self._pj_recipe()
         if recipe is None:
-            self.override = {}
-            self.refresh()
+            if self.override:
+                self.override = {}
+                self.refresh()
             return
         existing = hist.light(self.document.bodies)
+        originals = {b.id: b for b in self.document.bodies}
 
         def compute():
-            bodies = hist.background(hist.run_ply_joints, existing, recipe)
-            return {b.id: b for b in bodies if b.id in recipe['ids']}
+            return hist.background(hist.ply_joints_preview_job, existing, recipe)
 
         def show(value, error):
             if self.mode != 'ply_joints':
@@ -727,7 +745,12 @@ class PlywoodTools:
                 self.override = {}
                 self.pj_status.setText(str(error))
             else:
-                self.override = {bid: (b if b.mesh is not None else b.prepared()) for bid, b in (value or {}).items()}
+                out = {}
+                for bid, (shape, mesh) in (value or {}).items():
+                    body = originals.get(bid)
+                    if body is not None:
+                        out[bid] = replace(body, shape=shape, mesh=mesh)
+                self.override = out
             self.refresh()
 
         self.run_preview('ply_joints', compute, show)

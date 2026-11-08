@@ -255,6 +255,41 @@ class PlywoodPolygonTests(unittest.TestCase):
         flat, t = pw.flat_part(out[wall], 6)
         self.assertAlmostEqual(t, 6)
 
+    def test_laser_polygon_corners_are_cut_square(self):
+        """Laser / frezarka: narożnik pod kątem z końcami prostopadłymi do płyt - na przemian jedna ścianka dochodzi
+        do zewnętrznego wierzchołka, druga jest cofnięta (jak w przykładowym modelu); wszystkie ściany płyt równoległe
+        albo prostopadłe do ich stron - da się je wyciąć laserem."""
+        bodies = self._walls(cq.Workplane().polygon(6, 115.47).extrude(6).val(), 'on')
+        panels = pw.panels_of(bodies)
+        contacts, _ = pw.find_contacts(panels)
+        for c in contacts:
+            c['joint'] = pw.joint_for('laser', c['kind'])
+        out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=0.1))
+        shapes = [out[p['id']] for p in panels]
+        self.assertEqual(_overlaps(shapes), 0)
+        for p, shape in zip(panels, shapes):
+            n = pw.panel_info(shape, 6)['n']
+            for f in shape.Faces():
+                self.assertEqual(f.geomType(), 'PLANE')
+                fn = np.array(f.normalAt().toTuple())
+                self.assertTrue(abs(abs(fn @ n) - 1) < 1e-6 or abs(fn @ n) < 1e-6, p['name'])   # bez skosów
+        # zewnętrzny wierzchołek narożnika: na każdej wysokości dochodzi do niego dokładnie jedna ścianka
+        walls = [out[p['id']] for p in panels if p['id'] != bodies[0].id]
+        vertex = cq.Vector(57.735, 0, 0)
+        for z in np.linspace(9, 60, 9):
+            probe = cq.Vertex.makeVertex(vertex.x - .05, vertex.y, z)
+            near = [w for w in walls if w.distance(probe) < .2]
+            self.assertLessEqual(len(near), 1)
+        flat, t = pw.flat_part(walls[0], 6)
+        union, pockets = pw.part_layers(flat, t)
+        self.assertEqual(pockets, [])                                             # laser: tylko cięcie na wylot
+        # bez połączenia (laser): jedna ścianka zachodzi na całej wysokości, nadal bez skosów
+        for c in contacts:
+            if c['kind'] == 'M':
+                c['joint'] = 'none'
+        out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=0.1))
+        self.assertEqual(_overlaps([out.get(p['id'], p['shape']) for p in panels]), 0)
+
     def test_drawing_parts_laid_out_without_overlap(self):
         from rccad import drawing as dr
         bodies = self._walls(cq.Solid.makeBox(200, 150, 6), 'on')
@@ -366,6 +401,8 @@ class PlywoodWindowTests(unittest.TestCase):
         self.assertAlmostEqual(shelf.shape.Volume(), 164 * 114 * 18)
         # połączenia: wykrycie, zmiana metody zamienia niedostępne, podgląd i zapis kroku
         w.toggle_mode('ply_joints')
+        self.assertIn('Szukam', w.pj_status.text())                            # styki liczone w tle - okno nie czeka
+        self.wait()
         self.assertEqual(sorted(c['kind'] for c in w.pj_contacts), ['L'] * 8 + ['T'] * 4)
         key = next(c['key'] for c in w.pj_contacts if c['kind'] == 'T')
         combo = w.pj_rows[key][1]

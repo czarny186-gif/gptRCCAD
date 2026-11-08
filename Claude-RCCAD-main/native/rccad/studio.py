@@ -5617,44 +5617,51 @@ class StudioWindow(PlywoodTools, QMainWindow):
             return
         self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl)
 
+    def _mod_reset_size(self):
+        if not any(self.mod_vertices.values()) and not any(self.edges.values()):
+            self.mod_size.blockSignals(True)
+            self.mod_size.setValue(2.0)
+            self.mod_size.blockSignals(False)
+
     def _mod_vertex_select(self, bid, point, shift, ctrl):
-        if not (shift or ctrl) or bid not in self.mod_vertices:
-            if not self.mod_vertices and not any(self.edges.values()):
-                self.mod_size.blockSignals(True)
-                self.mod_size.setValue(2.0)
-                self.mod_size.blockSignals(False)
-            self.mod_vertices = {bid: []}
-        points = self.mod_vertices[bid]
-        same = [q for q in points if float(np.linalg.norm(q - point)) < 1e-3]
-        if (shift or ctrl) and same:
-            points[:] = [q for q in points if all(q is not r for r in same)]
+        """Narożnik. Shift / Ctrl dodaje (albo odejmuje) - także do zaznaczonych krawędzi i na innych bryłach."""
+        if not (shift or ctrl):
+            self._mod_reset_size()
+            self.edges, self.mod_vertices = {}, {bid: [point]}
         else:
-            points.append(point)
-        self.edges = {}
+            points = self.mod_vertices.setdefault(bid, [])
+            same = [q for q in points if float(np.linalg.norm(q - point)) < 1e-3]
+            if same:
+                points[:] = [q for q in points if all(q is not r for r in same)]
+            else:
+                points.append(point)
+            self.mod_vertices = {k: v for k, v in self.mod_vertices.items() if v}
         self._mod_face_mesh = None
-        self.view.sel_vertices = list(points)
         self.update_mod_status()
 
     def _mod_select(self, bid, ids, shift, ctrl, mark=None):
-        self.mod_vertices = {}
-        if not (shift or ctrl) or bid not in self.edges:
-            if not any(self.edges.values()):
-                self.mod_size.blockSignals(True)
-                self.mod_size.setValue(2.0)
-                self.mod_size.blockSignals(False)
-            self.edges = {bid: set()}
-            self.view.sel_vertices = []
+        """Krawędzie. Shift / Ctrl dodaje (albo odejmuje) - także do zaznaczonych narożników i na innych bryłach."""
+        if not (shift or ctrl):
+            self._mod_reset_size()
+            self.edges, self.mod_vertices = {bid: set()}, {}
         self._mod_face_mesh = None
-        current = self.edges[bid]
+        current = self.edges.setdefault(bid, set())
         if (shift or ctrl) and ids <= current:
             current -= ids
-            if mark is not None:
-                self.view.sel_vertices = [q for q in self.view.sel_vertices if float(np.linalg.norm(np.asarray(q) - np.asarray(mark))) > 1e-3]
         else:
             current |= ids
-            if mark is not None:
-                self.view.sel_vertices = [*self.view.sel_vertices, np.asarray(mark, float)]
+        self.edges = {k: v for k, v in self.edges.items() if v}
         self.update_mod_status()
+
+    def _mod_items(self):
+        """Zaznaczenie zaokrąglenia / fazy pogrupowane po bryłach: [(id, krawędzie albo None, narożniki albo None)]."""
+        out = []
+        for bid in dict.fromkeys([*self.edges, *self.mod_vertices]):
+            ids = set(self.edges.get(bid) or ())
+            pts = [np.array(q, float) for q in (self.mod_vertices.get(bid) or [])]
+            if (ids or pts) and self.document.get(bid) is not None:
+                out.append((bid, ids or None, pts or None))
+        return out
 
     def view_double_clicked(self, x, y):
         """Podwójne kliknięcie ściany w trybie edycji bryły: podświetla ścianę i zaznacza wszystkie jej krawędzie (zaokrąglenie / faza na okrągło)."""
@@ -5686,8 +5693,9 @@ class StudioWindow(PlywoodTools, QMainWindow):
     def update_mod_status(self):
         count = sum(len(v) for v in self.edges.values())
         vcount = sum(len(v) for v in self.mod_vertices.values())
-        self.mod_status.setText(f'Zaznaczone narożniki: {vcount}' if vcount else (f'Zaznaczone krawędzie: {count}' if count else
-                                'Kliknij krawędź lub narożnik; dwuklik w ścianę zaznacza cały jej obwód.'))
+        self.mod_status.setText(self._mod_count_text() if count or vcount else
+                                'Kliknij krawędź lub narożnik; Shift + klik dodaje kolejne (także na innych bryłach); dwuklik w ścianę zaznacza cały jej obwód.')
+        self.view.sel_vertices = [np.asarray(q, float) for pts in self.mod_vertices.values() for q in pts]
         count += vcount
         if not count:
             self.view.sel_vertices = []
@@ -5697,8 +5705,15 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self._place_mod_handle()
         self._timers['mod'].start()
 
+    def _mod_count_text(self):
+        count = sum(len(v) for v in self.edges.values())
+        vcount = sum(len(v) for v in self.mod_vertices.values())
+        parts = ([f'krawędzie: {count}'] if count else []) + ([f'narożniki: {vcount}'] if vcount else [])
+        bodies = len(self._mod_items())
+        return 'Zaznaczone ' + ', '.join(parts) + (f' (bryły: {bodies})' if bodies > 1 else '')
+
     def _place_mod_handle(self):
-        if self.mode == 'mod' and self.mod_vertices:
+        if self.mode == 'mod' and self.mod_vertices and not any(self.edges.values()):
             bid, pts = next(iter(self.mod_vertices.items()))
             body = self.document.get(bid)
             try:
@@ -5709,10 +5724,10 @@ class StudioWindow(PlywoodTools, QMainWindow):
             mid, d = np.array(mid, float), np.array(direction, float)
             self.view.set_handles([dict(id='mod', start=mid, tip=mid + d * self.mod_size.value(), dir=d, color=(.94, .6, .13, 1))])
             return
-        if self.mode != 'mod' or len(self.edges) != 1 or not next(iter(self.edges.values()), None):
+        if self.mode != 'mod' or not any(self.edges.values()):
             self.view.set_handles([])
             return
-        bid, ids = next(iter(self.edges.items()))
+        bid, ids = next((k, v) for k, v in self.edges.items() if v)
         body = self.document.get(bid)
         try:
             hkey = (id(body.shape), max(ids))
@@ -5728,11 +5743,15 @@ class StudioWindow(PlywoodTools, QMainWindow):
     def update_mod_preview(self):
         if self.mode != 'mod':
             return
-        verts = bool(self.mod_vertices and next(iter(self.mod_vertices.values()), None))
-        if not verts and (len(self.edges) != 1 or not next(iter(self.edges.values()), None)):
+        items = self._mod_items()
+        if not items:
             self.cancel_previews()
             self.view.set_preview_mesh(None)
             return
+        if len(items) > 1 or (items[0][1] and items[0][2]):
+            self._mod_multi_preview(items)
+            return
+        verts = bool(items[0][2])
         if verts:
             bid, pts = next(iter(self.mod_vertices.items()))
             sig, count, label = ('v', bid, tuple(tuple(np.round(q, 3)) for q in pts)), len(pts), 'narożniki'
@@ -5797,13 +5816,40 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.mod_status.setText(f'Zaznaczone {label}: {count}')
 
         self.run_preview('mod', compute, show)
+    def _mod_multi_preview(self, items):
+        """Podgląd dla kilku brył albo krawędzi i narożników naraz: liczony w procesie w tle, tylko nowe powierzchnie."""
+        size, kind = self.mod_size.value(), self.mod_kind.currentData()
+        sig = ('m', tuple((bid, frozenset(ids or ()), tuple(tuple(np.round(q, 3)) for q in (pts or ()))) for bid, ids, pts in items), size, kind)
+        self._mod_sig = sig
+        jobs = [(self.document.get(bid).shape, sorted(ids) if ids else None, pts) for bid, ids, pts in items]
+        text = self._mod_count_text()
+
+        def compute():
+            return hist.background(hist.mod_preview_many, jobs, size, kind, max(4.0 * size, 2.0))
+
+        def show(value, error):
+            if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig:
+                return
+            if error or value is None:
+                self.view.set_preview_mesh(None)
+                self.mod_status.setText(text + '\nTa wartość jest za duża dla wybranych elementów.')
+                return
+            self.view.set_preview_mesh(value, color=MOD_PREVIEW, line_color=MOD_PREVIEW_LINE, width=2.2, on_top=True)
+            self.mod_status.setText(text)
+
+        self.run_preview('mod', compute, show)
+
     def apply_mod(self):
         if self.busy:
             return
-        verts = bool(self.mod_vertices and next(iter(self.mod_vertices.values()), None))
-        if not verts and (len(self.edges) != 1 or not next(iter(self.edges.values()), None)):
-            self.toast('Zaznacz krawędzie lub narożniki jednej bryły.')
+        items = self._mod_items()
+        if not items:
+            self.toast('Zaznacz krawędzie lub narożniki.')
             return
+        if len(items) > 1 or (items[0][1] and items[0][2]):
+            self._apply_mod_many(items)
+            return
+        verts = bool(items[0][2])
         if verts:
             bid, pts = next(iter(self.mod_vertices.items()))
             points, ids = [np.array(q, float) for q in pts], None
@@ -5828,6 +5874,32 @@ class StudioWindow(PlywoodTools, QMainWindow):
         # zaokrąglenie / faza liczy proces liczący - okno w tym czasie działa (obracanie, oglądanie modelu)
         work = (lambda: (body.changed(*hist.offloaded_shape(kernel.blend_vertices, body.shape, points, size, kind)), recipe_of())) if verts else \
             (lambda: (body.changed(*hist.offloaded_shape(kernel.blend, body.shape, ids, size, kind)), recipe_of()))
+        self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
+
+    def _apply_mod_many(self, items):
+        """Kilka brył albo krawędzie razem z narożnikami - jeden krok historii, liczony w procesie w tle."""
+        size, kind = self.mod_size.value(), self.mod_kind.currentData()
+        bodies = {bid: self.document.get(bid) for bid, _, _ in items}
+
+        def work():
+            made, entries = {}, []
+            for bid, ids, pts in items:
+                body = bodies[bid]
+                shape, mesh = hist.offloaded_shape(hist.mod_many_job, body.shape, sorted(ids) if ids else None, pts, size, kind)
+                made[bid] = body.changed(shape, mesh) if mesh is not None else body.changed(shape)
+                entries.append(dict(id=bid, edges=hist.edge_refs(body.shape, ids) if ids else [],
+                                    verts=[[float(c) for c in q] for q in pts] if pts else [],
+                                    vrefs=hist.vertex_refs(body.shape, pts) if pts else []))
+            return made, dict(type='mod', kind=kind, size=size, items=entries)
+
+        def apply(result):
+            made, recipe = result
+            self.document.pending_op = recipe
+            self.document.commit([made.get(b.id, b) for b in self.document.bodies])
+            self._tool_select(list(made))
+
+        self.view.set_preview_mesh(None)
+        self.view.set_handles([])
         self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
 
     # =====================================================================
@@ -8552,13 +8624,17 @@ class StudioWindow(PlywoodTools, QMainWindow):
             return
         if path.lower().endswith('.svg'):
             def build_svg():
-                return [Body(f'{Path(path).stem} {i + 1}', w, 'sketch', 'XY').prepared() for i, w in enumerate(kernel.svg_profiles(path, 'XY'))]
+                wires = kernel.svg_profiles(path, 'XY')
+                folder = Path(path).stem[:60] if len(wires) > 1 else ''      # wiele konturów - razem w grupie na liście obiektów
+                return hist.prepared_many(Body(f'{Path(path).stem} {i + 1}', w, 'sketch', 'XY', folder=folder) for i, w in enumerate(wires))
             self.run_operation('Importowanie SVG', build_svg, self.add_prepared_many, True)
             return
 
         def build():
-            return [Body(Path(path).stem if i == 0 else f'{Path(path).stem} {i + 1}', s, kind).prepared()
-                    for i, (s, kind) in enumerate(kernel.import_shapes(path))]
+            shapes = kernel.import_shapes(path)
+            folder = Path(path).stem[:60] if len(shapes) > 1 and all(kind == 'sketch' for _, kind in shapes) else ''
+            return hist.prepared_many(Body(Path(path).stem if i == 0 else f'{Path(path).stem} {i + 1}', s, kind, folder=folder)
+                                      for i, (s, kind) in enumerate(shapes))
 
         def add(bodies):
             if not bodies:

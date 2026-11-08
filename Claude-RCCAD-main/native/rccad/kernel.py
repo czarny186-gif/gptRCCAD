@@ -1042,9 +1042,9 @@ def import_shapes(path):
             if not StlAPI_Reader().Read(shape, str(path)):
                 raise CadError("Nie można odczytać pliku STL.")
             return [(valid(cq.Shape.cast(shape), False), "mesh")]
-        if path.suffix.lower() == ".dxf":
-            wp = cq.importers.importDXF(str(path))
-            return [(valid(w, False), "sketch") for w in wp.wires().vals()]
+        if path.suffix.lower() == ".dxf":           # jednostki z nagłówka, splajny, bloki - jak w rysunku technicznym
+            from .import2d import sketch_wires
+            return [(w, "sketch") for w in sketch_wires(path)]
         raise CadError("Obsługiwane formaty: STEP, BREP, STL i DXF.")
     except CadError:
         raise
@@ -1143,18 +1143,21 @@ def edge_points(edge, length=None):
     if edge.geomType() == "LINE":
         points = edge.positions([0.0, 1.0])
         return np.asarray([p.toTuple() for p in points], dtype=np.float32)
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
     length = edge.Length() if length is None else length
     count = min(96, max(16, int(length / 1.0)))
+    curve = BRepAdaptor_Curve(edge.wrapped)
     if edge.geomType() not in ("CIRCLE", "ELLIPSE"):
         try:
-            from OCP.BRepAdaptor import BRepAdaptor_Curve
             from OCP.GCPnts import GCPnts_TangentialDeflection
-            sampler = GCPnts_TangentialDeflection(BRepAdaptor_Curve(edge.wrapped), .12, min(.02, max(length, 1e-3) * .002), 16)
-            count = max(count, min(20000, sampler.NbPoints()))     # tyle punktów, ile potrzeba wg krzywizny - równo rozłożonych
+            sampler = GCPnts_TangentialDeflection(curve, .12, min(.02, max(length, 1e-3) * .002), 16)
+            count = max(count, min(20000, sampler.NbPoints()))     # tyle punktów, ile potrzeba wg krzywizny
         except Exception:
             count = max(count, min(4000, int(length / .5)))
-    points = edge.positions(np.linspace(0, 1, count))
-    return np.asarray([p.toTuple() for p in points], dtype=np.float32)
+    # równo w parametrze krzywej: szybko i bez błędów odmierzania długości na zdegenerowanych krzywych (np. z SVG)
+    t0, t1 = curve.FirstParameter(), curve.LastParameter()
+    pts = [curve.Value(t) for t in np.linspace(t0, t1, count)]
+    return np.asarray([(p.X(), p.Y(), p.Z()) for p in pts], dtype=np.float32)
 
 
 def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
@@ -1467,65 +1470,16 @@ def remove_edge(shape, index):
 
 
 def svg_profiles(path, plane="XY"):
-    """Prosty import SVG: rect, circle, ellipse, polygon, polyline oraz path z M/L/H/V/Z (współrzędne mm, oś Y odwrócona)."""
-    import re
-    import xml.etree.ElementTree as ET
-    text = Path(path).read_text(encoding="utf-8", errors="ignore")
-    if len(text) > 5_000_000:
-        raise CadError("Plik SVG jest zbyt duży.")
-    root = ET.fromstring(text)
-    num = lambda s: [float(x) for x in re.findall(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", s or "")]
-    flip = lambda p: (p[0], -p[1])
-    out = []
-    for el in root.iter():
-        tag = el.tag.split("}")[-1]
-        g = lambda k, d=0.0: float(num(el.get(k))[0]) if num(el.get(k)) else d
-        try:
-            if tag == "rect":
-                x, y, w, h = g("x"), g("y"), g("width"), g("height")
-                out.append(polyline(plane, [flip(p) for p in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]], True))
-            elif tag == "circle":
-                out.append(wp(plane).center(g("cx"), -g("cy")).circle(g("r")).wire().val())
-            elif tag == "ellipse":
-                out.append(wp(plane).center(g("cx"), -g("cy")).ellipse(g("rx"), g("ry")).wire().val())
-            elif tag in ("polygon", "polyline"):
-                n = num(el.get("points"))
-                pts = [flip((n[i], n[i + 1])) for i in range(0, len(n) - 1, 2)]
-                out.append(polyline(plane, pts, tag == "polygon"))
-            elif tag == "path":
-                subs, cur, pos, start = [], [], (0.0, 0.0), (0.0, 0.0)
-                for cmd, args in re.findall(r"([MmLlHhVvZz])([^MmLlHhVvZz]*)", el.get("d", "")):
-                    n = num(args)
-                    rel = cmd.islower()
-                    c = cmd.upper()
-                    if c == "Z":
-                        if len(cur) > 2:
-                            subs.append((cur, True))
-                        cur, pos = [], start
-                    elif c in "ML":
-                        for i in range(0, len(n) - 1, 2):
-                            pos = (pos[0] + n[i], pos[1] + n[i + 1]) if rel else (n[i], n[i + 1])
-                            if c == "M" and i == 0:
-                                if len(cur) > 1:
-                                    subs.append((cur, False))
-                                cur, start = [pos], pos
-                            else:
-                                cur.append(pos)
-                    elif c == "H":
-                        for v in n:
-                            pos = (pos[0] + v if rel else v, pos[1]); cur.append(pos)
-                    elif c == "V":
-                        for v in n:
-                            pos = (pos[0], pos[1] + v if rel else v); cur.append(pos)
-                if len(cur) > 1:
-                    subs.append((cur, False))
-                for pts, closed in subs:
-                    out.append(polyline(plane, [flip(p) for p in pts], closed))
-        except CadError:
-            continue
-    if not out:
-        raise CadError("W pliku SVG nie znaleziono obsługiwanych kształtów (prostokąt, okrąg, elipsa, wielokąt, ścieżka z liniami).")
-    return out
+    """Import SVG / DXF jako szkic: ścieżki z krzywymi Béziera i łukami, przekształcenia (transform), jednostki
+    (mm, cm, in, pt, px - bez jednostki to piksele 96/cal). Kontury w mm, połączone w obwody."""
+    from .import2d import sketch_wires
+    wires = sketch_wires(path)
+    if plane in ("XY", None):
+        return wires
+    frame = frame_of(plane)
+    rot = np.column_stack([np.asarray(frame.xdir, float), np.cross(np.asarray(frame.normal, float), np.asarray(frame.xdir, float)),
+                           np.asarray(frame.normal, float)])
+    return [transformed(w, rot, np.asarray(frame.origin, float)) for w in wires]
 
 
 def extrude_dir(wire, normal, d1, d2=0.0, symmetric=False):
@@ -1679,8 +1633,9 @@ def split_edges(edges):
     if builder.HasErrors():
         raise CadError("Nie udało się połączyć szkiców.")
     out = []
+    images = builder.Images()             # mapa obrazów: wielokrotnie szybsza niż Modified() dla każdej krawędzi
     for e in edges:
-        pieces = [cq.Shape.cast(m) for m in _fromlist(builder.Modified(e.wrapped))]
+        pieces = [cq.Shape.cast(m) for m in images.Find(e.wrapped)] if images.IsBound(e.wrapped) else []
         pieces = [p for p in pieces if p.geomType() is not None and p.Length() > 1e-6]
         if pieces:
             out.append(pieces)
@@ -1698,10 +1653,11 @@ def regions(plane, edges, wires=()):
     from OCP.gp import gp_Ax3, gp_Dir, gp_Pln, gp_Pnt
     if not edges:
         return []
-    unique = []
+    unique, seen = [], set()
     for pieces in split_edges(edges):
         for p in pieces:
-            if not any(p.isSame(q) for q in unique):
+            if p not in seen:            # skrót + isSame (zamiast porównywania każdej z każdą - tysiące krawędzi z SVG)
+                seen.add(p)
                 unique.append(p)
     frame = frame_of(plane)
     pln = gp_Pln(gp_Ax3(gp_Pnt(*[float(c) for c in frame.origin]), gp_Dir(*[float(c) for c in frame.normal]), gp_Dir(*[float(c) for c in frame.xdir])))
@@ -1822,9 +1778,10 @@ def _regions_from_wires(wires):
     builder.Perform()
     if builder.HasErrors():
         return []
-    out = []
+    out, seen = [], set()
     for f in cq.Shape.cast(builder.Shape()).Faces():
-        if f.Area() > 1e-6 and not any(f.isSame(q) for q in out):
+        if f.Area() > 1e-6 and f not in seen:
+            seen.add(f)
             out.append(f)
     return out
 

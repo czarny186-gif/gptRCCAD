@@ -1120,7 +1120,41 @@ def vertex_points(shape, recipe):
     return out
 
 
+def mod_many_job(shape, ids, points, size, kind):
+    """Krawędzie, potem narożniki jednej bryły (narożniki odnajdywane po zaokrągleniu krawędzi)."""
+    if ids:
+        before = shape
+        shape = kernel.blend(shape, set(ids), size, kind)
+        if points:
+            points = vertex_points(shape, dict(verts=[list(map(float, q)) for q in points], vrefs=vertex_refs(before, points)))
+    if points:
+        shape = kernel.blend_vertices(shape, [np.asarray(q, float) for q in points], size, kind)
+    return shape
+
+
+def mod_preview_many(jobs, size, kind, margin):
+    """Podgląd kilku zaokrągleń / faz naraz (różne bryły, krawędzie i narożniki): siatka samych nowych powierzchni."""
+    made = []
+    for shape, ids, points in jobs:
+        result = mod_many_job(shape, ids, points, size, kind)
+        made += kernel.new_faces(shape, result) or []
+    if not made:
+        raise kernel.CadError('Ta wartość jest za duża dla wybranych elementów.')
+    return kernel.display_mesh(kernel.compound(made), .3)
+
+
 def run_mod(bodies, recipe):
+    if recipe.get('items'):              # kilka brył albo krawędzie razem z narożnikami
+        out = list(bodies)
+        for item in recipe['items']:
+            body = _body(out, item['id'])
+            shape = body.shape
+            if item.get('edges'):
+                shape = kernel.blend(shape, set(edge_indices(shape, item['edges'])), float(recipe['size']), recipe['kind'])
+            if item.get('verts'):
+                shape = kernel.blend_vertices(shape, vertex_points(shape, item), float(recipe['size']), recipe['kind'])
+            out = _replace(out, body.changed(shape))
+        return out
     body = _body(bodies, recipe['id'])
     if recipe.get('verts'):
         shape = kernel.blend_vertices(body.shape, vertex_points(body.shape, recipe), float(recipe['size']), recipe['kind'])
@@ -1608,6 +1642,26 @@ def run_ply_joints(bodies, recipe):
     return out
 
 
+def ply_joints_preview_job(bodies, recipe):
+    """W procesie liczącym (osobny rdzeń): połączenia sklejki do podglądu - tylko zmienione płyty, razem z siatkami,
+    żeby okno nie liczyło niczego samo."""
+    from . import plywood as pw
+    panels, contacts, _ = ply_contacts(bodies, recipe)
+    if not contacts:
+        return {}
+    shapes = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, recipe.get('params', {}))
+    return {pid: (shape, kernel.display_mesh(shape)) for pid, shape in shapes.items()}
+
+
+def ply_detect_job(bodies, ids):
+    """W procesie liczącym: styki płyt (do listy połączeń) - bez kształtów w wyniku (lekkie do przesłania)."""
+    from . import plywood as pw
+    panels = pw.panels_of([b for b in bodies if b.id in set(ids)])
+    contacts, skipped = pw.find_contacts(panels)
+    light_contacts = [{k: v for k, v in c.items() if k != 'ends'} for c in contacts]
+    return [p['id'] for p in panels], {p['id']: p['name'] for p in panels}, {p['id']: p['method'] for p in panels}, light_contacts, skipped
+
+
 def run_folder(bodies, recipe):
     """Grupa (folder) na liście obiektów: przeniesienie do grupy, wyjęcie z niej (pusta nazwa) albo zmiana nazwy."""
     ids, folder = set(recipe['ids']), str(recipe.get('folder') or '')[:60]
@@ -1790,6 +1844,8 @@ def reads(recipe, current):
         return ids
     if kind == 'transform':
         return set(recipe.get('ids') or [recipe['id']])
+    if kind == 'mod' and recipe.get('items'):
+        return {item['id'] for item in recipe['items']}
     if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode'):
         return {recipe['id']}
     if kind == 'bool':
