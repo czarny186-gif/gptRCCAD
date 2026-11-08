@@ -350,14 +350,30 @@ def _abut(A, B, pa, pb):
     elif abs(a_hi - B['lo']) < TOL:
         plane, into = B['lo'], 1.0
     else:
-        return None
-    # ściany końca A leżące na płaszczyźnie styku
+        # płyta A sięga po obu stronach płaszczyzny B (np. podstawa-wielokąt wklęsły przy ściance „przy boku”):
+        # styk jest tam, gdzie A ma ścianę końca na stronie B zwróconą do B
+        plane = None
+        for f in A['shape'].Faces():
+            if f.geomType() != 'PLANE':
+                continue
+            fn = np.array(f.normalAt().toTuple(), float)
+            o = float(np.array(f.Center().toTuple()) @ nb)
+            if float(fn @ nb) < -1 + 1e-4 and abs(o - B['hi']) < TOL:
+                plane, into = B['hi'], -1.0
+            elif float(fn @ nb) > 1 - 1e-4 and abs(o - B['lo']) < TOL:
+                plane, into = B['lo'], 1.0
+            else:
+                continue
+            break
+        if plane is None:
+            return None
+    # ściany końca A leżące na płaszczyźnie styku (zwrócone do płyty B)
     ends = []
     for f in A['shape'].Faces():
         if f.geomType() != 'PLANE':
             continue
         fn = np.array(f.normalAt().toTuple(), float)
-        if abs(abs(float(fn @ nb)) - 1) > 1e-4:
+        if abs(abs(float(fn @ nb)) - 1) > 1e-4 or float(fn @ nb) * into < 0:
             continue
         if abs(float(np.array(f.Center().toTuple()) @ nb) - plane) > TOL:
             continue
@@ -805,10 +821,11 @@ def dogbones(shape, axis, regions, radius):
     return kernel.boolean('subtract', shape, cutters)
 
 
-def apply_joints(panels, contacts, params):
+def apply_joints(panels, contacts, params, failures=None):
     """Wykonuje połączenia na kształtach płyt. panels: {id: (kształt, normalna)}; contacts: styki z polem 'joint'.
     params: method, width (0 = auto), fit, depth (ułamek grubości dla gniazd nieprzelotowych / rowków), tool (średnica freza).
-    Zwraca {id: nowy kształt} (tylko zmienione płyty)."""
+    Zwraca {id: nowy kształt} (tylko zmienione płyty). failures: lista, do której trafiają (klucz styku, opis) połączeń,
+    których nie udało się wykonać - wtedy pozostałe i tak się wykonują; bez listy błąd przerywa całość."""
     shapes = {pid: shp for pid, (shp, _) in panels.items()}
     axes = {pid: np.asarray(n, float) for pid, (_, n) in panels.items()}
     regions = {}
@@ -822,51 +839,62 @@ def apply_joints(panels, contacts, params):
     for c in sorted(contacts, key=lambda c: c['kind'] != 'M'):
         joint = c.get('joint') or 'none'
         a, b = c['a'], c['b']
-        if c['kind'] == 'M' and flat_cut:
-            # laser / frezarka tną prostopadle do płyty: skos zamieniony na końce proste - na przemian jedna ścianka
-            # dochodzi do narożnika, druga jest cofnięta; „bez połączenia” - jedna ścianka zachodzi na całej wysokości
-            width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
-            shapes[a], shapes[b], box = _square_corner(c, shapes[a], shapes[b], width if joint != 'none' else None, fit)
-            regions.setdefault(a, []).append(box)
-            regions.setdefault(b, []).append(box)
+        saved = (shapes[a], shapes[b], set(changed), {k: list(v) for k, v in regions.items()})
+        try:
+            if c['kind'] == 'M' and flat_cut:
+                # laser / frezarka tną prostopadle do płyty: skos zamieniony na końce proste - na przemian jedna ścianka
+                # dochodzi do narożnika, druga jest cofnięta; „bez połączenia” - jedna ścianka zachodzi na całej wysokości
+                width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
+                shapes[a], shapes[b], box = _square_corner(c, shapes[a], shapes[b], width if joint != 'none' else None, fit)
+                regions.setdefault(a, []).append(box)
+                regions.setdefault(b, []).append(box)
+                changed |= {a, b}
+                continue
+            if joint == 'none':
+                continue
+            if not allowed(meth, joint):
+                raise kernel.CadError(f"{JOINTS[joint][0]}: {WHY_NOT.get(meth, 'niedostępne dla tej metody')}.")
+            if c['kind'] == 'M':
+                width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
+                shapes[a], shapes[b] = _mitre_fingers(c, shapes[a], shapes[b], width, fit)
+                changed |= {a, b}
+                continue
+            if c['kind'] == 'X':
+                cut_a, cut_b, _ = _halving_parts(c, fit)
+                shapes[a] = kernel.boolean('subtract', shapes[a], [cut_a])
+                shapes[b] = kernel.boolean('subtract', shapes[b], [cut_b])
+                box = _region_box(c, 1.0)
+                regions.setdefault(a, []).append(box)
+                regions.setdefault(b, []).append(box)
+            else:
+                width = float(params.get('width') or 0) or default_width(c['ta'])
+                add, cut, info = _joint_parts(c, joint, width, fit, ratio)
+                if c.get('ends') and add:
+                    current = _ends_on_plane(shapes[a], c)      # koniec płyty po wcześniejszych zmianach (np. narożnik prostowany pod laser)
+                    if current:
+                        c = dict(c, ends=current)
+                    foot = _footprint(c, info[4] + .05)     # nosek nie wychodzi poza koniec płyty przyciętej na skos
+                    add = [x for x in (kernel.boolean('intersect', seg, [foot]) for seg in add) if x.Solids()]
+                    cut = [x for x in (kernel.boolean('intersect', seg, [_footprint(c, info[4] + .1, fit / 2)]) for seg in cut) if x.Solids()]
+                others = [shp for pid, shp in shapes.items() if pid not in (a, b)]
+                add = _clip(add, others)                     # nosek nie wchodzi w trzecią płytę (narożnik trzech płyt)
+                if joint != 'groove' and not add:
+                    raise kernel.CadError('noski nie zmieściły się na końcu płyty')
+                if cut:
+                    shapes[b] = kernel.boolean('subtract', shapes[b], cut)
+                if add:
+                    shapes[a] = kernel.boolean('union', shapes[a], add)
+                    if len(shapes[a].Solids()) > 1 and sum(x.Volume() for x in sorted(shapes[a].Solids(), key=lambda x: -x.Volume())[1:]) > 1e-3:
+                        raise kernel.CadError('noski odstają od płyty')       # nie przylegają do jej końca
+                box = _region_box(c, fit + 1.0, info)
+                regions.setdefault(a, []).append(box)
+                regions.setdefault(b, []).append(box)
             changed |= {a, b}
-            continue
-        if joint == 'none':
-            continue
-        if not allowed(meth, joint):
-            raise kernel.CadError(f"{JOINTS[joint][0]}: {WHY_NOT.get(meth, 'niedostępne dla tej metody')}.")
-        if c['kind'] == 'M':
-            width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
-            shapes[a], shapes[b] = _mitre_fingers(c, shapes[a], shapes[b], width, fit)
-            changed |= {a, b}
-            continue
-        if c['kind'] == 'X':
-            cut_a, cut_b, _ = _halving_parts(c, fit)
-            shapes[a] = kernel.boolean('subtract', shapes[a], [cut_a])
-            shapes[b] = kernel.boolean('subtract', shapes[b], [cut_b])
-            box = _region_box(c, 1.0)
-            regions.setdefault(a, []).append(box)
-            regions.setdefault(b, []).append(box)
-        else:
-            width = float(params.get('width') or 0) or default_width(c['ta'])
-            add, cut, info = _joint_parts(c, joint, width, fit, ratio)
-            if c.get('ends') and add:
-                current = _ends_on_plane(shapes[a], c)      # koniec płyty po wcześniejszych zmianach (np. narożnik prostowany pod laser)
-                if current:
-                    c = dict(c, ends=current)
-                foot = _footprint(c, info[4] + .05)     # nosek nie wychodzi poza koniec płyty przyciętej na skos
-                add = [x for x in (kernel.boolean('intersect', seg, [foot]) for seg in add) if x.Solids()]
-                cut = [x for x in (kernel.boolean('intersect', seg, [_footprint(c, info[4] + .1, fit / 2)]) for seg in cut) if x.Solids()]
-            others = [shp for pid, shp in shapes.items() if pid not in (a, b)]
-            add = _clip(add, others)                     # nosek nie wchodzi w trzecią płytę (narożnik trzech płyt)
-            if cut:
-                shapes[b] = kernel.boolean('subtract', shapes[b], cut)
-            if add:
-                shapes[a] = kernel.boolean('union', shapes[a], add)
-            box = _region_box(c, fit + 1.0, info)
-            regions.setdefault(a, []).append(box)
-            regions.setdefault(b, []).append(box)
-        changed |= {a, b}
+        except Exception as exc:
+            if failures is None:
+                raise
+            shapes[a], shapes[b], changed, regions = saved      # to połączenie pominięte, płyty bez zmian
+            failures.append((c.get('key', f'{a}:{b}'), str(exc) or exc.__class__.__name__))
     for pid in changed:
         shapes[pid] = _main_solid(shapes[pid])
     tool = float(params.get('tool', 0) or 0)
@@ -930,18 +958,36 @@ def part_layers(flat, t):
     return union, pockets
 
 
+def _offset_wire(wire, delta):
+    """Obwód przesunięty o delta: najpierw ostre narożniki, a gdy OpenCascade nie poradzi sobie z gęstymi noskami -
+    narożniki zaokrąglone promieniem połowy szerokości cięcia (tak i tak tnie wiązka); w ostateczności bez przesunięcia."""
+    for kind in ('intersection', 'arc'):
+        try:
+            out = wire.offset2D(delta, kind)
+            if out:
+                return out
+        except Exception:
+            continue
+    return [wire]
+
+
 def _offset_face(face, delta):
     """Obrys przesunięty na zewnątrz o delta (otwory do środka) - kompensacja szerokości cięcia lasera."""
     if abs(delta) < 1e-9:
         return [face.outerWire()], list(face.innerWires())
-    outer = face.outerWire().offset2D(delta, 'intersection')
+    area = lambda ws: sum(cq.Face.makeFromWires(x).Area() for x in ws)
+    outer = _offset_wire(face.outerWire(), delta)
+    try:
+        if area(outer) < cq.Face.makeFromWires(face.outerWire()).Area():
+            outer = _offset_wire(face.outerWire(), -delta)        # kierunek przesunięcia zależy od orientacji obwodu
+    except Exception:
+        pass
     inner = []
     for w in face.innerWires():
-        grown = w.offset2D(-delta, 'intersection')
-        area = lambda ws: sum(cq.Face.makeFromWires(x).Area() for x in ws)
+        grown = _offset_wire(w, -delta)
         try:
             if area(grown) > cq.Face.makeFromWires(w).Area():
-                grown = w.offset2D(delta, 'intersection')     # kierunek przesunięcia zależy od orientacji obwodu
+                grown = _offset_wire(w, delta)
         except Exception:
             pass
         inner += grown
@@ -1004,7 +1050,10 @@ def export_dxf(parts, path, meth='cnc', labels=True, sheet_width=1200.0, kerf=No
         kerf = float(method(meth).get('kerf', 0.0)) if meth == 'laser' else 0.0
     places = layout(parts, width=sheet_width)
     for item, (dx, dy) in zip(parts, places):
-        union, pockets = part_layers(item['flat'], item['t'])
+        try:
+            union, pockets = part_layers(item['flat'], item['t'])
+        except Exception as exc:
+            raise kernel.CadError(f"Płyta „{item['name']}”: nie udało się wyznaczyć obrysu ({exc}).") from exc
         for face in union.Faces():
             outer, inner = _offset_face(face, kerf / 2)
             for w in [*outer, *inner]:

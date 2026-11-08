@@ -592,7 +592,7 @@ class PlywoodTools:
         """Styki płyt liczone w procesie w tle - okno od razu działa, lista połączeń pojawia się po chwili."""
         hidden = set(self._ply_hidden())
         ids = [b.id for b in self.document.bodies if pw.is_panel(b) and b.visible and b.id not in hidden]   # ukryte - bez połączeń
-        self.pj_contacts, self.pj_skipped, self.pj_ids = [], [], ids
+        self.pj_contacts, self.pj_skipped, self.pj_ids, self.pj_failed = [], [], ids, {}
         self._pj_build_rows()
         self.pj_status.setText('Szukam miejsc, w których płyty się stykają…' if ids else '')
         if not ids:
@@ -752,15 +752,32 @@ class PlywoodTools:
                 self.override = {}
                 self.pj_status.setText(str(error))
             else:
+                meshes, failed = value if isinstance(value, tuple) else (value or {}, [])
                 out = {}
-                for bid, (shape, mesh) in (value or {}).items():
+                for bid, (shape, mesh) in meshes.items():
                     body = originals.get(bid)
                     if body is not None:
                         out[bid] = replace(body, shape=shape, mesh=mesh)
                 self.override = out
+                self._pj_show_failed(failed)
             self.refresh()
 
         self.run_preview('ply_joints', compute, show)
+
+    def _pj_show_failed(self, failed):
+        """Połączenia, których nie da się wykonać: czerwona ramka w liście i opis - reszta wykonuje się normalnie."""
+        self.pj_failed = dict(failed or [])
+        for key, (row, combo) in self.pj_rows.items():
+            bad = key in self.pj_failed
+            row.setStyleSheet(('QFrame#plyrow{background:#fff3f1;border:1.5px solid #e0533b;border-radius:9px;}' if bad else
+                               'QFrame#plyrow{background:#f6f9fc;border:1px solid #dbe6f0;border-radius:9px;}'
+                               'QFrame#plyrow:hover{background:#eaf3fe;border-color:#9ccbf6;}'))
+            row.setToolTip(f'Nie udało się połączyć: {self.pj_failed[key]}. Zmień rodzaj połączenia albo szerokość noska.' if bad else '')
+        base = self.pj_status.text().split('\n')[0]
+        if self.pj_failed:
+            self.pj_status.setText(base + f'\nNie da się wykonać połączeń: {len(self.pj_failed)} (czerwona ramka) - pozostałe się wykonają.')
+        else:
+            self.pj_status.setText(base)
 
     def apply_ply_joints(self):
         recipe = self._pj_recipe()
@@ -780,6 +797,9 @@ class PlywoodTools:
             self.document.pending_op = recipe_
             self.document.pending_label, self.document.pending_icon = 'Połączenia sklejki', 'ply_joints'
             self.document.commit(bodies)
+            failed = [c['title'] for c in self.pj_contacts if c['key'] in getattr(self, 'pj_failed', {})]
+            if failed:
+                self.toast('Pominięte połączenia (nie dało się ich wykonać): ' + '; '.join(failed[:4]) + ('…' if len(failed) > 4 else ''), 8000)
 
         self.override = {}
         self.view.set_selection_meshes(None)

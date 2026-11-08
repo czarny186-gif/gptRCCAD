@@ -290,6 +290,64 @@ class PlywoodPolygonTests(unittest.TestCase):
         out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=0.1))
         self.assertEqual(_overlaps([out.get(p['id'], p['shape']) for p in panels]), 0)
 
+    def test_concave_base_every_wall_gets_fingers(self):
+        """0.4.63 (model użytkownika): podstawa-wielokąt wklęsły - ścianki przy wklęsłym narożniku też łączą się z podstawą
+        (podstawa sięga po obu stronach ich płaszczyzny, a styk i tak jest wykryty)."""
+        pts = [(-480, 0), (-140, -40), (-20, -240), (212.5, -214.9), (222.6, -67.9), (20, 200), (-327.4, 206.1)]
+        base = cq.Workplane().polyline(pts).close().extrude(2).val()
+        for side in ('side', 'on'):
+            b = Body('Płyta 1', base, meta=pw.ply_meta(2, 'laser')).prepared()
+            tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - 2) < 1e-6]
+            bodies = hist.run_recipe([b], dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, tops), t=2.0, h=20.0,
+                                               side=side, flip=False, method='laser', out=[f'w{i}' for i in tops]))
+            panels = pw.panels_of(bodies)
+            contacts, skipped = pw.find_contacts(panels)
+            walls = {x.id for x in bodies if x.id != b.id}
+            on_base = {c['b'] if c['a'] == b.id else c['a'] for c in contacts if b.id in (c['a'], c['b'])}
+            self.assertEqual(on_base, walls, side)                                 # każda ścianka styka się z podstawą
+            self.assertFalse(skipped)
+            for c in contacts:
+                c['joint'] = pw.joint_for('laser', c['kind'])
+            failures = []
+            out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=.1),
+                                  failures=failures)
+            self.assertEqual(failures, [], side)
+            self.assertEqual(set(out), walls | {b.id})
+            self.assertEqual(_overlaps([out[p['id']] for p in panels]), 0, side)
+
+    def test_laser_polygon_box_exports_with_kerf(self):
+        """0.4.63: Do cięcia - podstawa-wielokąt z wczepami eksportuje się także z kompensacją lasera (offset2D bywał pusty)."""
+        bodies = self._walls(cq.Workplane().polygon(6, 200).extrude(6).val(), 'on')
+        panels = pw.panels_of(bodies)
+        contacts, _ = pw.find_contacts(panels)
+        for c in contacts:
+            c['joint'] = pw.joint_for('laser', c['kind'])
+        out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=0.1))
+        parts = [dict(name=p['name'], flat=pw.flat_part(out[p['id']], 6)[0], t=6.0) for p in panels]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'box.dxf')
+            pw.export_dxf(parts, path, 'laser', True, 1200, kerf=0.15)
+            self.assertGreater(os.path.getsize(path), 1000)
+
+    def test_failed_contact_is_skipped_and_reported(self):
+        """0.4.63: nieudane połączenie nie psuje pozostałych - jest pomijane i zgłaszane."""
+        bodies = self._walls(cq.Solid.makeBox(200, 150, 6), 'on')
+        panels = pw.panels_of(bodies)
+        contacts, _ = pw.find_contacts(panels)
+        for c in contacts:
+            c['joint'] = 'finger'
+        bad = contacts[0]
+        failures = []
+        bad['joint'] = 'blind'                                                      # niedostępne dla lasera -> błąd tylko tego styku
+        out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=0.1),
+                              failures=failures)
+        self.assertEqual(len(failures), 1)
+        self.assertTrue(all(s.isValid() for s in out.values()))
+        changed = [p for p in panels if abs(out[p['id']].Volume() - p['shape'].Volume()) > 1]
+        self.assertGreaterEqual(len(changed), 4)
+        with self.assertRaises(Exception):
+            pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, [bad], dict(method='laser', fit=0.1))
+
     def test_drawing_parts_laid_out_without_overlap(self):
         from rccad import drawing as dr
         bodies = self._walls(cq.Solid.makeBox(200, 150, 6), 'on')

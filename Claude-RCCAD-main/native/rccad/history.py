@@ -58,6 +58,8 @@ def step_label(info):
     if not op:
         return label
     kind = op.get('type')
+    if kind == 'multi' and op.get('steps'):
+        return f"{step_label(dict(info, op=op['steps'][0]))} ×{len(op['steps'])}"
     try:
         if kind == 'extrude' and isinstance(op.get('d1'), (int, float)):
             extra = {'symmetric': ' symetrycznie', 'two': f" + {_num(op.get('d2'), ' mm')}", 'ends': ' (oba końce)'}.get(op.get('dir'), '')
@@ -1163,6 +1165,23 @@ def run_mod(bodies, recipe):
     return _replace(bodies, body.changed(shape))
 
 
+def outer_face_along(shape, normal):
+    """Płaska ściana bryły zwrócona w kierunku normal, najdalej wysunięta w tę stronę (np. „górna” ściana) - do otwarcia
+    tej samej ściany na kilku bryłach naraz. (ściana, normalna) albo None."""
+    n = _unit(normal)
+    best = None
+    for f in shape.Faces():
+        if f.geomType() != 'PLANE':
+            continue
+        fn = outward_normal(shape, f)
+        if float(fn @ n) < 1 - 1e-4:
+            continue
+        level = float(np.array(f.Center().toTuple()) @ n)
+        if best is None or level > best[0] + 1e-6 or (abs(level - best[0]) <= 1e-6 and f.Area() > best[1].Area()):
+            best = (level, f, fn)
+    return None if best is None else (best[1], best[2])
+
+
 def run_shell(bodies, recipe):
     """Ponownie wykonuje skorupę: grubość, kierunek i otwarte ściany (odnajdywane na bryle po zmianie jej rozmiarów)."""
     body = _body(bodies, recipe['id'])
@@ -1657,16 +1676,21 @@ def ply_contacts(bodies, recipe):
     return panels, contacts, skipped
 
 
-def run_ply_joints(bodies, recipe):
+def run_ply_joints(bodies, recipe, failures=None):
+    """Połączenia sklejki. Styk, którego nie da się połączyć, jest pomijany (reszta się wykonuje), a opis trafia do failures."""
     from . import plywood as pw
     panels, contacts, _ = ply_contacts(bodies, recipe)
     if not contacts:
         raise kernel.CadError('Płyty się nie stykają - nie ma czego połączyć.')
     params = recipe.get('params', {})
-    shapes = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, params)
+    failed = [] if failures is None else failures
+    shapes = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, params, failed)
+    bad = {key for key, _ in failed}
+    if contacts and all(c['key'] in bad or c['joint'] == 'none' for c in contacts) and bad:
+        raise kernel.CadError('Nie udało się wykonać żadnego połączenia: ' + failed[0][1])
     partners = {}
     for c in contacts:
-        if c['joint'] != 'none':
+        if c['joint'] != 'none' and c['key'] not in bad:
             partners.setdefault(c['a'], set()).add(c['b'])
             partners.setdefault(c['b'], set()).add(c['a'])
     out = []
@@ -1688,9 +1712,10 @@ def ply_joints_preview_job(bodies, recipe):
     from . import plywood as pw
     panels, contacts, _ = ply_contacts(bodies, recipe)
     if not contacts:
-        return {}
-    shapes = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, recipe.get('params', {}))
-    return {pid: (shape, kernel.display_mesh(shape)) for pid, shape in shapes.items()}
+        return {}, []
+    failed = []
+    shapes = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, recipe.get('params', {}), failed)
+    return {pid: (shape, kernel.display_mesh(shape)) for pid, shape in shapes.items()}, failed
 
 
 def ply_detect_job(bodies, ids):
@@ -1700,6 +1725,15 @@ def ply_detect_job(bodies, ids):
     contacts, skipped = pw.find_contacts(panels)
     light_contacts = [{k: v for k, v in c.items() if k != 'ends'} for c in contacts]
     return [p['id'] for p in panels], {p['id']: p['name'] for p in panels}, {p['id']: p['method'] for p in panels}, light_contacts, skipped
+
+
+def run_multi(bodies, recipe):
+    """Ta sama operacja na kilku zaznaczonych obiektach (lustro, szyk, przecięcie, skorupa...): kolejne kroki po kolei,
+    jako jeden krok historii."""
+    out = list(bodies)
+    for step in recipe['steps']:
+        out = list(run_recipe(out, step))
+    return out
 
 
 def run_folder(bodies, recipe):
@@ -1780,7 +1814,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1871,6 +1905,14 @@ def changed_ids(before, current):
 def reads(recipe, current):
     """Zbiór obiektów, od których zależy wynik kroku (None = nie wiadomo, trzeba liczyć od nowa)."""
     kind = recipe['type']
+    if kind == 'multi':
+        ids = set()
+        for step in recipe['steps']:
+            got = reads(step, current)
+            if got is None:
+                return None
+            ids |= got
+        return ids
     sketches = {b.id for b in current if b.kind == 'sketch'}
     if kind in ('extrude', 'revolve', 'sweep', 'loft'):
         ids = set(recipe.get('spent', ()))

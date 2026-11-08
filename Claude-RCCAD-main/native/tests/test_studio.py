@@ -1,7 +1,7 @@
 """Okno Studio: układ jak w HTML oraz przepływ szkic → wyciągnięcie → Boolean / zaokrąglenie / lustro."""
 import os, faulthandler
 DIAG=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w")
-faulthandler.dump_traceback_later(600, exit=True, file=DIAG)       # strażnik zawieszenia; licznik startuje od nowa w każdym teście (setUp)
+# strażnik zawieszenia: włączany w setUp każdego testu okna i wyłączany w tearDown (nie liczy czasu innych modułów)
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
 import tempfile
@@ -37,6 +37,7 @@ class StudioTests(unittest.TestCase):
     def tearDown(self):
         self.wait();self.w.document._saved_revision=self.w.document._revision;self.w.close();self.w.deleteLater();self.app.sendPostedEvents(None,QEvent.DeferredDelete);self.app.processEvents();self.w=None   # okno zwalniane od razu (inaczej pamięć rośnie z każdym testem)
         for p in self.patches:p.stop()
+        faulthandler.cancel_dump_traceback_later()
 
     def wait(self):
         end=time.monotonic()+20
@@ -1478,6 +1479,52 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_face',return_value=(a.id,[1,0,0],[20,10,10])):w.view_clicked(5,5,False,False)
         self.assertIsNotNone(w.mirror_frame);w.update_mirror_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.apply_mirror();self.wait();self.assertEqual(len(w.document.bodies),2)
+
+    # 0.4.63: kilka zaznaczonych - lustro, przecięcie, skorupa i szyk na wszystkich naraz (jeden krok historii)
+    def test_operations_apply_to_all_selected(self):
+        import cadquery as cq
+        from rccad import history as hist
+        w=self.w
+        a=Body('A',cq.Solid.makeBox(10,10,10)).prepared();b=Body('B',cq.Solid.makeBox(10,10,10,pnt=cq.Vector(20,0,0))).prepared()
+        c=Body('C',cq.Solid.makeBox(10,10,10,pnt=cq.Vector(40,0,0))).prepared()
+        w.document.commit([a,b,c]);w.refresh()
+        w.objects_select(a.id,Qt.NoModifier);w.objects_select(b.id,Qt.ShiftModifier)
+        # lustro: zaznaczone przed narzędziem - od razu płaszczyzna; odbija obie
+        w.set_mode('mirror');self.assertEqual(w.mirror_id,a.id);self.assertEqual(set(w.view.tints),{a.id,b.id})
+        w.mir_keep.setChecked(True)
+        with patch.object(w.view,'pick_face',return_value=(c.id,[0,-1,0],[45,0,5])):w.view_clicked(5,5,False,False)
+        w.apply_mirror();self.wait()
+        self.assertEqual(len(w.document.bodies),5);self.assertEqual(w.document.info['op']['type'],'multi')
+        self.assertIn('×2',hist.step_label(w.document.info))
+        mirrored=[x for x in w.document.bodies if x.name.endswith('odbicie')]
+        self.assertEqual(sorted(round(x.shape.Center().y) for x in mirrored),[-5,-5])
+        w.undo();self.wait();self.assertEqual(len(w.document.bodies),3)
+        # przecięcie płaszczyzną: każda przez swój środek
+        w.objects_select(a.id,Qt.NoModifier);w.objects_select(c.id,Qt.ShiftModifier)
+        w.set_mode('split');self.assertEqual(w.sp_id,a.id);self.assertEqual(set(w.view.tints),{a.id,c.id})
+        w.apply_split();self.wait()
+        self.assertEqual(len(w.document.bodies),5)
+        self.assertEqual(sorted(round(x.shape.Volume()) for x in w.document.bodies),[500,500,500,500,1000])
+        w.undo();self.wait()
+        # skorupa: ta sama grubość, otwarta górna ściana na każdej
+        w.objects_select(b.id,Qt.NoModifier);w.objects_select(c.id,Qt.ShiftModifier)
+        w.set_mode('shell');self.assertEqual(w.sh_id,b.id);self.assertEqual(set(w.selected),{b.id,c.id})
+        with patch.object(w.view,'pick_face',return_value=(b.id,np.array([0,0,1.]),np.array([25,5,10.]))):w.view_clicked(5,5,False,False)
+        self.assertIn('+ 1 zaznaczone',w.sh_step1.value.text())
+        w.sh_thick.setValue(1);w.apply_shell();self.wait()
+        nb,nc=w.document.get(b.id),w.document.get(c.id)
+        self.assertAlmostEqual(nb.shape.Volume(),nc.shape.Volume(),3);self.assertLess(nc.shape.Volume(),600)
+        self.assertEqual(len(nc.shape.Faces()),len(nb.shape.Faces()))          # obie otwarte od góry
+        self.assertEqual(hist.reads(w.document.info['op'],[a,b,c]),{b.id,c.id})
+        w.undo();self.wait()
+        # szyk: każda zaznaczona dostaje swoje kopie
+        w.objects_select(a.id,Qt.NoModifier);w.objects_select(c.id,Qt.ShiftModifier)
+        w.set_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=a.id),patch.object(w.view,'nearest_edge',return_value=None):w.view_clicked(5,5,False,False)
+        self.assertEqual(set(w.view.tints),{a.id,c.id})
+        w.pat_counts[0].setValue(3);w.pat_gaps[0].setValue(0);w.pat_counts[1].setValue(1)
+        w.apply_pattern();self.wait()
+        self.assertEqual(len(w.document.bodies),7)
 
     def test_move_and_rotate_selected_solid_live(self):
         w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('move');self.assertIs(w.t_target.id,a.id)

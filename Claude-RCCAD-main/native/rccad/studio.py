@@ -1997,6 +1997,9 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.hint('Gwint: kliknij otwór albo wałek. Strzałki w widoku ustawiają długość i rozmiar; gwint powstaje po Zastosuj.')
         elif mode == 'shell':
             self.shell_panel.show()
+            solids = [i for i in self.selected if (b := self.document.get(i)) is not None and b.kind == 'solid']
+            if solids and self.sh_id is None:
+                self.sh_id, self.sh_faces = solids[0], []        # bryła (bryły) zaznaczone przed włączeniem narzędzia
             self._sh_update()
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Skorupa: kliknij bryłę, potem ściany, które mają zostać otwarte.')
@@ -2030,13 +2033,17 @@ class StudioWindow(PlywoodTools, QMainWindow):
         elif mode == 'split':
             self.sp_panel.show()
             self.view.setCursor(Qt.PointingHandCursor)
-            chosen = self.document.get(self.selected[0]) if len(self.selected) == 1 else None
-            if chosen is not None and chosen.kind == 'solid':
-                self.sp_id = chosen.id                      # bryła zaznaczona kliknięciem przed włączeniem narzędzia
+            chosen = next((b for b in (self.document.get(i) for i in self.selected) if b is not None and b.kind == 'solid'), None)
+            if chosen is not None:
+                self.sp_id = chosen.id                      # bryła (bryły) zaznaczone przed włączeniem narzędzia
             self._split_method_changed()
             self.hint('Przetnij bryłę: kliknij bryłę, wybierz metodę i wskaż, czym ją przeciąć.')
         elif mode == 'mirror':
             self.mir_panel.show()
+            chosen = next((b for b in (self.document.get(i) for i in self.selected) if b is not None and b.kind in ('solid', 'sketch')), None)
+            if chosen is not None and self.mirror_id is None:
+                self.mirror_id = chosen.id                  # zaznaczone wcześniej: od razu krok 2 (płaszczyzna odbicia)
+                self._tint_targets(chosen.id, ('solid', 'sketch'))
             self.update_mirror_status()
             self.hint('Lustro: kliknij bryłę, a potem ścianę, względem której ma nastąpić odbicie.')
         elif mode == 'pattern':
@@ -5120,7 +5127,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
     def _sh_update(self):
         body = self.document.get(self.sh_id) if self.sh_id else None
         self._sh_xray(body is not None)
-        self._tool_select([body.id] if body is not None else [])
+        if body is None or body.id not in self.selected or len(self.selected) < 2:     # kilka zaznaczonych - zostają zaznaczone
+            self._tool_select([body.id] if body is not None else [])
         self._hover_key = None
         if body is None:
             self.sh_id, self.sh_faces = None, []
@@ -5132,7 +5140,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.override = {}
             self.refresh()
             return
-        self.sh_step1.set_state('done', body.name)
+        many = len(self._multi_targets(body.id))
+        self.sh_step1.set_state('done', body.name if many < 2 else f'{body.name} + {many - 1} zaznaczone (te same ustawienia)')
         self.sh_step2.set_state('done' if self.sh_faces else 'active', f'Otwarte ściany: {len(self.sh_faces)}' if self.sh_faces else 'Kliknij ściany (albo zatwierdź bez otwierania)')
         self.sh_status.setText('Kliknij ścianę, aby ją otworzyć; ponowne kliknięcie cofa. Enter zatwierdza.')
         meshes = []
@@ -5194,6 +5203,22 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.toast('Kliknij bryłę, którą chcesz wydrążyć.')
             return
         faces, thickness, inward = list(self.sh_faces), self.sh_thick.value(), self.sh_dir.currentData() == 'in'
+        targets = self._multi_targets(body.id)
+        if len(targets) > 1:          # kilka zaznaczonych: ta sama grubość; otwarte ściany o tym samym kierunku na każdej bryle
+            steps = [dict(type='shell', id=body.id, faces=[hist.face_ref(f['face'], f['normal'], f['point'], body.shape) for f in faces],
+                          thickness=thickness, inward=inward)]
+            for i in targets[1:]:
+                other = self.document.get(i)
+                refs = []
+                for f in faces:
+                    match = hist.outer_face_along(other.shape, np.asarray(f['normal'], float))
+                    if match is not None:
+                        refs.append(hist.face_ref(match[0], match[1], np.array(match[0].Center().toTuple(), float), other.shape))
+                steps.append(dict(type='shell', id=i, faces=refs, thickness=thickness, inward=inward))
+            self.override = {}
+            self.view.set_selection_meshes(None)
+            self._run_multi('Skorupa', 'shell', steps, targets)
+            return
 
         def build():
             new = body.changed(*hist.offloaded_shape(hist.shell_indexed, body.shape, hist.face_indices(body.shape, [f['face'] for f in faces]), thickness, inward))
@@ -6025,7 +6050,10 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.view.tints = {}
         else:
             self.sp_step1.set_state('done', body.name)
-            self.view.tints = {body.id: TINT_BASE}
+            self._tint_targets(body.id, ('solid',), exclude=((self.sp_ref or {}).get('tool'),))
+            many = len(self.view.tints)
+            if many > 1:
+                self.sp_step1.set_state('done', f'{body.name} + {many - 1} zaznaczone')
             if self.sp_ref is None:
                 self.sp_step2.set_state('active', {'face': 'Kliknij płaską ścianę', 'sketch': 'Kliknij szkic', 'body': 'Kliknij bryłę tnącą'}.get(method, ''))
             else:
@@ -6094,6 +6122,16 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.toast('Kliknij bryłę i wskaż, czym ją przeciąć.')
             return
         recipe['out'] = uuid.uuid4().hex
+        targets = self._multi_targets(recipe['id'], ('solid',), exclude=(recipe.get('tool'),))
+        if len(targets) > 1:          # kilka zaznaczonych: każda przecięta tym samym (płaszczyzna - przez środek każdej)
+            steps = []
+            for i in targets:
+                step = dict(recipe, id=i, out=uuid.uuid4().hex)
+                if recipe['method'] == 'plane':
+                    step['origin'] = [float(c) for c in _center(self.document.get(i).shape).toTuple()]
+                steps.append(step)
+            self._run_multi('Przecięcie', 'split', steps)
+            return
         existing = list(self.document.bodies)
 
         def build():
@@ -6121,7 +6159,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 self.toast('Kliknij bryłę lub element szkicu do odbicia.')
                 return
             self.mirror_id = bid
-            self.view.tints = {bid: TINT_BASE}
+            self._tint_targets(bid, ('solid', 'sketch'))
             self.update_mirror_status()
             return
         hit = self.view.pick_face(x, y)
@@ -6297,6 +6335,11 @@ class StudioWindow(PlywoodTools, QMainWindow):
         keep, join = self.mir_keep.isChecked(), self.mir_join.isChecked() and body.kind == 'solid'
 
         recipe = dict(type='mirror', id=body.id, normal=[float(c) for c in normal], origin=[float(c) for c in origin], keep=keep, join=join, out=uuid.uuid4().hex)
+        targets = self._multi_targets(body.id, ('solid', 'sketch'))
+        if len(targets) > 1:          # kilka zaznaczonych: każdy odbity względem tej samej płaszczyzny
+            steps = [dict(recipe, id=i, join=join and self.document.get(i).kind == 'solid', out=uuid.uuid4().hex) for i in targets]
+            self._run_multi('Odbicie lustrzane', 'mirror', steps, [st['out'] if keep and not st['join'] else st['id'] for st in steps])
+            return
         existing = list(self.document.bodies)
 
         def build():
@@ -6378,7 +6421,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 self.toast('Kliknij bryłę lub szkic, który ma być powielony.')
                 return
             self.pat_id = bid
-            self.view.tints = {bid: TINT_BASE}
+            self._tint_targets(bid, ('solid', 'sketch'))
             low, high = self._mesh_bounds(body.mesh)
             for spin, size in zip(self.pat_gaps, high - low):      # domyślny odstęp: wymiar obiektu + zapas
                 spin.blockSignals(True)
@@ -6910,6 +6953,21 @@ class StudioWindow(PlywoodTools, QMainWindow):
         recipe = dict(type='pattern', id=body.id, kind=kind, params=params, join=join, out=[uuid.uuid4().hex for _ in ops])
         if not join and self.pat_result.currentData() == 'group':
             recipe['group'] = uuid.uuid4().hex             # „jako jeden element”: oryginał i kopie w jednej grupie
+        targets = self._multi_targets(body.id, ('solid', 'sketch'))
+        if len(targets) > 1:          # kilka zaznaczonych: każdy powielony tak samo
+            steps = []
+            for i in targets:
+                other = self.document.get(i)
+                step = dict(recipe, id=i, join=join and other.kind == 'solid', out=[uuid.uuid4().hex for _ in ops])
+                if kind == 'rect':
+                    axes = self._pattern_axes(other)
+                    step['params'] = dict(params, axes=[list(axes[a]) for a in 'XYZ'])
+                if recipe.get('group'):
+                    step['group'] = uuid.uuid4().hex
+                steps.append(step)
+            self.selected = []
+            self._run_multi('Szyk', 'pattern', steps)
+            return
         existing = list(self.document.bodies)
 
         def build():
@@ -7140,6 +7198,42 @@ class StudioWindow(PlywoodTools, QMainWindow):
             state['warned'] = True
             self.toast(f'Historia ma już {doc.history_length} kroków. Po {doc.MAX_UNDO} krokach najstarsze kroki będą usuwane - '
                        'jeśli chcesz je zachować, zapisz wariant w menu historii.', 12000)
+
+    def _multi_targets(self, primary, kinds=('solid',), exclude=()):
+        """Obiekty, na których wykona się operacja: wskazany, a gdy jest wśród kilku zaznaczonych (na liście obiektów
+        albo na polu roboczym) - wszystkie zaznaczone odpowiedniego rodzaju (wskazany pierwszy)."""
+        if primary is None:
+            return []
+        if primary not in self.selected or len(self.selected) < 2:
+            return [primary]
+        out = [primary]
+        for i in self.selected:
+            body = self.document.get(i)
+            if i != primary and i not in exclude and body is not None and body.kind in kinds and i not in out:
+                out.append(i)
+        return out
+
+    def _tint_targets(self, primary, kinds=('solid',), exclude=()):
+        self.view.tints = {i: TINT_BASE for i in self._multi_targets(primary, kinds, exclude)}
+
+    def _run_multi(self, label, icon, steps, select=None):
+        """Ta sama operacja na kilku zaznaczonych obiektach - jeden krok historii (cofa się w całości)."""
+        recipe = dict(type='multi', steps=steps)
+        existing = list(self.document.bodies)
+
+        def build():
+            return list(hist.offloaded(hist.run_multi, existing, recipe))
+
+        def apply(new):
+            self.document.pending_op = recipe
+            self.document.pending_label, self.document.pending_icon = label, icon
+            self.document.commit(new)
+            if select is not None:
+                self._tool_select([i for i in select if self.document.get(i) is not None])
+
+        self.view.set_preview_mesh(None)
+        self.view.set_handles([])
+        self.run_operation(f'{label} ×{len(steps)}', build, apply, after=lambda: self.set_mode(None))
 
     def _tool_select(self, ids, sketch=False):
         """Zaznaczenie ustawione przez program (wynik operacji, bryła wskazana w narzędziu). Bryła zaznacza się na stałe tylko

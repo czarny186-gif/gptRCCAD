@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.62 — akcje na zaznaczonych obiektach, przegrody na krzyż, ukryte płyty
+# RCCAD Desktop 0.4.63 — operacje na wszystkich zaznaczonych, pominięte połączenia, eksport wielokątów
+
+## Zmiany 0.4.63
+
+- **Kilka zaznaczonych = operacja na wszystkich**: jak przy Przesuń / obróć - Lustro, Szyk, Przetnij bryłę i Skorupa działają na wszystkie bryły zaznaczone na liście Obiekty albo na polu roboczym, jednym krokiem historii. Zaznaczone świecą się na niebiesko, kroki pokazują „+ N zaznaczone”. Lustro: ta sama płaszczyzna dla wszystkich; Przetnij płaszczyzną: każda przez swój środek; Skorupa: ta sama grubość i otwarta ściana zwrócona w tę samą stronę.
+- **Noski przy wklęsłej podstawie (przesłany model)**: przy podstawie-wielokącie z wklęsłym narożnikiem ścianki po obu stronach tego narożnika nie były wykrywane jako stykające się z podstawą (podstawa wystaje tam po obu stronach płaszczyzny ścianki) - dlatego nie dostawały nosków. Teraz każda ścianka łączy się z podstawą, w trybie Na podstawie i Przy boku, dla lasera, frezarki i druku.
+- **Połączenia (Sklejka)**: styk, na którym połączenia nie da się wykonać, nie psuje już pozostałych - jest pomijany, reszta płyt dostaje noski, a pozycja na liście ma czerwoną ramkę z przyczyną (także komunikat po zatwierdzeniu). Program wykrywa też noski, które nie zmieściły się na końcu płyty albo odstają od niej.
+- **Do cięcia**: eksport DXF pudełek z podstawą-wielokątem przy laserze (kompensacja szerokości cięcia) już nie kończy się błędem; przy błędzie komunikat podaje nazwę płyty.
+
+## RCCAD Desktop 0.4.62 — akcje na zaznaczonych obiektach, przegrody na krzyż, ukryte płyty
 
 ## Zmiany 0.4.62
 
