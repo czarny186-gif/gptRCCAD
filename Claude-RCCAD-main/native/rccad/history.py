@@ -19,7 +19,7 @@ from .document import Body
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
@@ -1566,21 +1566,202 @@ def _ply_others(bodies, skip=()):
     return [b.shape for b in bodies if b.kind == 'solid' and b.visible and b.id not in skip and pw.is_panel(b)]
 
 
-def ply_walls(bodies, base, indices, recipe):
+def _nominal_edge(sheet, edge):
+    """Krawędź płyty bazowej blachy w pełnej długości (z zapisu blachy): gniazda wycięte wcześniej przy narożniku
+    (noski sąsiedniej ścianki) nie skracają nowej ścianki. Inne krawędzie (kołnierz, ścianka) - bez zmian.
+    Zwraca (krawędź, płyta albo None)."""
+    state = ((sheet.meta or {}).get('sheet') or {}).get('recipe')
+    if not state or edge.geomType() != 'LINE':
+        return edge, None
+    try:
+        base = shm.base_solid(state['base'])
+    except Exception:
+        return edge, None
+    a, b = np.array(edge.startPoint().toTuple(), float), np.array(edge.endPoint().toTuple(), float)
+    d = _unit(b - a)
+    for e in base.Edges():
+        if e.geomType() != 'LINE':
+            continue
+        p, q = np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float)
+        u = _unit(q - p)
+        if abs(abs(float(u @ d)) - 1) > 1e-6:
+            continue
+        off = (a - p) - u * float((a - p) @ u)
+        if np.linalg.norm(off) > 1e-4:
+            continue
+        lo, hi = sorted((0.0, float((q - p) @ u)))
+        s0, s1 = sorted((float((a - p) @ u), float((b - p) @ u)))
+        if not (s0 >= lo - 1e-4 and s1 <= hi + 1e-4):
+            continue
+        # przedłużenie tylko przez puste gniazdo (noski sąsiedniej ścianki): gdy za końcem jest materiał (gięcie
+        # sąsiedniego kołnierza), koniec zostaje - inaczej gniazda trafiłyby w łuk gięcia
+        from . import plywood as pw
+        t = float(state['t'])
+        try:
+            plate, n = pw.edge_plate(sheet.shape, edge, t)
+        except kernel.CadError:
+            return edge, None
+        inward = np.cross(n, u)
+        if float((np.array(plate.Center().toTuple(), float) - a) @ inward) < 0:
+            inward = -inward                     # w głąb płyty (próbka nie może leżeć na ścianie czołowej)
+        reach = 1.5 * t + .5
+        ends = []
+        for s_end, sign, limit in ((s0, -1.0, lo), (s1, 1.0, hi)):
+            point = p + u * s_end
+            probe = point + u * sign * .05 - n * (t / 2) + inward * min(.2, t / 4)
+            void = kernel.point_state(sheet.shape, tuple(probe)) == 'out'
+            ends.append(max(limit, s_end - reach) if sign < 0 and void else min(limit, s_end + reach) if sign > 0 and void else s_end)
+        if ends[1] - ends[0] <= s1 - s0 + 1e-9:
+            return edge, base
+        return cq.Edge.makeLine(cq.Vector(*(p + u * ends[0])), cq.Vector(*(p + u * ends[1]))), base
+    return edge, None
+
+
+def run_sheet_tabwall(bodies, recipe):
+    """Kołnierz na noski (Blacha): płaska ścianka zamiast gięcia na krawędzi blachy (albo innej takiej ścianki), połączona
+    noskami z płytą, z której wychodzi, i z sąsiednimi ściankami na noski. Blacha dostaje gniazda / noski jak przy
+    zwykłym cięciu (zmiana kształtu blachy), ścianka jest osobną płytą (do cięcia jak płyty ze Sklejki)."""
+    from . import plywood as pw
+    sheet = _body(bodies, recipe['id'])
+    index = edge_indices(sheet.shape, recipe['edges'])[0]
+    edge = sheet.shape.Edges()[index]
+    t = float(recipe['t'])
+    try:
+        flat_region, _n = pw.edge_plate(sheet.shape, edge, t)      # płaska część płyty: tylko tu wolno ciąć gniazda
+    except kernel.CadError:
+        flat_region = None
+    edge, plate = _nominal_edge(sheet, edge)
+    wall, plate, _up = pw.tab_wall(sheet.shape, edge, t, float(recipe['length']), recipe.get('measure', 'outer'), bool(recipe.get('flip')), plate)
+    neighbours = [b for b in bodies if b.kind == 'solid' and b.visible and b.id != sheet.id and pw.is_panel(b) and pw._boxes_near(wall, b.shape)]
+    wall = _ply_trim(wall, [sheet.shape, *[b.shape for b in neighbours]])
+    wid = (recipe.get('out') or [uuid.uuid4().hex])[0] if isinstance(recipe.get('out'), list) else (recipe.get('out') or uuid.uuid4().hex)
+    wp = dict(id=wid, shape=wall, **pw.panel_info(wall, t))
+    platep = dict(id=sheet.id, shape=plate, **pw.panel_info(plate, t))
+    contacts = [c for c in pw.find_contacts([wp, platep])[0]]
+    if not contacts:
+        raise kernel.CadError('Ścianka nie styka się z płytą blachy - sprawdź krawędź i stronę.')
+    near = [dict(id=b.id, shape=b.shape, **pw.panel_info(b.shape, (b.meta or {}).get('ply', {}).get('t'))) for b in neighbours]
+    for c in pw.find_contacts([wp, *near])[0]:
+        if wid in (c['a'], c['b']):
+            contacts.append(c)
+    meth = 'laser'
+    for c in contacts:
+        c['joint'] = pw.joint_for(meth, c['kind'])
+    shapes = {wid: (wall, wp['n']), sheet.id: (sheet.shape, platep['n'])}
+    for p in near:
+        shapes[p['id']] = (p['shape'], p['n'])
+    failures = []
+    out = pw.apply_joints(shapes, contacts, dict(method=meth, width=float(recipe.get('width') or 0), fit=float(recipe.get('fit', 0.0))),
+                          failures=failures)
+    failed = {k for k, _ in failures}
+    main = f'{wid}:{sheet.id}' if any(c['a'] == wid and c['b'] == sheet.id for c in contacts) else f'{sheet.id}:{wid}'
+    if main in failed:
+        raise kernel.CadError('Nie udało się połączyć ścianki z blachą noskami: ' + next(m for k, m in failures if k == main))
+    partners = {wid: set()}
+    for c in contacts:
+        key = c.get('key', f"{c['a']}:{c['b']}")
+        if key in failed:
+            continue
+        other = c['b'] if c['a'] == wid else c['a']
+        partners[wid].add(other)
+        partners.setdefault(other, set()).add(wid)
+    if sheet.id in out and flat_region is not None and (sheet.meta or {}).get('sheet'):
+        # gniazda (z luzem) tylko w płaskiej części blachy - nie w łuku gięcia sąsiedniego kołnierza
+        try:
+            removed = kernel.boolean('subtract', sheet.shape, [out[sheet.id]]) if sheet.shape.Volume() > out[sheet.id].Volume() - 1e-9 else None
+        except kernel.CadError:
+            removed = None
+        try:
+            added = kernel.boolean('subtract', out[sheet.id], [sheet.shape])
+        except kernel.CadError:
+            added = None
+        new_shape = sheet.shape
+        if removed is not None and removed.Solids():
+            cut = pw._common(removed, flat_region)
+            if cut is not None:
+                new_shape = kernel.boolean('subtract', new_shape, [cut])
+        if added is not None and added.Solids() and added.Volume() > 1e-6:
+            new_shape = kernel.boolean('union', new_shape, [added])
+        out[sheet.id] = new_shape
+    result = []
+    for b in bodies:
+        if b.id in out and b.id != wid:
+            changed = b.changed(out[b.id])
+            if pw.is_panel(changed) and b.id in partners:
+                ply = dict(changed.meta['ply'], joined=sorted(set(changed.meta['ply'].get('joined', ())) | partners[b.id]))
+                changed = replace(changed, meta=dict(changed.meta, ply=ply))
+            result.append(changed)
+        else:
+            result.append(b)
+    meta = pw.ply_meta(t, meth)
+    meta['ply']['joined'] = sorted(partners[wid])
+    meta['ply']['tab'] = dict(sheet=sheet.id, length=float(recipe['length']), measure=recipe.get('measure', 'outer'))
+    name = _next_names(bodies, 'Ścianka blachy', 1)[0]
+    new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=sheet.folder).prepared()
+    return [*result, new]
+
+
+def _wall_params(recipe):
+    return dict(t=float(recipe['t']), h=float(recipe['h']), side=recipe.get('side', 'on'), flip=bool(recipe.get('flip')))
+
+
+def ply_neighbour_walls(bodies, base, indices, recipe):
+    """Ścianki tej samej podstawy (jeszcze bez połączeń, z tymi samymi ustawieniami) stykające się narożnikiem z nowymi
+    krawędziami: przeliczane razem z nowymi, żeby ścianki dodawane po jednej schodziły się tak samo jak dodane naraz.
+    Zwraca {indeks krawędzi: id ścianki}."""
+    from . import plywood as pw
+    params = _wall_params(recipe)
+    edges = base.shape.Edges()
+    ends = []
+    for i in indices:
+        e = edges[i]
+        ends += [np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float)]
+    out = {}
+    for b in bodies:
+        ply = (b.meta or {}).get('ply') or {}
+        info = ply.get('wall')
+        if b.kind != 'solid' or not info or info.get('base') != base.id or ply.get('joined') or ply.get('fold'):
+            continue
+        if any(abs(float(info.get(k, 0)) - float(params[k])) > 1e-9 for k in ('t', 'h')) or info.get('side') != params['side'] \
+                or bool(info.get('flip')) != params['flip']:
+            continue
+        try:
+            j = edge_indices(base.shape, [info['edge']])[0]
+        except Exception:
+            continue
+        if j in indices:
+            continue
+        e = edges[j]
+        pts = (np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float))
+        if any(np.linalg.norm(p - q) < 1e-5 for p in pts for q in ends):
+            out[j] = b.id
+    return out
+
+
+def ply_walls(bodies, base, indices, recipe, neighbours=None):
     """Ścianki na krawędziach płyty-podstawy. Najdłuższe krawędzie najpierw: w narożnikach prostych dłuższe ścianki biegną
     przez całą długość, krótsze mieszczą się między nimi; w narożnikach pod innym kątem ścianki schodzą się na skos.
-    Kolejne ścianki i inne płyty nie nachodzą na siebie."""
+    Kolejne ścianki i inne płyty nie nachodzą na siebie. neighbours ({indeks: id}) - istniejące ścianki przeliczane
+    razem z nowymi; zwraca wtedy (nowe ścianki, {id: nowy kształt sąsiada})."""
     from . import plywood as pw
     edges = base.shape.Edges()
     base_t = (base.meta or {}).get('ply', {}).get('t') if base.meta else None
-    others = _ply_others(bodies, {base.id, *recipe.get('ignore', ())})     # płyty ukryte na liście obiektów - pomijane
-    order = sorted(indices, key=lambda i: -edges[i].Length())
+    redo = dict(neighbours or {})
+    others = _ply_others(bodies, {base.id, *recipe.get('ignore', ()), *redo.values()})     # płyty ukryte na liście obiektów - pomijane
+    every = [*indices, *redo]
+    order = sorted(every, key=lambda i: -edges[i].Length())
     made = pw.edge_walls(base.shape, [edges[i] for i in order], float(recipe['t']), float(recipe['h']), recipe.get('side', 'on'),
                          bool(recipe.get('flip')), base_t)
-    walls = []
-    for wall, _ in made:
-        walls.append(_ply_trim(wall, [*others, *walls]))
-    return walls
+    shapes = {i: wall for i, (wall, _) in zip(order, made)}
+    done = []
+    result = {}
+    for i in order:
+        result[i] = _ply_trim(shapes[i], [*others, *done])
+        done.append(result[i])
+    walls = [result[i] for i in sorted(indices, key=lambda i: -edges[i].Length())]
+    if neighbours is None:
+        return walls
+    return walls, {bid: result[i] for i, bid in redo.items()}
 
 
 def ply_folder(bodies, base):
@@ -1595,13 +1776,22 @@ def ply_folder(bodies, base):
 
 
 def run_ply_wall(bodies, recipe):
-    """Ścianki; podstawa i ścianki trafiają do jednej grupy (całe pudełko razem na liście obiektów)."""
+    """Ścianki; podstawa i ścianki trafiają do jednej grupy (całe pudełko razem na liście obiektów). Ścianki pamiętają
+    krawędź podstawy, z której powstały - kolejne ścianki dodane obok przeliczają ich narożniki (jak przy dodaniu naraz)."""
     base = _body(bodies, recipe['base'])
     indices = edge_indices(base.shape, recipe['edges'])
-    walls = ply_walls(bodies, base, indices, recipe)
+    neighbours = ply_neighbour_walls(bodies, base, indices, recipe)
+    walls, redone = ply_walls(bodies, base, indices, recipe, neighbours)
     folder = recipe.get('folder') or ply_folder(bodies, base)
-    kept = [replace(b, folder=folder) if b.id == base.id else b for b in bodies]
-    return [*kept, *_ply_bodies(bodies, walls, 'Ścianka', recipe, folder)]
+    kept = [replace(b, folder=folder) if b.id == base.id else (b.changed(redone[b.id]) if b.id in redone else b) for b in bodies]
+    order = sorted(indices, key=lambda i: -base.shape.Edges()[i].Length())
+    made = _ply_bodies(bodies, walls, 'Ścianka', recipe, folder)
+    info = _wall_params(recipe)
+    tagged = []
+    for body, i in zip(made, order):
+        ply = dict(body.meta['ply'], wall=dict(info, base=base.id, edge=edge_refs(base.shape, [i])[0]))
+        tagged.append(replace(body, meta=dict(body.meta, ply=ply)))
+    return [*kept, *tagged]
 
 
 def ply_between_shapes(bodies, recipe):
@@ -1847,7 +2037,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1971,6 +2161,8 @@ def reads(recipe, current):
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
     if kind in ('delete', 'folder', 'ply_fold'):
         return set(recipe['ids'])
+    if kind == 'sheet_tabwall':
+        return None
     if kind == 'thread':
         return {item['id'] for item in recipe.get('items') or [recipe]}
     if kind == 'thread_real':

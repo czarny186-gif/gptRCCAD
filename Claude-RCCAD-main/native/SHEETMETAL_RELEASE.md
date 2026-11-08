@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.65 — ostre narożniki pudełek, ofset szkicu na ścianie, zwinięte grupy
+# RCCAD Desktop 0.4.66 — kołnierz na noski w Blasze, Wstaw w Ściance, grupy w przesuwaniu i wyciąganiu
+
+## Zmiany 0.4.66
+
+- **Kołnierz na noski (Blacha, obok Zawinięcia)**: zamiast gięcia na krawędzi powstaje płaska ścianka o grubości blachy, połączona z blachą noskami jak pudełka ze Sklejki; sąsiednie takie ścianki łączą się noskami także ze sobą. Długość i wymiar jak przy Kołnierzu - „Zewnętrzna” zachowuje wymiar zewnętrzny (blacha 100 × 60 + 30 mm = pudełko 100 × 60 × 30), „Wewnętrzna” - wewnętrzny. Szerokość noska, luz, druga strona. Przyciski jak w Kołnierzu: Wstaw czerwony - kliknięcie krawędzi od razu dodaje ściankę. Gniazda tylko w płaskiej części blachy - blacha dalej się rozkłada i zgina; ścianki są płytami (Do cięcia → DXF).
+- **Ścianka (Sklejka) jak Kołnierz**: przycisk Wstaw - czerwony: każde kliknięcie krawędzi od razu dodaje ściankę (bez Zastosuj), zielony: tylko wybór. Ścianki dodawane po jednej schodzą się w narożnikach tak samo jak dodane naraz.
+- **Cała grupa z listy Obiekty**: po zaznaczeniu grupy (albo kilku pozycji) Przesuń i Obróć przesuwają / obracają wszystkie jej elementy razem.
+- **Wyciągnij zaznaczone szkice**: zaznaczone szkice (np. cała grupa importu DXF / SVG) są od razu wybrane do wyciągnięcia ze wszystkimi profilami; Shift + klik odznacza te, które nie mają być wyciągnięte.
+
+## RCCAD Desktop 0.4.65 — ostre narożniki pudełek, ofset szkicu na ścianie, zwinięte grupy
 
 ## Zmiany 0.4.65
 

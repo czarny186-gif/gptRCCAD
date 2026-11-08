@@ -680,3 +680,114 @@ class PlywoodFoldTests(PlywoodWindowTests):
         self.assertEqual(w._read_settings('plywood')['corner'], 'tbone')
         w.pj_contacts = []
         w.set_mode(None)
+
+
+class PlywoodInsertTests(PlywoodWindowTests):
+    """0.4.66: Ścianka jak Kołnierz - przycisk Wstaw (czerwony) dodaje ściankę od razu po kliknięciu krawędzi."""
+
+    def test_tab_tools_and_full_flow(self):
+        pass
+
+    def test_insert_walls_one_by_one_like_batch(self):
+        w = self.w
+        hexagon = cq.Workplane().polygon(6, 200).extrude(6).val()
+        base = Body('Płyta 1', hexagon, meta=pw.ply_meta(6, 'laser')).prepared()
+        w.document.commit([base])
+        w.refresh()
+        w.toggle_mode('ply_wall')
+        w._ply_set_method('laser')
+        w._ply_widgets[0][1].setValue(6)
+        w.pw_height.setValue(60)
+        self.assertFalse(w.pw_armed)
+        w.pw_insert.click()
+        self.assertTrue(w.pw_armed)
+        tops = [i for i, e in enumerate(hexagon.Edges()) if abs(e.Center().z - 6) < 1e-6]
+        for i in tops:
+            with patch.object(w.view, 'nearest_edge', return_value=(base.id, i)):
+                w.view_clicked(5, 5, False, False)
+            self.wait()
+        self.assertEqual(w.mode, 'ply_wall')
+        walls = [b for b in w.document.bodies if b.name.startswith('Ścianka')]
+        self.assertEqual(len(walls), 6)
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        batch = PlywoodPolygonTests._walls(None, hexagon, 'on')
+        want = sorted(round(b.shape.Volume(), 2) for b in batch if b.name.startswith('Ścianka'))
+        self.assertEqual(sorted(round(b.shape.Volume(), 2) for b in walls), want)        # jak dodane naraz (skosy w narożnikach)
+        self.assertEqual({b.folder for b in w.document.bodies}, {'Pudełko 1'})
+        w.pw_insert.click()
+        self.assertFalse(w.pw_armed)
+        with patch.object(w.view, 'nearest_edge', return_value=(base.id, tops[0])):
+            w.view_clicked(5, 5, False, False)                  # wyłączone: tylko wybór krawędzi
+        self.wait()
+        self.assertEqual(len([b for b in w.document.bodies if b.name.startswith('Ścianka')]), 6)
+        self.assertEqual(w.pw_edges, [tops[0]])
+
+
+class SheetTabWallTests(PlywoodWindowTests):
+    """0.4.66: Blacha - kołnierz na noski: ścianki bez gięcia połączone noskami, wymiary jak przy kołnierzu."""
+
+    def test_tab_tools_and_full_flow(self):
+        pass
+
+    def _sheet(self, w):
+        box = Body('Blacha', k.box(100, 60, 2)).prepared()
+        top = max(box.shape.Faces(), key=lambda f: f.Center().z)
+        bodies = hist.run_recipe([box], dict(type='sheet', id=box.id, face=hist.face_ref(top, (0, 0, 1), top.Center().toTuple(), box.shape)))
+        w.document.commit(bodies)
+        w.refresh()
+        return bodies[0]
+
+    def _edge(self, body, x, y):
+        sh = body.shape
+        tops = [i for i, e in enumerate(sh.Edges()) if e.geomType() == 'LINE' and abs(e.startPoint().z - 2) < 1e-6 and abs(e.endPoint().z - 2) < 1e-6]
+        return min(tops, key=lambda i: abs(sh.Edges()[i].positionAt(.5).x - x) + abs(sh.Edges()[i].positionAt(.5).y - y))
+
+    def test_tabwalls_box_outer_and_inner(self):
+        from rccad.studio import TABS
+        w = self.w
+        self.assertEqual(TABS['Blacha'][:4], ['sheet', 'flange', 'hem', 'tabwall'])
+        for measure, size, height in (('outer', (100, 60), 30), ('inner', (104, 64), 32)):
+            w.document = type(w.document)()
+            sheet = self._sheet(w)
+            w.toggle_mode('tabwall')
+            self.assertTrue(w.tabwall_panel.isVisible())
+            w.tw_length.setValue(30)
+            w.tw_datum.setCurrentIndex(w.tw_datum.findData(measure))
+            w.tw_bend.click()
+            self.assertTrue(w.tw_armed)
+            for x, y in ((50, 0), (100, 30), (50, 60), (0, 30)):
+                with patch.object(w.view, 'nearest_edge', return_value=(sheet.id, self._edge(w.document.get(sheet.id), x, y))):
+                    w.view_clicked(5, 5, False, False)
+                self.wait()
+            walls = [b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]
+            self.assertEqual(len(walls), 4, measure)
+            shapes = [b.shape for b in w.document.bodies]
+            self.assertEqual(_overlaps(shapes), 0)
+            bb = k.compound(shapes).BoundingBox()
+            self.assertAlmostEqual(bb.xlen, size[0], 4); self.assertAlmostEqual(bb.ylen, size[1], 4); self.assertAlmostEqual(bb.zlen, height, 4)
+            self.assertTrue(all(len(b.meta['ply']['joined']) == 3 for b in walls))             # blacha + dwie sąsiednie ścianki
+            self.assertTrue(w.document.get(sheet.id).meta['sheet'].get('dirty'))               # gniazda w blasze
+            self.assertEqual(w.document.info['op']['type'], 'sheet_tabwall')
+            w.set_mode(None)
+
+    def test_tabwalls_between_bent_flanges_unfold(self):
+        w = self.w
+        sheet = self._sheet(w)
+        sid = sheet.id
+
+        def click(x, y):
+            with patch.object(w.view, 'nearest_edge', return_value=(sid, self._edge(w.document.get(sid), x, y))):
+                w.view_clicked(5, 5, False, False)
+            self.wait()
+        w.toggle_mode('flange'); w.fl_length.setValue(30); w.toggle_bending()
+        click(50, 0); click(50, 60)
+        w.set_mode(None); w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_bend.click()
+        click(100, 30); click(0, 30)
+        walls = [b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]
+        self.assertEqual(len(walls), 2)
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        w.set_mode(None)
+        w.selected = [sid]; w.sheet_command('unfold_sheet'); self.wait()
+        self.assertTrue(w.document.get(sid).meta['sheet'].get('flat'))                 # gniazda nie w łuku - blacha się rozkłada
+        w.selected = [sid]; w.sheet_command('fold_sheet'); self.wait()
+        self.assertFalse(w.document.get(sid).meta['sheet'].get('flat'))

@@ -210,7 +210,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -476,6 +476,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                  ('sheet', ui.style_icon('sheet', 38), 'Konwertuj na blachę — wybierz płaski prostokąt prostopadłościanu'),
                  ('flange', ui.style_icon('flange', 38), 'Kołnierz — wybierz krawędź blachy'),
                  ('hem', ui.style_icon('hem', 38), 'Zawinięcie — zawiń krawędź blachy o 180°, z przerwą albo zaciśnięte'),
+                 ('tabwall', ui.style_icon('tabwall', 38), 'Kołnierz na noski — ścianka bez gięcia, połączona noskami z blachą (wymiary jak przy kołnierzu)'),
                  ('rules', ui.style_icon('rules', 38), 'Reguły blach — szczelina i wycięcia w narożnikach'),
                  ('unfold_sheet', ui.style_icon('unfold_sheet',38), 'Rozłóż blachę — edytuj płaskie rozwinięcie'),
                  ('fold_sheet', ui.style_icon('fold_sheet',38), 'Zegnij blachę — przywróć gięcia z wykonanymi zmianami'),
@@ -1933,6 +1934,12 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.ex_status.setText('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.')
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Wyciągnięcie: kliknij profil szkicu lub ścianę bryły.')
+            if self.selected:
+                profiles = self._selected_sketch_profiles()     # zaznaczone szkice (np. cała grupa DXF / SVG) - od razu wybrane
+                if profiles:
+                    self.ex_profiles = profiles
+                    self._ex_profiles_changed()
+                    self.toast(f'Wybrano profili z zaznaczonych szkiców: {len(profiles)}. Shift + klik odznacza te, które nie mają być wyciągnięte.', 5000)
         elif mode == 'revolve':
             self.rev_panel.show()
             self._rev_update()
@@ -1993,6 +2000,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.hint('Zawinięcie: kliknij krawędź blachy. Krawędź zawija się do środka o 180°.')
         elif mode in PLY_MODES:
             self._ply_enter(mode)
+        elif mode == 'tabwall':
+            self._tw_enter()
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
@@ -3273,7 +3282,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 self._split_hover(x, y)
             elif self.mode == 'sheet':
                 self._hover_face_only(x, y)
-            elif self.mode in ('flange', 'hem'):
+            elif self.mode in ('flange', 'hem', 'tabwall'):
                 self.view._set_hover_edge(self.view.nearest_edge(x, y, True))
             elif self.mode == 'revolve' and (not self.rev_profiles or (self.rev_axis.currentData() == 'line' and self.rev_line is None)):
                 if self.rev_profiles:
@@ -3379,6 +3388,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.pick_sheet(x, y)
         elif self.mode in ('flange', 'hem'):
             self.pick_flange(x, y)
+        elif self.mode == 'tabwall':
+            self.pick_tabwall(x, y)
         elif self.mode in DRAWING_MODES:
             self.pick_drawing(x, y)
         elif self.mode == 'bool':
@@ -3664,6 +3675,48 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.ex_profiles = [p for p in self.ex_profiles if p not in dup] if dup else [*self.ex_profiles, *group]
         else:
             self.ex_profiles = group
+        self._ex_profiles_changed(shift)
+
+    def _selected_sketch_profiles(self):
+        """Profile szkiców zaznaczonych na liście Obiekty / polu roboczym (np. cała grupa importu DXF / SVG): obszary
+        szkicu, które zakrywają, a zamknięte szkice bez obszaru - w całości. Shift + klik odznacza pojedyncze."""
+        chosen = [b for b in (self.document.get(i) for i in self.selected) if b is not None and b.kind == 'sketch'
+                  and not b.name.startswith(('Konstrukcja', 'Punkt'))]
+        if not chosen:
+            return []
+        out, covered = [], set()
+        groups = self._drawn_sketches()
+        ids = {b.id for b in chosen}
+        for key, (plane, bodies) in groups.items():
+            mine = [b for b in bodies if b.id in ids]
+            if not mine:
+                continue
+            frame = kernel.frame_of(plane)
+            boxes = []
+            for m in mine:
+                bb = kernel.bounds(m.shape)
+                boxes.append((np.array([bb.xmin, bb.ymin, bb.zmin]) - 1e-6, np.array([bb.xmax, bb.ymax, bb.zmax]) + 1e-6, m))
+            material = {}
+            try:
+                regions = self._regions_for(key, plane, bodies)
+            except Exception:
+                regions = []
+            for f in regions:
+                point = np.asarray(hist._inner_point(f), float)
+                for low, high, m in boxes:
+                    if (point >= low).all() and (point <= high).all():
+                        faces = material.setdefault(m.id, hist.material_faces([m]))
+                        if any(kernel.face_contains(face, point) for face in faces):
+                            out.append(dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=tuple(frame.normal),
+                                            center=f.Center().toTuple()))
+                            covered.add(m.id)
+                            break
+        for m in chosen:
+            if m.id not in covered and getattr(m.shape, 'IsClosed', lambda: False)():
+                out.append(self._sketch_profile(m))
+        return out
+
+    def _ex_profiles_changed(self, shift=False):
         self._hover_key = None
         if not shift:
             self._ex_op_manual = False
@@ -7020,6 +7073,12 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.override = {}
         self.t_target = body
         self.t_group = self._group_ids(body.id)
+        if body.id in self.selected and len(self.selected) > 1:
+            # kilka zaznaczonych (np. cała grupa z listy Obiekty): przesuwają się / obracają razem, wokół wspólnego środka
+            for i in self.selected:
+                for j in self._group_ids(i):
+                    if j not in self.t_group and self.document.get(j) is not None:
+                        self.t_group.append(j)
         members = [self.document.get(i) for i in self.t_group]
         if len(members) > 1:          # grupa: wspólna ramka i wspólny środek obrotu
             box = kernel.bounds(kernel.compound([m.shape for m in members]))
@@ -7299,8 +7358,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self._hist_compare_update()
         if self.document.deferred and not self.busy:
             self._replay_deferred()
-        highlighted = [] if self.mode in ('sheet', 'flange', 'hem') else self.selected
-        if self._obj_hover and self.mode not in ('sheet', 'flange', 'hem'):
+        highlighted = [] if self.mode in ('sheet', 'flange', 'hem', 'tabwall') else self.selected
+        if self._obj_hover and self.mode not in ('sheet', 'flange', 'hem', 'tabwall'):
             highlighted = [*highlighted, self._obj_hover]
         self.view.set_models(bodies, highlighted, self.edges)
         self.view.set_threads({b.id: b.threads for b in bodies if b.threads and b.visible})   # gwinty: lekkie linie, bez geometrii

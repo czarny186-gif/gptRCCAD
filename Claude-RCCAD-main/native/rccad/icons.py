@@ -1155,8 +1155,8 @@ def _draw_thread_icon(p, kind, pen, fill):
 # ---------------------------------------------------------------------------------------------------------------
 # sklejka: narzędzia (t_ply...), nagłówki paneli (x_ply...) i obrazki pól
 # ---------------------------------------------------------------------------------------------------------------
-PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'plydrawing', 'ply_unfold', 'ply_fold')
-PLY_HEADERS = {'x_ply': 'ply', 'x_plywall': 'ply_wall', 'x_plybetween': 'ply_between', 'x_plyjoints': 'ply_joints', 'x_plycut': 'ply_cut', 'x_plydrawing': 'plydrawing'}
+PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'plydrawing', 'ply_unfold', 'ply_fold', 'tabwall')
+PLY_HEADERS = {'x_ply': 'ply', 'x_plywall': 'ply_wall', 'x_plybetween': 'ply_between', 'x_plyjoints': 'ply_joints', 'x_plycut': 'ply_cut', 'x_plydrawing': 'plydrawing', 'x_tabwall': 'tabwall'}
 PLY_ICONS = ('pm_laser', 'pm_cnc', 'pm_print', 'pl_up', 'pl_down', 'pl_thick', 'pw_on', 'pw_side', 'pw_height', 'pb_h', 'pb_v', 'pb_count',
              'pb_pos', 'pj_width', 'pj_fit', 'pj_tool', 'pj_depth', 'pc_sheet', 'pc_kerf', 'pc_all', 'pc_sel',
              'pd_dog', 'pd_tbone', 'pd_none')
@@ -1241,6 +1241,14 @@ def _draw_ply_tool(p, name, ink, acc, soft, pen):
         dash = pen(acc, 2.6); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.6]); p.setPen(dash)
         p.drawRect(QRectF(28, 15, 11, 18))
         p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(39, 15), 3.0, 3.0)
+    elif name == 'tabwall':
+        # blacha (płasko) i ścianka postawiona na krawędzi bez gięcia; pomarańczowe noski ścianki w gniazdach blachy
+        p.setBrush(soft); p.setPen(pen(ink, 2.2))
+        p.drawRect(QRectF(4, 30, 40, 8))
+        p.drawRect(QRectF(33, 6, 8, 24))
+        p.setPen(Qt.NoPen); p.setBrush(QColor(acc))
+        p.drawRect(QRectF(34.2, 29, 5.6, 8))
+        _arrow(p, (14, 22), (27, 12), acc, pen, 2.6, 4.5)
     elif name in ('ply_unfold', 'ply_fold'):
         p.setBrush(soft); p.setPen(pen(ink, 2.2))
         if name == 'ply_unfold':

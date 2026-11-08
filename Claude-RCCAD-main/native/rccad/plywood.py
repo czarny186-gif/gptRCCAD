@@ -1299,3 +1299,45 @@ def fold_placed(state, matrix):
     m = np.eye(4)
     m[:3, :4] = mm[:3, :4]
     return dict(state, acc=_lst(m @ _mat(state.get('acc'))))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# blacha: kołnierz na noski - płaska ścianka zamiast gięcia, połączona noskami z płytą, z której wychodzi
+# ---------------------------------------------------------------------------------------------------------------
+def edge_plate(shape, edge, t):
+    """Płaska płyta, do której należy krawędź bryły (podstawa blachy, kołnierz, ścianka): największa płaska ściana przy
+    krawędzi wyciągnięta w głąb materiału na grubość t. Zwraca (płyta, normalna na zewnątrz klikniętej strony)."""
+    if edge.geomType() != 'LINE':
+        raise kernel.CadError('Kliknij prostą krawędź blachy.')
+    d = _unit(np.array(edge.endPoint().toTuple(), float) - np.array(edge.startPoint().toTuple(), float))
+    best = None
+    for f in edge.ancestors(shape, 'Face').Faces():
+        if f.geomType() != 'PLANE':
+            continue
+        n = np.array(f.normalAt().toTuple(), float)
+        if abs(float(n @ d)) > 1e-6:
+            continue
+        if best is None or f.Area() > best[0].Area():
+            best = (f, n)
+    if best is None:
+        raise kernel.CadError('Kliknij krawędź płaskiej części blachy.')
+    face, n = best
+    plate = cq.Solid.extrudeLinear(face, cq.Vector(*(-n * float(t))))
+    return kernel.valid(plate), n
+
+
+def tab_wall(shape, edge, t, length, measure='outer', flip=False, plate=None):
+    """Ścianka zamiast gięcia (kołnierz na noski), pod kątem prostym do płyty. Wymiary jak przy kołnierzu giętym:
+    'outer' - zewnętrzna strona ścianki w krawędzi płyty, długość od zewnętrznej strony płyty (ścianka stoi na płycie);
+    'inner' - wewnętrzna strona ścianki w krawędzi płyty, długość od wewnętrznej strony (ścianka przy boku płyty).
+    Zwraca (ścianka, płyta, kierunek do góry)."""
+    if plate is None:
+        plate, _n = edge_plate(shape, edge, t)
+    t, length = float(t), float(length)
+    if measure == 'inner':
+        wall, up = edge_wall(plate, edge, t, length, 'side', flip, t)
+    else:
+        if length <= t + 1e-6:
+            raise kernel.CadError(f'Długość kołnierza mierzona od zewnątrz musi być większa niż grubość blachy ({t:g} mm).')
+        wall, up = edge_wall(plate, edge, t, length - t, 'on', flip, t)
+    return wall, plate, up

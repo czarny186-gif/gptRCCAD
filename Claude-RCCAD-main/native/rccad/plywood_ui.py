@@ -169,7 +169,13 @@ class PlywoodTools:
         lay.addWidget(self.pw_flip)
         self.pw_status = _label('Kliknij prostą krawędź płaskiej strony płyty. Shift + klik dodaje kolejne krawędzie.', 'status')
         lay.addWidget(self.pw_status)
+        self.pw_insert = QPushButton('Wstaw')
+        self.pw_insert.setToolTip('Czerwony: kliknięcie krawędzi płyty od razu dodaje ściankę (bez Zastosuj). Zielony: tylko wybór krawędzi.')
+        self.pw_insert.clicked.connect(lambda _=False: self._pw_toggle_insert())
+        self.ply_wall_panel.footer.addWidget(self.pw_insert)
         self._buttons(self.ply_wall_panel.footer, 'Zastosuj', 'Zamknij', self.apply_ply_wall, lambda: self.set_mode(None))
+        self.pw_armed = False
+        self._pw_style_insert()
         self.pw_height.valueChanged.connect(lambda *_: self._ply_update())
         self.pw_side.currentIndexChanged.connect(lambda *_: self._ply_update())
         self.pw_flip.toggled.connect(lambda *_: self._ply_update())
@@ -299,9 +305,155 @@ class PlywoodTools:
             w.valueChanged.connect(lambda *_: self._pc_params_changed())
         self.pc_labels.toggled.connect(lambda *_: self._pc_params_changed())
         self._ply_sync()
+        self._build_tabwall_panel()
 
     def ply_panels(self):
-        return (self.ply_panel, self.ply_wall_panel, self.ply_between_panel, self.ply_joints_panel, self.ply_cut_panel)
+        return (self.ply_panel, self.ply_wall_panel, self.ply_between_panel, self.ply_joints_panel, self.ply_cut_panel, self.tabwall_panel)
+
+    # ------------------------------------------------------------------ Blacha: kołnierz na noski
+    TW_DEFAULT = dict(length=20.0, measure='outer', width=0.0, fit=0.1)
+
+    def _build_tabwall_panel(self):
+        from .studio import _label, _spin
+        self.tabwall_panel, lay = self._panel(312, 'Kołnierz na noski', 'x_tabwall', 'Ścianka bez gięcia, łączona noskami', plain=True, scroll=True)
+        self.tw_length = _spin(self.TW_DEFAULT['length'], .01, 1e5, 3, 1)
+        self.tw_length.setToolTip('Długość kołnierza jak przy gięciu: od wybranej strony blachy do końca ścianki.')
+        self._pic_field(lay, 'Długość kołnierza (mm)', 'fl_length', self.tw_length, 'Długość mierzona od wybranej strony blachy do końca ścianki.')
+        self.tw_datum = ui.Segmented([('Zewnętrzna', 'outer', 'dl_outer'), ('Wewnętrzna', 'inner', 'dl_inner')], 40)
+        self.tw_datum._buttons[0].setToolTip('Zewnętrzna strona ścianki w krawędzi blachy - wymiar zewnętrzny zostaje (ścianka stoi na blasze).')
+        self.tw_datum._buttons[1].setToolTip('Wewnętrzna strona ścianki w krawędzi blachy - wymiar wewnętrzny zostaje (ścianka przy boku blachy).')
+        self._field(lay, 'Wymiar od strony', self.tw_datum)
+        self.tw_width = _spin(self.TW_DEFAULT['width'], 0, 1e4, 1, 1)
+        self.tw_width.setToolTip('Szerokość noska; 0 - sama (około 3 grubości blachy), liczba nosków zawsze nieparzysta.')
+        self._pic_field(lay, 'Szerokość noska (mm, 0 = sama)', 'pj_width', self.tw_width, 'Szerokość noska.')
+        self.tw_fit = _spin(self.TW_DEFAULT['fit'], 0, 5, 2, .05)
+        self.tw_fit.setToolTip('Gniazda większe o tyle - 0 na wcisk, więcej luźniej.')
+        self._pic_field(lay, 'Luz pasowania (mm)', 'pj_fit', self.tw_fit, 'Luz między noskiem a gniazdem.')
+        self.tw_flip = QCheckBox('Odwróć stronę (ścianka po drugiej stronie blachy)')
+        lay.addWidget(self.tw_flip)
+        self.tw_status = _label('Kliknij Wstaw (czerwony), potem klikaj krawędzie blachy.', 'status')
+        self.tw_status.setWordWrap(True)
+        lay.addWidget(self.tw_status)
+        self._bend_buttons(self.tabwall_panel.footer, 'tw', self._tw_save, self._tw_reset,
+                           'Zapamiętuje ustawienia i dodaje wskazaną krawędź; potem kliknięcie krawędzi dodaje ściankę od razu.',
+                           'Przywraca ustawienia domyślne: 20 mm od strony zewnętrznej, nosek sam, luz 0,1 mm.')
+        self.tw_bend.setText('Wstaw')
+        self.tw_bend.clicked.disconnect()
+        self.tw_bend.clicked.connect(lambda _=False: self._tw_toggle())
+        self.tw_bend.setToolTip('Czerwony: kliknięcie krawędzi blachy od razu dodaje ściankę na noski. Zielony: wyłączone.')
+        self.tw_armed, self.tw_pick = False, None
+        values = self._read_settings('tabwall') or {}
+        self._tw_set(dict(self.TW_DEFAULT, **values))
+        self._tw_style()
+
+    def _tw_values(self):
+        return dict(length=float(self.tw_length.value()), measure=self.tw_datum.currentData(), width=float(self.tw_width.value()),
+                    fit=float(self.tw_fit.value()))
+
+    def _tw_set(self, values):
+        self.tw_length.setValue(float(values.get('length', 20.0)))
+        index = self.tw_datum.findData(values.get('measure', 'outer'))
+        self.tw_datum.setCurrentIndex(index if index >= 0 else 0)
+        self.tw_width.setValue(float(values.get('width', 0.0)))
+        self.tw_fit.setValue(float(values.get('fit', .1)))
+
+    def _tw_style(self):
+        on = bool(self.tw_armed)
+        color, hover = ('#e5484d', '#cf3a3f') if on else ('#2fa56d', '#26905e')
+        self.tw_bend.setStyleSheet(f'QPushButton{{background:{color};color:white;border:none;border-radius:8px;font-weight:700;padding:7px 10px;}}'
+                                   f'QPushButton:hover{{background:{hover};}}')
+        self.tw_bend.setProperty('armed', on)
+
+    def _tw_enter(self):
+        from PySide6.QtCore import Qt as _Qt
+        self.tabwall_panel.show()
+        self.tw_armed, self.tw_pick = False, None
+        self._tw_style()
+        self.view.set_picked_edge(None)
+        self.tw_status.setText('Kliknij Wstaw (czerwony), potem klikaj krawędzie blachy - każda dostaje ściankę na noski.')
+        self.view.setCursor(_Qt.PointingHandCursor)
+        self.hint('Kołnierz na noski: kliknij krawędź blachy - zamiast gięcia powstaje ścianka połączona noskami.')
+
+    def _tw_toggle(self):
+        self.tw_armed = not self.tw_armed
+        self._tw_style()
+        if self.tw_armed and self.tw_pick:
+            self._tw_commit()
+            return
+        self.tw_status.setText('Wstawianie włączone: kliknij krawędź blachy.' if self.tw_armed else 'Wstawianie wyłączone. Kliknij Wstaw, aby znów dodawać.')
+
+    def _tw_save(self):
+        """Zatwierdź: zapamiętuje ustawienia, dodaje wskazaną krawędź i włącza wstawianie kliknięciem."""
+        self._write_settings('tabwall', self._tw_values())
+        self.tw_armed = True
+        self._tw_style()
+        if self.tw_pick:
+            self._tw_commit()
+        else:
+            self.tw_status.setText('Ustawienia zapamiętane. Kliknij krawędź blachy, aby dodać ściankę.')
+
+    def _tw_reset(self):
+        self._tw_set(self.TW_DEFAULT)
+        self.tw_flip.setChecked(False)
+        self.tw_status.setText('Przywrócono ustawienia domyślne. Zatwierdź, aby je zapamiętać.')
+
+    def _tw_thickness(self, body):
+        st = self._sheet_state(body.id) if (body.meta or {}).get('sheet') else None
+        if st is not None:
+            if st.get('flat'):
+                raise kernel.CadError('Najpierw zegnij blachę, zanim dodasz ściankę na noski.')
+            return float(st['t'])
+        if pw.is_panel(body):
+            return float(body.meta['ply'].get('t') or pw.panel_info(body.shape)['t'])
+        raise kernel.CadError('To nie jest blacha. Kliknij krawędź blachy (najpierw Konwertuj na blachę) albo ścianki na noski.')
+
+    def pick_tabwall(self, x, y):
+        hit = self.view.nearest_edge(x, y, True)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid':
+            self.toast('Kliknij krawędź blachy.')
+            return
+        try:
+            t = self._tw_thickness(body)
+            edge = body.shape.Edges()[hit[1]]
+            pw.tab_wall(body.shape, edge, t, max(float(self.tw_length.value()), 2 * t + 1), self.tw_datum.currentData(), self.tw_flip.isChecked())
+        except kernel.CadError as exc:
+            self.tw_pick = None
+            self.view.set_picked_edge(None)
+            self.tw_status.setText(str(exc))
+            return
+        self.tw_pick = dict(id=body.id, index=hit[1], t=t)
+        self.view.set_picked_edge(hit)
+        if self.tw_armed:
+            self._tw_commit()
+        else:
+            self.tw_status.setText('Krawędź wybrana. Kliknij Zatwierdź albo Wstaw, aby dodać ściankę.')
+
+    def _tw_commit(self):
+        pick = self.tw_pick
+        body = self.document.get(pick['id']) if pick else None
+        if self.busy or body is None:
+            self.toast('Najpierw kliknij krawędź blachy.')
+            return
+        v = self._tw_values()
+        recipe = dict(type='sheet_tabwall', id=body.id, edges=hist.edge_refs(body.shape, [pick['index']]), t=pick['t'],
+                      length=v['length'], measure=v['measure'], flip=bool(self.tw_flip.isChecked()), width=v['width'], fit=v['fit'],
+                      out=[uuid.uuid4().hex])
+        existing = list(self.document.bodies)
+        self.tw_pick = None
+        self.view.set_picked_edge(None)
+
+        def build():
+            return hist.offloaded(hist.run_sheet_tabwall, existing, recipe)
+
+        def apply(bodies):
+            self.document.pending_op = recipe
+            self.document.pending_label, self.document.pending_icon = 'Kołnierz na noski', 'tabwall'
+            self.document.commit(bodies)
+            self._tool_select([recipe['out'][0]])
+            self.tw_status.setText('Ścianka dodana. Kliknij następną krawędź.' if self.tw_armed else 'Ścianka dodana.')
+
+        self.run_operation('Kołnierz na noski', build, apply)
 
     # ------------------------------------------------------------------ tryby
     def _ply_enter(self, mode):
@@ -393,7 +545,27 @@ class PlywoodTools:
         else:
             self.pw_edges = [*self.pw_edges, hit[1]]
         self.view._set_hover_edge(None)
+        if getattr(self, 'pw_armed', False) and self.pw_edges:
+            self.apply_ply_wall()            # Wstaw włączone: ścianka od razu, bez Zastosuj
+            return
         self._ply_update()
+
+    def _pw_toggle_insert(self):
+        """Wstaw: czerwony = każde kliknięcie krawędzi dodaje ściankę (jak Zaginaj przy kołnierzu), zielony = wyłączone."""
+        self.pw_armed = not self.pw_armed
+        self._pw_style_insert()
+        if self.pw_armed and self.pw_edges:
+            self.apply_ply_wall()            # wcześniej wybrane krawędzie od razu dostają ścianki
+        self.pw_status.setText('Wstawianie włączone: kliknij krawędź płyty - ścianka doda się od razu.' if self.pw_armed
+                               else 'Wstawianie wyłączone: kliknij krawędzie (Shift - kolejne), potem Zastosuj.')
+
+    def _pw_style_insert(self):
+        on = bool(getattr(self, 'pw_armed', False))
+        color, hover = ('#e5484d', '#cf3a3f') if on else ('#2fa56d', '#26905e')
+        self.pw_insert.setText('Wstaw: włączone' if on else 'Wstaw: wyłączone')
+        self.pw_insert.setStyleSheet(f'QPushButton{{background:{color};color:white;border:none;border-radius:8px;font-weight:700;padding:7px 10px;}}'
+                                     f'QPushButton:hover{{background:{hover};}}')
+        self.pw_insert.setProperty('armed', on)
 
     def _pw_recipe(self):
         base = self.document.get(self.pw_base) if self.pw_base else None

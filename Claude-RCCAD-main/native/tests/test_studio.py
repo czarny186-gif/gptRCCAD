@@ -976,6 +976,34 @@ class StudioTests(unittest.TestCase):
     def pick_sketch_profile(self,sk):
         with patch.object(self.w.view,'pick_profile',return_value=sk.id):self.w.view_clicked(5,5,False,False)
 
+    # 0.4.66: zaznaczone szkice (np. grupa importu) - Wyciągnij od razu bierze wszystkie, Shift + klik odznacza
+    def test_extrude_takes_selected_sketches_and_shift_deselects(self):
+        w=self.w
+        a=Body('A',k.sketch('rectangle','XY',10,10),'sketch','XY',folder='plik').prepared()
+        b=Body('B',k.transform(k.sketch('rectangle','XY',10,10),(30,0,0)),'sketch','XY',folder='plik').prepared()
+        c=Body('C',k.transform(k.sketch('rectangle','XY',10,10),(60,0,0)),'sketch','XY').prepared()
+        w.document.commit([a,b,c]);w.refresh()
+        w.objects_folder_select([a.id,b.id])
+        w.set_mode('extrude')
+        self.assertEqual(len(w.ex_profiles),2);self.assertTrue(w.ex_bar.isVisible())
+        # Shift + klik na profilu B: odznaczony
+        prof=next(p for p in w.ex_profiles if p['center'][0]>20)
+        with patch.object(w,'_profile_at',return_value=dict(prof)):w.view_clicked(5,5,True,False)
+        self.assertEqual(len(w.ex_profiles),1);self.assertLess(w.ex_profiles[0]['center'][0],20)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        self.assertEqual(len([x for x in w.document.bodies if x.kind=='solid']),1)
+
+    # 0.4.66: cała grupa zaznaczona na liście Obiekty - przesuwanie i obracanie wszystkich
+    def test_move_whole_selected_group(self):
+        w=self.w
+        a=Body('A',k.box(5,5,5),folder='G').prepared();b=Body('B',k.transform(k.box(5,5,5),(20,0,0)),folder='G').prepared();c=Body('C',k.transform(k.box(5,5,5),(40,0,0))).prepared()
+        w.document.commit([a,b,c]);w.refresh()
+        w.objects_folder_select([a.id,b.id]);w.set_mode('move')
+        self.assertEqual(sorted(w.t_group),sorted([a.id,b.id]))
+        w.t_spins[1].setValue(7);w.apply_transform();self.wait()
+        self.assertAlmostEqual(w.document.get(a.id).shape.Center().y,9.5,6);self.assertAlmostEqual(w.document.get(b.id).shape.Center().y,9.5,6)
+        self.assertAlmostEqual(w.document.get(c.id).shape.Center().y,2.5,6)
+
     def test_rotated_sketch_extrudes_along_its_tilt(self):
         from dataclasses import replace as rep
         w=self.w;self.sketch('rect',(0,0),(20,10));b=w.document.bodies[0]
