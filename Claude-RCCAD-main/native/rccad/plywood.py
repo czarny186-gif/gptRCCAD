@@ -1368,3 +1368,169 @@ def frame_matrix(o, x, y, z):
     m = np.eye(4)
     m[:3, 0], m[:3, 1], m[:3, 2], m[:3, 3] = _unit(x), _unit(y), _unit(z), np.asarray(o, float)
     return m
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# nachodzące na siebie ścianki (np. ścianki na ściankach skierowane w tę samą stronę, jak kołnierze przy gięciu):
+# narożnik „Równolegle” albo „Blacharskie”, noski na styku
+# ---------------------------------------------------------------------------------------------------------------
+CORNER_RULES = (('Równolegle', 'parallel', 'rl_par'), ('Blacharskie', 'sheet', 'rl_sheet'))
+
+
+def _overlap(a, b):
+    if not _boxes_near(a, b, 0.0):
+        return None
+    try:
+        common = a.intersect(b)
+    except Exception:
+        return None
+    return common if common.Solids() and common.Volume() > 1e-6 else None
+
+
+def _keep_side(shape, point, normal, keep_center):
+    """Część bryły po tej stronie płaszczyzny (point, normal), po której leży keep_center."""
+    n = _unit(normal)
+    if float((np.asarray(keep_center, float) - point) @ n) < 0:
+        n = -n
+    size = 10.0 * max(1.0, shape.BoundingBox().DiagonalLength)
+    return _main_solid(kernel.boolean('intersect', shape, [_halfspace(point, n, size)]))
+
+
+def _at_end(shape, info, region, slack=0.0):
+    """Czy obszar leży przy końcu płyty (narożnik), a nie w jej środku (przecięcie na krzyż). slack - płyta może
+    wystawać za obszar o tyle (np. nad sąsiednią ścianką)."""
+    pts, rp = _points(shape), _points(region)
+    for v in np.eye(3):
+        u = _unit(v - info['n'] * float(v @ info['n'])) if np.linalg.norm(v - info['n'] * float(v @ info['n'])) > 1e-6 else None
+        if u is None:
+            continue
+        lo, hi = float((pts @ u).min()), float((pts @ u).max())
+        rlo, rhi = float((rp @ u).min()), float((rp @ u).max())
+        if hi - lo > 1e-6 and not (rlo <= lo + slack + 1e-4 or rhi >= hi - slack - 1e-4):
+            return False
+    return True
+
+
+def _coplanar_teeth(a, b, a_orig, b_orig, p_out, p_in, n, slab, width, fit):
+    """Noski w płaszczyźnie płyt na styku dwóch ścianek leżących w jednej płaszczyźnie (styk od p_out do p_in): pasy
+    na przemian należą do jednej i drugiej, każdy wchodzi w drugą ściankę - tylko w jej dawnym obrysie."""
+    s = _unit(p_in - p_out)
+    length = float(np.linalg.norm(p_in - p_out))
+    m = _unit(np.cross(n, s))
+    count = finger_count(length, width)
+    step = length / count
+    depth = max(min(step, 3.0 * (slab[1] - slab[0])), .5 * step)
+    ca = np.array(a.Center().toTuple(), float)
+    side_a = 1.0 if float((ca - p_out) @ m) > 0 else -1.0
+    adds = {'a': [], 'b': []}
+    cuts = {'a': [], 'b': []}
+    base_s, base_m = float(p_out @ s), float(p_out @ m)
+    for k in range(count):
+        owner = 'a' if k % 2 == 0 else 'b'
+        other = 'b' if owner == 'a' else 'a'
+        into = -side_a if owner == 'a' else side_a            # nosek wchodzi na stronę drugiej ścianki
+        lo, hi = sorted((0.0, into * depth))
+        tooth = frame_box(s, m, (base_s + k * step, base_s + (k + 1) * step), (base_m + lo, base_m + hi), _slab_range(s, m, n, slab))
+        piece = _common(tooth, b_orig if owner == 'a' else a_orig)
+        if piece is None:
+            continue
+        adds[owner].append(piece)
+        grown = frame_box(s, m, (base_s + k * step - fit / 2, base_s + (k + 1) * step + fit / 2),
+                          (base_m + lo - (fit if into < 0 else 0), base_m + hi + (fit if into > 0 else 0)), _slab_range(s, m, n, slab, 1.0))
+        cuts[other].append(grown)
+    out = {}
+    for key, shp in (('a', a), ('b', b)):
+        if cuts[key]:
+            shp = kernel.boolean('subtract', shp, cuts[key])
+        if adds[key]:
+            shp = kernel.boolean('union', shp, adds[key])
+        out[key] = _main_solid(shp)
+    return out['a'], out['b']
+
+
+def _slab_range(s, m, n, slab, grow=0.0):
+    """Zakres trzeciej osi układu (s, m, s×m) odpowiadający grubości płyty (slab - wzdłuż normalnej n)."""
+    w = np.cross(s, m)
+    sign = 1.0 if float(w @ n) > 0 else -1.0
+    lo, hi = sorted((sign * (slab[0] - grow), sign * (slab[1] + grow)))
+    return (lo, hi)
+
+
+def resolve_overlaps(shape, t, others, rule='sheet', width=0.0, fit=0.0):
+    """Nowa ścianka nachodząca na istniejące (others: [(id, kształt, grubość)]):
+    - w jednej płaszczyźnie (np. dwie ścianki wywinięte w tę samą stronę nad narożnikiem) - „Równolegle”: istniejąca
+      przechodzi przez narożnik, nowa do niej dochodzi; „Blacharskie”: ukos po przekątnej narożnika; na styku noski
+      w płaszczyźnie płyt (od razu - połączenie gotowe),
+    - pod kątem (pionowe ścianki): proste końce, nowa dochodzi do istniejącej - jak przy blasze (przycięcie robi
+      wywołujący), noski dodają Połączenia / ścianka na noski. Zwraca (nowa ścianka, {id: zmieniona}, [id połączonych noskami])."""
+    info = panel_info(shape, t)
+    changed, joined = {}, []
+    width = float(width or 0) or default_width(t)
+    for oid, other, ot in others:
+        other = changed.get(oid, other)
+        region = _overlap(shape, other)
+        if region is None:
+            continue
+        try:
+            oinfo = panel_info(other, ot)
+        except kernel.CadError:
+            continue
+        ca, cb = np.array(shape.Center().toTuple(), float), np.array(other.Center().toTuple(), float)
+        parallel = abs(abs(float(info['n'] @ oinfo['n'])) - 1) < 1e-6
+        if parallel:
+            olo = oinfo['lo'] if float(info['n'] @ oinfo['n']) > 0 else -oinfo['hi']
+            slack = 1.5 * max(float(info['t']), float(oinfo['t'])) + .5
+            if abs(info['lo'] - olo) > 1e-4 or not (_at_end(shape, info, region, slack) and _at_end(other, oinfo, region, slack)):
+                continue
+            rp = _points(region)
+            rp = rp[np.abs(rp @ info['n'] - info['hi']) < 1e-4]
+            if len(rp) < 3:
+                continue
+            a_orig, b_orig = shape, other
+            if rule == 'parallel':
+                # istniejąca przechodzi przez narożnik, nowa do niej dochodzi; styk - brzeg istniejącej w obszarze nakładania
+                seam = _seam_line(rp, region, shape, info)
+                shape = _main_solid(kernel.boolean('subtract', shape, [other]))
+            else:
+                score = np.linalg.norm(rp - ca, axis=1) + np.linalg.norm(rp - cb, axis=1)
+                seam = (rp[int(np.argmax(score))], rp[int(np.argmin(score))])      # przekątna: narożnik zewnętrzny - wewnętrzny
+                plane_n = _unit(np.cross(info['n'], seam[1] - seam[0]))
+                shape = _keep_side(shape, seam[0], plane_n, ca)
+                other = _keep_side(other, seam[0], plane_n, cb)
+            if seam is not None:
+                try:
+                    shape, other = _coplanar_teeth(shape, other, a_orig, b_orig, seam[0], seam[1], info['n'], (info['lo'], info['hi']), width, fit)
+                    joined.append(oid)
+                except Exception:
+                    pass
+            changed[oid] = other
+            continue
+        # pod kątem (pionowe ścianki): proste końce - nowa dochodzi do istniejącej (przycięcie), noski jak w innych narożnikach
+    return shape, changed, joined
+
+
+def _seam_line(top, region, new, info):
+    """Styk „Równolegle”: krawędź obszaru nakładania (górna strona płyt), za którą nowa ścianka biegnie dalej - tam
+    kończy się istniejąca. Zwraca (koniec, koniec) albo None."""
+    centre = top.mean(axis=0)
+    u, v = _frame2(info['n'])
+    order = np.argsort([np.arctan2(float((p - centre) @ v), float((p - centre) @ u)) for p in top])
+    pts = top[order]
+    best = None
+    for i in range(len(pts)):
+        p, q = pts[i], pts[(i + 1) % len(pts)]
+        L = float(np.linalg.norm(q - p))
+        if L < 1e-6:
+            continue
+        mid = (p + q) / 2
+        outward = _unit(mid - centre - info['n'] * float((mid - centre) @ info['n']))
+        probe = mid + outward * min(.05, L / 4) - info['n'] * ((info['hi'] - info['lo']) / 2)
+        if kernel.point_state(new, tuple(probe)) == 'in' and (best is None or L > best[0]):
+            best = (L, p, q)
+    return None if best is None else (best[1], best[2])
+
+
+def _frame2(n):
+    helper = np.array((0, 0, 1.0)) if abs(n[2]) < .9 else np.array((1.0, 0, 0))
+    u = _unit(np.cross(n, helper))
+    return u, np.cross(n, u)

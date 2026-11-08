@@ -4805,7 +4805,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         roots = {self._tab_root(b).id: self._tab_root(b) for b in chosen}       # ścianka na noski -> jej blacha
         if len(roots) == 1:
             chosen = [*roots.values(), *[b for b in chosen if b.id not in roots]]
-        sheets = [b for b in chosen if (b.meta or {}).get('sheet') or (len(chosen) == 1 and self._sheet_state(b.id) is not None)]
+        tab = lambda b: (((b.meta or {}).get('ply') or {}).get('tab'))
+        sheets = [b for b in chosen if not tab(b) and ((b.meta or {}).get('sheet') or (len(chosen) == 1 and self._sheet_state(b.id) is not None))]
         # blacha zaznaczona razem ze swoimi ściankami na noski (jedna grupa) - to nadal jedna blacha
         if len(sheets) == 1 and all(b is sheets[0] or ((b.meta or {}).get('ply') or {}).get('tab') for b in chosen):
             return sheets[0]
@@ -4918,7 +4919,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self._tool_select([body.id])
             if self.mode == 'rules':
                 self.rl_status.setText(f'Reguły zastosowane do: {body.name}.')
-        source=replace(body,meta={'sheet':self._editable_sheet_state(body.id)})
+        source=replace(body,meta=dict(body.meta or {},sheet=self._editable_sheet_state(body.id)))
         self.run_operation('Narożniki blachy',lambda:hist.run_sheetbuild([source],recipe)[0],apply)
 
     def pick_rules_sheet(self, x, y):
@@ -4963,7 +4964,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.view.set_picked_edge(None)
             self._edge_status().setText('To nie jest blacha (albo zmieniła się po konwersji). Kliknij KONWERTUJ NA BLACHĘ.')
             return
-        if st.get('flat'):
+        if st.get('flat') or (((body.meta or {}).get('ply') or {}).get('tab') or {}).get('unfold'):
             self.toast('Najpierw zegnij blachę, zanim dodasz kolejne gięcie.')
             return
         self.fl_joint.setCurrentIndex(self.fl_joint.findData(('sheet' if st['rules'].get('joint') == 'diagonal' else st['rules'].get('joint','parallel'))))
@@ -5142,7 +5143,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         previous = [dict(s, outside=s.get('outside', st['rules'].get('outside', False))) for s in st['specs']]
         recipe = dict(type='sheetbuild', id=body.id, base=st['base'], t=st['t'], flanges=[*previous, spec], rules=self._flange_rules())
 
-        source=replace(body,meta={'sheet':self._editable_sheet_state(body.id)})
+        source=replace(body,meta=dict(body.meta or {},sheet=self._editable_sheet_state(body.id)))
         def build():
             return hist.run_sheetbuild([source],recipe)[0],recipe
 
@@ -5205,7 +5206,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             moves = hist.sheet_tab_matrices(self.document.bodies, body, body, True)
         except Exception:
             return []
-        return [pw.apply_matrix(w.shape, moves[w.id]) for w in walls if w.id in moves]
+        return [pw.apply_matrix(moves[w.id][1] if moves[w.id][1] is not None else w.shape, moves[w.id][0]) for w in walls if w.id in moves]
 
     def _folded_tab_walls(self, body):
         walls = hist.sheet_tab_walls(self.document.bodies, body.id)
@@ -5216,7 +5217,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         except Exception:
             return []
         from . import plywood as pw
-        return [pw.apply_matrix(w.shape, moves[w.id]) for w in walls if w.id in moves]
+        return [moves[w.id][1] if moves[w.id][1] is not None else pw.apply_matrix(w.shape, moves[w.id][0]) for w in walls if w.id in moves]
 
     def pick_shell(self, x, y):
         hit = self.view.pick_face(x, y)

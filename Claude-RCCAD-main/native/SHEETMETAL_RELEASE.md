@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.68 — skalowanie, wielokąty ścianka po ściance, grupa blachy
+# RCCAD Desktop 0.4.69 — gięcia na ściankach na noski, narożniki nachodzących ścianek
+
+## Zmiany 0.4.69
+
+- **Gięcie i zawinięcie na ściance na noski**: ścianka na noski jest też blachą - na jej krawędziach działa zwykły Kołnierz i Zawinięcie (wcześniej tylko odwrotnie: ścianka na noski na giętym kołnierzu). Noski i docięcia ścianki są zachowywane jako zmiany płyty. Rozłóż blachę rozkłada także gięcia ścianki (jej rozwinięcie leży obok płyty, na której stoi), Zegnij przywraca wszystko dokładnie.
+- **Narożniki nachodzących ścianek - Równolegle / Blacharskie** (Sklejka: Ścianka, Blacha: Kołnierz na noski): gdy nowa ścianka nachodzi na inną leżącą w tej samej płaszczyźnie (np. wywinięcia na górnych krawędziach sąsiednich ścianek skierowane w tę samą stronę - jak kołnierze przy gięciu), Równolegle: istniejąca przechodzi przez narożnik, nowa do niej dochodzi; Blacharskie: styk po przekątnej narożnika. Na styku od razu noski w płaszczyźnie płyt (zaznaczone jako połączone). Ścianki pod kątem do siebie: proste końce, noski jak w innych narożnikach. Sprawdzone dla sklejki i blachy, obie zasady, z rozkładaniem i składaniem - nic nie nachodzi na siebie.
+
+## RCCAD Desktop 0.4.68 — skalowanie, wielokąty ścianka po ściance, grupa blachy
 
 ## Zmiany 0.4.68
 

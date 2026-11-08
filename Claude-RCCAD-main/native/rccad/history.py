@@ -1391,6 +1391,13 @@ def sheet_warm(recipe):
     return she.warm(recipe)
 
 
+def _with_sheet(body, metadata):
+    """Meta bryły z nowym stanem blachy; pozostałe dane (np. ścianka na noski - 'ply') zostają."""
+    meta = dict(body.meta or {})
+    meta['sheet'] = metadata
+    return meta
+
+
 def _sheet_result(bodies, body, kind, source, args):
     """Wynik operacji na blasze: w procesie liczącym tej blachy (okno się nie zacina - czeka bez blokady Pythona),
     a bez procesów - jak dotąd w tym wątku."""
@@ -1418,14 +1425,14 @@ def _sheet_result(bodies, body, kind, source, args):
                     raise kernel.CadError(error)
             except workers.Unavailable:
                 mesh = None
-        out = replace(body, shape=shape, mesh=mesh, meta={'sheet': metadata}) if mesh is not None or not with_mesh else replace(body.changed(shape), meta={'sheet': metadata})
+        out = replace(body, shape=shape, mesh=mesh, meta=_with_sheet(body, metadata)) if mesh is not None or not with_mesh else replace(body.changed(shape), meta=_with_sheet(body, metadata))
         return _replace(bodies, out)
     try:
         shape, metadata, mesh = workers.call_affine((place, body.id), sheet_job, kind, body.shape, source, args, with_mesh)
-        out = replace(body, shape=shape, mesh=mesh, meta={'sheet': metadata})
+        out = replace(body, shape=shape, mesh=mesh, meta=_with_sheet(body, metadata))
     except workers.Unavailable:
         shape, metadata, _ = sheet_job(kind, body.shape, source, args, False)
-        out = replace(body.changed(shape), meta={'sheet': metadata})
+        out = replace(body.changed(shape), meta=_with_sheet(body, metadata))
     return _replace(bodies, out)
 
 
@@ -1470,10 +1477,17 @@ def _np44(matrix):
     return np.array([[matrix[r, c] for c in range(4)] for r in range(4)], float)
 
 
+def _bent_wall(w):
+    """Ścianka na noski z własnymi gięciami (kołnierz / zawinięcie na niej) - rozkłada się jak blacha."""
+    state = (w.meta or {}).get('sheet') or {}
+    return bool((state.get('recipe') or {}).get('flanges'))
+
+
 def sheet_tab_matrices(bodies, before, after, flat):
-    """Przekształcenia ścianek na noski przy rozkładaniu (flat=True) / składaniu blachy: {id: macierz 4x4}.
+    """Rozkładanie (flat=True) / składanie ścianek na noski blachy: {id: (macierz 4x4, płaski kształt lokalny albo None)}.
     Rozkładanie: ścianka kładzie się płasko obok płyty, na której stoi (obrót na zawiasie), i jedzie razem z tą płytą
-    do rozwinięcia (ta sama macierz co płyta blachy). Składanie: zapamiętane położenie, z przesunięciem blachy."""
+    do rozwinięcia (ta sama macierz co płyta blachy). Ścianka z własnymi gięciami najpierw sama się rozkłada (jak
+    blacha), a jej rozwinięcie trafia w to samo miejsce. Składanie: zapamiętane położenie, z przesunięciem blachy."""
     from . import plywood as pw
     walls = sheet_tab_walls(bodies, before.id)
     if not walls:
@@ -1483,34 +1497,54 @@ def sheet_tab_matrices(bodies, before, after, flat):
         state = (before.meta or {}).get('sheet') or {}
         if state.get('flat'):
             return {}
-        model = she.layout(state['recipe'])
         t = float(state['recipe']['t'])
-        folded = {b.id: b.shape for b in walls}
+        models = {before.id: she.layout(state['recipe'])}
+        local = {before.id: np.eye(4)}           # rozwinięcie (układ lokalny) -> położenie płaskie na polu roboczym
+        rigid = {}
+        folded = {b.id: b for b in walls}
         for w in walls:
             if w.meta['ply'].get('tab', {}).get('unfold'):
                 continue
             parent = w.meta['ply']['tab']['sheet']
             wt = float(w.meta['ply'].get('t') or t)
-            if parent == before.id:
-                panel = min(model.panels, key=lambda p: p.folded.distance(w.shape))
-                place = _np44(panel.flat_frame) @ np.linalg.inv(_np44(panel.folded_frame))
-                out[w.id] = place @ pw.hinge_matrix(w.shape, panel.folded, wt)
-            elif parent in out and parent in folded:
-                out[w.id] = out[parent] @ pw.hinge_matrix(w.shape, folded[parent], wt)
+            shape = shm.base_solid(w.meta['sheet']['recipe']['base']) if _bent_wall(w) else w.shape
+            if parent in models:
+                panel = min(models[parent].panels, key=lambda p: p.folded.distance(shape))
+                place = local[parent] @ _np44(panel.flat_frame) @ np.linalg.inv(_np44(panel.folded_frame))
+                T = place @ pw.hinge_matrix(shape, panel.folded, wt)
+            elif parent in rigid and parent in folded:
+                T = rigid[parent] @ pw.hinge_matrix(shape, folded[parent].shape, wt)
+            else:
+                continue
+            if _bent_wall(w):
+                flat_shape, flat_state = she.switch(w.shape, w.meta['sheet'], True)
+                wb = w.meta['sheet']['recipe']['base']
+                M = T @ pw.frame_matrix(wb['o'], wb['x'], wb['y'], wb['z'])
+                models[w.id] = she.layout(w.meta['sheet']['recipe'])
+                local[w.id] = M
+                out[w.id] = (M, flat_shape, flat_state)
+            else:
+                rigid[w.id] = T
+                out[w.id] = (T, None, None)
         return out
     for w in walls:
         info = w.meta['ply'].get('tab', {}).get('unfold')
         if not info:
             continue
+        if info.get('bent'):
+            back = pw._mat(info['M']) @ np.linalg.inv(pw._mat(info.get('acc')))       # na polu -> układ rozwinięcia
+            local_flat = pw.apply_matrix(w.shape, back)
+            shape, state = she.switch(local_flat, w.meta['sheet'], False)
+            out[w.id] = (None, shape, state)
+            continue
         ref = pw._mat(info.get('ref'))
         sheet_move = _sheet_frame(after) @ np.linalg.inv(ref)
-        out[w.id] = sheet_move @ pw._mat(info['M']) @ np.linalg.inv(pw._mat(info.get('acc')))
+        out[w.id] = (sheet_move @ pw._mat(info['M']) @ np.linalg.inv(pw._mat(info.get('acc'))), None, None)
     return out
 
 
 def sheet_tabs_switch(bodies, before, after, flat):
-    """Blacha rozłożona / zgięta: jej ścianki na noski rozkładają się / składają razem z nią (tylko przesunięcie płyt,
-    siatki przekształcane)."""
+    """Blacha rozłożona / zgięta: jej ścianki na noski rozkładają się / składają razem z nią."""
     from . import plywood as pw
     moves = sheet_tab_matrices(bodies, before, after, flat)
     if not moves:
@@ -1518,20 +1552,30 @@ def sheet_tabs_switch(bodies, before, after, flat):
     ref = pw._lst(_sheet_frame(after))
     result = []
     for b in bodies:
-        m = moves.get(b.id)
-        if m is None:
+        item = moves.get(b.id)
+        if item is None:
             result.append(b)
             continue
-        ply = dict(b.meta['ply'])
+        m, local, state = item
+        meta = dict(b.meta)
+        ply = dict(meta['ply'])
         tab = dict(ply['tab'])
         if flat:
-            tab['unfold'] = dict(M=pw._lst(np.linalg.inv(m)), acc=pw._lst(np.eye(4)), ref=ref)
+            tab['unfold'] = dict(M=pw._lst(np.linalg.inv(m)), acc=pw._lst(np.eye(4)), ref=ref, bent=local is not None)
         else:
             tab.pop('unfold', None)
         ply['tab'] = tab
+        meta['ply'] = ply
+        if local is not None:                       # ścianka z gięciami: rozwinięcie / zgięcie jak blacha
+            shape = pw.apply_matrix(local, m) if m is not None else local
+            meta['sheet'] = dict(state, dirty=True) if state else meta.get('sheet')
+            result.append(replace(b, shape=shape, mesh=_deferred_or_mesh(shape), meta=meta))
+            continue
         shape = pw.apply_matrix(b.shape, m)
+        if meta.get('sheet'):
+            meta['sheet'] = she.placed_state(meta['sheet'], m[:3, :4])      # przepis płyty jedzie razem ze ścianką
         result.append(replace(b, shape=shape, mesh=kernel.mesh_moved(b.mesh, m) if b.mesh is not None else _deferred_or_mesh(shape),
-                              meta=dict(b.meta, ply=ply)))
+                              meta=meta))
     return result
 
 
@@ -1765,6 +1809,27 @@ def run_scale(bodies, recipe):
     return [scaled_body(b, f, recipe['center']) if b.id in ids else b for b in bodies]
 
 
+def _wall_base(box, t):
+    """Opis płyty bazowej blachy (jak przy Konwertuj na blachę) dla prostopadłościennej ścianki: x wzdłuż krawędzi,
+    z w grubości."""
+    from . import plywood as pw
+    info = pw.panel_info(box, t)
+    z = info['n']
+    best, length = None, 0.0
+    for e in box.Edges():
+        a, b = np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float)
+        d = b - a
+        if abs(float(_unit(d) @ z)) < 1e-6 and np.linalg.norm(d) > length:
+            best, length = _unit(d), float(np.linalg.norm(d))
+    x = best
+    y = np.cross(z, x)
+    pts = pw._points(box)
+    o = x * float((pts @ x).min()) + y * float((pts @ y).min()) + z * float((pts @ z).min())
+    span = lambda v: float((pts @ v).max() - (pts @ v).min())
+    return dict(o=[float(c) for c in o], x=[float(c) for c in x], y=[float(c) for c in y], z=[float(c) for c in z],
+                lx=span(x), ly=span(y), lz=float(t))
+
+
 SHEET_GROUP = 'sheet-'      # grupa blachy ze ściankami na noski (nie łączy pozycji listy Obiekty w jedną)
 
 
@@ -1783,7 +1848,16 @@ def run_sheet_tabwall(bodies, recipe):
         flat_region = None
     edge, plate = _nominal_edge(sheet, edge)
     wall, plate, _up = pw.tab_wall(sheet.shape, edge, t, float(recipe['length']), recipe.get('measure', 'outer'), bool(recipe.get('flip')), plate)
+    box_wall = wall
     neighbours = [b for b in bodies if b.kind == 'solid' and b.visible and b.id != sheet.id and pw.is_panel(b) and pw._boxes_near(wall, b.shape)]
+    seam_joined = []
+    if recipe.get('corner'):
+        # nakładające się ścianki w jednej płaszczyźnie: narożnik Równolegle / Blacharskie z noskami w płaszczyźnie
+        others = [(b.id, b.shape, (b.meta or {}).get('ply', {}).get('t')) for b in neighbours]
+        wall, seamed, seam_joined = pw.resolve_overlaps(wall, t, others, recipe['corner'], float(recipe.get('width') or 0),
+                                                        float(recipe.get('fit', 0.0)))
+        neighbours = [b.changed(seamed[b.id]) if b.id in seamed else b for b in neighbours]
+        bodies = [next((n for n in neighbours if n.id == b.id), b) for b in bodies]
     wall = _ply_trim(wall, [sheet.shape, *[b.shape for b in neighbours]])
     wid = (recipe.get('out') or [uuid.uuid4().hex])[0] if isinstance(recipe.get('out'), list) else (recipe.get('out') or uuid.uuid4().hex)
     wp = dict(id=wid, shape=wall, **pw.panel_info(wall, t))
@@ -1808,7 +1882,9 @@ def run_sheet_tabwall(bodies, recipe):
     main = f'{wid}:{sheet.id}' if any(c['a'] == wid and c['b'] == sheet.id for c in contacts) else f'{sheet.id}:{wid}'
     if main in failed:
         raise kernel.CadError('Nie udało się połączyć ścianki z blachą noskami: ' + next(m for k, m in failures if k == main))
-    partners = {wid: set()}
+    partners = {wid: set(seam_joined)}
+    for j in seam_joined:
+        partners.setdefault(j, set()).add(wid)
     for c in contacts:
         key = c.get('key', f"{c['a']}:{c['b']}")
         if key in failed:
@@ -1853,16 +1929,20 @@ def run_sheet_tabwall(bodies, recipe):
         if b.id in members and (b.group != group or b.folder != folder):
             b = replace(b, group=group, folder=folder)
         if b.id in out and b.id != wid:
-            changed = b.changed(out[b.id])
-            if pw.is_panel(changed) and b.id in partners:
-                ply = dict(changed.meta['ply'], joined=sorted(set(changed.meta['ply'].get('joined', ())) | partners[b.id]))
-                changed = replace(changed, meta=dict(changed.meta, ply=ply))
-            result.append(changed)
-        else:
-            result.append(b)
+            b = b.changed(out[b.id])
+        if b.id != wid and pw.is_panel(b) and b.id in partners and partners[b.id]:
+            ply = dict(b.meta['ply'], joined=sorted(set(b.meta['ply'].get('joined', ())) | partners[b.id]))
+            b = replace(b, meta=dict(b.meta, ply=ply))
+        result.append(b)
     meta = pw.ply_meta(t, meth)
     meta['ply']['joined'] = sorted(partners[wid])
     meta['ply']['tab'] = dict(sheet=sheet.id, length=float(recipe['length']), measure=recipe.get('measure', 'outer'))
+    # ścianka jest też blachą (płyta bazowa = płyta ścianki): można na niej giąć kołnierze i zawinięcia; noski i docięcia
+    # to zmiany na tej płycie (zachowywane przy kolejnych gięciach, rozkładaniu i zginaniu)
+    try:
+        meta['sheet'] = dict(she.state(dict(base=_wall_base(box_wall, t), t=t, flanges=[], rules={})), dirty=True)
+    except Exception:
+        pass
     name = _next_names(bodies, 'Ścianka blachy', 1)[0]
     new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=folder, group=group).prepared()
     return [*result, new]
@@ -1920,13 +2000,36 @@ def ply_walls(bodies, base, indices, recipe, neighbours=None):
     shapes = {i: wall for i, (wall, _) in zip(order, made)}
     done = []
     result = {}
+    trim_others = [] if recipe.get('corner') else others      # z zasadą narożników: najpierw narożniki, potem przycięcie
     for i in order:
-        result[i] = _ply_trim(shapes[i], [*others, *done])
+        result[i] = _ply_trim(shapes[i], [*trim_others, *done])
         done.append(result[i])
     walls = [result[i] for i in sorted(indices, key=lambda i: -edges[i].Length())]
     if neighbours is None:
         return walls
     return walls, {bid: result[i] for i, bid in redo.items()}
+
+
+def ply_wall_overlaps(bodies, walls, recipe, skip):
+    """Nowe ścianki nakładające się na ścianki innych płyt (np. ścianki na ściankach skierowane w tę samą stronę):
+    narożnik Równolegle / Blacharskie z noskami w płaszczyźnie. Zwraca (ścianki, {id: zmieniona płyta}, {indeks: [id]})."""
+    from . import plywood as pw
+    rule = recipe.get('corner')
+    if not rule:
+        return walls, {}, {}
+    ignore = set(recipe.get('ignore', ())) | set(skip)
+    others = [b for b in bodies if b.kind == 'solid' and b.visible and pw.is_panel(b) and b.id not in ignore]
+    current = {b.id: b.shape for b in others}
+    joined = {}
+    out = []
+    for k, wall in enumerate(walls):
+        near = [(b.id, current[b.id], b.meta['ply'].get('t')) for b in others if pw._boxes_near(wall, current[b.id], 0.0)]
+        wall, changed, ids = pw.resolve_overlaps(wall, float(recipe['t']), near, rule, float(recipe.get('width') or 0), float(recipe.get('fit', 0.0)))
+        current.update(changed)
+        joined[k] = ids
+        wall = _ply_trim(wall, [current[b.id] for b in others if pw._boxes_near(wall, current[b.id], 0.0)])
+        out.append(wall)
+    return out, {i: current[i] for i in current if any(current[i] is not b.shape for b in others if b.id == i)}, joined
 
 
 def ply_folder(bodies, base):
@@ -1947,15 +2050,35 @@ def run_ply_wall(bodies, recipe):
     indices = edge_indices(base.shape, recipe['edges'])
     neighbours = ply_neighbour_walls(bodies, base, indices, recipe)
     walls, redone = ply_walls(bodies, base, indices, recipe, neighbours)
+    walls, touched, seams = ply_wall_overlaps(bodies, walls, recipe, {base.id, *neighbours.values()})
     folder = recipe.get('folder') or ply_folder(bodies, base)
-    kept = [replace(b, folder=folder) if b.id == base.id else (b.changed(redone[b.id]) if b.id in redone else b) for b in bodies]
     order = sorted(indices, key=lambda i: -base.shape.Edges()[i].Length())
     made = _ply_bodies(bodies, walls, 'Ścianka', recipe, folder)
+    partners = {}
+    for k, ids in seams.items():
+        for j in ids:
+            partners.setdefault(made[k].id, set()).add(j)
+            partners.setdefault(j, set()).add(made[k].id)
+
+    def mark(b):
+        if b.id in partners and (b.meta or {}).get('ply'):
+            ply = dict(b.meta['ply'], joined=sorted(set(b.meta['ply'].get('joined', ())) | partners[b.id]))
+            return replace(b, meta=dict(b.meta, ply=ply))
+        return b
+    kept = []
+    for b in bodies:
+        if b.id == base.id:
+            b = replace(b, folder=folder)
+        elif b.id in redone:
+            b = b.changed(redone[b.id])
+        elif b.id in touched:
+            b = b.changed(touched[b.id])
+        kept.append(mark(b))
     info = _wall_params(recipe)
     tagged = []
     for body, i in zip(made, order):
         ply = dict(body.meta['ply'], wall=dict(info, base=base.id, edge=edge_refs(base.shape, [i])[0]))
-        tagged.append(replace(body, meta=dict(body.meta, ply=ply)))
+        tagged.append(mark(replace(body, meta=dict(body.meta, ply=ply))))
     return [*kept, *tagged]
 
 

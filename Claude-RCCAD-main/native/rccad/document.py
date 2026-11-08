@@ -51,7 +51,9 @@ class Body:
             self = replace(self, threads=tuple(transformed(t, m) for t in self.threads))
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             from .sheetedit import placed_state
-            return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
+            self = replace(self, meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
+            if not (self.meta.get('ply') or {}):
+                return replace(self, shape=shape, mesh=_mesh(shape))
         ply_meta = (self.meta or {}).get('ply') or {} if self.kind == 'solid' else {}
         if ply_meta.get('fold') or (ply_meta.get('tab') or {}).get('unfold'):
             from .plywood import fold_placed        # płyta pamięta rozłożenie / złożenie także po przesunięciu
@@ -61,6 +63,8 @@ class Body:
             if (ply.get('tab') or {}).get('unfold'):
                 ply['tab'] = dict(ply['tab'], unfold=fold_placed(ply['tab']['unfold'], matrix))
             return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, ply=ply))
+        if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
+            return replace(self, shape=shape, mesh=_mesh(shape))      # ruch nie jest edycją blachy
         return self.changed(shape)
 
     def changed(self, shape, mesh=False):
@@ -68,8 +72,8 @@ class Body:
         meta = None
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
-        elif self.kind == 'solid' and self.meta and self.meta.get('ply'):
-            meta = {'ply': dict(self.meta['ply'])}      # płyta ze sklejki zostaje płytą (grubość, metoda, połączenia)
+        if self.kind == 'solid' and self.meta and self.meta.get('ply'):
+            meta = dict(meta or {}, ply=dict(self.meta['ply']))      # płyta ze sklejki zostaje płytą (grubość, metoda, połączenia)
         return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False or (mesh is None and not mesh_deferred()) else mesh, meta=meta)
 
 

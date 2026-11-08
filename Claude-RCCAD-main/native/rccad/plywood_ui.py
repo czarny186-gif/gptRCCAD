@@ -167,6 +167,12 @@ class PlywoodTools:
         self._field(lay, 'Ustawienie', self.pw_side)
         self.pw_flip = QCheckBox('Po drugiej stronie płyty')
         lay.addWidget(self.pw_flip)
+        self.pw_corner = ui.Segmented(list(pw.CORNER_RULES), 30)
+        self.pw_corner.setCurrentIndex(1)
+        self.pw_corner.setToolTip('Gdy nowa ścianka nachodzi na inną leżącą w tej samej płaszczyźnie (np. ścianki na ściankach skierowane '
+                                  'w tę samą stronę): Równolegle - istniejąca przechodzi przez narożnik, nowa do niej dochodzi; '
+                                  'Blacharskie - ukos po przekątnej narożnika. Na styku od razu noski w płaszczyźnie płyt.')
+        self._field(lay, 'Narożniki nachodzących ścianek', self.pw_corner)
         self.pw_status = _label('Kliknij prostą krawędź płaskiej strony płyty. Shift + klik dodaje kolejne krawędzie.', 'status')
         lay.addWidget(self.pw_status)
         self.pw_insert = QPushButton('Wstaw')
@@ -331,6 +337,11 @@ class PlywoodTools:
         self._pic_field(lay, 'Luz pasowania (mm)', 'pj_fit', self.tw_fit, 'Luz między noskiem a gniazdem.')
         self.tw_flip = QCheckBox('Odwróć stronę (ścianka po drugiej stronie blachy)')
         lay.addWidget(self.tw_flip)
+        self.tw_corner = ui.Segmented(list(pw.CORNER_RULES), 30)
+        self.tw_corner.setCurrentIndex(1)
+        self.tw_corner.setToolTip('Jak w Kołnierzu: gdy ścianka nachodzi na inną ściankę na noski w tej samej płaszczyźnie - Równolegle: '
+                                  'istniejąca przechodzi przez narożnik; Blacharskie: ukos po przekątnej. Na styku noski.')
+        self._field(lay, 'Łączenie w narożniku', self.tw_corner)
         self.tw_status = _label('Kliknij Wstaw (czerwony), potem klikaj krawędzie blachy.', 'status')
         self.tw_status.setWordWrap(True)
         lay.addWidget(self.tw_status)
@@ -438,7 +449,7 @@ class PlywoodTools:
         v = self._tw_values()
         recipe = dict(type='sheet_tabwall', id=body.id, edges=hist.edge_refs(body.shape, [pick['index']]), t=pick['t'],
                       length=v['length'], measure=v['measure'], flip=bool(self.tw_flip.isChecked()), width=v['width'], fit=v['fit'],
-                      out=[uuid.uuid4().hex], group=uuid.uuid4().hex)
+                      out=[uuid.uuid4().hex], group=uuid.uuid4().hex, corner=self.tw_corner.currentData())
         existing = list(self.document.bodies)
         self.tw_pick = None
         self.view.set_picked_edge(None)
@@ -572,7 +583,9 @@ class PlywoodTools:
         if base is None or not self.pw_edges:
             return None, None
         return base, dict(type='ply_wall', base=base.id, t=self.ply_thickness(), h=float(self.pw_height.value()), side=self.pw_side.currentData(),
-                          flip=bool(self.pw_flip.isChecked()), method=self.ply_method, ignore=self._ply_hidden())
+                          flip=bool(self.pw_flip.isChecked()), method=self.ply_method, ignore=self._ply_hidden(),
+                          corner=self.pw_corner.currentData(), width=float(self.ply_cfg.get('width', 0) or 0),
+                          fit=float(self.ply_cfg['fit'][self.ply_method]))
 
     # ------------------------------------------------------------------ Półka / przegroda
     def _pb_pick(self, x, y):

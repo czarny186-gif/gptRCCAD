@@ -908,3 +908,144 @@ class PlywoodSequentialPolygonTests(unittest.TestCase):
                 out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=.1), failures=failures)
                 self.assertEqual(failures, [], (n, side))
                 self.assertEqual(_overlaps([out.get(p['id'], p['shape']) for p in panels]), 0, (n, side))
+
+
+class OverlapCornerTests(unittest.TestCase):
+    """0.4.69: ścianki nachodzące na siebie w jednej płaszczyźnie (wywinięcia na ściankach w tę samą stronę) -
+    narożnik Równolegle / Blacharskie z noskami w płaszczyźnie płyt."""
+
+    def _box_with_lips(self, rule, meth='laser'):
+        import uuid
+        t = 3.0
+        base = cq.Solid.makeBox(100, 60, t)
+        b = Body('Płyta 1', base, meta=pw.ply_meta(t, meth)).prepared()
+        tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - t) < 1e-6]
+        bodies = hist.run_recipe([b], dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, tops), t=t, h=40.0, side='on', flip=False,
+                                           method=meth, corner=rule, out=[uuid.uuid4().hex for _ in tops]))
+        walls = [x for x in bodies if x.id != b.id]
+        for wb in walls:
+            sh = wb.shape
+            info = pw.panel_info(sh, t)
+            inner = info['hi'] if float(np.array([50, 30, 20.]) @ info['n']) > (info['lo'] + info['hi']) / 2 else info['lo']
+            zmax = sh.BoundingBox().zmax
+            cand = [i for i, e in enumerate(sh.Edges()) if e.geomType() == 'LINE' and abs(e.startPoint().z - zmax) < 1e-6
+                    and abs(e.endPoint().z - zmax) < 1e-6 and abs(float(np.array(e.Center().toTuple()) @ info['n']) - inner) < 1e-6]
+            i = max(cand, key=lambda i: sh.Edges()[i].Length())
+            bodies = hist.run_recipe(bodies, dict(type='ply_wall', base=wb.id, edges=hist.edge_refs(sh, [i]), t=t, h=15.0, side='on', flip=False,
+                                                  method=meth, corner=rule, out=[uuid.uuid4().hex]))
+        lips = [x for x in bodies if x.id not in {b.id, *[w.id for w in walls]}]
+        return bodies, lips
+
+    def test_lips_meet_with_teeth_both_rules(self):
+        for rule in ('sheet', 'parallel'):
+            bodies, lips = self._box_with_lips(rule)
+            self.assertEqual(len(lips), 4)
+            self.assertEqual(_overlaps([x.shape for x in bodies]), 0, rule)
+            lip_ids = {x.id for x in lips}
+            for x in lips:
+                self.assertEqual(len(set(x.meta['ply'].get('joined', [])) & lip_ids), 2, rule)    # obie sąsiednie - noskami
+                self.assertTrue(x.shape.isValid() and len(x.shape.Solids()) == 1)
+            panels = pw.panels_of(bodies)
+            contacts, skipped = pw.find_contacts(panels)
+            self.assertFalse(skipped)
+            for c in contacts:
+                c['joint'] = pw.joint_for('laser', c['kind'])
+            failures = []
+            out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=.1), failures=failures)
+            self.assertEqual(failures, [], rule)
+            self.assertEqual(_overlaps([out.get(p['id'], p['shape']) for p in panels]), 0, rule)
+        # Blacharskie: styk po przekątnej - wywinięcie sięga do narożnika zewnętrznego
+        _, sheet_lips = self._box_with_lips('sheet')
+        _, par_lips = self._box_with_lips('parallel')
+        short = lambda lips: min(lips, key=lambda x: x.shape.BoundingBox().xlen)
+        self.assertLess(short(sheet_lips).shape.BoundingBox().ymin, short(par_lips).shape.BoundingBox().ymin)
+
+
+class SheetTabBendTests(SheetTabWallTests):
+    """0.4.69: na ściance na noski można giąć kołnierz i zawinięcie; ścianki na ściankach w tę samą stronę łączą się
+    w narożnikach (Równolegle / Blacharskie) noskami; całość rozkłada się i składa."""
+
+    def test_tabwalls_box_outer_and_inner(self):
+        pass
+
+    def test_tabwalls_between_bent_flanges_unfold(self):
+        pass
+
+    def test_tabwalls_unfold_fold_drawing_and_library(self):
+        pass
+
+    def test_sheet_group_folder_and_uniform_scale_keeps_unfold(self):
+        pass
+
+    def test_ply_thickness_from_point_one(self):
+        pass
+
+    def _click(self, bid, p):
+        w = self.w
+        sh = w.document.get(bid).shape
+        cand = [i for i, e in enumerate(sh.Edges()) if e.geomType() == 'LINE']
+        i = min(cand, key=lambda i: np.linalg.norm(np.array(sh.Edges()[i].positionAt(.5).toTuple()) - p))
+        with patch.object(w.view, 'nearest_edge', return_value=(bid, i)):
+            w.view_clicked(5, 5, False, False)
+        self.wait()
+
+    def test_flange_and_hem_on_tabwall_unfold_fold(self):
+        w = self.w
+        sheet = self._sheet(w)
+        w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_bend.click()
+        self._click(sheet.id, (100, 30, 2))
+        w.set_mode(None)
+        wall = next(b for b in w.document.bodies if b.name.startswith('Ścianka blachy'))
+        self.assertIn('sheet', wall.meta)
+        w.toggle_mode('flange'); w.fl_length.setValue(15); w.toggle_bending()
+        self._click(wall.id, (100, 30, 30))
+        self.assertEqual(w.document.info['label'], 'Kołnierz')
+        w.set_mode(None)
+        w.toggle_mode('hem'); w.toggle_bending()
+        self._click(wall.id, (115, 30, 30))
+        self.assertEqual(w.document.info['label'], 'Zawinięcie')
+        w.set_mode(None)
+        wall = w.document.get(wall.id)
+        self.assertEqual(len(wall.meta['sheet']['recipe']['flanges']), 2)
+        self.assertIn('ply', wall.meta)                                                          # dalej ścianka na noski
+        before = {b.id: (np.array(b.shape.Center().toTuple()), b.shape.Volume()) for b in w.document.bodies}
+        w.selected = [sheet.id]; w.sheet_command('unfold_sheet'); self.wait()
+        self.assertTrue(w.document.get(wall.id).meta['sheet'].get('flat'))                      # ścianka też rozłożona
+        self.assertLess(w.document.get(wall.id).shape.BoundingBox().zlen, 2.01)
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        w.selected = [sheet.id]; w.sheet_command('fold_sheet'); self.wait()
+        for b in w.document.bodies:
+            c, v = before[b.id]
+            self.assertTrue(np.allclose(b.shape.Center().toTuple(), c, atol=1e-5), b.name)
+            self.assertAlmostEqual(b.shape.Volume(), v, 4)
+
+    def test_tabwall_lips_corner_rules(self):
+        for rule in ('sheet', 'parallel'):
+            w = self.w
+            w.document = type(w.document)()
+            sheet = self._sheet(w)
+            w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_corner.setCurrentIndex(w.tw_corner.findData(rule)); w.tw_bend.click()
+            for p in ((50, 0, 2), (100, 30, 2), (50, 60, 2), (0, 30, 2)):
+                self._click(sheet.id, p)
+            walls = [x for x in w.document.bodies if x.name.startswith('Ścianka')]
+            w.tw_length.setValue(12)
+            for wb in walls:
+                sh = w.document.get(wb.id).shape
+                info = pw.panel_info(sh, 2)
+                zmax = sh.BoundingBox().zmax
+                inner = info['hi'] if float(np.array([50, 30, 15]) @ info['n']) > (info['lo'] + info['hi']) / 2 else info['lo']
+                cand = [i for i, e in enumerate(sh.Edges()) if e.geomType() == 'LINE' and abs(e.startPoint().z - zmax) < 1e-6
+                        and abs(e.endPoint().z - zmax) < 1e-6 and abs(float(np.array(e.Center().toTuple()) @ info['n']) - inner) < 1e-6]
+                i = max(cand, key=lambda i: sh.Edges()[i].Length())
+                with patch.object(w.view, 'nearest_edge', return_value=(wb.id, i)):
+                    w.view_clicked(5, 5, False, False)
+                self.wait()
+            w.set_mode(None)
+            lips = [x for x in w.document.bodies if x.name.startswith('Ścianka') and x.id not in {v.id for v in walls}]
+            self.assertEqual(len(lips), 4, rule)
+            self.assertEqual(_overlaps([x.shape for x in w.document.bodies]), 0, rule)
+            ids = {x.id for x in lips}
+            self.assertTrue(all(len(set(x.meta['ply']['joined']) & ids) == 2 for x in lips), rule)
+            w.selected = [sheet.id]; w.sheet_command('unfold_sheet'); self.wait()
+            self.assertTrue(w.document.get(sheet.id).meta['sheet'].get('flat'), rule)
+            self.assertEqual(_overlaps([x.shape for x in w.document.bodies]), 0, rule)
