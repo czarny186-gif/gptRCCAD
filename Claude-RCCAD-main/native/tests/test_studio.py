@@ -117,9 +117,9 @@ class StudioTests(unittest.TestCase):
         w.set_mode('extrude')
         with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,False)
         self.assertEqual(len(w.ex_profiles),n)
-        with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,True)
+        with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,True)          # Shift odznacza literę
         self.assertEqual(len(w.ex_profiles),n-1)
-        with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,True)
+        with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,False)         # kliknięcie dodaje z powrotem
         self.assertEqual(len(w.ex_profiles),n)
 
     def test_revolve_tool_history_undo_and_panel(self):
@@ -2112,21 +2112,26 @@ class StudioTests(unittest.TestCase):
         self.assertLessEqual(seg.geometry().bottom(),w.sh_status.geometry().top())   # opis pod przyciskami, nie na nich
 
     # 0.4.61: Shift - kilka krawędzi i narożników, także na różnych bryłach, w jednym kroku
-    def test_fillet_shift_many_edges_corners_and_bodies(self):
+    def test_fillet_click_adds_shift_removes_edges_corners_and_bodies(self):
         import cadquery as cq
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();b=Body('B',cq.Solid.makeBox(10,10,10,pnt=cq.Vector(40,0,0))).prepared()
         w.document.commit([a,b]);w.refresh();w.set_mode('mod')
         top=next(i for i,e in enumerate(a.shape.Edges()) if e.Center().z>19.9)
         corner=np.array(next(v.toTuple() for v in a.shape.Vertices() if v.Z<1e-6))
         with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(a.id,top)):w.view_clicked(5,5,False,False)
-        with patch.object(w.view,'nearest_vertex',return_value=(a.id,corner)):w.view_clicked(5,5,True,False)         # Shift: narożnik do krawędzi
-        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)   # Shift: druga bryła
+        with patch.object(w.view,'nearest_vertex',return_value=(a.id,corner)):w.view_clicked(5,5,False,False)        # kliknięcie: narożnik dochodzi do krawędzi
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,False,False)   # druga bryła
         self.assertEqual(len(w._mod_items()),2);self.assertIn('krawędzie: 2',w.mod_status.text());self.assertIn('narożniki: 1',w.mod_status.text())
         self.assertEqual(len(w.view.sel_vertices),1)
         w.mod_size.setValue(1.5);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
-        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)   # Shift drugi raz: odznacza
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)   # Shift: odznacza
         self.assertEqual(len(w._mod_items()),1)
-        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,True,False)
+        with patch.object(w.view,'nearest_vertex',return_value=(a.id,corner)):w.view_clicked(5,5,True,False)         # Shift: odznacza narożnik
+        self.assertEqual(len(w.view.sel_vertices),0)
+        with patch.object(w.view,'nearest_vertex',return_value=(a.id,corner)):w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)):w.view_clicked(5,5,False,False)   # drugi raz bez Shift - zostaje
+        self.assertEqual(len(w._mod_items()),2)
         va,vb=a.shape.Volume(),b.shape.Volume()
         w.apply_mod();self.wait()
         na,nb=w.document.get(a.id),w.document.get(b.id)
@@ -2137,6 +2142,22 @@ class StudioTests(unittest.TestCase):
         again=hist.run_recipe([a,b],op);self.assertAlmostEqual(again[0].shape.Volume(),na.shape.Volume(),3)
         self.assertEqual(hist.reads(op,[a,b]),{a.id,b.id})
         w.undo();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),va,3)
+
+    # 0.4.71: Wyciągnij - kliknięcie dodaje profil, Shift + klik odznacza
+    def test_extrude_click_adds_shift_removes(self):
+        w=self.w
+        a=Body('A',k.sketch('rectangle','XY',10,10),'sketch','XY').prepared();b=Body('B',k.transform(k.sketch('rectangle','XY',10,10),(30,0,0)),'sketch','XY').prepared()
+        w.document.commit([a,b]);w.refresh();w.selected=[];w.set_mode('extrude')
+        pa,pb=w._sketch_profile(a),w._sketch_profile(b)
+        with patch.object(w,'_profile_at',return_value=pa):w.view_clicked(5,5,False,False)
+        w.ex_value.setValue(7)
+        with patch.object(w,'_profile_at',return_value=pb):w.view_clicked(5,5,False,False)
+        self.assertEqual(len(w.ex_profiles),2);self.assertEqual(w.ex_value.value(),7)          # drugi profil nie kasuje ustawień
+        with patch.object(w,'_profile_at',return_value=pa):w.view_clicked(5,5,False,False)
+        self.assertEqual(len(w.ex_profiles),2)                                                  # już wybrany - zostaje
+        with patch.object(w,'_profile_at',return_value=pa):w.view_clicked(5,5,True,False)
+        self.assertEqual(len(w.ex_profiles),1);self.assertEqual(w.ex_profiles[0]['id'],b.id)
+        w.apply_extrude();self.wait();self.assertEqual(len([x for x in w.document.bodies if x.kind=='solid']),1)
 
     def test_fillet_preview_shows_only_created_surface(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')

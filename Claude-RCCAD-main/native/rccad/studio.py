@@ -2058,7 +2058,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.mod_size.blockSignals(False)
             self._mod_kind_changed()
             self.update_mod_status()
-            self.hint('Edytuj bryłę: kliknij krawędź. Shift + klik dodaje kolejne.')
+            self.hint('Edytuj bryłę: klikaj krawędzie i narożniki - każde kliknięcie dodaje kolejne, Shift + klik odznacza.')
         elif mode in ('mate', 'align'):
             self.mt_panels[mode].show()
             self.view.setCursor(Qt.PointingHandCursor)
@@ -3688,15 +3688,22 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.toast('Kliknij zamknięty profil szkicu albo płaską ścianę bryły.')
             return
         group = [src, *src.get('siblings', ())]
+        had = bool(self.ex_profiles)
+        # kliknięcie dodaje kolejny profil (bez Shift), Shift + klik odznacza pomyłkowo wybrany
+        if shift and src.get('letters'):
+            group = [src]             # Shift na literze: tylko ta litera
+        dup = [p for p in self.ex_profiles if (p.get('cluster') is not None and p.get('cluster') == src.get('cluster') and not src.get('letters'))
+               or (p['id'] == src['id'] and p['kind'] == src['kind'] and np.allclose(p['center'], src['center'], atol=1e-6))]
         if shift:
-            if src.get('letters'):
-                group = [src]         # Shift na literze: tylko ta litera
-            dup = [p for p in self.ex_profiles if (p.get('cluster') is not None and p.get('cluster') == src.get('cluster') and not src.get('letters'))
-                   or (p['id'] == src['id'] and p['kind'] == src['kind'] and np.allclose(p['center'], src['center'], atol=1e-6))]
-            self.ex_profiles = [p for p in self.ex_profiles if p not in dup] if dup else [*self.ex_profiles, *group]
+            if not dup:
+                return
+            self.ex_profiles = [p for p in self.ex_profiles if p not in dup]
+        elif dup:
+            return                    # już wybrany - zostaje
         else:
-            self.ex_profiles = group
-        self._ex_profiles_changed(shift)
+            same = lambda p, q: p['id'] == q['id'] and p['kind'] == q['kind'] and np.allclose(p['center'], q['center'], atol=1e-6)
+            self.ex_profiles = [*self.ex_profiles, *[g for g in group if not any(same(g, p) for p in self.ex_profiles)]]
+        self._ex_profiles_changed(had)
 
     def _selected_sketch_profiles(self):
         """Profile szkiców zaznaczonych na liście Obiekty / polu roboczym (np. cała grupa importu DXF / SVG): obszary
@@ -5774,12 +5781,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             return
         hit = self.view.nearest_edge(x, y, True)
         if hit is None:
-            if not (shift or ctrl):
-                self.edges = {}
-                self.mod_vertices = {}
-                self.view.sel_vertices = []
-                self._mod_face_mesh = None
-            self.update_mod_status()
+            self.update_mod_status()          # kliknięcie obok nie kasuje wybranych krawędzi i narożników
             return
         bid, index = hit[0], hit[1]
         body = self.document.get(bid)
@@ -5794,29 +5796,25 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.mod_size.blockSignals(False)
 
     def _mod_vertex_select(self, bid, point, shift, ctrl):
-        """Narożnik. Shift / Ctrl dodaje (albo odejmuje) - także do zaznaczonych krawędzi i na innych bryłach."""
-        if not (shift or ctrl):
-            self._mod_reset_size()
-            self.edges, self.mod_vertices = {}, {bid: [point]}
-        else:
-            points = self.mod_vertices.setdefault(bid, [])
-            same = [q for q in points if float(np.linalg.norm(q - point)) < 1e-3]
-            if same:
-                points[:] = [q for q in points if all(q is not r for r in same)]
-            else:
-                points.append(point)
-            self.mod_vertices = {k: v for k, v in self.mod_vertices.items() if v}
+        """Narożnik: kliknięcie dodaje go do wybranych (krawędzie i narożniki, także na innych bryłach), Shift + klik
+        odznacza pomyłkowo wybrany."""
+        self._mod_reset_size()
+        points = self.mod_vertices.setdefault(bid, [])
+        same = [q for q in points if float(np.linalg.norm(q - point)) < 1e-3]
+        if shift:
+            points[:] = [q for q in points if all(q is not r for r in same)]
+        elif not same:
+            points.append(point)
+        self.mod_vertices = {k: v for k, v in self.mod_vertices.items() if v}
         self._mod_face_mesh = None
         self.update_mod_status()
 
     def _mod_select(self, bid, ids, shift, ctrl, mark=None):
-        """Krawędzie. Shift / Ctrl dodaje (albo odejmuje) - także do zaznaczonych narożników i na innych bryłach."""
-        if not (shift or ctrl):
-            self._mod_reset_size()
-            self.edges, self.mod_vertices = {bid: set()}, {}
+        """Krawędzie: kliknięcie dodaje (Ctrl - cały łańcuch stycznych), Shift + klik odznacza pomyłkowo wybrane."""
+        self._mod_reset_size()
         self._mod_face_mesh = None
         current = self.edges.setdefault(bid, set())
-        if (shift or ctrl) and ids <= current:
+        if shift:
             current -= ids
         else:
             current |= ids
@@ -5850,13 +5848,12 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             return
         if not ids:
             return
-        if not any(self.edges.values()):
+        if not any(self.edges.values()) and not any(self.mod_vertices.values()):
             self.mod_size.blockSignals(True)
             self.mod_size.setValue(2.0)
             self.mod_size.blockSignals(False)
-        self.edges = {body.id: ids}
-        self.mod_vertices = {}
-        self.view.sel_vertices = []
+        self.edges = dict(self.edges)
+        self.edges[body.id] = set(self.edges.get(body.id, ())) | ids      # obwód ściany dochodzi do wybranych
         self._mod_face_mesh = None          # zaznaczają się krawędzie obwodu; sama ściana się nie podświetla (widać tworzone zaokrąglenie)
         self.update_mod_status()
 
@@ -5864,7 +5861,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         count = sum(len(v) for v in self.edges.values())
         vcount = sum(len(v) for v in self.mod_vertices.values())
         self.mod_status.setText(self._mod_count_text() if count or vcount else
-                                'Kliknij krawędź lub narożnik; Shift + klik dodaje kolejne (także na innych bryłach); dwuklik w ścianę zaznacza cały jej obwód.')
+                                'Klikaj krawędzie i narożniki - każde kliknięcie dodaje kolejne (także na innych bryłach); Shift + klik odznacza pomyłkowo wybrane; dwuklik w ścianę dodaje cały jej obwód.')
         self.view.sel_vertices = [np.asarray(q, float) for pts in self.mod_vertices.values() for q in pts]
         count += vcount
         if not count:

@@ -1,4 +1,11 @@
-# RCCAD Desktop 0.4.70 — wybór płyt do cięcia, strzałki skalowania
+# RCCAD Desktop 0.4.71 — zaznaczanie bez Shift w zaokrąglaniu, fazowaniu i wyciąganiu
+
+## Zmiany 0.4.71
+
+- **Zaokrąglanie i fazowanie**: każde kliknięcie dodaje kolejną krawędź albo narożnik (bez Shift, także na innych bryłach); Shift + klik odznacza pomyłkowo wybraną krawędź albo narożnik; kliknięcie obok bryły nie kasuje wyboru; dwuklik w ścianę dodaje jej obwód. Zastosuj (Enter) wykonuje operację na wszystkich naraz.
+- **Wyciąganie**: każde kliknięcie dodaje kolejny profil, obszar albo ścianę (bez Shift) - ustawiona odległość zostaje; Shift + klik odznacza pomyłkowo wybrany.
+
+## RCCAD Desktop 0.4.70 — wybór płyt do cięcia, strzałki skalowania
 
 ## Zmiany 0.4.70
 
