@@ -504,7 +504,7 @@ def find_contacts(panels):
                 if found is not None:
                     out.append(found)
                 elif A['shape'].distance(B['shape']) < TOL:      # tylko płyty, które naprawdę się stykają
-                    skipped.append((A['id'], B['id'], 'Płyty pod kątem innym niż 90° stykające się inaczej niż narożnikiem - połączenie pominięte.'))
+                    skipped.append((A['id'], B['id'], 'Płyty pod kątem innym niż 90° stykają się bez skosu (jedna docięta prosto do drugiej) - połączenie pominięte. Usuń te ścianki i dodaj je ponownie narzędziem Ścianka, wtedy zejdą się na skos z noskami.'))
                 continue
             found = _cross(A, B, pts[A['id']], pts[B['id']])
             if found is not None:

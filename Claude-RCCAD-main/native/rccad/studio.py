@@ -27,6 +27,7 @@ from . import sketchmeta as sm
 from . import settings
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 from .plywood_ui import PlywoodTools, PLY_MODES
+from .scale_ui import ScaleTools
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
         'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'line': 2, 'circleTangent2': 3}
@@ -223,7 +224,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(PlywoodTools, QMainWindow):
+class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -548,6 +549,15 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.clear_button = self._round(ui.style_icon('trash', 24), 'Wyczyść całe pole', self.clear_all)
         self.undo_button = self._round(ui.style_icon('undo', 24), 'Cofnij (Ctrl+Z)', self.undo)
         self.redo_button = self._round(ui.style_icon('redo', 24), 'Ponów (Ctrl+Y)', self.redo)
+        self.scale_button = QToolButton(v)
+        self.scale_button.setObjectName('layers')
+        self.scale_button.setCheckable(True)
+        self.scale_button.setFixedSize(40, 40)
+        self.scale_button.setIcon(ui.style_icon('scale', 26))
+        self.scale_button.setIconSize(QSize(26, 26))
+        self.scale_button.setToolTip('Skalowanie — zmień rozmiar zaznaczonych obiektów, szkiców albo całej grupy')
+        self.scale_button.clicked.connect(lambda _=False: self.toggle_scale(self.scale_button.isChecked()))
+        ui.shadow(self.scale_button, 12, 3, 28)
         self.layers = QToolButton(v)
         self.layers.setObjectName('layers')
         self.layers.setCheckable(True)
@@ -1662,7 +1672,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.off_value.valueChanged.connect(lambda *_: self._off_update())
 
         self._build_ply_panels()
-        self.panels = (*self.ply_panels(), *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self._build_scale_panel()
+        self.panels = (*self.ply_panels(), self.scale_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1682,9 +1693,10 @@ class StudioWindow(PlywoodTools, QMainWindow):
         for i, key in enumerate(shown):
             self.tools[key].move(78 + 60 * i, TOOLS_TOP)
         self.shape_bar.move(18, 80 + TOOLS_TOP - 18)
-        self.clear_button.move(W - 446, 20)
-        self.undo_button.move(W - 398, 20)
-        self.redo_button.move(W - 350, 20)
+        self.clear_button.move(W - 494, 20)
+        self.undo_button.move(W - 446, 20)
+        self.redo_button.move(W - 398, 20)
+        self.scale_button.move(W - 350, 20)
         self.layers.move(W - 302, 20)
         self.xray.move(W - 254, 20)
         self.home.move(W - 205, 20)
@@ -1705,7 +1717,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels()):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1716,7 +1728,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170 + TOOLS_TOP - 18)
-        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit, self.hist_vars,
+        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit, self.hist_vars,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -1743,7 +1755,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -1908,6 +1920,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.t_group = []
         self.edges = {}
         self._hover_key = None
+        if hasattr(self, 'scale_button'):
+            self.scale_button.setChecked(mode == 'scale')
         for key, button in self.tools.items():
             if key != 'file':
                 button.setChecked(key == ('sketch' if mode == 'plane' else mode))
@@ -2002,6 +2016,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self._ply_enter(mode)
         elif mode == 'tabwall':
             self._tw_enter()
+        elif mode == 'scale':
+            self._scale_enter()
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
@@ -3258,7 +3274,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 self.view.overlay.update()
             elif self.mode == 'mrad':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
-            elif self.mode in ('mprops', 'sheetpick', 'plyfoldpick') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
+            elif self.mode in ('mprops', 'sheetpick', 'plyfoldpick', 'scale') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
@@ -3390,6 +3406,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.pick_flange(x, y)
         elif self.mode == 'tabwall':
             self.pick_tabwall(x, y)
+        elif self.mode == 'scale':
+            self.pick_scale(x, y, shift)
         elif self.mode in DRAWING_MODES:
             self.pick_drawing(x, y)
         elif self.mode == 'bool':
@@ -9065,7 +9083,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 plane = kernel.Frame(tuple(float(c) for c in rotation @ np.asarray(frame.origin, float) + translation),
                                      tuple(float(c) for c in rotation @ np.asarray(frame.xdir, float)),
                                      tuple(float(c) for c in rotation @ np.asarray(frame.normal, float)))
-            group = groups.setdefault(b.group, uuid.uuid4().hex) if b.group else ''
+            group = groups.setdefault(b.group, ('sheet-' if b.group.startswith('sheet-') else '') + uuid.uuid4().hex) if b.group else ''
             shape = kernel.transformed(b.shape, rotation, translation)
             if b.kind == 'sketch':
                 made.append(Body(b.name, shape, b.kind, plane, group=group, meta=b.meta))
@@ -9216,7 +9234,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text

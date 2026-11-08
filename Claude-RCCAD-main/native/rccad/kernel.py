@@ -1682,6 +1682,38 @@ def regions(plane, edges, wires=()):
     return alt if len(alt) > len(out) else out
 
 
+def scale_matrix(factors, center):
+    """Macierz 4x4 skalowania wokół punktu center (współczynniki X, Y, Z)."""
+    f = np.asarray(factors, float)
+    c = np.asarray(center, float)
+    m = np.eye(4)
+    m[:3, :3] = np.diag(f)
+    m[:3, 3] = c - f * c
+    return m
+
+
+def scaled(shape, factors, center):
+    """Kształt przeskalowany wokół center: jednakowo - dokładnie (łuki zostają łukami), różnie w osiach - przez
+    przekształcenie ogólne (okrąg staje się elipsą)."""
+    from OCP.gp import gp_Trsf, gp_GTrsf, gp_Pnt, gp_Mat, gp_XYZ
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform, BRepBuilderAPI_GTransform
+    f = [float(v) for v in factors]
+    if any(not isfinite(v) or v <= 0 for v in f):
+        raise CadError('Skala musi być większa od zera.')
+    c = [float(v) for v in center]
+    if max(f) - min(f) < 1e-12:
+        trsf = gp_Trsf()
+        trsf.SetScale(gp_Pnt(*c), f[0])
+        out = BRepBuilderAPI_Transform(shape.wrapped, trsf, True).Shape()
+    else:
+        g = gp_GTrsf()
+        g.SetVectorialPart(gp_Mat(f[0], 0, 0, 0, f[1], 0, 0, 0, f[2]))
+        g.SetTranslationPart(gp_XYZ(*(c[i] - f[i] * c[i] for i in range(3))))
+        out = BRepBuilderAPI_GTransform(shape.wrapped, g, True).Shape()
+    result = cq.Shape.cast(out)
+    return valid(result, bool(shape.Solids())) if shape.Solids() else result
+
+
 def mesh_moved(mesh, matrix):
     """Ta sama siatka po sztywnym przesunięciu / obrocie (macierz 4x4 albo 3x4) - bez ponownego liczenia z kształtu."""
     if mesh is None:

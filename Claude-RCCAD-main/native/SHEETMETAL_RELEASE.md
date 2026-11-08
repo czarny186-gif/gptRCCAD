@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.67 — ścianki na noski razem z blachą, płyty od 0,1 mm
+# RCCAD Desktop 0.4.68 — skalowanie, wielokąty ścianka po ściance, grupa blachy
+
+## Zmiany 0.4.68
+
+- **Ścianki dodawane po jednej (Wstaw) w każdym wielokącie** (przesłany model - dziesięciokąt): przy dodaniu ścianki przeliczana była tylko sąsiednia ścianka, a jej drugi koniec tracił skos (zwłaszcza „Przy boku”) - ścianki były docięte prosto i Połączenia łączyły je tylko z podstawą. Teraz przeliczane są wszystkie ścianki podstawy bez połączeń: każdy narożnik schodzi się na skos i dostaje noski, przy dowolnej liczbie boków (sprawdzone 3-12, oba ustawienia, laser / frezarka / druk). Ścianki już docięte prosto trzeba dodać ponownie - komunikat przy Połączeniach to podpowiada.
+- **Skalowanie** (nowy przycisk w prawym górnym rogu, obok płaszczyzn): zmiana rozmiaru zaznaczonych obiektów, szkiców albo całej grupy - skala w procentach, osobno w osiach X / Y / Z, punkt stały: środek, spód albo początek układu; wymiary przed i po, podgląd na żywo, Enter zatwierdza. Blacha (skala jednakowa) zachowuje gięcia i dalej się rozkłada, płyty dostają nową grubość, szkic skaluje się z płaszczyzną.
+- **Blacha ze ściankami na noski - wspólna grupa na liście Obiekty**: folder z nazwą blachy, w nim blacha i każda ścianka osobno; kliknięcie dowolnej części na polu roboczym zaznacza całość do przesuwania, obracania, skalowania i innych operacji.
+
+## RCCAD Desktop 0.4.67 — ścianki na noski razem z blachą, płyty od 0,1 mm
 
 ## Zmiany 0.4.67
 

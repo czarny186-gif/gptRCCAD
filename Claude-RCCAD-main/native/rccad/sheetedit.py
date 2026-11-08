@@ -53,6 +53,36 @@ def placed_state(metadata, matrix):
     return result
 
 
+_LENGTH_KEYS = ('lx', 'ly', 'lz', 't', 'length', 'r', 'gap', 'ret', 'relief_size')
+
+
+def scaled_state(metadata, factor, center):
+    """Stan blachy po jednakowym przeskalowaniu (współczynnik factor wokół center): punkty przepisu, grubość, długości
+    kołnierzy, promienie i szczeliny razem z bryłą - blacha dalej się rozkłada i zgina."""
+    f = float(factor)
+    c = np.asarray(center, float)
+
+    def move(node):
+        if isinstance(node, dict):
+            out = {}
+            for key, value in node.items():
+                vec = isinstance(value, (list, tuple)) and len(value) == 3 and all(isinstance(v, (int, float)) for v in value)
+                if vec and key in _POINT_KEYS:
+                    out[key] = [float(v) for v in c + f * (np.asarray(value, float) - c)]
+                elif isinstance(value, (int, float)) and not isinstance(value, bool) and key in _LENGTH_KEYS:
+                    out[key] = float(value) * f
+                else:
+                    out[key] = move(value)
+            return out
+        if isinstance(node, list):
+            return [move(v) for v in node]
+        return copy.deepcopy(node)
+
+    result = copy.deepcopy(metadata)
+    result['recipe'] = move(metadata['recipe'])
+    return result
+
+
 def _matrix(origin, axes):
     q = np.column_stack(axes)
     from OCP.gp import gp_Trsf

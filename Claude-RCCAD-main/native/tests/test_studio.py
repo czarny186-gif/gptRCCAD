@@ -945,7 +945,7 @@ class StudioTests(unittest.TestCase):
                     for key in okeys:self.assertFalse(w.tools[key].isVisibleTo(w.view),key)
         w.set_tab('Szkic')
         self.assertEqual(w.cube.width(),138);self.assertEqual(w.cube.x(),W-160)
-        self.assertEqual(w.undo_button.x(),W-398);self.assertEqual(w.redo_button.x(),W-350);self.assertEqual(w.layers.x(),W-302);self.assertEqual(w.xray.x(),W-254)
+        self.assertEqual(w.undo_button.x(),W-446);self.assertEqual(w.redo_button.x(),W-398);self.assertEqual(w.scale_button.x(),W-350);self.assertEqual(w.layers.x(),W-302);self.assertEqual(w.xray.x(),W-254)
         self.assertFalse(w.shape_bar.isVisible())
 
     def test_rectangle_is_live_on_any_plane(self):
@@ -1553,6 +1553,27 @@ class StudioTests(unittest.TestCase):
         w.pat_counts[0].setValue(3);w.pat_gaps[0].setValue(0);w.pat_counts[1].setValue(1)
         w.apply_pattern();self.wait()
         self.assertEqual(len(w.document.bodies),7)
+
+    # 0.4.68: Skalowanie - przycisk obok płaszczyzn, cała grupa, różna skala w osiach, szkic z płaszczyzną
+    def test_scale_objects_and_sketch(self):
+        w=self.w
+        a=Body('A',k.box(10,10,10),folder='G').prepared();b=Body('B',k.transform(k.box(10,10,10),(20,0,0)),folder='G').prepared()
+        s=Body('S',k.sketch('rectangle','XY',20,10),'sketch','XY').prepared()
+        w.document.commit([a,b,s]);w.refresh()
+        w.objects_folder_select([a.id,b.id]);w.scale_button.click()
+        self.assertEqual(w.mode,'scale');self.assertEqual(sorted(w.sc_ids),sorted([a.id,b.id]))
+        w.sc_value.setValue(50);w.sc_anchor.setCurrentIndex(w.sc_anchor.findData('bottom'))
+        self.assertIn('30 × 10 × 10 mm  →  15 × 5 × 5 mm',w.sc_size.text())
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        bb=k.compound([w.document.get(a.id).shape,w.document.get(b.id).shape]).BoundingBox()
+        self.assertAlmostEqual(bb.xlen,15,6);self.assertAlmostEqual(bb.zmin,0,6);self.assertAlmostEqual(bb.zmax,5,6)
+        self.assertEqual(w.document.info['op']['type'],'scale');self.assertIsNone(w.mode);self.assertFalse(w.scale_button.isChecked())
+        w.selected=[];w.toggle_scale(True)
+        with patch.object(w,'pick_object',return_value=s.id):w.view_clicked(5,5,False,False)
+        w.sc_axes.setChecked(True);w.sc_xyz[0].setValue(50);w.sc_xyz[1].setValue(300);w.apply_scale();self.wait()
+        bb=w.document.get(s.id).shape.BoundingBox();self.assertAlmostEqual(bb.xlen,10,5);self.assertAlmostEqual(bb.ylen,30,5)
+        self.assertEqual(w.document.get(s.id).plane,'XY')
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(s.id).shape.BoundingBox().xlen,20,5)
 
     def test_move_and_rotate_selected_solid_live(self):
         w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('move');self.assertIs(w.t_target.id,a.id)

@@ -19,7 +19,7 @@ from .document import Body
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
@@ -1711,6 +1711,63 @@ def _nominal_edge(sheet, edge):
     return edge, None
 
 
+def scaled_body(body, factors, center):
+    """Obiekt przeskalowany wokół center. Szkic: płaszczyzna razem z nim. Blacha (skala jednakowa): przepis gięć też,
+    więc dalej się rozkłada i zgina; skala różna w osiach zamienia ją w zwykłą bryłę. Płyta: nowa grubość."""
+    from . import plywood as pw
+    f = [float(v) for v in factors]
+    uniform = max(f) - min(f) < 1e-12
+    m = kernel.scale_matrix(f, center)
+    shape = kernel.scaled(body.shape, f, center)
+    meta = dict(body.meta) if body.meta else None
+    plane = body.plane
+    if body.kind == 'sketch':
+        frame = kernel.frame_of(body.plane)
+        o = m[:3, :3] @ np.asarray(frame.origin, float) + m[:3, 3]
+        x = _unit(m[:3, :3] @ np.asarray(frame.xdir, float))
+        n = _unit(np.linalg.inv(m[:3, :3]).T @ np.asarray(frame.normal, float))
+        if isinstance(body.plane, str) and np.allclose(n, frame.normal, atol=1e-9) and abs(float((o - np.asarray(frame.origin, float)) @ n)) < 1e-9:
+            plane = body.plane
+        else:
+            plane = kernel.Frame(tuple(float(v) for v in o), tuple(float(v) for v in x), tuple(float(v) for v in n))
+    if meta and meta.get('sheet'):
+        state = meta['sheet']
+        if state.get('flat'):
+            raise kernel.CadError(f'{body.name}: najpierw zegnij blachę, potem ją skaluj.')
+        if uniform:
+            meta['sheet'] = dict(she.scaled_state(state, f[0], center), dirty=state.get('dirty', False))
+        else:
+            meta.pop('sheet')                        # różna skala w osiach: blacha przestaje być blachą (zwykła bryła)
+    if meta and meta.get('ply'):
+        ply = dict(meta['ply'])
+        if (ply.get('tab') or {}).get('unfold'):
+            raise kernel.CadError(f'{body.name}: najpierw zegnij blachę ze ściankami, potem ją skaluj.')
+        try:
+            ply['t'] = float(ply['t']) * f[0] if uniform and ply.get('t') else pw.panel_info(shape)['t']
+        except Exception:
+            pass
+        if ply.get('fold'):
+            ply['fold'] = pw.fold_placed(ply['fold'], m[:3, :4])     # rozłożenie / złożenie skaluje się razem z płytą
+        if ply.get('tab') and uniform:
+            ply['tab'] = dict(ply['tab'], length=float(ply['tab'].get('length', 0)) * f[0])
+        meta['ply'] = ply
+    threads = body.threads if all(abs(v - 1) < 1e-12 for v in f) else ()      # gwint normowy nie pasuje do przeskalowanego otworu
+    mesh = kernel.mesh_moved(body.mesh, m) if body.mesh is not None else None
+    if mesh is not None:
+        mesh = replace(mesh, size=float(mesh.size) * max(f))
+    return replace(body, shape=shape, plane=plane, meta=meta, threads=threads, mesh=mesh if mesh is not None else _deferred_or_mesh(shape))
+
+
+def run_scale(bodies, recipe):
+    """Skalowanie: obiekty (np. cała grupa) zmieniają rozmiar wokół wspólnego punktu (recipe['center'])."""
+    ids = set(recipe['ids'])
+    f = [float(v) for v in recipe['f']]
+    return [scaled_body(b, f, recipe['center']) if b.id in ids else b for b in bodies]
+
+
+SHEET_GROUP = 'sheet-'      # grupa blachy ze ściankami na noski (nie łączy pozycji listy Obiekty w jedną)
+
+
 def run_sheet_tabwall(bodies, recipe):
     """Kołnierz na noski (Blacha): płaska ścianka zamiast gięcia na krawędzi blachy (albo innej takiej ścianki), połączona
     noskami z płytą, z której wychodzi, i z sąsiednimi ściankami na noski. Blacha dostaje gniazda / noski jak przy
@@ -1786,12 +1843,15 @@ def run_sheet_tabwall(bodies, recipe):
         if parent is None:
             break
         root = parent
-    group = root.group or sheet.group or recipe.get('group') or ('t' + sheet.id)[:32]
     members = {root.id, sheet.id, *(b.id for b in sheet_tab_walls(bodies, root.id))}
+    group = root.group or sheet.group or recipe.get('group') or sheet.id
+    if not group.startswith(SHEET_GROUP) and all(b.id in members for b in bodies if b.group == group):
+        group = SHEET_GROUP + group           # grupa blachy: zaznaczanie razem, na liście Obiekty osobne pozycje
+    folder = root.folder or root.name     # wspólna grupa (folder) na liście Obiekty
     result = []
     for b in bodies:
-        if b.id in members and b.group != group:
-            b = replace(b, group=group)
+        if b.id in members and (b.group != group or b.folder != folder):
+            b = replace(b, group=group, folder=folder)
         if b.id in out and b.id != wid:
             changed = b.changed(out[b.id])
             if pw.is_panel(changed) and b.id in partners:
@@ -1804,7 +1864,7 @@ def run_sheet_tabwall(bodies, recipe):
     meta['ply']['joined'] = sorted(partners[wid])
     meta['ply']['tab'] = dict(sheet=sheet.id, length=float(recipe['length']), measure=recipe.get('measure', 'outer'))
     name = _next_names(bodies, 'Ścianka blachy', 1)[0]
-    new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=sheet.folder, group=group).prepared()
+    new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=folder, group=group).prepared()
     return [*result, new]
 
 
@@ -1813,8 +1873,9 @@ def _wall_params(recipe):
 
 
 def ply_neighbour_walls(bodies, base, indices, recipe):
-    """Ścianki tej samej podstawy (jeszcze bez połączeń, z tymi samymi ustawieniami) stykające się narożnikiem z nowymi
-    krawędziami: przeliczane razem z nowymi, żeby ścianki dodawane po jednej schodziły się tak samo jak dodane naraz.
+    """Ścianki tej samej podstawy (jeszcze bez połączeń, z tymi samymi ustawieniami): przeliczane razem z nowymi
+    (wszystkie, nie tylko sąsiednie - każda ścianka zachowuje skosy z obu stron), żeby ścianki dodawane po jednej
+    schodziły się tak samo jak dodane naraz.
     Zwraca {indeks krawędzi: id ścianki}."""
     from . import plywood as pw
     params = _wall_params(recipe)
@@ -1838,10 +1899,7 @@ def ply_neighbour_walls(bodies, base, indices, recipe):
             continue
         if j in indices:
             continue
-        e = edges[j]
-        pts = (np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float))
-        if any(np.linalg.norm(p - q) < 1e-5 for p in pts for q in ends):
-            out[j] = b.id
+        out[j] = b.id          # wszystkie ścianki tej podstawy: skosy z obu stron każdej ścianki jak przy dodaniu naraz
     return out
 
 
@@ -2144,7 +2202,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -2266,7 +2324,7 @@ def reads(recipe, current):
         return {recipe['id'], recipe['target']}
     if kind == 'split':
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
-    if kind in ('delete', 'folder', 'ply_fold'):
+    if kind in ('delete', 'folder', 'ply_fold', 'scale'):
         return set(recipe['ids'])
     if kind == 'sheet_tabwall':
         return None

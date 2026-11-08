@@ -371,6 +371,22 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_ply_tool(p, PLY_HEADERS[kind], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in PLY_ICONS:
         _draw_ply_icon(p, kind, pen)
+    elif kind in ('x_scale', 'sc_center', 'sc_bottom', 'sc_origin'):
+        # skalowanie: przerywany duży kwadrat, mały kwadrat, pomarańczowy punkt, który zostaje w miejscu
+        dash = pen(BLUE, 2.2); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.4, 1.8])
+        if kind == 'x_scale':
+            p.setBrush(Qt.NoBrush); p.setPen(dash); p.drawRect(QRectF(7, 7, 34, 34))
+            fill(_rounded(7, 25, 16, 16, 1), BLUE_SOFT, BLUE)
+            p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(20, 28), QPointF(37, 11))
+            p.drawPolyline(QPolygonF([QPointF(28, 11), QPointF(37, 11), QPointF(37, 20)]))
+        else:
+            big, small = {'sc_center': ((6, 6, 36, 36), (15, 15, 18, 18), (24, 24)),
+                          'sc_bottom': ((6, 6, 36, 36), (15, 24, 18, 18), (24, 42)),
+                          'sc_origin': ((10, 4, 34, 34), (10, 20, 18, 18), (10, 38))}[kind][:2]
+            dot = {'sc_center': (24, 24), 'sc_bottom': (24, 42), 'sc_origin': (10, 38)}[kind]
+            p.setBrush(Qt.NoBrush); p.setPen(dash); p.drawRect(QRectF(*big))
+            fill(_rounded(*small, 1), BLUE_SOFT, BLUE)
+            p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(*dot), 3.6, 3.6)
     elif kind == 'x_shell':
         cup = QPainterPath(); cup.moveTo(6, 8); cup.lineTo(6, 42); cup.lineTo(42, 42); cup.lineTo(42, 8); cup.lineTo(33, 8); cup.lineTo(33, 33); cup.lineTo(15, 33); cup.lineTo(15, 8); cup.closeSubpath()
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.6)); p.drawPath(cup)
@@ -1039,6 +1055,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 36)); p.drawLine(QPointF(18, 30), QPointF(30, 30))
             else:
                 st(acc, 2.6); p.drawLine(QPointF(14, 30), QPointF(34, 30))
+        elif name == 'scale':
+            # mały i duży kwadrat ze wspólnym narożnikiem, pomarańczowa strzałka po przekątnej - zmiana rozmiaru
+            dash = pen(ink, 2.2); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.4, 1.8])
+            p.setBrush(Qt.NoBrush); p.setPen(dash); p.drawRect(QRectF(7, 7, 34, 34))
+            p.setBrush(soft); p.setPen(pen(ink, 2.6)); p.drawRect(QRectF(7, 25, 16, 16))
+            st(acc, 3.0); p.drawLine(QPointF(20, 28), QPointF(37, 11))
+            p.drawPolyline(poly([(28, 11), (37, 11), (37, 20)]))
         elif name == 'layers':
             for k, y in enumerate((30, 20, 10)):
                 q = poly([(24, y + 8), (42, y), (24, y - 8 + 0), (6, y)])

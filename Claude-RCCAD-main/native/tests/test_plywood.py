@@ -847,3 +847,64 @@ class SheetTabWallTests(PlywoodWindowTests):
         spin.setValue(.1)
         self.assertAlmostEqual(w.ply_thickness(), .1)
         w.set_mode(None)
+
+    def test_sheet_group_folder_and_uniform_scale_keeps_unfold(self):
+        """0.4.68: blacha ze ściankami w jednym folderze na liście Obiekty (ścianki osobno); skala jednakowa
+        zachowuje blachę i ścianki - dalej się rozkładają i składają."""
+        w = self.w
+        sheet = self._sheet(w)
+        sid = sheet.id
+
+        def click(x, y):
+            with patch.object(w.view, 'nearest_edge', return_value=(sid, self._edge(w.document.get(sid), x, y))):
+                w.view_clicked(5, 5, False, False)
+            self.wait()
+        w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_bend.click()
+        click(100, 30); click(0, 30)
+        w.set_mode(None)
+        self.assertEqual({b.folder for b in w.document.bodies}, {'Blacha'})
+        self.app.processEvents()
+        self.assertEqual(len(w.objects._members), 3)                              # trzy pozycje w grupie, nie jedna
+        w.objects_folder_select([b.id for b in w.document.bodies])
+        w.set_mode('scale')
+        self.assertEqual(sorted(w.sc_ids), sorted(b.id for b in w.document.bodies))
+        w.sc_value.setValue(200); w.apply_scale(); self.wait()
+        bb = k.compound([b.shape for b in w.document.bodies]).BoundingBox()
+        self.assertAlmostEqual(bb.xlen, 200, 3); self.assertAlmostEqual(bb.zlen, 60, 3)
+        self.assertAlmostEqual(w.document.get(sid).meta['sheet']['recipe']['t'], 4)
+        self.assertTrue(all(b.meta['ply']['t'] == 4 for b in w.document.bodies if b.id != sid))
+        before = {b.id: np.array(b.shape.Center().toTuple()) for b in w.document.bodies}
+        w.selected = [sid]; w.sheet_command('unfold_sheet'); self.wait()
+        self.assertTrue(w.document.get(sid).meta['sheet'].get('flat'))
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        w.selected = [sid]; w.sheet_command('fold_sheet'); self.wait()
+        for b in w.document.bodies:
+            self.assertTrue(np.allclose(b.shape.Center().toTuple(), before[b.id], atol=1e-5), b.name)
+
+
+class PlywoodSequentialPolygonTests(unittest.TestCase):
+    def test_walls_one_by_one_meet_with_fingers_any_polygon(self):
+        """0.4.68 (model użytkownika - dziesięciokąt): ścianki dodawane po jednej (Wstaw) schodzą się na skos i łączą
+        noskami w każdym narożniku - dowolna liczba kątów, na podstawie i przy boku."""
+        import uuid, random
+        for n in (5, 7, 10, 12):
+            for side in ('on', 'side'):
+                t = 1.0
+                base = cq.Workplane().polygon(n, 52).extrude(t).val()
+                b = Body('Płyta 1', base, meta=pw.ply_meta(t, 'laser')).prepared()
+                tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - t) < 1e-6]
+                random.Random(n).shuffle(tops)
+                bodies = [b]
+                for i in tops:
+                    bodies = hist.run_recipe(bodies, dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, [i]), t=t, h=10.0, side=side,
+                                                          flip=False, method='laser', out=[uuid.uuid4().hex]))
+                panels = pw.panels_of(bodies)
+                contacts, skipped = pw.find_contacts(panels)
+                self.assertEqual(sum(c['kind'] == 'M' for c in contacts), n, (n, side))
+                self.assertFalse(skipped, (n, side))
+                for c in contacts:
+                    c['joint'] = pw.joint_for('laser', c['kind'])
+                failures = []
+                out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='laser', fit=.1), failures=failures)
+                self.assertEqual(failures, [], (n, side))
+                self.assertEqual(_overlaps([out.get(p['id'], p['shape']) for p in panels]), 0, (n, side))

@@ -295,7 +295,7 @@ def units(items):
     items: (id, kategoria, numer, nazwa, grupa, folder) -> (id, kategoria, numer, nazwa, liczba, folder, id członków)."""
     out, seen = [], {}
     for oid, cat, number, name, group, folder in items:
-        key = (cat, group) if group else None
+        key = (cat, group) if group and not str(group).startswith('sheet-') else None     # blacha ze ściankami: osobne pozycje
         if key is not None and key in seen:
             unit = seen[key]
             unit[4] += 1
