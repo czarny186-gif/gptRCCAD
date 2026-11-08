@@ -455,6 +455,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setPen(pen(INK, 1.6)); dash = pen(INK, 1.4); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(24, 18), QPointF(24, 30)); p.drawLine(QPointF(18, 24), QPointF(30, 24))
         f = p.font(); f.setPixelSize(11); f.setBold(True); p.setFont(f); p.setPen(QColor(color))
         p.drawText(QRectF(30, 30, 18, 18), Qt.AlignCenter, kind[-1].upper())
+    elif kind == 'dr_plydrawing':
+        _draw_ply_tool(p, 'plydrawing', BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('dr_drawing', 'dr_autodrawing', 'dr_sheetdrawing'):
         # arkusz rysunku z rzutami
         p.setBrush(QColor('#ffffff')); p.setPen(pen(BLUE, 1.6)); p.drawRect(QRectF(5, 9, 38, 30))
@@ -1153,10 +1155,10 @@ def _draw_thread_icon(p, kind, pen, fill):
 # ---------------------------------------------------------------------------------------------------------------
 # sklejka: narzędzia (t_ply...), nagłówki paneli (x_ply...) i obrazki pól
 # ---------------------------------------------------------------------------------------------------------------
-PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut')
-PLY_HEADERS = {'x_ply': 'ply', 'x_plywall': 'ply_wall', 'x_plybetween': 'ply_between', 'x_plyjoints': 'ply_joints', 'x_plycut': 'ply_cut'}
+PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'plydrawing')
+PLY_HEADERS = {'x_ply': 'ply', 'x_plywall': 'ply_wall', 'x_plybetween': 'ply_between', 'x_plyjoints': 'ply_joints', 'x_plycut': 'ply_cut', 'x_plydrawing': 'plydrawing'}
 PLY_ICONS = ('pm_laser', 'pm_cnc', 'pm_print', 'pl_up', 'pl_down', 'pl_thick', 'pw_on', 'pw_side', 'pw_height', 'pb_h', 'pb_v', 'pb_count',
-             'pb_pos', 'pj_width', 'pj_fit', 'pj_tool', 'pj_depth', 'pc_sheet', 'pc_kerf')
+             'pb_pos', 'pj_width', 'pj_fit', 'pj_tool', 'pj_depth', 'pc_sheet', 'pc_kerf', 'pc_all', 'pc_sel')
 
 
 def _slab(p, pts, depth, ink, soft, pen, layers=True, acc=None):
@@ -1238,6 +1240,14 @@ def _draw_ply_tool(p, name, ink, acc, soft, pen):
         dash = pen(acc, 2.6); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.6]); p.setPen(dash)
         p.drawRect(QRectF(28, 15, 11, 18))
         p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(39, 15), 3.0, 3.0)
+    elif name == 'plydrawing':
+        p.setBrush(Qt.NoBrush); p.setPen(pen(ink, 2.2)); p.drawRoundedRect(QRectF(4, 6, 40, 36), 2, 2)
+        p.setPen(pen(ink, 1.4)); p.drawLine(QPointF(28, 36), QPointF(44, 36)); p.drawLine(QPointF(28, 36), QPointF(28, 42))
+        p.setBrush(soft); p.setPen(pen(ink, 1.8))
+        p.drawRect(QRectF(8, 12, 12, 9)); p.drawRect(QRectF(23, 12, 16, 9)); p.drawRect(QRectF(8, 25, 16, 8))
+        _fingers(p, 8, 20, 21, 2.2, 3, ink, pen, False, 1.4)
+        _arrow(p, (14, 9.2), (8.6, 9.2), acc, pen, 1.6, 2.6); _arrow(p, (14, 9.2), (19.4, 9.2), acc, pen, 1.6, 2.6)
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawRect(QRectF(30, 38, 12, 2))
 
 
 def _draw_ply_icon(p, kind, pen):
@@ -1328,6 +1338,11 @@ def _draw_ply_icon(p, kind, pen):
             p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawPath(path)
             _arrow(p, (24, 11), (24, 23), acc, pen, 2.2, 3.5)
             p.setPen(pen(acc, 1.6)); p.drawLine(QPointF(19, 10), QPointF(29, 10))
+    elif kind in ('pc_all', 'pc_sel'):
+        for k, (x, y) in enumerate(((6, 8), (26, 8), (6, 27), (26, 27))):
+            chosen = kind == 'pc_all' or k == 1
+            p.setBrush(QColor(acc) if chosen else soft); p.setPen(pen(acc if chosen else blue, 2.0))
+            p.drawRoundedRect(QRectF(x, y, 16, 13), 2, 2)
     elif kind in ('pc_sheet', 'pc_kerf'):
         if kind == 'pc_sheet':
             p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawRect(QRectF(4, 14, 40, 26))

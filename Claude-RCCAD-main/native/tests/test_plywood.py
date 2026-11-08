@@ -1,4 +1,5 @@
 """Zakładka Sklejka: płyty, ścianki, półki, rozpoznawanie styków, połączenia zależne od metody produkcji, pliki do cięcia."""
+import math
 import os
 import tempfile
 import time
@@ -201,6 +202,84 @@ class PlywoodGeometryTests(unittest.TestCase):
         self.assertTrue(pw.is_panel(moved))                                     # przesunięta płyta zostaje płytą
 
 
+class PlywoodPolygonTests(unittest.TestCase):
+    """0.4.60: ścianki na podstawie-wielokącie schodzą się na skos, wczepy w takich narożnikach, grupa pudełka."""
+
+    def _walls(self, base, side):
+        b = Body('Płyta 1', base, meta=pw.ply_meta(6, 'laser')).prepared()
+        tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - 6) < 1e-6]
+        return hist.run_recipe([b], dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, tops), t=6.0, h=60.0, side=side,
+                                         flip=False, method='laser', out=[f'w{i}' for i in tops]))
+
+    def test_polygon_walls_meet_on_mitre_without_overlap_or_gap(self):
+        hexagon = cq.Workplane().polygon(6, 200).extrude(6).val()
+        for side in ('on', 'side'):
+            bodies = self._walls(hexagon, side)
+            walls = [b for b in bodies if b.name.startswith('Ścianka')]
+            self.assertEqual(len(walls), 6)
+            self.assertEqual(_overlaps([b.shape for b in bodies]), 0, side)
+            vols = sorted(round(w.shape.Volume(), 1) for w in walls)
+            self.assertAlmostEqual(vols[0], vols[-1], 1)                           # wszystkie jednakowe (symetryczne skosy)
+            ring = kernel_union([w.shape for w in walls])
+            self.assertEqual(len(ring.Solids()), 1, side)                          # ścianki stykają się w narożnikach - bez szczelin
+            self.assertEqual({b.folder for b in bodies}, {'Pudełko 1'})            # podstawa i ścianki w jednej grupie
+            outer = 100 if side == 'on' else 100 + 6 / math.cos(math.radians(30))
+            bb = ring.BoundingBox()
+            self.assertAlmostEqual(bb.xlen, 2 * outer, 3)                          # przy boku: na zewnątrz podstawy, narożniki pełne
+
+    def test_rectangle_side_mode_fills_corners(self):
+        bodies = self._walls(cq.Solid.makeBox(200, 150, 6), 'side')
+        walls = [b.shape for b in bodies if b.name.startswith('Ścianka')]
+        ring = kernel_union(walls)
+        self.assertAlmostEqual(ring.Volume(), (212 * 162 - 200 * 150) * 66, 0)  # pełny obwód razem z narożnikami
+        self.assertEqual(_overlaps([b.shape for b in bodies]), 0)
+
+    def test_mitre_contacts_get_fingers(self):
+        bodies = self._walls(cq.Workplane().polygon(5, 200).extrude(6).val(), 'on')
+        panels = pw.panels_of(bodies)
+        contacts, skipped = pw.find_contacts(panels)
+        self.assertEqual(sorted(c['kind'] for c in contacts), ['L'] * 5 + ['M'] * 5)
+        self.assertFalse(skipped)
+        mitre = next(c for c in contacts if c['kind'] == 'M')
+        self.assertAlmostEqual(180 - mitre['angle'], 108, 1)                        # narożnik pięciokąta
+        self.assertEqual(pw.joint_for('laser', 'M'), 'finger')
+        for c in contacts:
+            c['joint'] = 'finger'
+        before = {p['id']: p['shape'].Volume() for p in panels}
+        out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method='print', fit=.2))
+        shapes = [out[p['id']] for p in panels]
+        self.assertTrue(all(s.isValid() and len(s.Solids()) == 1 for s in shapes))
+        self.assertEqual(_overlaps(shapes), 0)
+        wall = next(p['id'] for p in panels if p['id'] != bodies[0].id)
+        self.assertNotAlmostEqual(out[wall].Volume(), before[wall], 0)
+        flat, t = pw.flat_part(out[wall], 6)
+        self.assertAlmostEqual(t, 6)
+
+    def test_drawing_parts_laid_out_without_overlap(self):
+        from rccad import drawing as dr
+        bodies = self._walls(cq.Solid.makeBox(200, 150, 6), 'on')
+        items = [(b.name, b.shape, 6.0) for b in bodies]
+        flat, parts = pw.drawing_parts(items)
+        self.assertEqual(len(parts), 5)
+        for i, a in enumerate(parts):
+            for b in parts[i + 1:]:
+                self.assertTrue(a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])   # części obok siebie
+        source = dr.DrawingSource(flat, 'Pudełko', parts=parts, iso_shape=kernel_union([b.shape for b in bodies]))
+        d = dr.build_drawing(source, views=('top', 'iso'))
+        texts = [p.text for p in d.prims if isinstance(p, dr.Label)]
+        for name in ('Płyta 1', 'Ścianka 1', 'Ścianka 4'):
+            self.assertIn(name, texts)
+        self.assertIn('200', texts)
+        self.assertIn('60', texts)                                                  # wymiary każdej płyty
+
+
+def kernel_union(shapes):
+    out = shapes[0]
+    for s in shapes[1:]:
+        out = out.fuse(s)
+    return out.clean()
+
+
 class PlywoodWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -305,13 +384,32 @@ class PlywoodWindowTests(unittest.TestCase):
         self.assertTrue(all(b.meta['ply']['method'] == 'laser' for b in panels))
         self.assertEqual(_overlaps([b.shape for b in panels]), 0)
         # do cięcia: lista i zapis DXF w tle
+        self.assertEqual({b.folder for b in panels}, {'Pudełko 1'})            # całe pudełko w jednej grupie
         w.toggle_mode('ply_cut')
         self.assertIn('Płyta 1', w.pc_list.text())
         self.assertIn('6 płyt', w.pc_status.text())
+        w.pc_scope.setCurrentIndex(1)                                          # tylko zaznaczone
+        with patch.object(w.view, 'pick_body', return_value=shelf.id):
+            w.view_clicked(5, 5, False, False)
+        self.assertEqual([b.id for b in w._pc_bodies()], [shelf.id])
+        self.assertIn('1 płyt', w.pc_status.text())
+        w.pc_scope.setCurrentIndex(0)
+        self.assertEqual(len(w._pc_bodies()), 6)
         path = os.path.join(tempfile.mkdtemp(), 'plyty.dxf')
         w.ply_export(path)
         self.wait()
         self.assertTrue(os.path.exists(path))
+        # rysunek płyt: wszystkie płyty grupy rozłożone obok siebie
+        from rccad.studio import TABS as T
+        self.assertIn('plydrawing', T['Rysunek'])
+        w.toggle_mode('plydrawing')
+        with patch.object(w.view, 'pick_face', return_value=(shelf.id, np.array([0, 0, 1.]), np.array([100, 75, 50.]))):
+            w.view_clicked(5, 5, False, False)
+        self.wait()
+        win = w._drawing_windows[-1]
+        self.assertEqual(len(win.source.parts), 6)
+        self.assertIn('Pudełko 1', win.windowTitle())
+        win.close()
         w.undo()
         self.wait()
         self.assertFalse(any(b.meta['ply'].get('joined') for b in w.document.bodies if pw.is_panel(b)))

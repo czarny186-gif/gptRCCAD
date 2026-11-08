@@ -1514,25 +1514,41 @@ def _ply_others(bodies, skip=()):
 
 
 def ply_walls(bodies, base, indices, recipe):
-    """Ścianki na krawędziach płyty-podstawy. Najdłuższe krawędzie najpierw: dłuższe ścianki biegną przez całą długość,
-    krótsze mieszczą się między nimi; kolejne ścianki i inne płyty nie nachodzą na siebie."""
+    """Ścianki na krawędziach płyty-podstawy. Najdłuższe krawędzie najpierw: w narożnikach prostych dłuższe ścianki biegną
+    przez całą długość, krótsze mieszczą się między nimi; w narożnikach pod innym kątem ścianki schodzą się na skos.
+    Kolejne ścianki i inne płyty nie nachodzą na siebie."""
     from . import plywood as pw
     edges = base.shape.Edges()
     base_t = (base.meta or {}).get('ply', {}).get('t') if base.meta else None
     others = _ply_others(bodies, {base.id})
+    order = sorted(indices, key=lambda i: -edges[i].Length())
+    made = pw.edge_walls(base.shape, [edges[i] for i in order], float(recipe['t']), float(recipe['h']), recipe.get('side', 'on'),
+                         bool(recipe.get('flip')), base_t)
     walls = []
-    for i in sorted(indices, key=lambda i: -edges[i].Length()):
-        wall, _ = pw.edge_wall(base.shape, edges[i], float(recipe['t']), float(recipe['h']), recipe.get('side', 'on'),
-                               bool(recipe.get('flip')), base_t)
+    for wall, _ in made:
         walls.append(_ply_trim(wall, [*others, *walls]))
     return walls
 
 
+def ply_folder(bodies, base):
+    """Grupa pudełka na liście obiektów: grupa podstawy albo nowa „Pudełko N”."""
+    if base.folder:
+        return base.folder
+    used = {b.folder for b in bodies if b.folder}
+    k = 1
+    while f'Pudełko {k}' in used:
+        k += 1
+    return f'Pudełko {k}'
+
+
 def run_ply_wall(bodies, recipe):
+    """Ścianki; podstawa i ścianki trafiają do jednej grupy (całe pudełko razem na liście obiektów)."""
     base = _body(bodies, recipe['base'])
     indices = edge_indices(base.shape, recipe['edges'])
     walls = ply_walls(bodies, base, indices, recipe)
-    return [*bodies, *_ply_bodies(bodies, walls, 'Ścianka', recipe)]
+    folder = recipe.get('folder') or ply_folder(bodies, base)
+    kept = [replace(b, folder=folder) if b.id == base.id else b for b in bodies]
+    return [*kept, *_ply_bodies(bodies, walls, 'Ścianka', recipe, folder)]
 
 
 def ply_between_shapes(bodies, recipe):
@@ -1549,7 +1565,9 @@ def run_ply_between(bodies, recipe):
     shapes, _ = ply_between_shapes(bodies, recipe)
     others = _ply_others(bodies)
     shapes = [_ply_trim(shp, others) for shp in shapes]
-    return [*bodies, *_ply_bodies(bodies, shapes, 'Półka' if not recipe.get('turn') else 'Przegroda', recipe)]
+    a, b = _body(bodies, recipe['a']['id']), _body(bodies, recipe['b']['id'])
+    folder = a.folder or b.folder                     # półka w grupie szafki / pudełka
+    return [*bodies, *_ply_bodies(bodies, shapes, 'Półka' if not recipe.get('turn') else 'Przegroda', recipe, folder)]
 
 
 def ply_contacts(bodies, recipe):

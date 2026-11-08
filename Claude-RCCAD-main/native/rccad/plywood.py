@@ -38,8 +38,9 @@ JOINTS = {
     'none': ('Bez połączenia', 'Samo stykanie - pod wkręty, kołki albo klej'),
 }
 
-KIND_TITLES = {'L': 'Narożnik', 'T': 'Płyta w płycie', 'X': 'Krzyż'}
-KIND_JOINTS = {'L': ['finger', 'tab', 'blind', 'groove', 'none'], 'T': ['tab', 'blind', 'groove', 'none'], 'X': ['halving', 'none']}
+KIND_TITLES = {'L': 'Narożnik', 'T': 'Płyta w płycie', 'X': 'Krzyż', 'M': 'Narożnik pod kątem'}
+KIND_JOINTS = {'L': ['finger', 'tab', 'blind', 'groove', 'none'], 'T': ['tab', 'blind', 'groove', 'none'], 'X': ['halving', 'none'],
+               'M': ['finger', 'none']}
 ALLOWED = {'laser': {'finger', 'tab', 'halving', 'none'},
            'cnc': {'finger', 'tab', 'blind', 'groove', 'halving', 'none'},
            'print': {'finger', 'tab', 'blind', 'groove', 'halving', 'none'}}
@@ -167,7 +168,7 @@ def panels_of(bodies):
 # ---------------------------------------------------------------------------------------------------------------
 # płyta na krawędzi (ścianka) i płyta pomiędzy (półka, przegroda)
 # ---------------------------------------------------------------------------------------------------------------
-def edge_wall(base_shape, edge, t, height, side='on', flip=False, base_t=None):
+def edge_wall(base_shape, edge, t, height, side='on', flip=False, base_t=None, extend=(0.0, 0.0)):
     """Ścianka na prostej krawędzi płaskiej strony płyty-podstawy.
     side: 'on' - stoi na podstawie (licuje z jej krawędzią), 'side' - przy boku podstawy (zakrywa jej brzeg).
     Wysokość liczona od strony podstawy, na której leży krawędź. Zwraca (bryła, kierunek do góry)."""
@@ -205,11 +206,66 @@ def edge_wall(base_shape, edge, t, height, side='on', flip=False, base_t=None):
     # układ: u = e, v = out, w = e × out = up (prawoskrętny)
     w = np.cross(e, out)
     sign = 1.0 if float(w @ up) > 0 else -1.0
-    ru = (float(a @ e), float(a @ e) + length)
+    ru = (float(a @ e) - float(extend[0]), float(a @ e) + length + float(extend[1]))
     rv = (float(a @ out) + rw[0], float(a @ out) + rw[1])
     base_w = float(a @ w)
     rz = sorted((base_w + sign * rup[0], base_w + sign * rup[1]))
     return frame_box(e, out, ru, rv, rz), up
+
+
+def _halfspace(point, normal, size):
+    """Duży prostopadłościan po stronie +normal płaszczyzny przez point (do przycinania)."""
+    n = _unit(normal)
+    helper = np.array((0, 0, 1.0)) if abs(n[2]) < .9 else np.array((1.0, 0, 0))
+    v = _unit(np.cross(n, helper))
+    w = np.cross(n, v)
+    p = np.asarray(point, float)
+    return frame_box(n, v, (float(p @ n), float(p @ n) + size), (float(p @ v) - size, float(p @ v) + size),
+                     (float(p @ w) - size, float(p @ w) + size))
+
+
+def edge_walls(base_shape, edges, t, height, side='on', flip=False, base_t=None):
+    """Ścianki na kilku krawędziach naraz. W narożnikach pod kątem innym niż prosty (podstawa-wielokąt) ścianki są
+    przedłużone i przycięte wzdłuż dwusiecznej - schodzą się dokładnie, bez nachodzenia i bez szczeliny (także przy boku).
+    W narożnikach prostych dłuższa ścianka biegnie przez cały narożnik, krótsza do niej dochodzi (przy boku dłuższa jest
+    wydłużona o grubość, żeby narożnik był pełny). Zwraca listę (bryła, kierunek do góry) w kolejności krawędzi."""
+    info = panel_info(base_shape, base_t)
+    size = 10.0 * (max(info['t'], float(t), float(height)) + sum(e.Length() for e in edges))
+    data = []
+    for e in edges:
+        a = np.array(e.startPoint().toTuple(), float)
+        b = np.array(e.endPoint().toTuple(), float)
+        data.append(dict(edge=e, a=a, b=b, level=round(float(a @ info['n']), 4)))
+    order = sorted(range(len(edges)), key=lambda i: -edges[i].Length())
+    rank = {i: k for k, i in enumerate(order)}
+    out = []
+    for i, item in enumerate(data):
+        ext = {'a': 0.0, 'b': 0.0}
+        mitres = []
+        for j, other in enumerate(data):
+            if j == i or other['level'] != item['level']:
+                continue
+            for end in ('a', 'b'):
+                V = item[end]
+                far = item['b' if end == 'a' else 'a']
+                shared = next((o for o in ('a', 'b') if np.linalg.norm(other[o] - V) < 1e-5), None)
+                if shared is None:
+                    continue
+                ui = _unit(far - V)
+                uj = _unit(other['b' if shared == 'a' else 'a'] - V)
+                if abs(float(ui @ uj)) < 1e-4:            # narożnik prosty
+                    if side != 'on' and rank[i] < rank[j]:
+                        ext[end] = max(ext[end], float(t))  # przy boku: dłuższa ścianka zakrywa narożnik
+                    continue
+                if abs(abs(float(ui @ uj)) - 1) < 1e-6:
+                    continue                               # krawędzie w jednej linii
+                ext[end] = size / 10.0
+                mitres.append((V, ui - uj))
+        wall, up = edge_wall(base_shape, item['edge'], t, height, side, flip, base_t, extend=(ext['a'], ext['b']))
+        for V, normal in mitres:
+            wall = kernel.boolean('intersect', wall, [_halfspace(V, normal, size)])
+        out.append((wall, up))
+    return out
 
 
 def face_extents(face, u, v):
@@ -318,8 +374,44 @@ def _abut(A, B, pa, pb):
     if s1 - s0 < 1e-2 or r1 - r0 < 1e-2:
         return None
     kind = 'L' if (r0 <= bm[0] + TOL or r1 >= bm[1] - TOL) else 'T'
-    return dict(a=A['id'], b=B['id'], kind=kind, d=d.tolist(), m=m.tolist(), nb=nb.tolist(), plane=plane, into=into,
-                s=[s0, s1], r=[r0, r1], ta=A['t'], tb=B['t'])
+    c = dict(a=A['id'], b=B['id'], kind=kind, d=d.tolist(), m=m.tolist(), nb=nb.tolist(), plane=plane, into=into,
+             s=[s0, s1], r=[r0, r1], ta=A['t'], tb=B['t'])
+    if sum(f.Area() for f in ends) < (s1 - s0) * (r1 - r0) - 1e-3:
+        c['ends'] = ends                     # koniec płyty nie jest prostokątem (ścianka przycięta na skos)
+    return c
+
+
+def _mitre(A, B):
+    """Narożnik na skos: boczne ściany obu płyt (nie ich płaskie strony) przylegają do siebie - ścianki na podstawie-wielokącie."""
+    na, nb = A['n'], B['n']
+    sides = lambda P: [f for f in P['shape'].Faces() if f.geomType() == 'PLANE'
+                       and abs(abs(float(np.array(f.normalAt().toTuple()) @ na)) - 1) > 1e-6
+                       and abs(abs(float(np.array(f.normalAt().toTuple()) @ nb)) - 1) > 1e-6]
+    best = None
+    for fa in sides(A):
+        n1 = np.array(fa.normalAt().toTuple(), float)
+        o1 = float(np.array(fa.Center().toTuple()) @ n1)
+        for fb in sides(B):
+            n2 = np.array(fb.normalAt().toTuple(), float)
+            if float(n1 @ n2) > -1 + 1e-6 or abs(float(np.array(fb.Center().toTuple()) @ n1) - o1) > TOL:
+                continue
+            try:
+                common = fa.intersect(fb)
+                area = sum(f.Area() for f in common.Faces())
+            except Exception:
+                continue
+            if area > 1e-2 and (best is None or area > best[0]):
+                best = (area, common)
+    if best is None:
+        return None
+    d = _unit(np.cross(na, nb))
+    cp = _points(best[1])
+    s0, s1 = float((cp @ d).min()), float((cp @ d).max())
+    if s1 - s0 < 1e-2:
+        return None
+    return dict(a=A['id'], b=B['id'], kind='M', d=d.tolist(), na=na.tolist(), nb=nb.tolist(), s=[s0, s1],
+                sa=[A['lo'], A['hi']], sb=[B['lo'], B['hi']], ta=A['t'], tb=B['t'],
+                angle=round(math.degrees(math.acos(min(1.0, abs(float(na @ nb))))), 1))
 
 
 def _cross(A, B, pa, pb):
@@ -341,7 +433,7 @@ def _cross(A, B, pa, pb):
 
 
 def find_contacts(panels):
-    """Styki między płytami: lista opisów (L, T, X). Płyty równoległe i ustawione pod innym kątem niż 90° są pomijane."""
+    """Styki między płytami: lista opisów (L, T, X, M - narożnik na skos). Płyty równoległe są pomijane."""
     out, skipped = [], []
     pts = {p['id']: _points(p['shape']) for p in panels}
     for i, A in enumerate(panels):
@@ -353,7 +445,11 @@ def find_contacts(panels):
             if abs(float(A['n'] @ B['n'])) > 1 - 1e-6:
                 continue                     # równoległe: leżą na sobie albo obok siebie
             if abs(float(A['n'] @ B['n'])) > 1e-4:
-                skipped.append((A['id'], B['id'], 'Płyty pod kątem innym niż 90° - połączenie pominięte.'))
+                found = _mitre(A, B)        # pod innym kątem niż prosty: tylko narożnik na skos
+                if found is not None:
+                    out.append(found)
+                else:
+                    skipped.append((A['id'], B['id'], 'Płyty pod kątem innym niż 90° stykające się inaczej niż narożnikiem - połączenie pominięte.'))
                 continue
             found = _cross(A, B, pts[A['id']], pts[B['id']])
             if found is not None:
@@ -362,7 +458,7 @@ def find_contacts(panels):
                 else:
                     out.append(found)
                 continue
-            found = _abut(A, B, pts[A['id']], pts[B['id']]) or _abut(B, A, pts[B['id']], pts[A['id']])
+            found = _abut(A, B, pts[A['id']], pts[B['id']]) or _abut(B, A, pts[B['id']], pts[A['id']]) or _mitre(A, B)
             if found is not None:
                 out.append(found)
     for c in out:
@@ -444,6 +540,40 @@ def _halving_parts(c, fit):
     return cut_a, cut_b, (ra, rb)
 
 
+def _rhombus(c, s0, s1):
+    """Część wspólna obu płyt przedłużonych w narożniku na skos (graniastosłup wzdłuż linii narożnika, od s0 do s1)."""
+    d, na, nb = np.array(c['d']), np.array(c['na']), np.array(c['nb'])
+    M = np.array([na, nb, d])
+    pts = []
+    for a, b in ((c['sa'][0], c['sb'][0]), (c['sa'][1], c['sb'][0]), (c['sa'][1], c['sb'][1]), (c['sa'][0], c['sb'][1])):
+        pts.append(np.linalg.solve(M, np.array([a, b, s0], float)))
+    wire = cq.Wire.makePolygon([cq.Vector(*p) for p in pts], close=True)
+    return cq.Solid.extrudeLinear(cq.Face.makeFromWires(wire), cq.Vector(*(d * (s1 - s0))))
+
+
+def _mitre_fingers(c, A, B, width, fit):
+    """Wczepy w narożniku na skos: wspólny obszar narożnika dzielony wzdłuż linii narożnika na odcinki należące
+    na przemian do jednej i drugiej płyty (z luzem między nimi)."""
+    s0, s1 = c['s']
+    whole = _rhombus(c, s0 - .01, s1 + .01)
+    region = kernel.boolean('union', A.intersect(whole), [B.intersect(whole)])
+    n = finger_count(s1 - s0, width)
+    step = (s1 - s0) / n
+    A2, B2 = kernel.boolean('subtract', A, [whole]), kernel.boolean('subtract', B, [whole])
+    own = {0: [], 1: []}
+    for k in range(n):
+        lo = s0 + k * step + (fit / 2 if k > 0 else -.02)
+        hi = s0 + (k + 1) * step - (fit / 2 if k < n - 1 else -.02)
+        piece = region.intersect(_rhombus(c, lo, hi))
+        if piece.Solids():
+            own[k % 2].append(piece)
+    if own[0]:
+        A2 = kernel.boolean('union', A2, own[0])
+    if own[1]:
+        B2 = kernel.boolean('union', B2, own[1])
+    return A2, B2
+
+
 def _region_box(c, extra, info=None):
     """Prostopadłościan wokół miejsca styku (do wyboru krawędzi pod „psie kości”)."""
     if c['kind'] == 'X':
@@ -453,6 +583,36 @@ def _region_box(c, extra, info=None):
         return frame_box(d, nb, (s0 - extra - 1, s1 + extra + 1), (ib[0] - extra, ib[1] + extra), (-ia[1] - extra, -ia[0] + extra))
     s0, s1, r0, r1, depth = info
     return _seg_box(c, s0 - extra, s1 + extra, r0 - extra, r1 + extra, depth + extra, extra)
+
+
+def _footprint(c, depth, grow=0.0):
+    """Koniec płyty A (ściany na płaszczyźnie styku) wyciągnięty w głąb płyty B."""
+    nb = np.array(c['nb'], float) * float(c['into'])
+    solids = []
+    for f in c['ends']:
+        face = f
+        if grow > 0:
+            try:
+                face = cq.Face.makeFromWires(f.outerWire().offset2D(grow, 'intersection')[0])
+            except Exception:
+                face = f
+        solids.append(cq.Solid.extrudeLinear(face.translate(cq.Vector(*(-nb * .05))), cq.Vector(*(nb * (depth + .05)))))
+    return solids[0] if len(solids) == 1 else kernel.boolean('union', solids[0], solids[1:])
+
+
+def _clip(pieces, others):
+    out = []
+    for seg in pieces:
+        for o in others:
+            if _boxes_near(seg, o, 0.0):
+                try:
+                    if seg.intersect(o).Volume() > 1e-6:
+                        seg = kernel.boolean('subtract', seg, [o])
+                except Exception:
+                    pass
+        if seg.Solids():
+            out.append(seg)
+    return out
 
 
 def _inside(shape, p):
@@ -522,6 +682,11 @@ def apply_joints(panels, contacts, params):
         if not allowed(meth, joint):
             raise kernel.CadError(f"{JOINTS[joint][0]}: {WHY_NOT.get(meth, 'niedostępne dla tej metody')}.")
         a, b = c['a'], c['b']
+        if c['kind'] == 'M':
+            width = float(params.get('width') or 0) or default_width(min(c['ta'], c['tb']))
+            shapes[a], shapes[b] = _mitre_fingers(c, shapes[a], shapes[b], width, fit)
+            changed |= {a, b}
+            continue
         if c['kind'] == 'X':
             cut_a, cut_b, _ = _halving_parts(c, fit)
             shapes[a] = kernel.boolean('subtract', shapes[a], [cut_a])
@@ -532,6 +697,12 @@ def apply_joints(panels, contacts, params):
         else:
             width = float(params.get('width') or 0) or default_width(c['ta'])
             add, cut, info = _joint_parts(c, joint, width, fit, ratio)
+            if c.get('ends') and add:
+                foot = _footprint(c, info[4] + .05)     # nosek nie wychodzi poza koniec płyty przyciętej na skos
+                add = [x for x in (kernel.boolean('intersect', seg, [foot]) for seg in add) if x.Solids()]
+                cut = [x for x in (kernel.boolean('intersect', seg, [_footprint(c, info[4] + .1, fit / 2)]) for seg in cut) if x.Solids()]
+            others = [shp for pid, shp in shapes.items() if pid not in (a, b)]
+            add = _clip(add, others)                     # nosek nie wchodzi w trzecią płytę (narożnik trzech płyt)
             if cut:
                 shapes[b] = kernel.boolean('subtract', shapes[b], cut)
             if add:
@@ -733,6 +904,24 @@ def cut_list(bodies):
         row['names'].append(b.name)
         row['count'] += 1
     return sorted(rows.values(), key=lambda r: (-r['size'][2], -r['size'][0], -r['size'][1]))
+
+
+def drawing_parts(items):
+    """Płyty rozłożone płasko obok siebie do rysunku: (kształt złożony, [(x0, y0, x1, y1, nazwa)]). items: [(nazwa, kształt, grubość)]."""
+    parts = [dict(name=n, flat=flat_part(s, t)[0]) for n, s, t in items]
+    if not parts:
+        raise kernel.CadError('Brak płyt do rysunku.')
+    sizes = [p['flat'].BoundingBox() for p in parts]
+    area = sum(b.xlen * b.ylen for b in sizes)
+    widest = max(b.xlen for b in sizes)
+    gap = max(15.0, .18 * max(max(b.xlen, b.ylen) for b in sizes))      # miejsce na wymiary i podpisy
+    width = max(widest, math.sqrt(area) * 1.7)
+    places = layout(parts, gap, width)
+    shapes, boxes = [], []
+    for p, (x, y), bb in zip(parts, places, sizes):
+        shapes.append(p['flat'].translate(cq.Vector(x, y, 0)))
+        boxes.append((x, y, x + bb.xlen, y + bb.ylen, p['name']))
+    return (shapes[0] if len(shapes) == 1 else cq.Compound.makeCompound(shapes)), boxes
 
 
 def parts_for(bodies):

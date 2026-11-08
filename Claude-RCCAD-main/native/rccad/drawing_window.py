@@ -875,7 +875,7 @@ def _big(text, icon_name, checkable=False, primary=False, tip=''):
 class DrawingWindow(QMainWindow):
     """Osobne, niemodalne okno. Rzuty liczone są w tle, zmiana opcji przelicza tylko rozmieszczenie."""
 
-    def __init__(self, shape, name='Bryła', parent=None, views=None, bends=None, sheet=None, iso_shape=None, checked=None):
+    def __init__(self, shape, name='Bryła', parent=None, views=None, bends=None, sheet=None, iso_shape=None, checked=None, parts=None):
         """views: rzuty dostępne w oknie (np. ('top',) dla płaskiego rysunku wczytanego z SVG / DXF); None = wszystkie."""
         super().__init__(parent)
         self._only_views = tuple(views) if views else None
@@ -888,7 +888,7 @@ class DrawingWindow(QMainWindow):
         self.resize(w, h)
         self.setMinimumSize(min(760, w), min(520, h))
         self.setStyleSheet(QSS)
-        self.source = D.DrawingSource(shape, name, bends, sheet, iso_shape)
+        self.source = D.DrawingSource(shape, name, bends, sheet, iso_shape, parts)
         self.pool = QThreadPool.globalInstance()
         self._ticket = 0
         self._busy = False

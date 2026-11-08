@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.4.59 — nowa zakładka Sklejka
+# RCCAD Desktop 0.4.60 — pudełka z wielokąta, wczepy na skos, rysunek płyt
+
+## Zmiany 0.4.60
+
+- **Ścianki na wielokącie**: na podstawie-wielokącie ścianki (na podstawie i przy boku) schodzą się w narożnikach na skos - nie nachodzą na siebie i nie zostawiają szczelin. Przy boku narożniki prostokąta są teraz pełne.
+- **Wczepy w narożnikach pod kątem**: ścianki stykające się tylko skośnymi końcami można połączyć noskami (nowy rodzaj styku „Narożnik pod kątem”).
+- **Rysunek płyt** (zakładka Rysunek): kliknij płytę pudełka - wszystkie płyty z jego grupy rozłożone płasko obok siebie, każda z nazwą i wymiarami, a obok widok izometryczny całości.
+- **Do cięcia**: przełącznik „Wszystkie płyty / Zaznaczone” - domyślnie zapisuje wszystkie płyty.
+- **Grupa pudełka**: podstawa i ścianki trafiają do jednej grupy na liście obiektów (Pudełko 1, 2…), półki do grupy ścian, między którymi stoją.
+- Noski przy ściankach przyciętych na skos nie wychodzą poza koniec ścianki ani nie wchodzą w sąsiednią płytę.
+
+## RCCAD Desktop 0.4.59 — nowa zakładka Sklejka
 
 ## Zmiany 0.4.59
 

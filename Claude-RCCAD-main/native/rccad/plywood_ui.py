@@ -241,6 +241,11 @@ class PlywoodTools:
         lay.addWidget(note)
         self._ply_widgets.append((self.pc_method, None, note))
         self.pc_method.currentIndexChanged.connect(lambda *_: self._ply_set_method(self.pc_method.currentData()))
+        self.pc_scope = ui.Segmented([('Wszystkie płyty', 'all', 'pc_all'), ('Zaznaczone', 'sel', 'pc_sel')], 30)
+        self.pc_scope._buttons[0].setToolTip('Wszystkie widoczne płyty ze sklejki.')
+        self.pc_scope._buttons[1].setToolTip('Tylko płyty zaznaczone na polu roboczym albo na liście obiektów.')
+        self._field(lay, 'Zapisz', self.pc_scope)
+        self.pc_scope.currentIndexChanged.connect(lambda *_: self._pc_update())
         self.pc_list = QLabel('—')
         self.pc_list.setObjectName('readout')
         self.pc_list.setWordWrap(True)
@@ -308,7 +313,13 @@ class PlywoodTools:
             bid = self.view.pick_body(x, y)
             body = self.document.get(bid) if bid else None
             if body is not None and pw.is_panel(body):
-                self._tool_select([body.id])
+                if self.mode == 'ply_cut' and shift:
+                    ids = [i for i in self.selected if i != body.id] if body.id in self.selected else [*self.selected, body.id]
+                    self._tool_select(ids)
+                else:
+                    self._tool_select([body.id])
+                if self.mode == 'ply_cut':
+                    self._pc_update()
                 if self.mode == 'ply_joints':
                     self._pj_hover(next((c['key'] for c in self.pj_contacts if body.id in (c['a'], c['b'])), None))
 
@@ -610,6 +621,12 @@ class PlywoodTools:
             self._pj_fill_combo(combo, c)
             combo.currentIndexChanged.connect(lambda *_, key=c['key'], cb=combo: self._pj_joint_changed(key, cb.currentData()))
             lay.addWidget(title)
+            if c['kind'] == 'M':
+                note = QLabel(f"Narożnik {180 - c.get('angle', 90):g}°: końce nosków są skośne. Laser i zwykła frezarka tną prostopadle "
+                              'do płyty - skos dokładnie zrobi druk 3D albo frezarka z głowicą uchylną.')
+                note.setWordWrap(True)
+                note.setStyleSheet('color:#6b7d90;font-size:11px;background:transparent;')
+                lay.addWidget(note)
             lay.addWidget(combo)
             row.hovered.connect(self._pj_hover)
             self.pj_list_lay.addWidget(row)
@@ -740,8 +757,11 @@ class PlywoodTools:
 
     # ------------------------------------------------------------------ Do cięcia
     def _pc_bodies(self):
-        chosen = [b for b in self.document.bodies if pw.is_panel(b) and b.id in self.selected]
-        return chosen or [b for b in self.document.bodies if pw.is_panel(b) and b.visible]
+        """Płyty do zapisu: wszystkie widoczne albo (przełącznik „Zaznaczone”) tylko zaznaczone."""
+        visible = [b for b in self.document.bodies if pw.is_panel(b) and b.visible]
+        if self.pc_scope.currentData() == 'sel':
+            return [b for b in visible if b.id in self.selected]
+        return visible
 
     def _pc_params_changed(self):
         self.ply_cfg.update(sheet=float(self.pc_sheet.value()), kerf=float(self.pc_kerf.value()), labels=bool(self.pc_labels.isChecked()))
@@ -753,7 +773,8 @@ class PlywoodTools:
         bodies = self._pc_bodies()
         self.pc_export.setText('Zapisz pliki STL…' if self.ply_method == 'print' else 'Zapisz DXF…')
         if not bodies:
-            self.pc_list.setText('Brak płyt. Płyty powstają w narzędziach Płyta, Ścianka i Półka.')
+            self.pc_list.setText('Nie zaznaczono żadnej płyty - zaznacz płyty albo wybierz „Wszystkie płyty”.' if self.pc_scope.currentData() == 'sel'
+                                 else 'Brak płyt. Płyty powstają w narzędziach Płyta, Ścianka i Półka.')
             self.pc_status.setText('')
             return
         try:
@@ -769,7 +790,7 @@ class PlywoodTools:
                          f"<td align='right'>{r['size'][2]:g}</td><td align='right'>{r['count']}</td></tr>")
         lines.append('</table>')
         self.pc_list.setText(''.join(lines))
-        scope = 'zaznaczone płyty' if any(b.id in self.selected for b in bodies) else 'wszystkie widoczne płyty'
+        scope = 'zaznaczone płyty' if self.pc_scope.currentData() == 'sel' else 'wszystkie widoczne płyty'
         self.pc_status.setText(f'{len(bodies)} płyt ({scope}). ' + ('Każda płyta jako osobny plik STL, położona płasko.' if self.ply_method == 'print'
                                                                     else 'Jeden plik DXF 1:1 mm: warstwa CUT (cięcie na wylot), POCKET (gniazda, rowki), OPIS.'))
 

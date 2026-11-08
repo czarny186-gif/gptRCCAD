@@ -212,7 +212,7 @@ def _label(text, name='label'):
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut'],
-        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'importdrawing'],
+        'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 # narzędzia, które można dodać do Ulubionych (bez Pliku, Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu)
@@ -220,7 +220,7 @@ FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for t
 TAB_TOP = 14        # pasek zakładek
 TOOLS_TOP = 50      # przyciski narzędzi pod zakładkami
 MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
-DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing')
+DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
 class StudioWindow(PlywoodTools, QMainWindow):
@@ -494,6 +494,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                  ('drawing', ui.style_icon('drawing', 38), 'Utwórz rysunek techniczny — rzuty, wymiary, pomiary, zapis'),
                  ('autodrawing', ui.style_icon('autodrawing', 38), 'Rysunek automatyczny — rzuty i opisy same, zapis do pliku'),
                  ('sheetdrawing', ui.style_icon('sheetdrawing', 38), 'Rysunek blachy do gięcia — rozwinięcie z liniami gięcia, wymiarami, promieniem i grubością'),
+                 ('plydrawing', ui.style_icon('plydrawing', 38), 'Rysunek płyt — pudełko / mebel ze sklejki rozłożony na wszystkie płyty z wymiarami'),
                  ('importdrawing', ui.style_icon('importdrawing', 38), 'Załaduj plik — rysunek techniczny z pliku SVG albo DXF z komputera'),
                  ('libimport', ui.style_icon('libimport', 38), 'Importuj — model STEP, STL, BREP albo szkic DXF, SVG na pole robocze'),
                  ('libobj', ui.style_icon('libobj', 38), 'Wstaw obiekt — biblioteka obiektów: foldery, import, eksport, wstawianie'),
@@ -1295,7 +1296,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
         for key, title, kind, sub, desc in (
                 ('drawing', 'Rysunek techniczny', 'x_drawing', 'Wskaż bryłę', 'Kliknij bryłę (podświetla się na niebiesko). Otworzy się osobne okno: wybierzesz rzuty, wymiary i arkusz, zmierzysz dowolne miejsce rysunku i zapiszesz go jako PDF, DXF, SVG lub JPG.'),
                 ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę', 'Kliknij bryłę. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.'),
-                ('sheetdrawing', 'Rysunek blachy do gięcia', 'x_sheetdrawing', 'Wskaż blachę', 'Kliknij blachę (zgiętą albo rozłożoną). Powstanie rozwinięcie widziane od góry blachy: wymiary całości, odległości linii gięcia od krawędzi i między sobą, kierunek, kąt i promień każdego gięcia oraz grubość blachy.')):
+                ('sheetdrawing', 'Rysunek blachy do gięcia', 'x_sheetdrawing', 'Wskaż blachę', 'Kliknij blachę (zgiętą albo rozłożoną). Powstanie rozwinięcie widziane od góry blachy: wymiary całości, odległości linii gięcia od krawędzi i między sobą, kierunek, kąt i promień każdego gięcia oraz grubość blachy.'),
+                ('plydrawing', 'Rysunek płyt', 'x_plydrawing', 'Wskaż płytę pudełka', 'Kliknij dowolną płytę pudełka albo mebla ze sklejki. Wszystkie płyty z jego grupy zostaną rozłożone płasko obok siebie - każda z nazwą i wymiarami; widok izometryczny pokazuje całość złożoną.')):
             panel, lay = self._panel(312, title, kind, sub, plain=True)
             pic = QLabel()
             pic.setFixedHeight(96)
@@ -1303,7 +1305,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
             pic.setPixmap(ui.icons.pixmap('dr_' + key, 96))
             pic.setToolTip(desc)
             lay.addWidget(pic)
-            lay.addWidget(_label('Kliknij ' + ('blachę' if key == 'sheetdrawing' else 'bryłę') + ' na polu roboczym.', 'status'))
+            lay.addWidget(_label('Kliknij ' + {'sheetdrawing': 'blachę', 'plydrawing': 'płytę ze sklejki'}.get(key, 'bryłę') + ' na polu roboczym.', 'status'))
             close = QPushButton('Zamknij')
             close.clicked.connect(lambda _=False: self.set_mode(None))
             lay.addWidget(close)
@@ -4454,6 +4456,14 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.toast('Kliknij bryłę (nie szkic).')
             return
         mode = self.mode
+        if mode == 'plydrawing':
+            from . import plywood as pw
+            if not pw.is_panel(body):
+                self.toast('Kliknij płytę ze sklejki (z zakładki Sklejka).')
+                return
+            self.set_mode(None)
+            self.open_ply_drawing(body)
+            return
         if mode == 'sheetdrawing':
             if self._editable_sheet_state(body.id) is None:
                 self.toast('Kliknij blachę (bryłę zamienioną na blachę, z zapisanymi gięciami).')
@@ -4492,6 +4502,29 @@ class StudioWindow(PlywoodTools, QMainWindow):
             win.raise_()
 
         self.run_operation('Rysunek blachy', build, apply)
+
+    def open_ply_drawing(self, body):
+        """Rysunek płyt: wszystkie płyty z grupy klikniętej płyty (bez grupy - wszystkie widoczne płyty) rozłożone płasko,
+        każda z nazwą i wymiarami; widok izometryczny pokazuje całość złożoną."""
+        from . import plywood as pw
+        from .drawing_window import DrawingWindow
+        chosen = [b for b in self.document.bodies if pw.is_panel(b) and b.visible and (b.folder == body.folder if body.folder else True)]
+        items = [(b.name, b.shape, b.meta['ply'].get('t')) for b in chosen]
+        name = body.folder or 'Płyty'
+
+        def build():
+            flat, parts = pw.drawing_parts(items)
+            whole = kernel.compound([s for _, s, _ in items]) if len(items) > 1 else items[0][1]
+            return flat, parts, whole
+
+        def apply(result):
+            flat, parts, whole = result
+            win = DrawingWindow(flat, f'{name} — płyty', self, views=('top', 'iso'), checked=('top',), iso_shape=whole, parts=parts)
+            self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
+            win.show()
+            win.raise_()
+
+        self.run_operation('Rysunek płyt', build, apply)
 
     def _flat_sheet_bends(self, body):
         """Funkcja licząca linie gięcia rozłożonej blachy (w górę / w dół, przycięte do obrysu) albo None, gdy bryła nie jest płaską blachą."""

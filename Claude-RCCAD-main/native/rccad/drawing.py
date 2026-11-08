@@ -248,7 +248,7 @@ class DrawingSource:
     """Bryła z pamięcią rzutów (liczenie HLR jest najdroższe, więc zmiana opcji nie powtarza go).
     bends: linie gięcia rozłożonej blachy w płaszczyźnie XY - [(a, b, 'up' | 'down')] - rysowane w rzutach z góry i z dołu."""
 
-    def __init__(self, shape, name='Bryła', bends=None, sheet=None, iso_shape=None):
+    def __init__(self, shape, name='Bryła', bends=None, sheet=None, iso_shape=None, parts=None):
         """sheet: opis blachy do rysunku do gięcia - dict(t, k); włącza wymiary linii gięcia.
         iso_shape: bryła do widoku izometrycznego (rozłożona blacha pokazuje tam blachę zgiętą)."""
         self.shape, self.name = shape, name
@@ -256,6 +256,8 @@ class DrawingSource:
         self.bends = [(tuple(map(float, b[0][:2])), tuple(map(float, b[1][:2])), 'down' if str(b[2]).lower() == 'down' else 'up') for b in (bends or ())]
         self.bend_info = [dict(b[3]) if len(b) > 3 and b[3] else {} for b in (bends or ())]
         self.sheet = sheet
+        # rozłożone części (np. płyty sklejki) w rzucie z góry: [(x0, y0, x1, y1, nazwa)] - podpis i wymiary każdej części
+        self.parts = [(float(a), float(b), float(c), float(d), str(n)) for a, b, c, d, n in (parts or ())]
         self._cache = {}
 
     def view(self, name):
@@ -553,6 +555,17 @@ def build_drawing(source, views=('front', 'top', 'right'), sheet='A4', landscape
                 _dim_circle(prims, d.snaps, place(circ['c']), rp, circ['r'], circ['full'], place(circ['mid']), 45.0 + 30.0 * (k % 3))
         if bends and g.bends:
             _bend_dims(prims, g, place, x0, y0, x1, y1)
+        parts = getattr(source, 'parts', None) if v == 'top' else None
+        if parts:
+            for px0, py0, px1, py1, label in parts:          # każda płyta: nazwa i wymiary (szerokość pod, wysokość z prawej)
+                a0, b0 = place((px0, py0))
+                a1, b1 = place((px1, py1))
+                size = max(1.8, min(3.5, abs(a1 - a0) / 8, abs(b1 - b0) / 3))
+                prims.append(Label((a0 + a1) / 2, (b0 + b1) / 2 - size / 2, label, size, 'c'))
+                if overall:
+                    _dim_horizontal(prims, a0, a1, b0, b0 - 4.0, fmt(px1 - px0))
+                    _dim_vertical(prims, b0, b1, a1, a1 + 4.0, fmt(py1 - py0))
+            continue
         if overall and (g.bbox[2] - g.bbox[0]) > 1e-6:
             _dim_horizontal(prims, x0, x1, y0, y0 - 10.0, fmt(g.bbox[2] - g.bbox[0]))
         if overall and (g.bbox[3] - g.bbox[1]) > 1e-6:
