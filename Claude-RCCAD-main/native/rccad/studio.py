@@ -211,7 +211,7 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
-        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut'],
+        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
@@ -485,6 +485,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
                  ('ply_between', ui.style_icon('ply_between', 38), 'Półka / przegroda — płyta między dwiema ścianami'),
                  ('ply_joints', ui.style_icon('ply_joints', 38), 'Połączenia — wczepy, czopy, rowki i nacięcia tam, gdzie płyty się stykają'),
                  ('ply_cut', ui.style_icon('ply_cut', 38), 'Do cięcia — lista płyt i plik DXF / STL do lasera, frezarki, drukarki'),
+                 ('ply_unfold', ui.style_icon('ply_unfold', 38), 'Rozłóż płyty — pudełko / mebel ze sklejki płasko, płyta obok płyty'),
+                 ('ply_fold', ui.style_icon('ply_fold', 38), 'Złóż płyty — rozłożone płyty z powrotem w pudełko / mebel'),
                  ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
                  ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii'),
                  ('mdist', ui.style_icon('mdist', 38), 'Pomiar odległości między dwoma punktami'),
@@ -507,6 +509,8 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.tools[key] = button
             if key in ('unfold_sheet', 'fold_sheet', 'flat'):
                 button.clicked.connect(lambda _=False, k=key: self.sheet_command(k))
+            elif key in ('ply_unfold', 'ply_fold'):
+                button.clicked.connect(lambda _=False, k=key: self.ply_fold_command(k))
             elif key == 'importdrawing':
                 button.clicked.connect(lambda _=False: self.import_drawing_file())
             elif key == 'surface':
@@ -1126,6 +1130,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
         # --- blacha: konwersja i kołnierz ---
         self.sheet_meta = {}        # id bryły -> normalna i grubość blachy (z konwersji), potrzebne do kołnierzy
         self._sheet_cmd = None      # Rozłóż / Zegnij / DXF czekające na wskazanie blachy (tryb 'sheetpick')
+        self._plyfold_cmd = None   # Rozłóż / Złóż płyty czekające na wskazanie płyty (tryb 'plyfoldpick')
         self.sheet_pick = None
         self.fl_pick = None
         self.sheet_panel, lay = self._panel(312, 'Konwertuj na blachę', 'x_sheet', 'Płaski prostokąt → blacha do gięcia', plain=True, scroll=True)
@@ -3230,7 +3235,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 self.view.overlay.update()
             elif self.mode == 'mrad':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
-            elif self.mode in ('mprops', 'sheetpick') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
+            elif self.mode in ('mprops', 'sheetpick', 'plyfoldpick') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
@@ -3327,6 +3332,9 @@ class StudioWindow(PlywoodTools, QMainWindow):
             return
         if self.mode == 'sheetpick':
             self.pick_sheet_command(x, y)
+            return
+        if self.mode == 'plyfoldpick':
+            self.pick_ply_fold(x, y)
             return
         if self.mode == 'plane':
             plane, _ = self.pick_surface(x, y, True)
@@ -8893,8 +8901,12 @@ class StudioWindow(PlywoodTools, QMainWindow):
             group = hist.text_group_of(bid)
             if group:                       # napis: wszystkie litery razem
                 ids += [b.id for b in self.document.bodies if hist.text_group_of(b.id) == group and b.id not in ids]
+            from . import plywood as pw
+            plywood = pw.is_panel(body) and (body.folder or (body.meta or {}).get('ply', {}).get('fold'))
+            if plywood:                     # płyta pudełka / mebla: zapisuje się całość (z pamięcią rozłożenia)
+                ids += [i for i in self._ply_fold_ids([bid]) if i not in ids]
             members = [self.document.get(i) for i in ids if self.document.get(i) is not None]
-            name = body.folder if (group and body.folder) else body.name.split(' — szyk')[0]
+            name = body.folder if ((group or plywood) and body.folder) else body.name.split(' — szyk')[0]
             try:
                 path = library.save_bodies(members, dialog.folder, name)
             except Exception as exc:
@@ -8942,6 +8954,12 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 made.append(replace(b, id=uuid.uuid4().hex, group=group, mesh=None).placed(shape, matrix))
         folder = action['name'] if len(made) > 1 else ''
         made = [replace(b, folder=folder) for b in made]
+        keys = {}                      # każda wstawiona kopia pudełka dostaje własny klucz rozłożenia
+        for i, b in enumerate(made):
+            fold = ((b.meta or {}).get('ply') or {}).get('fold')
+            if fold:
+                key = keys.setdefault(fold.get('key'), uuid.uuid4().hex)
+                made[i] = replace(b, meta=dict(b.meta, ply=dict(b.meta['ply'], fold=dict(fold, key=key))))
 
         def add(bodies):
             self.document.pending_label, self.document.pending_icon = f'Z biblioteki: {action["name"]}', 'libobj'

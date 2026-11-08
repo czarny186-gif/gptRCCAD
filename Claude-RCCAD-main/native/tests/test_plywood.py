@@ -449,7 +449,7 @@ class PlywoodWindowTests(unittest.TestCase):
     def test_tab_tools_and_full_flow(self):
         from rccad.studio import TABS, TAB_OF
         w = self.w
-        self.assertEqual(TABS['Sklejka'], ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut'])
+        self.assertEqual(TABS['Sklejka'], ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'])
         self.assertEqual(TAB_OF['ply_joints'], 'Sklejka')
         sk = Body('Szkic', k.sketch('rectangle', 'XY', 200, 150), 'sketch', 'XY').prepared()
         w.document.commit([sk])
@@ -567,3 +567,84 @@ class PlywoodWindowTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PlywoodFoldTests(PlywoodWindowTests):
+    """0.4.64: Rozłóż / Złóż płyty - pamięć w płytach, przesunięcie, biblioteka; frez i narożniki gniazd."""
+
+    def _box(self):
+        import uuid
+        base = cq.Solid.makeBox(200, 150, 6)
+        b = Body('Płyta 1', base, meta=pw.ply_meta(6, 'laser')).prepared()
+        tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - 6) < 1e-6]
+        return hist.run_recipe([b], dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, tops), t=6.0, h=60.0, side='on',
+                                         flip=False, method='laser', out=[uuid.uuid4().hex for _ in tops]))
+
+    def test_tab_tools_and_full_flow(self):
+        pass
+
+    def test_unfold_move_library_fold(self):
+        from PySide6.QtCore import Qt
+        from rccad import library
+        w = self.w
+        bodies = [b.prepared() for b in self._box()]
+        w.document.commit(bodies)
+        w.refresh()
+        centres = {b.id: np.array(b.shape.Center().toTuple()) for b in bodies}
+        # bez zaznaczenia: wskazanie płyty kliknięciem; cały zestaw (grupa „Pudełko 1”) się rozkłada
+        w.selected = []
+        w.tools['ply_unfold'].click()
+        self.assertEqual(w.mode, 'plyfoldpick')
+        with patch.object(w.view, 'pick_body', return_value=bodies[2].id):
+            w.view_clicked(5, 5, False, False)
+        self.wait()
+        flat = [w.document.get(b.id) for b in bodies]
+        self.assertTrue(all(abs(b.shape.BoundingBox().zlen - 6) < 1e-6 for b in flat))       # wszystkie leżą płasko
+        self.assertEqual(_overlaps([b.shape for b in flat]), 0)
+        self.assertEqual(w.document.info['op']['type'], 'ply_fold')
+        self.assertTrue(all(b.meta['ply']['fold']['flat'] for b in flat))
+        w.tools['ply_unfold'].click(); self.wait()                              # zaznaczone - już rozłożone: komunikat
+        # przesunięcie całego rozkładu (narzędziem przesuwania) i zapis do biblioteki
+        w.selected = [b.id for b in bodies]
+        w.document.commit(hist.run_recipe(w.document.bodies, dict(type='transform', ids=[b.id for b in bodies], v=[300, 0, 0], mode='move',
+                                                                  id=bodies[0].id)), label='Przesunięcie', icon='move')
+        folder = tempfile.mkdtemp()
+        path = library.save_bodies([w.document.get(b.id) for b in bodies], folder, 'Pudełko')
+        # złożenie przesuniętego rozkładu: pudełko przesunięte o to samo
+        w.selected = [bodies[0].id]
+        w.tools['ply_fold'].click(); self.wait()
+        for b in bodies:
+            got = np.array(w.document.get(b.id).shape.Center().toTuple())
+            self.assertTrue(np.allclose(got, centres[b.id] + (300, 0, 0), atol=1e-6), b.name)
+        w.undo(); self.wait()
+        self.assertTrue(w.document.get(bodies[0].id).meta['ply']['fold']['flat'])
+        # wstawienie z biblioteki w innym miejscu: kopia ma własny klucz i składa się w nowym miejscu
+        action = dict(bodies=library.load_bodies('object', path), name='Pudełko', dialog=None)
+        w._library_insert(action, np.eye(3), np.array([0.0, 500.0, 0.0])); self.wait()
+        copies = [b for b in w.document.bodies if b.id not in centres]
+        self.assertEqual(len(copies), 5)
+        self.assertNotEqual(copies[0].meta['ply']['fold']['key'], w.document.get(bodies[0].id).meta['ply']['fold']['key'])
+        w.selected = [copies[0].id]
+        w.tools['ply_fold'].click(); self.wait()
+        got = sorted(tuple(np.round(w.document.get(c.id).shape.Center().toTuple(), 4)) for c in copies)
+        want = sorted(tuple(np.round(c + (300, 500, 0), 4)) for c in centres.values())
+        self.assertEqual(got, want)
+        self.assertTrue(w.document.get(bodies[0].id).meta['ply']['fold']['flat'])   # oryginał nadal rozłożony
+
+    def test_cnc_tool_warning_and_corner_styles(self):
+        w = self.w
+        w.toggle_mode('ply_joints')
+        w._ply_set_method('cnc')
+        w.pj_tool.setValue(6)
+        w.pj_contacts = [dict(key='a:b', ta=2.0, tb=2.0, joint='finger', kind='L', a='a', b='b')]
+        w._pj_params_changed(save=False)
+        self.assertTrue(w.pj_tool_warn.isVisibleTo(w.ply_joints_panel))
+        self.assertIn('Ø2', w.pj_tool_fix.text())
+        w.pj_tool_fix.click()
+        self.assertEqual(w.pj_tool.value(), 2)
+        self.assertFalse(w.pj_tool_warn.isVisibleTo(w.ply_joints_panel))
+        w.pj_corner.setCurrentIndex(list(pw.CORNERS).index('tbone'))
+        self.assertEqual(w._pj_params()['corner'], 'tbone')
+        self.assertEqual(w._read_settings('plywood')['corner'], 'tbone')
+        w.pj_contacts = []
+        w.set_mode(None)

@@ -1155,10 +1155,11 @@ def _draw_thread_icon(p, kind, pen, fill):
 # ---------------------------------------------------------------------------------------------------------------
 # sklejka: narzędzia (t_ply...), nagłówki paneli (x_ply...) i obrazki pól
 # ---------------------------------------------------------------------------------------------------------------
-PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'plydrawing')
+PLY_TOOLS = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'plydrawing', 'ply_unfold', 'ply_fold')
 PLY_HEADERS = {'x_ply': 'ply', 'x_plywall': 'ply_wall', 'x_plybetween': 'ply_between', 'x_plyjoints': 'ply_joints', 'x_plycut': 'ply_cut', 'x_plydrawing': 'plydrawing'}
 PLY_ICONS = ('pm_laser', 'pm_cnc', 'pm_print', 'pl_up', 'pl_down', 'pl_thick', 'pw_on', 'pw_side', 'pw_height', 'pb_h', 'pb_v', 'pb_count',
-             'pb_pos', 'pj_width', 'pj_fit', 'pj_tool', 'pj_depth', 'pc_sheet', 'pc_kerf', 'pc_all', 'pc_sel')
+             'pb_pos', 'pj_width', 'pj_fit', 'pj_tool', 'pj_depth', 'pc_sheet', 'pc_kerf', 'pc_all', 'pc_sel',
+             'pd_dog', 'pd_tbone', 'pd_none')
 
 
 def _slab(p, pts, depth, ink, soft, pen, layers=True, acc=None):
@@ -1240,6 +1241,19 @@ def _draw_ply_tool(p, name, ink, acc, soft, pen):
         dash = pen(acc, 2.6); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.6]); p.setPen(dash)
         p.drawRect(QRectF(28, 15, 11, 18))
         p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(39, 15), 3.0, 3.0)
+    elif name in ('ply_unfold', 'ply_fold'):
+        p.setBrush(soft); p.setPen(pen(ink, 2.2))
+        if name == 'ply_unfold':
+            # płyty pudełka leżą płasko obok siebie (z noskami), strzałka - rozkładanie ścianki
+            for x in (3, 18, 33):
+                p.drawRect(QRectF(x, 32, 12, 7))
+            p.setPen(pen(acc, 3)); p.setBrush(Qt.NoBrush); p.drawArc(QRectF(15, 6, 26, 26), 20 * 16, 150 * 16)
+            p.drawPolyline(QPolygonF([QPointF(37, 11), QPointF(39.2, 15.6), QPointF(43.6, 13)]))
+        else:
+            # podstawa i ścianki postawione - pudełko złożone, strzałka - podnoszenie ścianki
+            p.drawRect(QRectF(10, 34, 28, 7)); p.drawRect(QRectF(4, 12, 6, 29)); p.drawRect(QRectF(38, 12, 6, 29))
+            p.setPen(pen(acc, 3)); p.setBrush(Qt.NoBrush); p.drawArc(QRectF(15, 9, 22, 22), 200 * 16, -150 * 16)
+            p.drawPolyline(QPolygonF([QPointF(30.5, 6.5), QPointF(34.6, 10.6), QPointF(30.4, 13.6)]))
     elif name == 'plydrawing':
         p.setBrush(Qt.NoBrush); p.setPen(pen(ink, 2.2)); p.drawRoundedRect(QRectF(4, 6, 40, 36), 2, 2)
         p.setPen(pen(ink, 1.4)); p.drawLine(QPointF(28, 36), QPointF(44, 36)); p.drawLine(QPointF(28, 36), QPointF(28, 42))
@@ -1338,6 +1352,27 @@ def _draw_ply_icon(p, kind, pen):
             p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawPath(path)
             _arrow(p, (24, 11), (24, 23), acc, pen, 2.2, 3.5)
             p.setPen(pen(acc, 1.6)); p.drawLine(QPointF(19, 10), QPointF(29, 10))
+    elif kind in ('pd_dog', 'pd_tbone', 'pd_none'):
+        # gniazdo (wcięcie) w płycie, narożniki dna: psia kość po skosie, T-kość w bok albo zaokrąglenie frezu
+        path = QPainterPath(); path.moveTo(4, 8); path.lineTo(16, 8)
+        if kind == 'pd_none':
+            path.lineTo(16, 27); path.quadTo(16, 32, 21, 32); path.lineTo(27, 32); path.quadTo(32, 32, 32, 27)
+        else:
+            path.lineTo(16, 32); path.lineTo(32, 32)
+        path.lineTo(32, 8); path.lineTo(44, 8); path.lineTo(44, 42); path.lineTo(4, 42); path.closeSubpath()
+        p.setBrush(soft); p.setPen(pen(blue, 2.2)); p.drawPath(path)
+        if kind != 'pd_none':
+            r = 3.8
+            d = r / 1.4142
+            if kind == 'pd_dog':          # koło po skosie, styczne do narożnika
+                centres, top = ((16 + d, 32 - d), (32 - d, 32 - d)), 32 - 2 * d
+            else:                         # koło na przedłużeniu boku - wycięcie wchodzi w bok gniazda
+                centres, top = ((16, 32 - r), (32, 32 - r)), 32 - 2 * r
+            p.setBrush(QColor('#ffffff')); p.setPen(pen(acc, 2.2))
+            for c in centres:
+                p.drawEllipse(QPointF(*c), r, r)
+            p.setPen(Qt.NoPen); p.drawRect(QRectF(17.2, 9.2, 13.6, 21.6))
+            p.setPen(pen(blue, 2.2)); p.drawLine(QPointF(16, 8), QPointF(16, top)); p.drawLine(QPointF(32, 8), QPointF(32, top))
     elif kind in ('pc_all', 'pc_sel'):
         for k, (x, y) in enumerate(((6, 8), (26, 8), (6, 27), (26, 27))):
             chosen = kind == 'pc_all' or k == 1

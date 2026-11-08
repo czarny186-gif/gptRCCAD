@@ -23,7 +23,7 @@ from . import shell_ui as ui
 PLY_MODES = ('ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut')
 PLY_TINT = dict(color=(.87, .69, .45, .62), line_color=(.55, .36, .14, 1), width=2)      # kolor sklejki w podglądzie
 DEFAULTS = dict(method='cnc', t={k: v['t'] for k, v in pw.METHODS.items()}, fit={k: v['fit'] for k, v in pw.METHODS.items()},
-                tool=6.0, kerf=.15, width=0.0, depth=50, sheet=1200.0, labels=True)
+                tool=6.0, corner='dog', kerf=.15, width=0.0, depth=50, sheet=1200.0, labels=True)
 
 
 class _Row(QFrame):
@@ -216,7 +216,22 @@ class PlywoodTools:
         box.setSpacing(6)
         self.pj_tool = _spin(float(self.ply_cfg['tool']), 0, 50, 2, .5)
         self.pj_tool.setToolTip('Frez nie zrobi ostrego kąta wewnętrznego - narożniki gniazd i wczepów dostają „psie kości” na ten promień. 0 - bez.')
-        self._pic_field(box, 'Średnica frezu (mm)', 'pj_tool', self.pj_tool, '„Psie kości” w narożnikach.')
+        self._pic_field(box, 'Średnica frezu (mm)', 'pj_tool', self.pj_tool, 'Wycięcia na frez w narożnikach gniazd i nosków.')
+        self.pj_corner = ui.Segmented([(pw.CORNERS[k][0], k, 'pd_' + k) for k in pw.CORNERS], 30)
+        self.pj_corner.setCurrentIndex(max(0, list(pw.CORNERS).index(self.ply_cfg.get('corner', 'dog')) if self.ply_cfg.get('corner', 'dog') in pw.CORNERS else 0))
+        for k, button in zip(pw.CORNERS, self.pj_corner._buttons):
+            button.setToolTip(pw.CORNERS[k][1])
+        self._field(box, 'Narożniki gniazd i nosków', self.pj_corner)
+        self.pj_corner_note = _label(pw.CORNERS[self.pj_corner.currentData()][1], 'help')
+        box.addWidget(self.pj_corner_note)
+        self.pj_tool_warn = _label('', 'status')
+        self.pj_tool_warn.setStyleSheet('color:#c0392b;')
+        self.pj_tool_warn.setWordWrap(True)
+        box.addWidget(self.pj_tool_warn)
+        self.pj_tool_fix = QPushButton('Dobierz frez')
+        self.pj_tool_fix.setToolTip('Ustaw największy typowy frez, który mieści się w gniazdach.')
+        self.pj_tool_fix.clicked.connect(self._pj_fix_tool)
+        box.addWidget(self.pj_tool_fix)
         lay.addWidget(self.pj_tool_box)
         self.pj_depth = _spin(int(self.ply_cfg['depth']), 10, 90, 0, 5)
         self.pj_depth.setToolTip('Głębokość gniazd nieprzelotowych i rowków jako część grubości płyty, w którą wchodzą.')
@@ -233,6 +248,7 @@ class PlywoodTools:
         for w in (self.pj_width, self.pj_fit, self.pj_tool):
             w.valueChanged.connect(lambda *_: self._pj_params_changed())
         self.pj_depth.valueChanged.connect(lambda *_: self._pj_params_changed())
+        self.pj_corner.currentIndexChanged.connect(lambda *_: self._pj_params_changed())
 
         # --- Do cięcia ---
         self.ply_cut_panel, lay = self._panel(340, 'Do cięcia', 'x_plycut', 'Lista płyt i plik do lasera, frezarki, drukarki', plain=True, scroll=True)
@@ -429,7 +445,14 @@ class PlywoodTools:
             refs.append(dict(hist.face_ref(f['face'], f['normal'], f['point'], body.shape if body else None), id=f['id']))
         count = int(round(self.pb_count.value()))
         return dict(type='ply_between', a=refs[0], b=refs[1], t=self.ply_thickness(), pos=None if count > 1 else float(self.pb_pos.value()),
-                    count=count, turn=self.pb_turn.currentData() == 'v', method=self.ply_method, ignore=self._ply_hidden())
+                    count=count, turn=self.pb_turn.currentData() == 'v', method=self.ply_method, ignore=self._ply_hidden(),
+                    fit=float(self.ply_cfg['fit'][self.ply_method]), **self._ply_tool_args())
+
+    def _ply_tool_args(self):
+        """Frez i rodzaj narożników z panelu Połączenia (nacięcia krzyżowe nowych przegród frezowanych tym samym frezem)."""
+        if self.ply_method != 'cnc':
+            return dict(tool=0.0, corner='dog')
+        return dict(tool=float(self.ply_cfg.get('tool', 6.0)), corner=self.ply_cfg.get('corner', 'dog'))
 
     def _pb_reset_pos(self):
         """Nowe ściany albo inny kierunek płyty: położenie na środku wspólnego obszaru."""
@@ -697,13 +720,39 @@ class PlywoodTools:
 
     def _pj_params(self):
         return dict(method=self.ply_method, width=float(self.pj_width.value()), fit=float(self.pj_fit.value()),
-                    tool=float(self.pj_tool.value()) if self.ply_method == 'cnc' else 0.0, depth=float(self.pj_depth.value()) / 100.0)
+                    tool=float(self.pj_tool.value()) if self.ply_method == 'cnc' else 0.0, depth=float(self.pj_depth.value()) / 100.0,
+                    corner=self.pj_corner.currentData())
+
+    def _pj_thickness(self):
+        """Najcieńsza płyta wśród wykrytych styków (bez styków - grubość z ustawień metody)."""
+        ts = [float(c[k]) for c in self.pj_contacts for k in ('ta', 'tb') if c.get(k)]
+        return min(ts) if ts else float(self.ply_thickness())
+
+    def _pj_tool_state(self):
+        """Ostrzeżenie, gdy frez nie mieści się w gniazdach, i przycisk z dobranym frezem."""
+        if not hasattr(self, 'pj_tool_warn'):
+            return
+        cnc = self.ply_method == 'cnc'
+        msg, fits = pw.tool_check(self._pj_thickness(), self.pj_fit.value(), self.pj_tool.value(), self.pj_width.value()) if cnc else ('', 0)
+        self.pj_tool_warn.setText(msg)
+        self.pj_tool_warn.setVisible(bool(msg))
+        self.pj_tool_fix.setVisible(bool(msg) and fits > 0)
+        if fits:
+            self.pj_tool_fix.setText(f'Dobierz frez Ø{fits:g} mm')
+        self.pj_corner_note.setText(pw.CORNERS[self.pj_corner.currentData()][1])
+
+    def _pj_fix_tool(self):
+        _msg, fits = pw.tool_check(self._pj_thickness(), self.pj_fit.value(), self.pj_tool.value(), self.pj_width.value())
+        if fits:
+            self.pj_tool.setValue(fits)
 
     def _pj_params_changed(self, save=True):
         if save:
-            self.ply_cfg.update(width=float(self.pj_width.value()), tool=float(self.pj_tool.value()), depth=int(round(self.pj_depth.value())))
+            self.ply_cfg.update(width=float(self.pj_width.value()), tool=float(self.pj_tool.value()), depth=int(round(self.pj_depth.value())),
+                                corner=self.pj_corner.currentData())
             self.ply_cfg['fit'][self.ply_method] = float(self.pj_fit.value())
             self._ply_cfg_save()
+        self._pj_tool_state()
         active = sum(1 for c in self.pj_contacts if c['joint'] != 'none')
         text = f'Styków: {len(self.pj_contacts)}, połączeń do wykonania: {active}.'
         if self.pj_skipped:
@@ -778,6 +827,77 @@ class PlywoodTools:
             self.pj_status.setText(base + f'\nNie da się wykonać połączeń: {len(self.pj_failed)} (czerwona ramka) - pozostałe się wykonają.')
         else:
             self.pj_status.setText(base)
+
+    # ------------------------------------------------------------------------------------------------- rozłóż / złóż
+    FOLD_COMMANDS = {'ply_unfold': ('Rozłóż płyty', 'rozłożyć'), 'ply_fold': ('Złóż płyty', 'złożyć')}
+
+    def _ply_fold_ids(self, seeds):
+        """Płyty pudełka / mebla: wskazana płyta razem z płytami o tym samym zapamiętanym rozłożeniu, a bez niego -
+        z płytami z jej grupy na liście obiektów (np. „Pudełko 1”). Zaznaczone płyty dochodzą do zestawu."""
+        panels = [b for b in self.document.bodies if b.kind == 'solid' and pw.is_panel(b)]
+        out = []
+        for sid in seeds:
+            body = self.document.get(sid)
+            if body is None or not pw.is_panel(body):
+                continue
+            fold = body.meta['ply'].get('fold')
+            if fold:
+                group = [b.id for b in panels if (b.meta['ply'].get('fold') or {}).get('key') == fold.get('key') and b.folder == body.folder]
+            elif body.folder:
+                group = [b.id for b in panels if b.folder == body.folder]
+            else:
+                group = [body.id]
+            out += [i for i in group if i not in out]
+        return out
+
+    def ply_fold_command(self, command):
+        """Rozłóż / Złóż płyty: od razu na zaznaczonych płytach, a bez zaznaczenia - po wskazaniu płyty kliknięciem."""
+        if self.busy:
+            return
+        if self.mode == 'plyfoldpick' and self._plyfold_cmd == command:
+            self.set_mode(None)
+            return
+        ids = self._ply_fold_ids([i for i in self.selected if self.document.get(i) is not None])
+        if ids:
+            self.tools[command].setChecked(False)
+            self.run_ply_fold(command, ids)
+            return
+        self.set_mode('plyfoldpick')
+        self._plyfold_cmd = command
+        self.tools[command].setChecked(True)
+        self.view.setCursor(Qt.PointingHandCursor)
+        title, what = self.FOLD_COMMANDS[command]
+        self.hint(f'{title}: kliknij płytę pudełka / mebla, które chcesz {what}. Esc anuluje.')
+        self.toast(f'Kliknij płytę, którą chcesz {what} razem z resztą pudełka.', 3000)
+
+    def pick_ply_fold(self, x, y):
+        bid = self.view.pick_body(x, y)
+        body = self.document.get(bid) if bid else None
+        if body is None or not pw.is_panel(body):
+            self.toast('To nie jest płyta ze sklejki. Kliknij płytę zrobioną w zakładce Sklejka.')
+            return
+        command = getattr(self, '_plyfold_cmd', 'ply_unfold')
+        self.set_mode(None)
+        self.tools[command].setChecked(False)
+        self.run_ply_fold(command, self._ply_fold_ids([body.id]))
+
+    def run_ply_fold(self, command, ids):
+        flat = command == 'ply_unfold'
+        title = self.FOLD_COMMANDS[command][0]
+        recipe = dict(type='ply_fold', ids=list(ids), flat=flat, key=uuid.uuid4().hex)
+        bodies = self.document.bodies
+
+        def build():
+            return hist.run_ply_fold(bodies, recipe)
+
+        def apply(result):
+            self.document.commit(result, label=title, icon=command, op=recipe)
+            self._tool_select(list(ids))
+
+        def shown():
+            self.view.fit_all()
+
+        self.run_operation(title, build, apply, fit=True, after=shown)
 
     def apply_ply_joints(self):
         recipe = self._pj_recipe()

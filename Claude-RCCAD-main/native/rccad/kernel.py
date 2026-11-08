@@ -1682,6 +1682,18 @@ def regions(plane, edges, wires=()):
     return alt if len(alt) > len(out) else out
 
 
+def mesh_moved(mesh, matrix):
+    """Ta sama siatka po sztywnym przesunięciu / obrocie (macierz 4x4 albo 3x4) - bez ponownego liczenia z kształtu."""
+    if mesh is None:
+        return None
+    m = np.asarray(matrix, float)
+    r, t = m[:3, :3], m[:3, 3]
+    move = lambda pts: np.asarray(pts, float) @ r.T + t if len(pts) else np.asarray(pts, float)
+    centre = tuple(float(c) for c in r @ np.asarray(mesh.center, float) + t)
+    return DisplayMesh(move(mesh.vertices).astype(np.asarray(mesh.vertices).dtype), mesh.triangles,
+                       {k: move(v) for k, v in mesh.edges.items()}, centre, mesh.size, mesh.fine)
+
+
 def transformed(shape, rotation, translation):
     """Kształt obrócony macierzą 3x3 (bez skalowania) i przesunięty."""
     from OCP.gp import gp_Trsf

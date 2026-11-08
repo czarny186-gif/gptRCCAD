@@ -11,6 +11,7 @@ Metoda produkcji decyduje, jakie połączenia da się wykonać (laser tnie tylko
 from __future__ import annotations
 
 import math
+import uuid
 
 import cadquery as cq
 import numpy as np
@@ -24,7 +25,7 @@ METHODS = {
     'laser': dict(title='Cięcie laserowe', short='Laser', t=4.0, fit=0.0, kerf=0.15, tool=0.0,
                   note='Tnie tylko na wylot: wczepy, czopy w gniazdach przelotowych i nacięcia krzyżowe.'),
     'cnc': dict(title='Frezowanie CNC', short='Frezarka', t=18.0, fit=0.1, kerf=0.0, tool=6.0,
-                note='Wszystkie połączenia; narożniki gniazd dostają „psie kości” na promień frezu.'),
+                note='Wszystkie połączenia; narożniki gniazd i nosków dostają wycięcia na frez (psie kości, T-kości albo bez) - frez nie może być szerszy niż gniazdo.'),
     'print': dict(title='Druk 3D', short='Druk 3D', t=4.0, fit=0.2, kerf=0.0, tool=0.0,
                   note='Wszystkie połączenia; luz pasowania zamiast szerokości cięcia.'),
 }
@@ -448,7 +449,7 @@ def _cross(A, B, pa, pb):
                 ad=list(extent(None, d, pa)), bd=list(extent(None, d, pb)), ta=A['t'], tb=B['t'])
 
 
-def cross_new(new_shape, t, others, meth='cnc', fit=None, tool=None):
+def cross_new(new_shape, t, others, meth='cnc', fit=None, tool=None, corner='dog'):
     """Nowa płyta przechodząca na wylot przez istniejące (przegrody na krzyż): od razu nacięcia krzyżowe do połowy
     w obu płytach. others: [(id, kształt, grubość)] - także płyty ukryte. Zwraca (nowa płyta, {id: zmieniona płyta}, [id])."""
     m = method(meth)
@@ -476,7 +477,7 @@ def cross_new(new_shape, t, others, meth='cnc', fit=None, tool=None):
         c['joint'], c['key'] = 'halving', f'__new__:{oid}'
         try:
             out = apply_joints({'__new__': (new['shape'], new['n']), oid: (other['shape'], other['n'])}, [c],
-                               dict(method=meth, fit=fit, tool=tool))
+                               dict(method=meth, fit=fit, tool=tool, corner=corner))
         except kernel.CadError:
             continue                         # nie da się naciąć (płyty nie dochodzą do krawędzi) - zostanie przycięta
         new['shape'] = out['__new__']
@@ -776,10 +777,42 @@ def _inside(shape, p):
     return kernel.point_state(shape, tuple(float(x) for x in p), 1e-5) == 'in'
 
 
-def dogbones(shape, axis, regions, radius):
-    """„Psie kości”: walce o promieniu freza w narożnikach wewnętrznych (krawędzie równoległe do osi freza) w obszarach
-    połączeń - frez nie zrobi ostrego kąta wewnętrznego, więc czop nie wszedłby do końca gniazda."""
-    if radius <= 0 or not regions:
+CORNERS = {
+    'dog': ('Psie kości', 'Okrągłe wycięcie po skosie w narożniku - najprostsze, czop wchodzi do końca.'),
+    'tbone': ('T-kości', 'Wycięcie wzdłuż dłuższego boku gniazda - mniej widoczne z zewnątrz połączenia.'),
+    'none': ('Bez', 'Narożniki bez wycięć - frez zostawi zaokrąglenie, czopy trzeba dopasować ręcznie (pilnik, dłuto).'),
+}
+TOOLS = (0.8, 1.0, 1.5, 2.0, 2.5, 3.0, 3.175, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0)
+
+
+def tool_check(t, fit, tool, width=0.0):
+    """Czy frez zmieści się w gniazdach: najwęższe miejsce to szerokość gniazda (grubość płyty + luz) i odstęp między
+    noskami. Zwraca (komunikat albo '', największy typowy frez, który się mieści, albo 0)."""
+    t, fit, tool = float(t), max(0.0, float(fit)), float(tool)
+    width = float(width) or default_width(t)
+    room = min(t + fit, width + fit)
+    fits = max((d for d in TOOLS if d <= room + 1e-9), default=0.0)
+    if tool <= 0 or tool <= room + 1e-9:
+        return '', fits
+    if fits:
+        return (f'Frez Ø{tool:g} mm jest szerszy niż gniazdo ({room:.2f} mm) - nie wyfrezuje go, a „psie kości” zjedzą '
+                f'połączenie. Użyj frezu Ø{fits:g} mm albo mniejszego.'), fits
+    return f'Gniazdo ma tylko {room:.2f} mm - za wąskie na frezowanie. Użyj grubszej płyty albo lasera.', 0.0
+
+
+def _face_span(face, axis, mid):
+    """Długość ściany w poprzek krawędzi (w jej płaszczyźnie, prostopadle do osi freza)."""
+    fn = np.array(face.normalAt(cq.Vector(*mid)).toTuple(), float)
+    u = _unit(np.cross(axis, fn))
+    pts = _points(face)
+    return float((pts @ u).max() - (pts @ u).min())
+
+
+def dogbones(shape, axis, regions, radius, style='dog'):
+    """Wycięcia na frez w narożnikach wewnętrznych (krawędzie równoległe do osi freza) w obszarach połączeń - frez nie
+    zrobi ostrego kąta wewnętrznego, więc czop nie wszedłby do końca gniazda.
+    style: 'dog' - koło po skosie (psia kość), 'tbone' - koło wzdłuż dłuższego boku (T-kość), 'none' - bez wycięć."""
+    if radius <= 0 or not regions or style == 'none':
         return shape
     axis = _unit(axis)
     cutters = []
@@ -794,25 +827,29 @@ def dogbones(shape, axis, regions, radius):
         mid = (a + b) / 2
         if not any(_inside(r, mid) for r in regions):
             continue
-        faces = edge.ancestors(shape, 'Face').Faces()
-        normals = []
-        for f in faces:
+        faces = []
+        for f in edge.ancestors(shape, 'Face').Faces():
             if f.geomType() != 'PLANE':
                 continue
             fn = np.array(f.normalAt(cq.Vector(*mid)).toTuple(), float)
             if abs(float(fn @ axis)) < 1e-6:
-                normals.append(fn)
-        if len(normals) != 2:
+                faces.append((f, fn))
+        if len(faces) != 2:
             continue
-        n1, n2 = normals
+        (f1, n1), (f2, n2) = faces
         eps = 2e-3
         inside = sum(_inside(shape, mid + eps * (s1 * n1 + s2 * n2)) for s1 in (-1, 1) for s2 in (-1, 1))
         if inside != 3:
             continue                     # tylko narożnik wewnętrzny (materiał z trzech stron)
-        bis = n1 + n2
-        if np.linalg.norm(bis) < 1e-6:
-            continue
-        centre = mid + _unit(bis) * radius
+        if style == 'tbone':
+            # koło na przedłużeniu dłuższej ściany: wycięcie wchodzi w nią, krótsza (np. dno gniazda) zostaje prosta
+            along = n2 if _face_span(f1, axis, mid) >= _face_span(f2, axis, mid) else n1
+            centre = mid + _unit(along) * radius
+        else:
+            bis = n1 + n2
+            if np.linalg.norm(bis) < 1e-6:
+                continue
+            centre = mid + _unit(bis) * radius
         lo, hi = sorted((float(a @ axis), float(b @ axis)))
         base = centre - axis * float(centre @ axis) + axis * lo
         cutters.append(cq.Solid.makeCylinder(radius, hi - lo, cq.Vector(*base), cq.Vector(*axis)))
@@ -900,15 +937,16 @@ def apply_joints(panels, contacts, params, failures=None):
     tool = float(params.get('tool', 0) or 0)
     if meth == 'cnc' and tool > 0:
         for pid in changed:
-            shapes[pid] = dogbones(shapes[pid], axes[pid], regions.get(pid, []), tool / 2)
+            shapes[pid] = dogbones(shapes[pid], axes[pid], regions.get(pid, []), tool / 2, params.get('corner', 'dog'))
     return {pid: shapes[pid] for pid in changed}
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # części do cięcia: płasko, lista, DXF / STL
 # ---------------------------------------------------------------------------------------------------------------
-def flat_part(shape, t=None):
-    """Płyta położona płasko: grubość wzdłuż Z (od 0 do t), najdłuższa prosta krawędź wzdłuż X, róg obrysu w (0, 0)."""
+def flat_matrix(shape, t=None):
+    """Macierz 4x4 kładąca płytę płasko: grubość wzdłuż Z (od 0 do t), najdłuższa prosta krawędź wzdłuż X, róg obrysu
+    w (0, 0). Zwraca (macierz, grubość)."""
     info = panel_info(shape, t)
     n = info['n']
     rot = kernel.rotation_between(n, (0, 0, 1))
@@ -927,10 +965,22 @@ def flat_part(shape, t=None):
         ang = -math.atan2(best[1], best[0])
         ca, sa = math.cos(ang), math.sin(ang)
         rot = np.array([[ca, -sa, 0], [sa, ca, 0], [0, 0, 1]]) @ rot
-    flat = kernel.transformed(shape, rot, np.zeros(3))
-    bb = flat.BoundingBox()
-    flat = flat.translate(cq.Vector(-bb.xmin, -bb.ymin, -bb.zmin))
-    return flat, info['t']
+    bb = kernel.transformed(shape, rot, np.zeros(3)).BoundingBox()
+    m = np.eye(4)
+    m[:3, :3] = rot
+    m[:3, 3] = (-bb.xmin, -bb.ymin, -bb.zmin)
+    return m, info['t']
+
+
+def apply_matrix(shape, m):
+    m = np.asarray(m, float)
+    return kernel.transformed(shape, m[:3, :3], m[:3, 3])
+
+
+def flat_part(shape, t=None):
+    """Płyta położona płasko: grubość wzdłuż Z (od 0 do t), najdłuższa prosta krawędź wzdłuż X, róg obrysu w (0, 0)."""
+    m, t = flat_matrix(shape, t)
+    return apply_matrix(shape, m), t
 
 
 def part_layers(flat, t):
@@ -1134,3 +1184,88 @@ def drawing_parts(items):
 def parts_for(bodies):
     return [dict(id=b.id, name=b.name, flat=flat_part(b.shape, b.meta['ply'].get('t'))[0], t=panel_info(b.shape, b.meta['ply'].get('t'))['t'])
             for b in bodies if is_panel(b)]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# rozłóż / złóż płyty (jak blacha): położenia zapamiętane w płytach, działają po przesunięciu i z biblioteki
+# ---------------------------------------------------------------------------------------------------------------
+def _mat(v):
+    return np.asarray(v, float).reshape(4, 4) if v is not None else np.eye(4)
+
+
+def _lst(m):
+    return [[float(x) for x in row] for row in np.asarray(m, float)]
+
+
+def fold_targets(items, flat, key=None):
+    """Przekształcenia płyt przy rozkładaniu (flat=True) albo składaniu (flat=False).
+    items: [dict(id, shape, t, fold)] - fold: zapamiętany stan z meta płyty (albo None).
+    Stan płyty: key (wspólny dla pudełka), anchor (płyta, za którą idzie całość), flat (czy teraz leży płasko),
+    M - przekształcenie z położenia w chwili przełączenia do drugiego położenia, acc - suma przesunięć / obrotów
+    wykonanych potem na płycie. Druga postać płyty i = acc_kotwicy · M_i · acc_i⁻¹ · bieżąca: przesunięcie całości
+    przenosi wynik razem z nią, a przestawienie pojedynczej płyty na rozkładzie (np. pod arkusz) nie psuje złożenia.
+    Płyty bez pamięci przy rozkładaniu układane są same, obok siebie, w miejscu pudełka.
+    Zwraca ({id: macierz 4x4}, {id: nowy stan})."""
+    by_key = {}
+    for it in items:
+        f = it.get('fold')
+        if f:
+            by_key.setdefault(f.get('key'), []).append(it)
+    anchors = {}
+    for k, group in by_key.items():
+        a = next((g for g in group if g['fold'].get('anchor')), group[0])
+        anchors[k] = _mat(a['fold'].get('acc'))
+    moves = {}
+    for it in items:
+        f = it.get('fold')
+        if f and bool(f.get('flat')) != bool(flat):
+            moves[it['id']] = anchors[f.get('key')] @ _mat(f.get('M')) @ np.linalg.inv(_mat(f.get('acc')))
+    fresh = [it for it in items if it['id'] not in moves and flat and not (it.get('fold') and it['fold'].get('flat'))]
+    if fresh:
+        mats = {}
+        sizes = {}
+        for it in fresh:
+            m, t = flat_matrix(it['shape'], it.get('t'))
+            bb = apply_matrix(it['shape'], m).BoundingBox()
+            mats[it['id']], sizes[it['id']] = m, (bb.xlen, bb.ylen, t)
+        order = sorted(fresh, key=lambda it: -sizes[it['id']][0] * sizes[it['id']][1])
+        gap = max(10.0, 2.0 * max(s[2] for s in sizes.values()))
+        area = sum((s[0] + gap) * (s[1] + gap) for s in sizes.values())
+        width = max(max(s[0] for s in sizes.values()), math.sqrt(area) * 1.6)
+        if moves:            # obok płyt rozłożonych z pamięci
+            boxes = [apply_matrix(it['shape'], moves[it['id']]).BoundingBox() for it in items if it['id'] in moves]
+            origin = np.array([max(b.xmax for b in boxes) + gap, min(b.ymin for b in boxes), min(b.zmin for b in boxes)])
+        else:                # w miejscu pudełka
+            boxes = [it['shape'].BoundingBox() for it in fresh]
+            origin = np.array([min(b.xmin for b in boxes), min(b.ymin for b in boxes), min(b.zmin for b in boxes)])
+        x = y = row = 0.0
+        for it in order:
+            w, h, _t = sizes[it['id']]
+            if x > 0 and x + w > width:
+                x, y, row = 0.0, y + row + gap, 0.0
+            shift = np.eye(4)
+            shift[:3, 3] = origin + (x, y, 0.0)
+            moves[it['id']] = shift @ mats[it['id']]
+            x += w + gap
+            row = max(row, h)
+    if not moves:
+        return {}, {}
+    moved = [it for it in items if it['id'] in moves]
+    keys = {(it.get('fold') or {}).get('key') for it in moved}
+    old_anchor = next((it['id'] for it in moved if (it.get('fold') or {}).get('anchor')), None)
+    if len(keys) == 1 and None not in keys and old_anchor is not None:
+        new_key, anchor = keys.pop(), old_anchor
+    else:
+        new_key = key or uuid.uuid4().hex
+        anchor = old_anchor or max(moved, key=lambda it: abs(it['shape'].Volume()) / max(float(it.get('t') or 1.0), 1e-9))['id']
+    states = {it['id']: dict(key=new_key, anchor=it['id'] == anchor, flat=bool(flat), M=_lst(np.linalg.inv(moves[it['id']])),
+                             acc=_lst(np.eye(4))) for it in moved}
+    return moves, states
+
+
+def fold_placed(state, matrix):
+    """Stan rozłożenia po sztywnym przesunięciu / obrocie płyty (macierz 3x4 albo 4x4)."""
+    mm = np.asarray(matrix, float)
+    m = np.eye(4)
+    m[:3, :4] = mm[:3, :4]
+    return dict(state, acc=_lst(m @ _mat(state.get('acc'))))

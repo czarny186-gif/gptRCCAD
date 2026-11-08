@@ -19,7 +19,7 @@ from .document import Body
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
@@ -1627,7 +1627,8 @@ def ply_between_fit(bodies, shapes, recipe):
     out = []
     for k, shp in enumerate(shapes):
         others = [(b.id, current[b.id], b.meta['ply'].get('t')) for b in panels]
-        shp, changed, crossed = pw.cross_new(shp, float(recipe['t']), others, recipe.get('method', 'cnc'), recipe.get('fit'))
+        shp, changed, crossed = pw.cross_new(shp, float(recipe['t']), others, recipe.get('method', 'cnc'), recipe.get('fit'),
+                                              recipe.get('tool'), recipe.get('corner', 'dog'))
         current.update(changed)
         joined[k] = crossed
         rest = [current[b.id] for b in panels if b.id not in crossed]
@@ -1674,6 +1675,38 @@ def ply_contacts(bodies, recipe):
     for c in contacts:
         c['joint'] = pw.joint_for(meth, c['kind'], chosen.get(c['key']))
     return panels, contacts, skipped
+
+
+def run_ply_fold(bodies, recipe):
+    """Rozłóż płyty (flat=True) / Złóż płyty (flat=False). Płyty tylko się przesuwają i obracają, więc siatki są
+    przekształcane, a nie liczone od nowa."""
+    from . import plywood as pw
+    ids = list(recipe['ids'])
+    items = []
+    for i in ids:
+        b = _body(bodies, i)
+        ply = (b.meta or {}).get('ply') or {}
+        items.append(dict(id=b.id, shape=b.shape, t=ply.get('t'), fold=ply.get('fold')))
+    moves, states = pw.fold_targets(items, bool(recipe['flat']), key=recipe.get('key'))
+    if not moves:
+        raise kernel.CadError('Płyty są już ' + ('rozłożone.' if recipe['flat'] else 'złożone (albo nigdy nie były rozkładane).'))
+    out = []
+    for b in bodies:
+        m = moves.get(b.id)
+        if m is None:
+            out.append(b)
+            continue
+        shape = pw.apply_matrix(b.shape, m)
+        meta = dict(b.meta or {})
+        meta['ply'] = dict(meta.get('ply') or {}, fold=states[b.id])
+        out.append(replace(b, shape=shape, mesh=kernel.mesh_moved(b.mesh, m) if b.mesh is not None else _deferred_or_mesh(shape),
+                           meta=meta, threads=b.threads))
+    return tuple(out)
+
+
+def _deferred_or_mesh(shape):
+    from .document import _mesh
+    return _mesh(shape)
 
 
 def run_ply_joints(bodies, recipe, failures=None):
@@ -1814,7 +1847,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -1936,7 +1969,7 @@ def reads(recipe, current):
         return {recipe['id'], recipe['target']}
     if kind == 'split':
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
-    if kind in ('delete', 'folder'):
+    if kind in ('delete', 'folder', 'ply_fold'):
         return set(recipe['ids'])
     if kind == 'thread':
         return {item['id'] for item in recipe.get('items') or [recipe]}

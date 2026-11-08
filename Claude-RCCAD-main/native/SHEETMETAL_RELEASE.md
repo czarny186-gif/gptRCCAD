@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.63 — operacje na wszystkich zaznaczonych, pominięte połączenia, eksport wielokątów
+# RCCAD Desktop 0.4.64 — rozłóż / złóż płyty, frez i narożniki gniazd przy frezowaniu
+
+## Zmiany 0.4.64
+
+- **Rozłóż płyty / Złóż płyty (zakładka Sklejka)**: jak w Blasze - całe pudełko albo mebel kładzie się płasko, płyta obok płyty, w miejscu pudełka, i wraca do złożenia. Płyty pamiętają oba położenia: można je przestawiać na rozkładzie pojedynczo (np. pod arkusz), przesuwać i obracać całość, zapisać do biblioteki i wstawić w dowolnym miejscu - nadal się składają i rozkładają. Pudełko składa się tam, gdzie leży jego podstawa. Tylko przesuwanie płyt (siatki przekształcane, bez przeliczania) - natychmiast, także przy dużych meblach.
+- **Biblioteka**: kliknięcie płyty pudełka zapisuje całe pudełko (z pamięcią rozłożenia); każda wstawiona kopia składa się niezależnie.
+- **Frezowanie - narożniki gniazd i nosków** (przesłany model FREZ): przy płycie 2 mm frez 6 mm robił „psie kości” większe niż gniazda - z połączeń zostawały bąble. W panelu Połączenia jest teraz wybór narożników: Psie kości, T-kości (wycięcie wzdłuż boku, mniej widoczne) albo Bez. Gdy frez jest szerszy niż gniazdo, pojawia się czerwone ostrzeżenie i przycisk „Dobierz frez Ø… mm” (największy typowy frez, który się mieści). Nacięcia krzyżowe nowych przegród używają tego samego frezu i narożników (wcześniej zawsze 6 mm).
+
+## RCCAD Desktop 0.4.63 — operacje na wszystkich zaznaczonych, pominięte połączenia, eksport wielokątów
 
 ## Zmiany 0.4.63
 

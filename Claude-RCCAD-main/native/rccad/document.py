@@ -52,6 +52,10 @@ class Body:
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             from .sheetedit import placed_state
             return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
+        if self.kind == 'solid' and self.meta and (self.meta.get('ply') or {}).get('fold'):
+            from .plywood import fold_placed        # płyta pamięta rozłożenie / złożenie także po przesunięciu
+            ply = dict(self.meta['ply'], fold=fold_placed(self.meta['ply']['fold'], matrix))
+            return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, ply=ply))
         return self.changed(shape)
 
     def changed(self, shape, mesh=False):
