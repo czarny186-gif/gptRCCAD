@@ -4565,6 +4565,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.toast('To nie jest blacha z zapisanymi gięciami.')
             return
         shape = body.shape
+        flat_walls, folded_walls = self._flat_tab_walls(body), self._folded_tab_walls(body)      # ścianki na noski
 
         def build():
             flat = shape if state.get('flat') else she.switch(shape, state, True)[0]
@@ -4573,6 +4574,10 @@ class StudioWindow(PlywoodTools, QMainWindow):
             k = float((state['recipe'].get('rules') or {}).get('kfactor', shm.K_DEFAULT))
             bends = [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in lines]
             folded = self._folded_of(shape, state)
+            if flat_walls:
+                flat = kernel.compound([flat, *flat_walls])
+            if folded is not None and folded_walls:
+                folded = kernel.compound([folded, *folded_walls])
             return flat, bends, dict(t=float(state['recipe']['t']), k=k), folded
 
         def apply(result):
@@ -4779,8 +4784,13 @@ class StudioWindow(PlywoodTools, QMainWindow):
 
     def _selected_sheet(self):
         chosen = [b for b in self.document.bodies if b.id in self.selected and b.kind == 'solid']
-        if len(chosen) == 1 and self._sheet_state(chosen[0].id) is not None:
-            return chosen[0]
+        roots = {self._tab_root(b).id: self._tab_root(b) for b in chosen}       # ścianka na noski -> jej blacha
+        if len(roots) == 1:
+            chosen = [*roots.values(), *[b for b in chosen if b.id not in roots]]
+        sheets = [b for b in chosen if (b.meta or {}).get('sheet') or (len(chosen) == 1 and self._sheet_state(b.id) is not None)]
+        # blacha zaznaczona razem ze swoimi ściankami na noski (jedna grupa) - to nadal jedna blacha
+        if len(sheets) == 1 and all(b is sheets[0] or ((b.meta or {}).get('ply') or {}).get('tab') for b in chosen):
+            return sheets[0]
         return None
 
     def sheet_command(self, command):
@@ -4804,9 +4814,20 @@ class StudioWindow(PlywoodTools, QMainWindow):
         self.hint(f'{self.SHEET_COMMANDS[command]}: kliknij blachę, którą chcesz {what}. Esc anuluje.')
         self.toast(f'Kliknij blachę, którą chcesz {what}.', 3000)
 
+    def _tab_root(self, body):
+        """Ścianka na noski -> blacha, na której stoi (przez kolejne ścianki); inne bryły bez zmian."""
+        seen = set()
+        while body is not None and ((body.meta or {}).get('ply') or {}).get('tab') and body.id not in seen:
+            seen.add(body.id)
+            parent = self.document.get(body.meta['ply']['tab'].get('sheet'))
+            if parent is None:
+                break
+            body = parent
+        return body
+
     def pick_sheet_command(self, x, y):
         bid = self.view.pick_body(x, y)
-        body = self.document.get(bid) if bid else None
+        body = self._tab_root(self.document.get(bid)) if bid else None
         if body is None or body.kind != 'solid' or self._sheet_state(body.id) is None:
             self.toast('To nie jest blacha. Kliknij blachę (najpierw KONWERTUJ NA BLACHĘ).')
             return
@@ -4824,8 +4845,7 @@ class StudioWindow(PlywoodTools, QMainWindow):
         if self.busy:
             return
         if body is None:
-            chosen=[b for b in self.document.bodies if b.id in self.selected and b.kind=='solid']
-            body=chosen[0] if len(chosen)==1 else None
+            body=self._selected_sheet()
         metadata=self._editable_sheet_state(body.id) if body else None
         if metadata is None:
             self.toast('Zaznacz jedną blachę z zapisaną historią gięć.')
@@ -4837,11 +4857,12 @@ class StudioWindow(PlywoodTools, QMainWindow):
             return
         label={'unfold_sheet':'Rozłóż blachę','fold_sheet':'Zegnij blachę','sheet_sync':'Aktualizuj blachę'}[command]
         recipe=dict(type='sheetmode',id=body.id,state=metadata,flat=flat,sync=sync)
+        walls=hist.sheet_tab_walls(self.document.bodies, body.id)     # ścianki na noski rozkładają się / składają z blachą
         def build():
-            return hist.run_sheetmode([body],recipe)[0]
+            return {b.id: b for b in hist.run_sheetmode([body, *walls],recipe)}
         def apply(result):
-            self.document.commit([result if b.id==body.id else b for b in self.document.bodies],label=label,icon=command,op=recipe)
-            self._tool_select([body.id])
+            self.document.commit([result.get(b.id, b) for b in self.document.bodies],label=label,icon=command,op=recipe)
+            self._tool_select([body.id, *[w.id for w in walls]])
         self.set_mode(None)
         def shown():
             if not sync:
@@ -5150,7 +5171,34 @@ class StudioWindow(PlywoodTools, QMainWindow):
             self.toast(f'Zapisano DXF 1:1 (mm): {path}. CUT: cięcie; BEND_UP/DOWN: linie gięcia, nie do cięcia. K={pattern["kfactor"]:.3f}.', 12000)
 
         metadata=self._editable_sheet_state(body.id)
-        self.run_operation('Rozwinięcie DXF',lambda:she.export_dxf(body.shape,metadata,path),done)
+        extra=self._flat_tab_walls(body)
+        self.run_operation('Rozwinięcie DXF',lambda:she.export_dxf(body.shape,metadata,path,extra),done)
+
+    def _flat_tab_walls(self, body):
+        """Ścianki na noski blachy położone płasko obok jej rozwinięcia (do DXF i rysunku blachy)."""
+        from . import plywood as pw
+        walls = hist.sheet_tab_walls(self.document.bodies, body.id)
+        if not walls:
+            return []
+        state = (body.meta or {}).get('sheet') or {}
+        if state.get('flat'):
+            return [w.shape for w in walls]
+        try:
+            moves = hist.sheet_tab_matrices(self.document.bodies, body, body, True)
+        except Exception:
+            return []
+        return [pw.apply_matrix(w.shape, moves[w.id]) for w in walls if w.id in moves]
+
+    def _folded_tab_walls(self, body):
+        walls = hist.sheet_tab_walls(self.document.bodies, body.id)
+        if not walls or not ((body.meta or {}).get('sheet') or {}).get('flat'):
+            return [w.shape for w in walls]
+        try:
+            moves = hist.sheet_tab_matrices(self.document.bodies, body, body, False)
+        except Exception:
+            return []
+        from . import plywood as pw
+        return [pw.apply_matrix(w.shape, moves[w.id]) for w in walls if w.id in moves]
 
     def pick_shell(self, x, y):
         hit = self.view.pick_face(x, y)
@@ -9027,6 +9075,16 @@ class StudioWindow(PlywoodTools, QMainWindow):
                 made.append(replace(b, id=uuid.uuid4().hex, group=group, mesh=None).placed(shape, matrix))
         folder = action['name'] if len(made) > 1 else ''
         made = [replace(b, folder=folder) for b in made]
+        ids = {old.id: new.id for old, new in zip(action['bodies'], made)}       # ścianki na noski / połączenia płyt - nowe id
+        for i, b in enumerate(made):
+            ply = ((b.meta or {}).get('ply') or {})
+            if ply.get('tab') or ply.get('joined'):
+                ply = dict(ply)
+                if ply.get('tab'):
+                    ply['tab'] = dict(ply['tab'], sheet=ids.get(ply['tab'].get('sheet'), ply['tab'].get('sheet')))
+                if ply.get('joined'):
+                    ply['joined'] = [ids.get(j, j) for j in ply['joined']]
+                made[i] = replace(b, meta=dict(b.meta, ply=ply))
         keys = {}                      # każda wstawiona kopia pudełka dostaje własny klucz rozłożenia
         for i, b in enumerate(made):
             fold = ((b.meta or {}).get('ply') or {}).get('fold')

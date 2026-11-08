@@ -82,7 +82,7 @@ class PlywoodTools:
         for button, m in zip(seg._buttons, seg._data):
             button.setToolTip(pw.METHODS[m]['title'] + ': ' + pw.METHODS[m]['note'])
         self._field(lay, 'Metoda produkcji', seg)
-        spin = _spin(self.ply_thickness(), .5, 200, 2, 1)
+        spin = _spin(self.ply_thickness(), .1, 200, 2, 1)
         spin.setToolTip('Grubość sklejki. Zapamiętywana osobno dla każdej metody produkcji.')
         self._pic_field(lay, 'Grubość płyty (mm)', 'pl_thick', spin, 'Grubość sklejki (płyty).')
         note = _label('', 'help')
@@ -438,7 +438,7 @@ class PlywoodTools:
         v = self._tw_values()
         recipe = dict(type='sheet_tabwall', id=body.id, edges=hist.edge_refs(body.shape, [pick['index']]), t=pick['t'],
                       length=v['length'], measure=v['measure'], flip=bool(self.tw_flip.isChecked()), width=v['width'], fit=v['fit'],
-                      out=[uuid.uuid4().hex])
+                      out=[uuid.uuid4().hex], group=uuid.uuid4().hex)
         existing = list(self.document.bodies)
         self.tw_pick = None
         self.view.set_picked_edge(None)

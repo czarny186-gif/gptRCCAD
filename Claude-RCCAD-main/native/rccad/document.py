@@ -52,9 +52,14 @@ class Body:
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             from .sheetedit import placed_state
             return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
-        if self.kind == 'solid' and self.meta and (self.meta.get('ply') or {}).get('fold'):
+        ply_meta = (self.meta or {}).get('ply') or {} if self.kind == 'solid' else {}
+        if ply_meta.get('fold') or (ply_meta.get('tab') or {}).get('unfold'):
             from .plywood import fold_placed        # płyta pamięta rozłożenie / złożenie także po przesunięciu
-            ply = dict(self.meta['ply'], fold=fold_placed(self.meta['ply']['fold'], matrix))
+            ply = dict(ply_meta)
+            if ply.get('fold'):
+                ply['fold'] = fold_placed(ply['fold'], matrix)
+            if (ply.get('tab') or {}).get('unfold'):
+                ply['tab'] = dict(ply['tab'], unfold=fold_placed(ply['tab']['unfold'], matrix))
             return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, ply=ply))
         return self.changed(shape)
 

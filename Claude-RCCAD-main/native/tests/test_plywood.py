@@ -791,3 +791,59 @@ class SheetTabWallTests(PlywoodWindowTests):
         self.assertTrue(w.document.get(sid).meta['sheet'].get('flat'))                 # gniazda nie w łuku - blacha się rozkłada
         w.selected = [sid]; w.sheet_command('fold_sheet'); self.wait()
         self.assertFalse(w.document.get(sid).meta['sheet'].get('flat'))
+
+    def test_tabwalls_unfold_fold_drawing_and_library(self):
+        """0.4.67: ścianki na noski rozkładają się i składają razem z blachą, idą do biblioteki i na rysunek / DXF."""
+        from rccad import library
+        w = self.w
+        sheet = self._sheet(w)
+        sid = sheet.id
+
+        def click(x, y):
+            with patch.object(w.view, 'nearest_edge', return_value=(sid, self._edge(w.document.get(sid), x, y))):
+                w.view_clicked(5, 5, False, False)
+            self.wait()
+        w.toggle_mode('flange'); w.fl_length.setValue(30); w.toggle_bending()
+        click(50, 0); click(50, 60)
+        w.set_mode(None); w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_bend.click()
+        click(100, 30); click(0, 30)
+        w.set_mode(None)
+        walls = [b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]
+        self.assertEqual(len({b.group for b in w.document.bodies}), 1)                    # blacha ze ściankami - jeden element
+        before = {b.id: np.array(b.shape.Center().toTuple()) for b in w.document.bodies}
+        w.selected = [walls[0].id]; w.sheet_command('unfold_sheet'); self.wait()           # klik ścianki - rozkłada całą blachę
+        self.assertTrue(w.document.get(sid).meta['sheet'].get('flat'))
+        flat = [w.document.get(b.id) for b in walls]
+        self.assertTrue(all(abs(b.shape.BoundingBox().zlen - 2) < 1e-6 for b in flat))         # ścianki leżą płasko
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        # DXF rozwinięcia: kontury blachy i ścianek
+        folder = tempfile.mkdtemp()
+        path = os.path.join(folder, 'r.dxf')
+        with patch('rccad.studio.QFileDialog.getSaveFileName', return_value=(path, '')):
+            w.export_flat_pattern(w.document.get(sid)); self.wait()
+        import ezdxf
+        cut = [e for e in ezdxf.readfile(path).modelspace() if e.dxf.layer == 'CUT']
+        ys = [v for e in cut if e.dxftype() == 'LINE' for v in (e.dxf.start.y, e.dxf.end.y)]
+        self.assertGreater(max(ys), 120); self.assertLess(min(ys), -20)                       # ścianki obok rozwinięcia
+        w.selected = [sid]; w.sheet_command('fold_sheet'); self.wait()
+        for b in w.document.bodies:
+            self.assertTrue(np.allclose(b.shape.Center().toTuple(), before[b.id], atol=1e-6), b.name)
+        # biblioteka: blacha zapisuje się ze ściankami; wstawiona kopia rozkłada się razem z nimi
+        lib = library.save_bodies([b for b in w.document.bodies], folder, 'Blacha')
+        action = dict(bodies=library.load_bodies('object', lib), name='Blacha', dialog=None)
+        w._library_insert(action, np.eye(3), np.array([0.0, 200.0, 0.0])); self.wait()
+        copy = next(b for b in w.document.bodies if b.id not in before and (b.meta or {}).get('sheet'))
+        cwalls = hist.sheet_tab_walls(w.document.bodies, copy.id)
+        self.assertEqual(len(cwalls), 2)
+        w.selected = [copy.id]; w.sheet_command('unfold_sheet'); self.wait()
+        self.assertTrue(w.document.get(copy.id).meta['sheet'].get('flat'))
+        self.assertTrue(all('unfold' in w.document.get(c.id).meta['ply']['tab'] for c in cwalls))
+
+    def test_ply_thickness_from_point_one(self):
+        w = self.w
+        w.toggle_mode('ply')
+        spin = w._ply_widgets[0][1]
+        self.assertAlmostEqual(spin.minimum(), .1)
+        spin.setValue(.1)
+        self.assertAlmostEqual(w.ply_thickness(), .1)
+        w.set_mode(None)

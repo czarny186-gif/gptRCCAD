@@ -595,7 +595,7 @@ def flat_bend_lines(actual, source_state):
     return _bend_lines(model,_flat_sections(blank,t),source_state['recipe'])
 
 
-def export_dxf(actual, source_state, path):
+def export_dxf(actual, source_state, path, extra=()):
     """Export the edited constant-thickness blank, with analytic cut curves.
     Linie gięcia: BEND_UP ciągła, BEND_DOWN przerywana (typ linii GIECIE_DOL), obie przycięte do konturu cięcia."""
     import os
@@ -624,6 +624,10 @@ def export_dxf(actual, source_state, path):
         for wire in face.Wires():
             contour=wire.translate((0,0,-face.Center().z)).copy()
             writer.add_shape(cq.Workplane('XY').newObject([contour]),layer='CUT')
+    for part in extra:          # ścianki na noski położone obok rozwinięcia (te same współrzędne)
+        for face in _flat_sections(part,t):
+            for wire in face.Wires():
+                writer.add_shape(cq.Workplane('XY').newObject([wire.translate((0,0,-face.Center().z)).copy()]),layer='CUT')
     writer.document.appids.add('RCCAD')
     factor=float((source_state['recipe'].get('rules') or {}).get('kfactor',s.K_DEFAULT))
     lines=_bend_lines(model,sections,source_state['recipe'])

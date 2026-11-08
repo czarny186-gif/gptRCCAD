@@ -1341,3 +1341,30 @@ def tab_wall(shape, edge, t, length, measure='outer', flip=False, plate=None):
             raise kernel.CadError(f'Długość kołnierza mierzona od zewnątrz musi być większa niż grubość blachy ({t:g} mm).')
         wall, up = edge_wall(plate, edge, t, length - t, 'on', flip, t)
     return wall, plate, up
+
+
+def hinge_matrix(wall, plate, t, gap=None):
+    """Ścianka na noski położona płasko obok płyty, na której stoi (jak rozłożony kołnierz): obrót wokół zewnętrznej
+    dolnej krawędzi ścianki do płaszczyzny płyty, na zewnątrz, z odstępem gap. Zwraca macierz 4x4."""
+    t = float(t)
+    nw = panel_info(wall, t)['n']
+    npl = panel_info(plate, t)['n']
+    e = _unit(np.cross(nw, npl))
+    pw_, pp = _points(wall), _points(plate)
+    wc, pc = pw_.mean(axis=0), pp.mean(axis=0)
+    up = npl if float((wc - pc) @ npl) > 0 else -npl
+    side = _unit(np.cross(up, e))
+    out = side if float((wc - pc) @ side) > 0 else -side
+    h = out * float((pw_ @ out).max()) + up * float((pp @ up).min()) + e * float(wc @ e)
+    R = kernel.rotation_between(up, out)
+    gap = max(1.0, t) if gap is None else float(gap)
+    m = np.eye(4)
+    m[:3, :3] = R
+    m[:3, 3] = h - R @ h + out * gap
+    return m
+
+
+def frame_matrix(o, x, y, z):
+    m = np.eye(4)
+    m[:3, 0], m[:3, 1], m[:3, 2], m[:3, 3] = _unit(x), _unit(y), _unit(z), np.asarray(o, float)
+    return m

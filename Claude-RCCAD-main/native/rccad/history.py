@@ -1438,7 +1438,101 @@ def run_sheetbuild(bodies, recipe):
 def run_sheetmode(bodies,recipe):
     body=_body(bodies,recipe['id'])
     source=(body.meta or {}).get('sheet') or recipe['state']
-    return _sheet_result(bodies, body, 'mode', source, (recipe['flat'], recipe.get('sync', False)))
+    out=_sheet_result(bodies, body, 'mode', source, (recipe['flat'], recipe.get('sync', False)))
+    if recipe.get('sync'):
+        return out
+    return sheet_tabs_switch(out, body, _body(out, body.id), bool(recipe['flat']))
+
+
+def sheet_tab_walls(bodies, sheet_id):
+    """Ścianki na noski blachy (także ścianki na ściankach) - najpierw te bliżej blachy."""
+    children = {}
+    for b in bodies:
+        tab = ((b.meta or {}).get('ply') or {}).get('tab')
+        if tab and tab.get('sheet'):
+            children.setdefault(tab['sheet'], []).append(b)
+    out, queue = [], [sheet_id]
+    while queue:
+        for c in children.get(queue.pop(0), ()):
+            if c not in out:
+                out.append(c)
+                queue.append(c.id)
+    return out
+
+
+def _sheet_frame(sheet):
+    from . import plywood as pw
+    base = (((sheet.meta or {}).get('sheet') or {}).get('recipe') or {}).get('base')
+    return pw.frame_matrix(base['o'], base['x'], base['y'], base['z']) if base else np.eye(4)
+
+
+def _np44(matrix):
+    return np.array([[matrix[r, c] for c in range(4)] for r in range(4)], float)
+
+
+def sheet_tab_matrices(bodies, before, after, flat):
+    """Przekształcenia ścianek na noski przy rozkładaniu (flat=True) / składaniu blachy: {id: macierz 4x4}.
+    Rozkładanie: ścianka kładzie się płasko obok płyty, na której stoi (obrót na zawiasie), i jedzie razem z tą płytą
+    do rozwinięcia (ta sama macierz co płyta blachy). Składanie: zapamiętane położenie, z przesunięciem blachy."""
+    from . import plywood as pw
+    walls = sheet_tab_walls(bodies, before.id)
+    if not walls:
+        return {}
+    out = {}
+    if flat:
+        state = (before.meta or {}).get('sheet') or {}
+        if state.get('flat'):
+            return {}
+        model = she.layout(state['recipe'])
+        t = float(state['recipe']['t'])
+        folded = {b.id: b.shape for b in walls}
+        for w in walls:
+            if w.meta['ply'].get('tab', {}).get('unfold'):
+                continue
+            parent = w.meta['ply']['tab']['sheet']
+            wt = float(w.meta['ply'].get('t') or t)
+            if parent == before.id:
+                panel = min(model.panels, key=lambda p: p.folded.distance(w.shape))
+                place = _np44(panel.flat_frame) @ np.linalg.inv(_np44(panel.folded_frame))
+                out[w.id] = place @ pw.hinge_matrix(w.shape, panel.folded, wt)
+            elif parent in out and parent in folded:
+                out[w.id] = out[parent] @ pw.hinge_matrix(w.shape, folded[parent], wt)
+        return out
+    for w in walls:
+        info = w.meta['ply'].get('tab', {}).get('unfold')
+        if not info:
+            continue
+        ref = pw._mat(info.get('ref'))
+        sheet_move = _sheet_frame(after) @ np.linalg.inv(ref)
+        out[w.id] = sheet_move @ pw._mat(info['M']) @ np.linalg.inv(pw._mat(info.get('acc')))
+    return out
+
+
+def sheet_tabs_switch(bodies, before, after, flat):
+    """Blacha rozłożona / zgięta: jej ścianki na noski rozkładają się / składają razem z nią (tylko przesunięcie płyt,
+    siatki przekształcane)."""
+    from . import plywood as pw
+    moves = sheet_tab_matrices(bodies, before, after, flat)
+    if not moves:
+        return bodies
+    ref = pw._lst(_sheet_frame(after))
+    result = []
+    for b in bodies:
+        m = moves.get(b.id)
+        if m is None:
+            result.append(b)
+            continue
+        ply = dict(b.meta['ply'])
+        tab = dict(ply['tab'])
+        if flat:
+            tab['unfold'] = dict(M=pw._lst(np.linalg.inv(m)), acc=pw._lst(np.eye(4)), ref=ref)
+        else:
+            tab.pop('unfold', None)
+        ply['tab'] = tab
+        shape = pw.apply_matrix(b.shape, m)
+        result.append(replace(b, shape=shape, mesh=kernel.mesh_moved(b.mesh, m) if b.mesh is not None else _deferred_or_mesh(shape),
+                              meta=dict(b.meta, ply=ply)))
+    return result
 
 
 def run_text(bodies, recipe):
@@ -1683,8 +1777,21 @@ def run_sheet_tabwall(bodies, recipe):
         if added is not None and added.Solids() and added.Volume() > 1e-6:
             new_shape = kernel.boolean('union', new_shape, [added])
         out[sheet.id] = new_shape
+    # blacha i jej ścianki na noski - jedna grupa (jeden element: zaznaczanie, przesuwanie, biblioteka)
+    root = sheet
+    seen = set()
+    while ((root.meta or {}).get('ply') or {}).get('tab') and root.id not in seen:
+        seen.add(root.id)
+        parent = next((b for b in bodies if b.id == root.meta['ply']['tab'].get('sheet')), None)
+        if parent is None:
+            break
+        root = parent
+    group = root.group or sheet.group or recipe.get('group') or ('t' + sheet.id)[:32]
+    members = {root.id, sheet.id, *(b.id for b in sheet_tab_walls(bodies, root.id))}
     result = []
     for b in bodies:
+        if b.id in members and b.group != group:
+            b = replace(b, group=group)
         if b.id in out and b.id != wid:
             changed = b.changed(out[b.id])
             if pw.is_panel(changed) and b.id in partners:
@@ -1697,7 +1804,7 @@ def run_sheet_tabwall(bodies, recipe):
     meta['ply']['joined'] = sorted(partners[wid])
     meta['ply']['tab'] = dict(sheet=sheet.id, length=float(recipe['length']), measure=recipe.get('measure', 'outer'))
     name = _next_names(bodies, 'Ścianka blachy', 1)[0]
-    new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=sheet.folder).prepared()
+    new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=sheet.folder, group=group).prepared()
     return [*result, new]
 
 

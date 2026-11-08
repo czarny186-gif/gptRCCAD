@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.66 — kołnierz na noski w Blasze, Wstaw w Ściance, grupy w przesuwaniu i wyciąganiu
+# RCCAD Desktop 0.4.67 — ścianki na noski razem z blachą, płyty od 0,1 mm
+
+## Zmiany 0.4.67
+
+- **Blacha ze ściankami na noski jak jedna blacha**: Rozłóż blachę rozkłada także ścianki na noski - każda kładzie się płasko obok płyty, na której stoi (noski naprzeciw gniazd), i jedzie razem z tą płytą do rozwinięcia; Zegnij blachę stawia je z powrotem dokładnie na miejsce. Kliknięcie ścianki też rozkłada / składa całą blachę.
+- **Jeden element**: blacha i jej ścianki tworzą wspólną grupę - zaznaczają się razem, przesuwają i obracają razem, zapisują się razem do biblioteki; wstawiona kopia ma własne połączenia i dalej się rozkłada i składa (także po przesunięciu).
+- **Rozwinięcie DXF i Rysunek blachy do gięcia**: ścianki na noski są w pliku / na rysunku obok rozwinięcia (warstwa CUT), widok izometryczny pokazuje całość złożoną.
+- **Sklejka - Płyta**: grubość od 0,1 mm (wcześniej od 0,5 mm).
+
+## RCCAD Desktop 0.4.66 — kołnierz na noski w Blasze, Wstaw w Ściance, grupy w przesuwaniu i wyciąganiu
 
 ## Zmiany 0.4.66
 
