@@ -337,6 +337,7 @@ class ObjectsPanel(QFrame):
         self.setFixedWidth(WIDTH)
         self._sig = None
         self._folded = set()
+        self._seen = set()          # grupy (foldery) już pokazane - nowa grupa pojawia się zwinięta
         self._editing = False
         self._stale = None
         outer = QVBoxLayout(self)
@@ -437,6 +438,9 @@ class ObjectsPanel(QFrame):
             self._stale = (items, selected, hidden, locked)      # lista przebuduje się po zakończeniu edycji nazwy
             return
         items = [tuple(it) + ('', '')[len(it) - 4:] if len(it) < 6 else tuple(it) for it in items]
+        keys = {f'{it[1]}:{it[5]}' for it in items if it[5]}
+        self._folded |= keys - self._seen            # nowa grupa: od razu zwinięta (rozwija ją strzałka)
+        self._seen |= keys
         sig = (tuple(items), tuple(selected), tuple(sorted(hidden)), tuple(sorted(locked)), tuple(sorted(self._folded)))
         if sig == self._sig:
             return

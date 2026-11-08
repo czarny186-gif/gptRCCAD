@@ -254,7 +254,8 @@ def edge_walls(base_shape, edges, t, height, side='on', flip=False, base_t=None)
                     continue
                 ui = _unit(far - V)
                 uj = _unit(other['b' if shared == 'a' else 'a'] - V)
-                if abs(float(ui @ uj)) < 1e-4:            # narożnik prosty
+                probe = V + (ui + uj) * min(1.0, .25 * float(t)) - info['n'] * (info['t'] / 2) * (1 if float(V @ info['n']) >= info['hi'] - 1e-6 else -1)
+                if abs(float(ui @ uj)) < 1e-4 and _inside(base_shape, probe):   # narożnik prosty wypukły
                     if side != 'on' and rank[i] < rank[j]:
                         ext[end] = max(ext[end], float(t))  # przy boku: dłuższa ścianka zakrywa narożnik
                     continue
@@ -502,7 +503,7 @@ def find_contacts(panels):
                 found = _mitre(A, B)        # pod innym kątem niż prosty: tylko narożnik na skos
                 if found is not None:
                     out.append(found)
-                else:
+                elif A['shape'].distance(B['shape']) < TOL:      # tylko płyty, które naprawdę się stykają
                     skipped.append((A['id'], B['id'], 'Płyty pod kątem innym niż 90° stykające się inaczej niż narożnikiem - połączenie pominięte.'))
                 continue
             found = _cross(A, B, pts[A['id']], pts[B['id']])
@@ -644,6 +645,9 @@ def _clip_polygon(poly, normal, lo, hi):
     return clip(poly, lambda p: hi - float(p @ normal)) if poly else poly
 
 
+FLAT_MITRE = 12.0       # ścianki załamane o mniej niż tyle stopni: zwykły styk na skos (bez wczepów i prostowania końców)
+
+
 def _square_corner(c, A, B, width, fit):
     """Narożnik pod kątem do cięcia prostopadłego (laser, frezarka): końce obu ścianek prostopadłe do ich stron.
     Wzdłuż linii narożnika pasy (wczepy) należą na przemian do jednej i drugiej ścianki: właściciel pasa sięga do
@@ -664,14 +668,25 @@ def _square_corner(c, A, B, width, fit):
     ua, ub = walls['a']['u'], walls['b']['u']
     outer = max(rh, key=lambda p: float(p @ (ua + ub)))       # zewnętrzny wierzchołek narożnika
     full, reach = {}, {}
+    base = d * s0
     for key, w in walls.items():
         proj = [float(p @ w['u']) for p in rh]
         w['start'], w['end'] = min(proj) - 1.0, float(outer @ w['u'])
+        # narożnik o kącie ostrym: koniec prostopadły przez zewnętrzny wierzchołek wystawałby wewnętrznym rogiem
+        # poza zewnętrzną stronę sąsiedniej ścianki - koniec cofnięty do tej płaszczyzny (nic nie wystaje)
+        o = walls['b' if key == 'a' else 'a']
+        ob = float(outer @ o['n'])
+        inner = o['slab'][1] if abs(o['slab'][0] - ob) < abs(o['slab'][1] - ob) else o['slab'][0]
+        sigma = 1.0 if inner > ob else -1.0
+        coef = float(o['n'] @ w['u'])
+        if sigma * coef < -1e-9:
+            for vv in w['slab']:
+                c0 = float(o['n'] @ (base + w['n'] * (vv - float(base @ w['n']))))
+                w['end'] = min(w['end'], (ob - c0) / coef)
         reach[key] = max(proj) + 5.0
         third = np.cross(w['u'], w['n'])
         sign = 1.0 if float(third @ d) > 0 else -1.0
         full[key] = frame_box(w['u'], w['n'], (w['start'], w['end']), tuple(w['slab']), sorted((sign * s0, sign * s1)))
-        base = d * s0
         # przekrój końca ścianki dochodzącej do narożnika (prostokąt w płaszczyźnie prostopadłej do linii narożnika)
         w['section'] = [base + w['u'] * uu + w['n'] * (vv - float(base @ w['n'])) for uu, vv in
                         ((w['start'], w['slab'][0]), (w['end'], w['slab'][0]), (w['end'], w['slab'][1]), (w['start'], w['slab'][1]))]
@@ -771,6 +786,18 @@ def _clip(pieces, others):
         if seg.Solids():
             out.append(seg)
     return out
+
+
+def _common(a, b):
+    """Część wspólna dwóch brył albo None, gdy się nie stykają (np. nosek wypadający poza koniec ścianki przyciętej
+    w ostrym narożniku - po prostu go nie ma)."""
+    if not _boxes_near(a, b, 0.0):
+        return None
+    try:
+        x = kernel.boolean('intersect', a, [b])
+    except kernel.CadError:
+        return None
+    return x if x.Solids() and x.Volume() > 1e-6 else None
 
 
 def _inside(shape, p):
@@ -878,6 +905,8 @@ def apply_joints(panels, contacts, params, failures=None):
         a, b = c['a'], c['b']
         saved = (shapes[a], shapes[b], set(changed), {k: list(v) for k, v in regions.items()})
         try:
+            if c['kind'] == 'M' and float(c.get('angle') or 90.0) < FLAT_MITRE:
+                continue                     # ścianki prawie w jednej linii: zostaje styk na skos (skos ułamka mm), bez wczepów
             if c['kind'] == 'M' and flat_cut:
                 # laser / frezarka tną prostopadle do płyty: skos zamieniony na końce proste - na przemian jedna ścianka
                 # dochodzi do narożnika, druga jest cofnięta; „bez połączenia” - jedna ścianka zachodzi na całej wysokości
@@ -911,8 +940,9 @@ def apply_joints(panels, contacts, params, failures=None):
                     if current:
                         c = dict(c, ends=current)
                     foot = _footprint(c, info[4] + .05)     # nosek nie wychodzi poza koniec płyty przyciętej na skos
-                    add = [x for x in (kernel.boolean('intersect', seg, [foot]) for seg in add) if x.Solids()]
-                    cut = [x for x in (kernel.boolean('intersect', seg, [_footprint(c, info[4] + .1, fit / 2)]) for seg in cut) if x.Solids()]
+                    add = [x for x in (_common(seg, foot) for seg in add) if x is not None]
+                    wide = _footprint(c, info[4] + .1, fit / 2)
+                    cut = [x for x in (_common(seg, wide) for seg in cut) if x is not None]
                 others = [shp for pid, shp in shapes.items() if pid not in (a, b)]
                 add = _clip(add, others)                     # nosek nie wchodzi w trzecią płytę (narożnik trzech płyt)
                 if joint != 'groove' and not add:

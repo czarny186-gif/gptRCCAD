@@ -1592,6 +1592,32 @@ class StudioTests(unittest.TestCase):
         self.assertIn('większy',w.off_status.text());w.apply_offset();self.wait();self.assertEqual(len(w.document.bodies),3)
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertIsNone(w.off);self.assertEqual(w.mode,'sketch')
 
+    # 0.4.65: szkic dokładnie po obrysie ściany bryły - ofset wybiera linię szkicu, nie krawędź bryły
+    def test_sketch_offset_on_face_outline(self):
+        from PySide6.QtCore import QPoint
+        w=self.w;box=Body('B',k.box(40,30,10)).prepared();fr=k.face_frame((20,15,10),(0,0,1))
+        sk=Body('Szkic',k.sketch('rectangle',fr,40,30),'sketch',fr).prepared()
+        w.document.commit([box,sk]);w.refresh();w.set_mode('sketch');w.sketch_plane=k.face_frame((5,5,10),(0,0,1));w.choose_tool('offset')
+        for _ in range(5):self.app.processEvents()
+        xy=w.view.project_one((20,0,10))
+        self.assertEqual(w.view.nearest_edge(*xy)[0],box.id)                      # krawędź bryły leży w tym samym miejscu
+        with patch('rccad.studio.QCursor.pos',return_value=w.view.mapToGlobal(QPoint(int(xy[0]),int(xy[1])))):
+            w.sketch_clicked(fr,0,-15)
+        self.assertIsNotNone(w.off);self.assertEqual(w.off['id'],sk.id)
+        w.off_side.setCurrentIndex(w.off_side._data.index('in'));w.off_value.setValue(3);w.apply_offset();self.wait()
+        bb=w.document.bodies[-1].shape.BoundingBox();self.assertAlmostEqual(bb.xlen,34,6);self.assertAlmostEqual(bb.ylen,24,6);self.assertAlmostEqual(bb.zmin,10,6)
+
+    # 0.4.65: nowa grupa na liście Obiekty pojawia się zwinięta
+    def test_new_object_group_starts_collapsed(self):
+        w=self.w;a=Body('A',k.box(5,5,5)).prepared();b=Body('B',k.box(5,5,5)).prepared();c=Body('C',k.box(5,5,5)).prepared()
+        w.document.commit([a,b,c]);w.refresh();self.app.processEvents()
+        w.objects_select(a.id,Qt.NoModifier);w.objects_select(b.id,Qt.ShiftModifier)
+        w.objects_folder_new([a.id,b.id]);self.wait();self.app.processEvents()
+        self.assertNotIn(a.id,w.objects.rows);self.assertIn(c.id,w.objects.rows)            # zwinięta: wiersze w środku ukryte
+        key=next(k2 for k2 in w.objects._folded if k2.endswith(':Grupa 1'))
+        w.objects._fold(key);self.app.processEvents()
+        self.assertIn(a.id,w.objects.rows)                                                   # strzałka rozwija
+
     def test_sketch_offset_circle_on_xz(self):
         w=self.w;w.set_mode('plane');w.plane_picked('XZ');w.choose_tool('circle');w.sketch_clicked('XZ',10,6);w.sketch_clicked('XZ',15,6);self.wait()
         src=w.document.bodies[0];w.choose_tool('offset')

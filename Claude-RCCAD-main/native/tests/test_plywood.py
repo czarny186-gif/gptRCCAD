@@ -315,6 +315,38 @@ class PlywoodPolygonTests(unittest.TestCase):
             self.assertEqual(set(out), walls | {b.id})
             self.assertEqual(_overlaps([out[p['id']] for p in panels]), 0, side)
 
+    def test_acute_corners_nothing_sticks_out(self):
+        """0.4.65 (model użytkownika): w narożniku o kącie ostrym ścianka z końcem prostopadłym nie wystaje poza
+        sąsiednią; ostry trójkąt, wklęsły narożnik prosty („Przy boku”) i ścianki prawie w jednej linii też poprawnie."""
+        import uuid
+        cases = [([(-46, 0), (-46, -25), (-22.589, -14.389), (15, -31), (22.589, -14.389), (22.589, 14.389), (-22.589, 14.389)], 2.0),
+                 ([(0, 0), (80, 0), (20, 40)], 2.0),
+                 ([(0, 0), (60, 0), (60, 20), (30, 20), (30, 50), (0, 50)], 3.0),
+                 ([(25.41, 8.4), (7.7, 38.0), (-5.8, -39.14), (21.18, -19.02), (37.97, -14.28)], 3.0)]
+        for pts, t in cases:
+            for meth, side in (('laser', 'on'), ('laser', 'side'), ('cnc', 'side'), ('print', 'on')):
+                base = cq.Workplane().polyline(pts).close().extrude(t).val()
+                b = Body('Płyta 1', base, meta=pw.ply_meta(t, meth)).prepared()
+                tops = [i for i, e in enumerate(base.Edges()) if abs(e.Center().z - t) < 1e-6]
+                bodies = hist.run_recipe([b], dict(type='ply_wall', base=b.id, edges=hist.edge_refs(base, tops), t=t, h=12.0, side=side,
+                                                   flip=False, method=meth, out=[uuid.uuid4().hex for _ in tops]))
+                panels = pw.panels_of(bodies)
+                contacts, skipped = pw.find_contacts(panels)
+                self.assertFalse(skipped, (pts, meth, side))
+                for c in contacts:
+                    c['joint'] = pw.joint_for(meth, c['kind'])
+                failures = []
+                out = pw.apply_joints({p['id']: (p['shape'], p['n']) for p in panels}, contacts, dict(method=meth, fit=.1, tool=0),
+                                      failures=failures)
+                self.assertEqual(failures, [], (pts, meth, side))
+                shapes = [out.get(p['id'], p['shape']) for p in panels]
+                self.assertEqual(_overlaps(shapes), 0, (pts, meth, side))
+                outline = cq.Workplane().polyline(pts).close().val()
+                if side == 'side':
+                    outline = outline.offset2D(t, 'intersection')[0]
+                prism = cq.Solid.extrudeLinear(cq.Face.makeFromWires(outline).translate(cq.Vector(0, 0, -5)), cq.Vector(0, 0, 40))
+                self.assertLess(sum(s.cut(prism).Volume() for s in shapes), 1e-3, (pts, meth, side))   # nic nie wystaje
+
     def test_laser_polygon_box_exports_with_kerf(self):
         """0.4.63: Do cięcia - podstawa-wielokąt z wczepami eksportuje się także z kompensacją lasera (offset2D bywał pusty)."""
         bodies = self._walls(cq.Workplane().polygon(6, 200).extrude(6).val(), 'on')

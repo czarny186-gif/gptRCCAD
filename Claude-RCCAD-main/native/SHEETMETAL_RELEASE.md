@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.4.64 — rozłóż / złóż płyty, frez i narożniki gniazd przy frezowaniu
+# RCCAD Desktop 0.4.65 — ostre narożniki pudełek, ofset szkicu na ścianie, zwinięte grupy
+
+## Zmiany 0.4.65
+
+- **Ścianki w ostrych narożnikach (przesłany model)**: przy laserze i frezarce koniec ścianki cięty prostopadle przechodził przez zewnętrzny wierzchołek narożnika, więc przy kącie ostrym (w modelu 66°) wewnętrzny róg ścianki wystawał poza sąsiednią ściankę. Teraz koniec kończy się na zewnętrznej stronie sąsiedniej ścianki - nic nie wystaje, we wszystkich pudełkach tego typu.
+- **Inne pudełka-wielokąty**: ostre trójkąty (noski przy podstawie już się nie gubią), wklęsły narożnik prosty przy ściankach „Przy boku” (ścianki nie nachodzą na siebie) i ścianki prawie w jednej linii (styk na skos zamiast rozjechanych wczepów). Fałszywe komunikaty o pominiętym połączeniu przy płytach, które się nie stykają, zniknęły. Sprawdzone na kilkudziesięciu losowych wielokątach - wcześniej większość z nich miała wystające lub nachodzące ścianki.
+- **Ofset szkicu na ścianie bryły**: szkicu narysowanego dokładnie po obrysie ściany nie dało się wybrać do ofsetu - kliknięcie trafiało w krawędź bryły leżącą w tym samym miejscu. Ofset wybiera teraz tylko linie szkiców.
+- **Lista Obiekty**: nowa grupa (także pudełko ze Sklejki, import SVG / DXF) pojawia się zwinięta; strzałka ją rozwija.
+
+## RCCAD Desktop 0.4.64 — rozłóż / złóż płyty, frez i narożniki gniazd przy frezowaniu
 
 ## Zmiany 0.4.64
 

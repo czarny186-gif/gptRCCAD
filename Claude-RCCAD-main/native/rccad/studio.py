@@ -2598,7 +2598,20 @@ class StudioWindow(PlywoodTools, QMainWindow):
 
     def _cursor_edge(self):
         pos = self.view.mapFromGlobal(QCursor.pos())
-        return self.view.nearest_edge(pos.x(), pos.y())
+        return self.view.nearest_edge(pos.x(), pos.y(), kinds=('sketch',))
+
+    @staticmethod
+    def _same_plane(a, b):
+        """Ta sama płaszczyzna (kierunek osi U może być inny - np. szkic na ścianie otwarty ponownie)."""
+        if a is None or b is None:
+            return False
+        if isinstance(a, str) and isinstance(b, str):
+            return a == b
+        fa, fb = kernel.frame_of(a), kernel.frame_of(b)
+        na, nb = np.asarray(fa.normal, float), np.asarray(fb.normal, float)
+        if abs(abs(float(na @ nb)) - 1) > 1e-6:
+            return False
+        return abs(float((np.asarray(fb.origin, float) - np.asarray(fa.origin, float)) @ na)) < 1e-4
 
     def _edge_line(self):
         hit = self._cursor_edge()
@@ -2788,11 +2801,12 @@ class StudioWindow(PlywoodTools, QMainWindow):
     def _off_body_at_cursor(self):
         """Szkic pod kursorem leżący w płaszczyźnie bieżącego szkicu i punkt kliknięcia na tej płaszczyźnie."""
         pos = self.view.mapFromGlobal(QCursor.pos())
-        hit = self.view.nearest_edge(pos.x(), pos.y())
+        # tylko linie szkiców: szkic narysowany dokładnie po obrysie ściany ma linie w miejscu krawędzi bryły
+        hit = self.view.nearest_edge(pos.x(), pos.y(), kinds=('sketch',))
         body = self.document.get(hit[0]) if hit else None
         if body is None or body.kind != 'sketch' or body.name.startswith('Punkt'):
             return None, None
-        if self._plane_key(body.plane) != self._plane_key(self.sketch_plane):
+        if not self._same_plane(body.plane, self.sketch_plane):
             return None, None
         uv = self.view.plane_point(body.plane, pos.x(), pos.y())
         point = kernel.to_world(body.plane, *uv) if uv is not None else body.shape.Center().toTuple()

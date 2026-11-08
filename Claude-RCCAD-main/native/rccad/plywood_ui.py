@@ -643,6 +643,9 @@ class PlywoodTools:
             for c in contacts:
                 c['joint'] = pw.joint_for(self.ply_method, c['kind'])
                 c['title'] = f"{pw.KIND_TITLES[c['kind']]}: {names.get(c['a'], '?')} ↔ {names.get(c['b'], '?')}"
+                if c['kind'] == 'M' and float(c.get('angle') or 90) < pw.FLAT_MITRE:
+                    c['joint'] = 'none'             # ścianki prawie w jednej linii - zwykły styk na skos
+                    c['title'] += ' (prawie w linii - styk na skos)'
             self.pj_contacts, self.pj_skipped, self.pj_ids = contacts, skipped, found_ids
             self._pj_build_rows()
             self._pj_params_changed(save=False)
