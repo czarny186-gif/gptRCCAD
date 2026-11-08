@@ -1019,6 +1019,27 @@ class SheetTabBendTests(SheetTabWallTests):
             self.assertTrue(np.allclose(b.shape.Center().toTuple(), c, atol=1e-5), b.name)
             self.assertAlmostEqual(b.shape.Volume(), v, 4)
 
+    def test_side_flange_on_tabwall_keeps_fingers_in_place(self):
+        # kołnierz przy bocznej krawędzi ścianki (od strony początku jej płyty) przesuwał noski o promień + grubość
+        w = self.w
+        sheet = self._sheet(w)
+        w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_bend.click()
+        self._click(sheet.id, (100, 30, 2))
+        w.set_mode(None)
+        wall = next(b for b in w.document.bodies if b.name.startswith('Ścianka blachy'))
+        w.toggle_mode('flange'); w.fl_length.setValue(12); w.toggle_bending()
+        self._click(wall.id, (100, 0, 16))
+        self.assertEqual(w.document.info['label'], 'Kołnierz')
+        w.set_mode(None)
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        self.assertLess(w.document.get(wall.id).shape.BoundingBox().ymax, 60 + 1e-5)
+        before = {b.id: np.array(b.shape.Center().toTuple()) for b in w.document.bodies}
+        w.selected = [sheet.id]; w.sheet_command('unfold_sheet'); self.wait()
+        self.assertTrue(w.document.get(wall.id).meta['sheet'].get('flat'))
+        w.selected = [sheet.id]; w.sheet_command('fold_sheet'); self.wait()
+        for b in w.document.bodies:
+            self.assertTrue(np.allclose(b.shape.Center().toTuple(), before[b.id], atol=1e-5), b.name)
+
     def test_tabwall_lips_corner_rules(self):
         for rule in ('sheet', 'parallel'):
             w = self.w
@@ -1081,3 +1102,88 @@ class PlyCutPickTests(PlywoodWindowTests):
         self.assertEqual([x.id for x in w._pc_bodies()], [b.id])
         w.set_mode(None)
         self.assertEqual(w.view.tints, {})
+
+
+class SheetTabVariantTests(SheetTabBendTests):
+    """0.4.72: blacha gięta ze ściankami na noski w różnej kolejności - gięcie po ściankach (ścianki liczą się od nowa),
+    noski do ramion kołnierzy giętych, zawinięcia na kołnierzach i na ściankach, wywinięcia na ściankach."""
+
+    def test_flange_and_hem_on_tabwall_unfold_fold(self):
+        pass
+
+    def test_tabwall_lips_corner_rules(self):
+        pass
+
+    def _mode(self, mode, length=None):
+        w = self.w
+        w.set_mode(None)
+        w.toggle_mode(mode)
+        if mode == 'tabwall':
+            if length:
+                w.tw_length.setValue(length)
+            if not w.tw_armed:
+                w.tw_bend.click()
+        else:
+            if length and mode == 'flange':
+                w.fl_length.setValue(length)
+            if not w.fl_armed:
+                w.toggle_bending()
+
+    def _check(self, sid):
+        w = self.w
+        from rccad import sheetedit as she
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        before = {b.id: np.array(b.shape.Center().toTuple()) for b in w.document.bodies}
+        w.selected = [sid]; w.sheet_command('unfold_sheet'); self.wait()
+        self.assertTrue(w.document.get(sid).meta['sheet'].get('flat'))
+        self.assertEqual(_overlaps([b.shape for b in w.document.bodies]), 0)
+        w.selected = [sid]; w.sheet_command('fold_sheet'); self.wait()
+        for b in w.document.bodies:
+            self.assertTrue(np.allclose(b.shape.Center().toTuple(), before[b.id], atol=1e-5), b.name)
+
+    def test_bend_after_tabwalls_regenerates_them_with_fingers_to_flange(self):
+        from rccad import sheetedit as she
+        w = self.w
+        sid = self._sheet(w).id
+        self._mode('tabwall', 30)
+        self._click(sid, (100, 30, 2)); self._click(sid, (0, 30, 2))
+        self._mode('flange', 30)
+        self._click(sid, (50, 0, 2))
+        self.assertEqual(w.document.info['label'], 'Kołnierz')                           # wcześniej: „Nie można dokładnie przenieść…”
+        w.set_mode(None)
+        model = she.layout(w.document.get(sid).meta['sheet']['recipe'])
+        walls = [b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]
+        self.assertEqual([b.name for b in walls], ['Ścianka blachy 1', 'Ścianka blachy 2'])
+        for wall in walls:
+            self.assertGreater(wall.shape.intersect(model.panels[1].folded).Volume(), 1)   # noski w ramieniu nowego kołnierza
+        self._check(sid)
+        # zawinięcie na nowym kołnierzu i drugi kołnierz - ścianki dalej dopasowują się same
+        self._mode('hem'); self._click(sid, (50, -1, 32))
+        self._mode('flange', 30); self._click(sid, (50, 60, 2))
+        self.assertEqual(w.document.info['label'], 'Kołnierz')
+        w.set_mode(None)
+        self._check(sid)
+
+    def test_hem_on_tabwalls_and_lips_then_bend(self):
+        w = self.w
+        sid = self._sheet(w).id
+        self._mode('flange', 30); self._click(sid, (50, 0, 2)); self._click(sid, (50, 60, 2))
+        self._mode('tabwall', 30); self._click(sid, (100, 30, 2)); self._click(sid, (0, 30, 2))
+        walls = [b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]
+        bb = walls[0].shape.BoundingBox()
+        self._mode('hem'); self._click(walls[0].id, ((bb.xmin + bb.xmax) / 2, (bb.ymin + bb.ymax) / 2, bb.zmax))
+        self.assertEqual(w.document.info['label'], 'Zawinięcie')
+        w.set_mode(None)
+        self._check(sid)
+        # wywinięcie na drugiej ściance, potem gięcie blachy nie nachodzi na nic
+        w.document = type(w.document)()
+        sid = self._sheet(w).id
+        self._mode('tabwall', 30); self._click(sid, (100, 30, 2)); self._click(sid, (0, 30, 2))
+        for wb in [b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]:
+            bb = wb.shape.BoundingBox()
+            self._mode('tabwall', 10); self._click(wb.id, ((bb.xmin + bb.xmax) / 2, (bb.ymin + bb.ymax) / 2, bb.zmax))
+        self._mode('flange', 30); self._click(sid, (50, 0, 2))
+        self.assertEqual(w.document.info['label'], 'Kołnierz')
+        w.set_mode(None)
+        self.assertEqual(len([b for b in w.document.bodies if b.name.startswith('Ścianka blachy')]), 4)
+        self._check(sid)

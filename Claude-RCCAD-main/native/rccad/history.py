@@ -1437,15 +1437,90 @@ def _sheet_result(bodies, body, kind, source, args):
 
 
 def run_sheetbuild(bodies, recipe):
-    """Blacha od podstaw: płyta bazowa i lista kołnierzy zapisane w kroku (geometria liczy się z nich, nie z poprzedniego stanu)."""
+    """Blacha od podstaw: płyta bazowa i lista kołnierzy zapisane w kroku (geometria liczy się z nich, nie z poprzedniego stanu).
+    Blacha ze ściankami na noski (bez innych zmian): blacha liczy się bez gniazd, a ścianki od nowa z zapamiętanych ustawień -
+    dopasowują się do nowego gięcia (gniazda nie trafiają w łuk, noski powstają też przy nowym kołnierzu)."""
     body = _body(bodies, recipe['id'])
+    walls = sheet_tab_walls(bodies, body.id)
+    if walls and _tabs_regenerable(body, walls):
+        state = dict(body.meta['sheet'], dirty=False, edited=False)
+        state.pop('tabs', None)
+        clean = replace(body, meta=_with_sheet(body, state))
+        rest = [clean if b.id == body.id else b for b in bodies if b.id not in {w.id for w in walls}]
+        out = _sheet_result(rest, clean, 'build', state, recipe)
+        return regenerate_tab_walls(out, walls)
     return _sheet_result(bodies, body, 'build', (body.meta or {}).get('sheet'), recipe)
+
+
+def _tabs_regenerable(sheet, walls):
+    info = ((sheet.meta or {}).get('sheet') or {}).get('tabs') or {}
+    if not info.get('clean') or info.get('volume') is None or abs(sheet.shape.Volume() - float(info['volume'])) > 1e-6:
+        return False
+    for w in walls:
+        tab = w.meta['ply'].get('tab') or {}
+        if not tab.get('recipe') or not tab.get('seg') or tab.get('unfold') or _bent_wall(w):
+            return False
+    return True
+
+
+def regenerate_tab_walls(bodies, walls):
+    """Ścianki na noski od nowa (ta sama kolejność, id, nazwy): każda na swojej krawędzi płyty, z zapamiętanymi ustawieniami."""
+    current = list(bodies)
+    for w in walls:
+        tab = w.meta['ply']['tab']
+        parent = _body(current, tab['sheet'])
+        frame = _sheet_frame(parent)
+        a = (frame @ np.append(np.array(tab['seg'][0], float), 1.0))[:3]
+        b = (frame @ np.append(np.array(tab['seg'][1], float), 1.0))[:3]
+        index = _edge_on_segment(parent.shape, a, b)
+        if index is None:
+            raise kernel.CadError(f'{w.name}: nie znaleziono krawędzi blachy pod ścianką na noski po nowym gięciu - cofnij gięcie.')
+        rec = dict(tab['recipe'], type='sheet_tabwall', id=parent.id, edges=edge_refs(parent.shape, [index]), out=[w.id], group=w.group)
+        current = run_sheet_tabwall(current, rec)
+        new = _body(current, w.id)
+        current = [replace(new, name=w.name, visible=w.visible) if x.id == w.id else x for x in current]
+    return current
+
+
+def _edge_on_segment(shape, a, b):
+    """Prosta krawędź bryły leżąca na odcinku a-b (ta sama prosta), z największą wspólną długością."""
+    d = b - a
+    L = float(np.linalg.norm(d))
+    if L < 1e-9:
+        return None
+    u = d / L
+    best = None
+    for i, e in enumerate(shape.Edges()):
+        if e.geomType() != 'LINE':
+            continue
+        p, q = np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float)
+        v = q - p
+        if np.linalg.norm(v) < 1e-9 or abs(abs(float(_unit(v) @ u)) - 1) > 1e-6:
+            continue
+        off = (p - a) - u * float((p - a) @ u)
+        if np.linalg.norm(off) > 1e-4:
+            continue
+        s0, s1 = sorted((float((p - a) @ u), float((q - a) @ u)))
+        common = min(s1, L) - max(s0, 0.0)
+        if common > 1e-6 and (best is None or common > best[0]):
+            best = (common, i)
+    return None if best is None else best[1]
 
 
 def run_sheetmode(bodies,recipe):
     body=_body(bodies,recipe['id'])
     source=(body.meta or {}).get('sheet') or recipe['state']
     out=_sheet_result(bodies, body, 'mode', source, (recipe['flat'], recipe.get('sync', False)))
+    tabs=((body.meta or {}).get('sheet') or {}).get('tabs')
+    if tabs and not recipe.get('sync'):
+        # zapis „blacha ma tylko gniazda ścianek na noski” przechodzi przez rozłożenie i zgięcie (ścianki dalej
+        # przeliczają się po kolejnych gięciach)
+        new=_body(out, body.id)
+        if recipe['flat']:
+            info=dict(tabs, matched=tabs.get('volume') is not None and abs(body.shape.Volume()-float(tabs['volume']))<=max(1e-6, 1e-7*body.shape.Volume()))
+        else:
+            info=dict(tabs, volume=float(new.shape.Volume())) if tabs.get('matched', True) else dict(tabs, clean=False)
+        out=_replace(out, replace(new, meta=dict(new.meta, sheet=dict(new.meta['sheet'], tabs=info))))
     if recipe.get('sync'):
         return out
     return sheet_tabs_switch(out, body, _body(out, body.id), bool(recipe['flat']))
@@ -1704,6 +1779,27 @@ def _ply_others(bodies, skip=()):
     return [b.shape for b in bodies if b.kind == 'solid' and b.visible and b.id not in skip and pw.is_panel(b)]
 
 
+def _flat_pieces(sheet):
+    """Płaskie części zgiętej blachy (podstawa i ramiona kołnierzy) w obecnym położeniu; [] gdy to nie blacha."""
+    state = (sheet.meta or {}).get('sheet') or {}
+    if not state.get('recipe') or state.get('flat'):
+        return []
+    try:
+        return [p.folded for p in she.layout(state['recipe']).panels]
+    except Exception:
+        return []
+
+
+def _bend_pieces(sheet):
+    state = (sheet.meta or {}).get('sheet') or {}
+    if not state.get('recipe') or state.get('flat'):
+        return []
+    try:
+        return list(she.layout(state['recipe']).folded_bends)
+    except Exception:
+        return []
+
+
 def _nominal_edge(sheet, edge):
     """Krawędź płyty bazowej blachy w pełnej długości (z zapisu blachy): gniazda wycięte wcześniej przy narożniku
     (noski sąsiedniej ścianki) nie skracają nowej ścianki. Inne krawędzie (kołnierz, ścianka) - bez zmian.
@@ -1731,27 +1827,9 @@ def _nominal_edge(sheet, edge):
         s0, s1 = sorted((float((a - p) @ u), float((b - p) @ u)))
         if not (s0 >= lo - 1e-4 and s1 <= hi + 1e-4):
             continue
-        # przedłużenie tylko przez puste gniazdo (noski sąsiedniej ścianki): gdy za końcem jest materiał (gięcie
-        # sąsiedniego kołnierza), koniec zostaje - inaczej gniazda trafiłyby w łuk gięcia
-        from . import plywood as pw
-        t = float(state['t'])
-        try:
-            plate, n = pw.edge_plate(sheet.shape, edge, t)
-        except kernel.CadError:
-            return edge, None
-        inward = np.cross(n, u)
-        if float((np.array(plate.Center().toTuple(), float) - a) @ inward) < 0:
-            inward = -inward                     # w głąb płyty (próbka nie może leżeć na ścianie czołowej)
-        reach = 1.5 * t + .5
-        ends = []
-        for s_end, sign, limit in ((s0, -1.0, lo), (s1, 1.0, hi)):
-            point = p + u * s_end
-            probe = point + u * sign * .05 - n * (t / 2) + inward * min(.2, t / 4)
-            void = kernel.point_state(sheet.shape, tuple(probe)) == 'out'
-            ends.append(max(limit, s_end - reach) if sign < 0 and void else min(limit, s_end + reach) if sign > 0 and void else s_end)
-        if ends[1] - ends[0] <= s1 - s0 + 1e-9:
-            return edge, base
-        return cq.Edge.makeLine(cq.Vector(*(p + u * ends[0])), cq.Vector(*(p + u * ends[1]))), base
+        # pełna krawędź płyty bazowej: ścianka dochodzi do sąsiednich kołnierzy (gięcia wycina docięcie do blachy,
+        # a noski powstają tylko na płaskich częściach)
+        return e, base
     return edge, None
 
 
@@ -1780,6 +1858,11 @@ def scaled_body(body, factors, center):
             raise kernel.CadError(f'{body.name}: najpierw zegnij blachę, potem ją skaluj.')
         if uniform:
             meta['sheet'] = dict(she.scaled_state(state, f[0], center), dirty=state.get('dirty', False))
+            if state.get('tabs'):
+                tabs = dict(state['tabs'])
+                if tabs.get('volume') is not None:
+                    tabs['volume'] = float(shape.Volume()) if abs(body.shape.Volume() - float(tabs['volume'])) <= 1e-6 else -1.0
+                meta['sheet']['tabs'] = tabs
         else:
             meta.pop('sheet')                        # różna skala w osiach: blacha przestaje być blachą (zwykła bryła)
     if meta and meta.get('ply'):
@@ -1793,7 +1876,18 @@ def scaled_body(body, factors, center):
         if ply.get('fold'):
             ply['fold'] = pw.fold_placed(ply['fold'], m[:3, :4])     # rozłożenie / złożenie skaluje się razem z płytą
         if ply.get('tab') and uniform:
-            ply['tab'] = dict(ply['tab'], length=float(ply['tab'].get('length', 0)) * f[0])
+            tab = dict(ply['tab'], length=float(ply['tab'].get('length', 0)) * f[0])
+            if tab.get('seg'):
+                tab['seg'] = [[float(v) * f[0] for v in q] for q in tab['seg']]      # w układzie płyty: skaluje się wprost
+            if tab.get('recipe'):
+                r = dict(tab['recipe'])
+                for key in ('t', 'length', 'width'):
+                    if r.get(key):
+                        r[key] = float(r[key]) * f[0]
+                tab['recipe'] = r
+            ply['tab'] = tab
+        elif ply.get('tab'):
+            ply['tab'] = {k: v for k, v in ply['tab'].items() if k not in ('recipe', 'seg')}
         meta['ply'] = ply
     threads = body.threads if all(abs(v - 1) < 1e-12 for v in f) else ()      # gwint normowy nie pasuje do przeskalowanego otworu
     mesh = kernel.mesh_moved(body.mesh, m) if body.mesh is not None else None
@@ -1809,7 +1903,12 @@ def run_scale(bodies, recipe):
     return [scaled_body(b, f, recipe['center']) if b.id in ids else b for b in bodies]
 
 
-def _wall_base(box, t):
+def _box_of(shape, t, up=None):
+    """Prostopadłościan płyty w jej własnych osiach (x wzdłuż najdłuższej krawędzi, z - grubość) obejmujący kształt."""
+    return shm.base_solid(_wall_base(shape, t, up))
+
+
+def _wall_base(box, t, up=None):
     """Opis płyty bazowej blachy (jak przy Konwertuj na blachę) dla prostopadłościennej ścianki: x wzdłuż krawędzi,
     z w grubości."""
     from . import plywood as pw
@@ -1823,6 +1922,8 @@ def _wall_base(box, t):
             best, length = _unit(d), float(np.linalg.norm(d))
     x = best
     y = np.cross(z, x)
+    if up is not None and float(y @ np.asarray(up, float)) < 0:
+        x, y = -x, -y                       # y od płyty, z której wychodzi ścianka (stały układ jej blachy)
     pts = pw._points(box)
     o = x * float((pts @ x).min()) + y * float((pts @ y).min()) + z * float((pts @ z).min())
     span = lambda v: float((pts @ v).max() - (pts @ v).min())
@@ -1847,8 +1948,9 @@ def run_sheet_tabwall(bodies, recipe):
     except kernel.CadError:
         flat_region = None
     edge, plate = _nominal_edge(sheet, edge)
-    wall, plate, _up = pw.tab_wall(sheet.shape, edge, t, float(recipe['length']), recipe.get('measure', 'outer'), bool(recipe.get('flip')), plate)
+    wall, plate, up = pw.tab_wall(sheet.shape, edge, t, float(recipe['length']), recipe.get('measure', 'outer'), bool(recipe.get('flip')), plate)
     box_wall = wall
+    pieces = _flat_pieces(sheet)            # płaskie części blachy (podstawa, ramiona kołnierzy) - tylko tam noski i gniazda
     neighbours = [b for b in bodies if b.kind == 'solid' and b.visible and b.id != sheet.id and pw.is_panel(b) and pw._boxes_near(wall, b.shape)]
     seam_joined = []
     if recipe.get('corner'):
@@ -1858,13 +1960,39 @@ def run_sheet_tabwall(bodies, recipe):
                                                         float(recipe.get('fit', 0.0)))
         neighbours = [b.changed(seamed[b.id]) if b.id in seamed else b for b in neighbours]
         bodies = [next((n for n in neighbours if n.id == b.id), b) for b in bodies]
-    wall = _ply_trim(wall, [sheet.shape, *[b.shape for b in neighbours]])
+    # docięcie także do innych blach w pobliżu (np. kołnierz gięty blachy, na której stoi ścianka pod tym wywinięciem)
+    solids = [b.shape for b in bodies if b.kind == 'solid' and b.visible and b.id != sheet.id and not pw.is_panel(b)
+              and (b.meta or {}).get('sheet') and pw._boxes_near(wall, b.shape)]
+    wall = _ply_trim(wall, [sheet.shape, *[b.shape for b in neighbours], *solids])
+    box_wall = _box_of(wall, t, up)              # płyta ścianki (bez nosków) - opis blachy ścianki
     wid = (recipe.get('out') or [uuid.uuid4().hex])[0] if isinstance(recipe.get('out'), list) else (recipe.get('out') or uuid.uuid4().hex)
     wp = dict(id=wid, shape=wall, **pw.panel_info(wall, t))
-    platep = dict(id=sheet.id, shape=plate, **pw.panel_info(plate, t))
-    contacts = [c for c in pw.find_contacts([wp, platep])[0]]
+    # styki z płaskimi częściami blachy: płyta, na której stoi ścianka, i ramiona sąsiednich kołnierzy giętych
+    contacts = []
+    plates = pieces if pieces else [plate]
+    platen = None
+    for k, piece in enumerate(plates):
+        if not pw._boxes_near(wall, piece) or wall.distance(piece) > 1e-4:
+            continue
+        try:
+            pp = dict(id=f'{sheet.id}~{k}', shape=piece, **pw.panel_info(piece, t))
+        except kernel.CadError:
+            continue
+        for c in pw.find_contacts([wp, pp])[0]:
+            c = dict(c, a=sheet.id if c['a'] == pp['id'] else c['a'], b=sheet.id if c['b'] == pp['id'] else c['b'])
+            c['key'] = f"{c['a']}:{c['b']}:{k}"
+            contacts.append(c)
+            platen = platen if platen is not None else pp['n']
+    if not contacts and pieces:
+        pp = dict(id=f'{sheet.id}~p', shape=plate, **pw.panel_info(plate, t))
+        for c in pw.find_contacts([wp, pp])[0]:
+            c = dict(c, a=sheet.id if c['a'] == pp['id'] else c['a'], b=sheet.id if c['b'] == pp['id'] else c['b'])
+            c['key'] = f"{c['a']}:{c['b']}:p"
+            contacts.append(c)
+            platen = pp['n']
     if not contacts:
         raise kernel.CadError('Ścianka nie styka się z płytą blachy - sprawdź krawędź i stronę.')
+    platep = dict(n=platen)
     near = [dict(id=b.id, shape=b.shape, **pw.panel_info(b.shape, (b.meta or {}).get('ply', {}).get('t'))) for b in neighbours]
     for c in pw.find_contacts([wp, *near])[0]:
         if wid in (c['a'], c['b']):
@@ -1879,9 +2007,9 @@ def run_sheet_tabwall(bodies, recipe):
     out = pw.apply_joints(shapes, contacts, dict(method=meth, width=float(recipe.get('width') or 0), fit=float(recipe.get('fit', 0.0))),
                           failures=failures)
     failed = {k for k, _ in failures}
-    main = f'{wid}:{sheet.id}' if any(c['a'] == wid and c['b'] == sheet.id for c in contacts) else f'{sheet.id}:{wid}'
-    if main in failed:
-        raise kernel.CadError('Nie udało się połączyć ścianki z blachą noskami: ' + next(m for k, m in failures if k == main))
+    mains = [c.get('key') for c in contacts if sheet.id in (c['a'], c['b'])]
+    if mains and all(k in failed for k in mains):
+        raise kernel.CadError('Nie udało się połączyć ścianki z blachą noskami: ' + next(m for k, m in failures if k in mains))
     partners = {wid: set(seam_joined)}
     for j in seam_joined:
         partners.setdefault(j, set()).add(wid)
@@ -1892,10 +2020,12 @@ def run_sheet_tabwall(bodies, recipe):
         other = c['b'] if c['a'] == wid else c['a']
         partners[wid].add(other)
         partners.setdefault(other, set()).add(wid)
-    if sheet.id in out and flat_region is not None and (sheet.meta or {}).get('sheet'):
-        # gniazda (z luzem) tylko w płaskiej części blachy - nie w łuku gięcia sąsiedniego kołnierza
+    if sheet.id in out and (sheet.meta or {}).get('sheet') and (pieces or flat_region is not None):
+        # gniazda (z luzem) tylko w płaskich częściach blachy - nie w łukach gięć; dodane noski blachy nie dotykają gięć
+        regions = pieces or [flat_region]
+        bends = _bend_pieces(sheet)
         try:
-            removed = kernel.boolean('subtract', sheet.shape, [out[sheet.id]]) if sheet.shape.Volume() > out[sheet.id].Volume() - 1e-9 else None
+            removed = kernel.boolean('subtract', sheet.shape, [out[sheet.id]])
         except kernel.CadError:
             removed = None
         try:
@@ -1904,12 +2034,21 @@ def run_sheet_tabwall(bodies, recipe):
             added = None
         new_shape = sheet.shape
         if removed is not None and removed.Solids():
-            cut = pw._common(removed, flat_region)
-            if cut is not None:
-                new_shape = kernel.boolean('subtract', new_shape, [cut])
-        if added is not None and added.Solids() and added.Volume() > 1e-6:
-            new_shape = kernel.boolean('union', new_shape, [added])
+            cuts = [c for c in (pw._common(removed, r) for r in regions) if c is not None]
+            if cuts:
+                new_shape = kernel.boolean('subtract', new_shape, cuts)
+        if added is not None and added.Solids():
+            keep = [x for x in added.Solids() if x.Volume() > 1e-6 and all(x.distance(b) > 1e-4 for b in bends)]
+            if keep:
+                new_shape = kernel.boolean('union', new_shape, keep)
         out[sheet.id] = new_shape
+    if wid in out and sheet.id in out:
+        # nosek ścianki w miejscu, gdzie blacha nie ma gniazda (gięcie) - ścianka docięta do blachy, nic nie nachodzi
+        try:
+            trimmed = kernel.boolean('subtract', out[wid], [out[sheet.id]])
+            out[wid] = pw._main_solid(trimmed)
+        except kernel.CadError:
+            pass
     # blacha i jej ścianki na noski - jedna grupa (jeden element: zaznaczanie, przesuwanie, biblioteka)
     root = sheet
     seen = set()
@@ -1929,18 +2068,31 @@ def run_sheet_tabwall(bodies, recipe):
         if b.id in members and (b.group != group or b.folder != folder):
             b = replace(b, group=group, folder=folder)
         if b.id in out and b.id != wid:
+            before = b
             b = b.changed(out[b.id])
+            if (b.meta or {}).get('sheet') and not ((b.meta or {}).get('ply') or {}).get('tab'):
+                # blacha z noskami ścianek: czy poza nimi ma inne zmiany (wtedy ścianek nie da się przeliczyć od nowa)
+                info = dict((before.meta['sheet'] or {}).get('tabs') or {'clean': not before.meta['sheet'].get('dirty')})
+                if info.get('volume') is not None and abs(before.shape.Volume() - info['volume']) > 1e-6:
+                    info['clean'] = False
+                info['volume'] = float(b.shape.Volume())
+                b = replace(b, meta=dict(b.meta, sheet=dict(b.meta['sheet'], tabs=info)))
         if b.id != wid and pw.is_panel(b) and b.id in partners and partners[b.id]:
             ply = dict(b.meta['ply'], joined=sorted(set(b.meta['ply'].get('joined', ())) | partners[b.id]))
             b = replace(b, meta=dict(b.meta, ply=ply))
         result.append(b)
     meta = pw.ply_meta(t, meth)
     meta['ply']['joined'] = sorted(partners[wid])
-    meta['ply']['tab'] = dict(sheet=sheet.id, length=float(recipe['length']), measure=recipe.get('measure', 'outer'))
+    seg = [np.array(edge.startPoint().toTuple(), float), np.array(edge.endPoint().toTuple(), float)]
+    to_local = np.linalg.inv(_sheet_frame(sheet))
+    meta['ply']['tab'] = dict(sheet=sheet.id, length=float(recipe['length']), measure=recipe.get('measure', 'outer'),
+                              # przepis ścianki - po nowym gięciu blachy ścianka liczy się od nowa (krawędź w układzie płyty)
+                              recipe={k: recipe.get(k) for k in ('t', 'length', 'measure', 'flip', 'width', 'fit', 'corner')},
+                              seg=[[float(v) for v in (to_local @ np.append(q, 1.0))[:3]] for q in seg])
     # ścianka jest też blachą (płyta bazowa = płyta ścianki): można na niej giąć kołnierze i zawinięcia; noski i docięcia
     # to zmiany na tej płycie (zachowywane przy kolejnych gięciach, rozkładaniu i zginaniu)
     try:
-        meta['sheet'] = dict(she.state(dict(base=_wall_base(box_wall, t), t=t, flanges=[], rules={})), dirty=True)
+        meta['sheet'] = dict(she.state(dict(base=_wall_base(box_wall, t, up), t=t, flanges=[], rules={})), dirty=True)
     except Exception:
         pass
     name = _next_names(bodies, 'Ścianka blachy', 1)[0]

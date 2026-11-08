@@ -495,7 +495,15 @@ def _changes(actual, model, flat):
     for solid in added.Solids():
         if _volume(solid)<1e-7:continue
         owners=[p for p in model.panels if solid.distance(p.flat if flat else p.folded)<1e-5]
-        if len(owners)!=1 or any(solid.distance(bend)<1e-5 for bend in bends):
+        # materiał tylko stykający się z gięciem (np. nosek ścianki przy narożniku zawinięcia) jest dozwolony - nie może
+        # wchodzić w obszar gięcia
+        if len(owners)>1:
+            # nosek w narożniku dotyka też sąsiedniej części (krawędzią / rogiem): należy do tej, przy której leży
+            centre=cq.Vertex.makeVertex(*solid.Center().toTuple())
+            gaps=[centre.distance(p.flat if flat else p.folded) for p in owners]
+            best=min(gaps)
+            if sum(1 for g in gaps if g<best+1e-6)==1:owners=[owners[gaps.index(best)]]
+        if len(owners)!=1 or any(solid.distance(bend)<1e-5 and _volume(solid.intersect(bend))>1e-7 for bend in bends):
             raise k.CadError('Dodany materiał musi należeć do jednej prostej ściany blachy i nie przekraczać obszaru gięcia. Bieżące zmiany zostały zachowane.')
         panel=owners[0];frame=panel.flat_frame if flat else panel.folded_frame
         changes[panel.key]['added'].append(solid.transformShape(_inverse(frame)))
@@ -590,6 +598,15 @@ def rebuild(actual, source_state, recipe):
     old=_source_layout(source_state)
     changes=_changes(actual,old,False)
     new=_cached_layout(json.dumps(state(recipe)['recipe'],sort_keys=True,allow_nan=False),False)
+    # zmiany są zapisane w układzie części; płyta (i ramiona) mogą mieć w nowym układzie inny początek (kołnierz
+    # mierzony zewnętrznie przy krawędzi początku skraca płytę od tej strony) - przepisz je przez położenie w modelu
+    old_panels={p.key:p for p in old.panels};new_panels={p.key:p for p in new.panels}
+    for key,delta in changes.items():
+        a,b=old_panels.get(key),new_panels.get(key)
+        if a is None or b is None:continue
+        back=_inverse(b.folded_frame)
+        for kind in ('removed','added'):
+            delta[kind]=[shape.transformShape(a.folded_frame).transformShape(back) for shape in delta[kind]]
     target_state=state(recipe,False)
     target_state['edited']=any(any(delta.values()) for delta in changes.values())
     return _apply(new,changes,False),target_state

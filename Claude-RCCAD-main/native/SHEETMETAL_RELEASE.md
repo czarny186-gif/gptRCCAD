@@ -1,4 +1,17 @@
-# RCCAD Desktop 0.4.71 — zaznaczanie bez Shift w zaokrąglaniu, fazowaniu i wyciąganiu
+# RCCAD Desktop 0.4.72 — blacha gięta ze ściankami na noski w dowolnej kolejności
+
+## Zmiany 0.4.72
+
+- **Gięcie po ściankach na noski** (komunikat „Nie można dokładnie przenieść zmiany przy zakończeniu lub narożniku gięcia”): gniazda ścianek przy narożniku wpadały w łuk nowego gięcia. Teraz po dodaniu gięcia albo zawinięcia blacha liczy się bez gniazd, a jej ścianki na noski od nowa z zapamiętanych ustawień (te same nazwy, kolejność, zasady narożników) - dochodzą do nowego kołnierza i łączą się z nim noskami. Działa także po rozłożeniu i zgięciu oraz po skalowaniu.
+- **Narożnik ścianki na noski i kołnierza giętego**: ścianka łączy się noskami nie tylko z płytą, na której stoi, ale z każdą płaską częścią blachy, której dotyka (ramiona sąsiednich kołnierzy giętych); dochodzi do kołnierza (łuk gięcia wycina docięcie), gniazda tylko w płaskich częściach - blacha dalej się rozkłada.
+- **Zawinięcie na ściance na noski**: płyta ścianki opisana bez nosków (wcześniej długie docięcia przy końcach trafiały w zawinięcie i rozłożenie się nie udawało); noski przy narożniku zawinięcia są dozwolone, o ile nie wchodzą w łuk.
+- **Wywinięcia na ściankach**: docinane także do kołnierzy giętych blachy - po dodaniu gięcia nic nie nachodzi.
+- **Kołnierz na ściance na noski** (górą i bokiem): układ płyty ścianki zawsze od płyty, z której wychodzi - wcześniej kołnierz na górnej krawędzi ścianki kończył się komunikatem „Operacja rozdzieliłaby blachę”, a kołnierz na bocznej krawędzi przesuwał noski w bok.
+- **Otwory i wycięcia po dodaniu kołnierza**: kołnierz mierzony zewnętrznie przy krawędzi od strony początku płyty skraca ją od tej strony - wcześniejsze otwory i wycięcia przesuwały się o promień + grubość; teraz zostają w miejscu (dotyczy każdej blachy).
+- **Nosek w narożniku kołnierza**: nosek dotykający rogiem sąsiedniego ramienia należy do płyty, przy której leży - rozkładanie / zginanie się udaje.
+- Sprawdzone warianty: gięcia + ścianki, ścianki + gięcie, zawinięcia na kołnierzach i na ściankach, ścianki na ściankach, kolejne gięcia - bez nachodzenia, z rozkładaniem i zgięciem w to samo miejsce.
+
+## RCCAD Desktop 0.4.71 — zaznaczanie bez Shift w zaokrąglaniu, fazowaniu i wyciąganiu
 
 ## Zmiany 0.4.71
 

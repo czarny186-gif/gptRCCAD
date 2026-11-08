@@ -241,6 +241,20 @@ class SheetEditTests(unittest.TestCase):
             self.assertEqual(path.read_text(),'previous')
 
 
+class EditsAfterOriginSideFlangeTests(unittest.TestCase):
+    def test_hole_stays_when_flange_shortens_plate_from_origin_side(self):
+        box=Body('B',k.box(100,60,2)).prepared()
+        top=max(box.shape.Faces(),key=lambda f:f.Center().z)
+        sheet=h.run_recipe([box],dict(type='sheet',id=box.id,face=h.face_ref(top,(0,0,1),top.Center().toTuple(),box.shape)))[0]
+        src=dict(sheet.meta['sheet'],dirty=True)
+        actual=sheet.shape.cut(cq.Solid.makeCylinder(3,10,cq.Vector(80,30,-5)))
+        target=copy.deepcopy(src['recipe'])
+        target['flanges']=[dict(kind='base',p0=[0.,0.,2.],p1=[0.,60.,2.],n=[0.,0.,1.],m=[-1.,0.,0.],r=.5,angle=90.,length=12.,measure='outer',outside=False)]
+        self.assertGreater(s.normalize(target)['base']['o'][0],1)       # płyta skrócona od strony początku
+        result,_=e.rebuild(actual,src,target)
+        self.assertLess(result.intersect(cq.Solid.makeCylinder(2.9,10,cq.Vector(80,30,-5))).Volume(),1e-6)
+
+
 class ParallelReliefMigrationTests(unittest.TestCase):
     def test_four_level_blank_and_old_engine_edits_survive_refolding(self):
         from test_sheetmetal_parallel import four_level_box

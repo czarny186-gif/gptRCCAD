@@ -5153,13 +5153,14 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         previous = [dict(s, outside=s.get('outside', st['rules'].get('outside', False))) for s in st['specs']]
         recipe = dict(type='sheetbuild', id=body.id, base=st['base'], t=st['t'], flanges=[*previous, spec], rules=self._flange_rules())
 
-        source=replace(body,meta=dict(body.meta or {},sheet=self._editable_sheet_state(body.id)))
+        source=replace(body,meta=dict(body.meta or {},sheet=dict(self._editable_sheet_state(body.id), **{k: v for k, v in ((body.meta or {}).get('sheet') or {}).items() if k == 'tabs'})))
+        walls=hist.sheet_tab_walls(self.document.bodies, body.id)      # ścianki na noski tej blachy - przeliczane po gięciu
         def build():
-            return hist.run_sheetbuild([source],recipe)[0],recipe
+            return {b.id: b for b in hist.run_sheetbuild([source, *walls],recipe)},recipe
 
         def apply(result):
             new, rec = result
-            self.document.commit([new if b.id == body.id else b for b in self.document.bodies], label=label, icon='flange', op=rec)
+            self.document.commit([new.get(b.id, b) for b in self.document.bodies], label=label, icon='flange', op=rec)
             self._tool_select([body.id])
 
         self.fl_pick = None
