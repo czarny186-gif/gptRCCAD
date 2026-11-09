@@ -173,7 +173,7 @@ class PlywoodTools:
                                   'w tę samą stronę): Równolegle - istniejąca przechodzi przez narożnik, nowa do niej dochodzi; '
                                   'Blacharskie - ukos po przekątnej narożnika. Na styku od razu noski w płaszczyźnie płyt.')
         self._field(lay, 'Narożniki nachodzących ścianek', self.pw_corner)
-        self.pw_status = _label('Kliknij prostą krawędź płaskiej strony płyty. Shift + klik dodaje kolejne krawędzie.', 'status')
+        self.pw_status = _label('Kliknij prostą krawędź płaskiej strony płyty. Shift + klik dodaje kolejne krawędzie. Prawy przycisk na wstawionej ściance cofa jej wstawienie.', 'status')
         lay.addWidget(self.pw_status)
         self.pw_insert = QPushButton('Wstaw')
         self.pw_insert.setToolTip('Czerwony: kliknięcie krawędzi płyty od razu dodaje ściankę (bez Zastosuj). Zielony: tylko wybór krawędzi.')
@@ -510,6 +510,29 @@ class PlywoodTools:
                     self._pc_update()
                 if self.mode == 'ply_joints':
                     self._pj_hover(next((c['key'] for c in self.pj_contacts if body.id in (c['a'], c['b'])), None))
+
+    def ply_right_click(self,x,y):
+        if self.mode=='ply_between':
+            hit=self.view.pick_face(x,y)
+            body=self.document.get(hit[0]) if hit else None
+            if body is None:return
+            try:face,_=kernel.face_at(body.shape,hit[1],hit[2])
+            except kernel.CadError:return
+            kept=[f for f in self.pb_faces if not (f['id']==body.id and f['face'].isSame(face))]
+            if len(kept)==len(self.pb_faces):return
+            self.pb_faces=kept;self._hover_key=None
+            self._ply_update();self.pb_status.setText('Kliknij ścianę naprzeciw.' if kept else 'Kliknij pierwszą ścianę.')
+            return
+        bid=self.view.pick_body(x,y)
+        body=self.document.get(bid) if bid else None
+        if body is None or not ((body.meta or {}).get('ply') or {}).get('wall'):return
+        states,current=self.document.states(),self.document.infos()[1]
+        states=states[:current+1];ctx=self._hist_ctx()
+        def apply(result):
+            values,_=result;self.document.rewrite(values,len(values)-1)
+            self.selected=[];self.pw_base=None;self.pw_edges=[]
+            if self.mode=='ply_wall':self._ply_update();self.pw_status.setText('Anulowano wstawienie wskazanej ścianki. Kliknij inną krawędź.')
+        self.run_history(lambda job:hist.cancel_ply_wall(states,bid,ctx,job),apply)
 
     def ply_cut_unpick(self, x, y):
         """Do cięcia: prawy przycisk na płycie odznacza ją."""

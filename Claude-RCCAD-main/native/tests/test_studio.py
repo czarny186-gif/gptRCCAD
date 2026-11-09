@@ -1421,6 +1421,60 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len([x for x in w.document.bodies if x.kind=='solid']),1)
         self.assertGreater(w.document.bodies[0].shape.Volume(),8000)
 
+    def test_boolean_apply_stays_open_for_next_operation(self):
+        w=self.w;a,b=self.make_solids()
+        c=Body('C',k.box(10,10,10).translate(cq.Vector(15,0,0))).prepared()
+        w.document.commit([a,b,c]);w.refresh();w.set_mode('bool')
+        w.bool_ids=[a.id,b.id];w.apply_bool();self.wait()
+        self.assertEqual(w.mode,'bool');self.assertEqual(w.bool_ids,[a.id])
+        w.bool_ids.append(c.id);w.apply_bool();self.wait()
+        self.assertEqual(w.mode,'bool');self.assertEqual(w.bool_ids,[a.id])
+        self.assertEqual(len(w.document.bodies),1)
+        self.assertTrue(w.document.bodies[0].shape.isValid())
+        w.set_mode('extrude');self.assertEqual(w.mode,'extrude')
+
+    def test_extrude_up_to_target_has_one_recipient_and_replays(self):
+        w=self.w
+        # Select the destination option immediately before applying the existing two-box fixture.
+        apply=w.apply_extrude
+        def target_apply():
+            self.assertTrue(w.ex_join_scope._buttons[1].isEnabled())
+            w.ex_join_scope.setCurrentIndex(1);apply()
+        with patch.object(w,'apply_extrude',side_effect=target_apply):
+            a,b=self._upto_between_boxes('join')
+        self.assertEqual(w.document.info['op']['join_to'],[b.id])
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),8000,3)
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),16000,3)
+        # A later history insertion must not turn a third body into a recipient.
+        c=Body('C',k.box(10,10,10).translate(cq.Vector(25,0,0))).prepared()
+        result=hist.run_extrude([a,b,c],w.document.info['op'])
+        self.assertEqual(len(result),3)
+        self.assertAlmostEqual(next(x for x in result if x.id==c.id).shape.Volume(),1000,3)
+        self.assertAlmostEqual(sum(x.shape.Volume() for x in result),25000,3)
+
+    def test_plywood_right_click_cancels_specific_wall_and_reselects_face(self):
+        w=self.w
+        sk=Body('Szkic',k.sketch('rectangle','XY',100,60),'sketch','XY').prepared()
+        base=hist.run_recipe([sk],dict(type='ply_panel',profiles=[{'k':'sketch','id':sk.id}],d=3,t=3,method='laser',spent=[sk.id],out=['base']))[-1]
+        w.document.commit([base]);w.refresh();w.set_mode('ply_wall')
+        edges=[i for i,e in enumerate(base.shape.Edges()) if abs(e.Center().z-3)<1e-6]
+        recipe=dict(type='ply_wall',base=base.id,edges=hist.edge_refs(base.shape,edges),t=3,h=20,side='on',flip=False,method='laser',out=['w1','w2','w3','w4'])
+        w.document.commit(hist.run_recipe([base],recipe),op=recipe)
+        w.refresh()
+        with patch.object(w.view,'pick_body',return_value='w2'):w.context_menu(5,5)
+        self.wait();self.assertEqual(w.mode,'ply_wall');self.assertIsNone(w.document.get('w2'))
+        self.assertTrue(all(w.document.get(i) is not None for i in ('w1','w3','w4')))
+        remaining=w.document.info['op'];self.assertEqual(len(remaining['edges']),3)
+        # Two faces of the same body: right-click removes the exact selected face only.
+        w.set_mode('ply_between');body=w.document.get(base.id)
+        faces=[f for f in body.shape.Faces() if abs(f.normalAt().z)>.99]
+        w.pb_faces=[dict(id=body.id,face=f,normal=np.array(f.normalAt().toTuple()),point=np.array(f.Center().toTuple()),name=body.name) for f in faces]
+        hit=(body.id,np.array(faces[0].normalAt().toTuple()),np.array(faces[0].Center().toTuple()))
+        with patch.object(w.view,'pick_face',return_value=hit):w.context_menu(5,5)
+        self.assertEqual(w.mode,'ply_between');self.assertEqual(len(w.pb_faces),1)
+        self.assertTrue(w.pb_faces[0]['face'].isSame(faces[1]))
+        self.assertFalse(w.view.preview_items)
+
     def test_fillet_arrow_and_live_preview(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
         with patch.object(w.view,'nearest_edge',return_value=(a.id,0)):w.view_clicked(5,5,False,False)

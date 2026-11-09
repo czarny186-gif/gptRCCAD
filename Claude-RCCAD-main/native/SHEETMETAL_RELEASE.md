@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.75 — wybór ścianek i łączenie wyciągnięć
+
+## Zmiany 0.4.75
+
+- **Sklejka → Ścianka:** prawy przycisk na wstawionej ściance cofa tylko jej wstawienie, również ze wspólnego kroku kilku ścianek. Pozostałe narożniki przeliczają się, a narzędzie pozostaje otwarte. Operacje zależne od usuwanej ścianki trzeba najpierw cofnąć.
+- **Sklejka → Półka/przegroda:** prawy przycisk odznacza wskazaną powierzchnię podpierającą; można wybrać inną bez zamykania panelu.
+- **Wyciągnięcie → Do elementu → Połącz:** wybór bryły Początkowej albo Docelowej. Wyciągnięcie jest dodawane tylko do wybranej bryły, bez powielania materiału w drugiej. Wybór zapisuje się w historii projektu.
+- **Boolean:** Zastosuj pozostawia panel otwarty i wynik jako bazę następnej operacji. Zamknij lub zmiana narzędzia kończy pracę.
+
+Rozpakuj cały plik ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.74 — kompletna poprawka gięć i ścianek na noski
 
 ## Poprawki 0.4.74

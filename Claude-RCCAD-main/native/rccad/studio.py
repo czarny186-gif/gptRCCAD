@@ -998,6 +998,13 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.ex_extent.setToolTip('Do elementu: po wybraniu profilu kliknij płaszczyznę, ścianę, krawędź albo punkt - bryła sięga do jego wysokości.')
         self._field(lay, 'Zakres', self.ex_extent)
         self.ex_target = None       # wskazany element (Do elementu): dict(kind, point, label)
+        self.ex_join_label=_label('Połącz z bryłą')
+        lay.addWidget(self.ex_join_label)
+        self.ex_join_scope=ui.Segmented([('Początkową','source','join'),('Docelową','target','join')],32)
+        lay.addWidget(self.ex_join_scope)
+        self.ex_join_scope._buttons[0].setToolTip('Wyciągnięcie zostaje dołączone do bryły, z której wychodzi profil.')
+        self.ex_join_scope._buttons[1].setToolTip('Wyciągnięcie zostaje dołączone do wskazanej bryły docelowej.')
+        self.ex_join_label.hide();self.ex_join_scope.hide()
         self.ex_dir_label = _label('Kierunek')
         lay.addWidget(self.ex_dir_label)
         self.ex_dir = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two'), ('Oba końce', 'ends', 'ends')], 32)
@@ -1036,6 +1043,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             w.valueChanged.connect(lambda *_: self._ex_value_changed())
         self.ex_dir.currentIndexChanged.connect(self._ex_dir_changed)
         self.ex_extent.currentIndexChanged.connect(self._ex_extent_changed)
+        self.ex_join_scope.currentIndexChanged.connect(lambda *_:self._timers['extrude'].start())
         self.ex_op.currentIndexChanged.connect(lambda *_: (self._ex_op_user_changed(), self._timers['extrude'].start()))
         self.ex_second_label.hide()
         self.ex_second.hide()
@@ -1902,6 +1910,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.sketch_plane = None
         self.ex_profiles = []
         self.ex_target = None
+        self._ex_join_scope_update()
         if hasattr(self, 'ex_target_label'):
             self.ex_target_label.hide()
         self.rev_profiles,self.rev_line, self._rev_manual = [], None, False
@@ -3801,6 +3810,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.ex_dir_label.setVisible(not upto)
         self.ex_dir.setVisible(not upto)
         self.ex_target = None
+        self._ex_join_scope_update()
         self.ex_target_label.hide()
         self.view.hover_vertex = None
         self.view._set_hover_edge(None)
@@ -3874,6 +3884,15 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
                 return dict(kind='plane', point=point, label=f'płaszczyzna {name}', edge=None, body=None)
         return None
 
+    def _ex_join_scope_update(self):
+        shown=self.ex_extent.currentData()=='upto' and self.ex_op.currentData()=='join'
+        self.ex_join_label.setVisible(shown);self.ex_join_scope.setVisible(shown)
+        target=self.ex_target
+        enabled=bool(target and target.get('body') and self.document.get(target['body']) and self.document.get(target['body']).kind=='solid')
+        self.ex_join_scope._buttons[1].setEnabled(enabled)
+        if not enabled and self.ex_join_scope.currentData()=='target':
+            self.ex_join_scope.blockSignals(True);self.ex_join_scope.setCurrentIndex(0);self.ex_join_scope.blockSignals(False)
+
     def _extent_skip(self):
         """Bryła wskazana przy wyciąganiu „Do elementu” wyznacza tylko wysokość: Połącz nie dokleja do niej wyciągnięcia
         (Wytnij i Wspólna działają na wszystkich bryłach, przez które przechodzi narzędzie, także na niej).
@@ -3923,6 +3942,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.toast('Ten element leży na wysokości profilu - wskaż inny.')
             return
         self.ex_target = target
+        self._ex_join_scope_update()
         self._apply_extent_target()
 
     def _apply_extent_target(self):
@@ -4057,12 +4077,14 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         return hit[1]
 
     def _ex_op_user_changed(self):
+        self._ex_join_scope_update()
         if not getattr(self, '_ex_auto', False):
             self._ex_op_manual = True
 
     def _ex_value_changed(self):
         if self.ex_target is not None and not getattr(self, '_ex_from_target', False):
             self.ex_target = None        # odległość zmieniona ręcznie: wyciągnięcie nie jest już związane ze wskazanym elementem
+            self._ex_join_scope_update()
             self.ex_target_label.hide()
             self.view.hover_vertex = None
             self.view.overlay.update()
@@ -4173,13 +4195,16 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         out = [uuid.uuid4().hex for _ in makers]
         target = self.ex_target
         upto = None if target is None else dict(kind=target['kind'], point=[float(c) for c in target['point']])
-        skip = self._extent_skip() if op == 'join' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
+        scope=self.ex_join_scope.currentData() if op=='join' and self.ex_extent.currentData()=='upto' else None
+        skip = self._extent_skip() if op == 'join' and scope != 'target' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
         skip = sorted(set(skip) | self._protected())             # ukrytych brył operacja nie zmienia
         folder = self._new_folder(profiles, spent, len(makers), op, 'Wyciągnięcie')
 
         def build():
-            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, skip=skip, folder=folder)
+            receivers=hist.extrusion_receivers(existing,profiles,scope,target.get('body') if target else None) if scope else None
+            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, skip=skip, folder=folder,only=receivers)
             recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            if receivers is not None:recipe.update(join_to=receivers,join_side=scope)
             if folder:
                 recipe['folder'] = folder
             if upto is not None:
@@ -5809,7 +5834,11 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self._tool_select([base.id])
 
         self.view.set_preview_mesh(None)
-        self.run_operation('Operacja na bryłach', build, apply, after=lambda: self.set_mode(None))
+        def again():
+            if self.mode=='bool':
+                self.bool_ids=[base.id] if self.document.get(base.id) is not None else []
+                self.update_bool_status()
+        self.run_operation('Operacja na bryłach', build, apply, after=again)
 
     # =====================================================================
     # edytuj bryłę: zaokrąglenia i fazy z uchwytem-strzałką
@@ -8827,6 +8856,9 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         if self.mode == 'sketch':
             if self.points or self.tangent_lines:
                 self.end_current_shape()
+            return
+        if self.mode in ('ply_wall','ply_between'):
+            self.ply_right_click(x,y)
             return
         if self.mode == 'ply_cut':
             self.ply_cut_unpick(x, y)          # Do cięcia: prawy przycisk odznacza płytę

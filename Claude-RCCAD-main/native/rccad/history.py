@@ -634,11 +634,34 @@ def split_parts(bodies, only=None):
     return out
 
 
-def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(), folder=''):
+def extrusion_receivers(bodies,profiles,side,target=None):
+    """Explicit endpoint scope for up-to-element unions; height is independent."""
+    solids=[b for b in bodies if b.kind=='solid']
+    if side=='target':
+        if not any(b.id==target for b in solids):raise kernel.CadError('Wskaż bryłę docelową, z którą wyciągnięcie ma się połączyć.')
+        return [target]
+    chosen=set()
+    for src in profiles:
+        direct=next((b for b in solids if b.id==src.get('id')),None)
+        if direct is not None:chosen.add(direct.id);continue
+        face=src.get('face') or profile_face(src['wire'])
+        point=_inner_point(face) if face is not None else np.array(src['center'],float)
+        found=[b.id for b in solids if kernel.point_state(b.shape,point)!='out']
+        if len(found)>1:raise kernel.CadError('Profil leży na kilku bryłach. Wskaż ścianę bryły początkowej albo wybierz połączenie z docelową.')
+        chosen.update(found)
+    if not chosen:raise kernel.CadError('Profil nie leży na bryle początkowej. Wybierz ścianę bryły albo połączenie z bryłą docelową.')
+    return [b.id for b in solids if b.id in chosen]
+
+
+def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(), folder='', only=None):
     """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają.
     skip: bryły, których operacja nie zmienia (bryła wskazana tylko jako wysokość przy wyciąganiu do elementu, bryły ukryte na liście obiektów).
-    folder: grupa na liście obiektów dla kilku nowych brył naraz (napis, szyk szkiców)."""
+    folder: grupa na liście obiektów dla kilku nowych brył naraz (napis, szyk szkiców).
+    only: jawna lista odbiorców operacji (None zachowuje dotychczasowy zakres)."""
     skip = set(skip or ())
+    if only is not None:
+        allowed=set(only)
+        skip.update(b.id for b in existing if b.id not in allowed)
     fade = lambda bodies: [replace(b, visible=False) if b.id in spent else b for b in bodies]
     if op == 'new':
         ids2 = pad_ids(ids, len(tools), list(ids)[0] if ids else None)
@@ -881,7 +904,7 @@ def run_extrude(bodies, recipe):
         spent |= set(src.get('spent', ()))
     groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] == 'textgroup'}
     spent |= {b.id for b in bodies if text_group_of(b.id) in groups}      # wszystkie litery napisu (także nowe po zmianie treści)
-    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()), folder=recipe.get('folder', ''))
+    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()), folder=recipe.get('folder', ''),only=recipe.get('join_to'))
 
 
 def profile_face(wire):
@@ -2694,7 +2717,7 @@ def reads(recipe, current):
         return ids
     sketches = {b.id for b in current if b.kind == 'sketch'}
     if kind in ('extrude', 'revolve', 'sweep', 'loft'):
-        ids = set(recipe.get('spent', ()))
+        ids = set(recipe.get('spent', ())) | set(recipe.get('join_to', ()))
         if kind == 'sweep':
             ids.add(recipe['path']['id'])
         for spec in recipe['profiles']:
@@ -2922,6 +2945,30 @@ def toggle_step(states, j, constraints=(), job=None):
     steps = [(states[j - 1][0], states[j][0], info, states[j][1]), *_steps(states, range(j + 1, len(states)))]
     tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
     return list(states[:j]) + tail, failed
+
+
+def cancel_ply_wall(states,body_id,constraints=(),job=None):
+    """Remove just one wall insertion and replay later corner construction."""
+    import copy
+    for index in range(len(states)-1,0,-1):
+        original=states[index][1];op=original.get('op') or {}
+        if op.get('type')!='ply_wall' or body_id not in op.get('out',[]):continue
+        outputs=list(op['out']);position=outputs.index(body_id)
+        if len(outputs)==1:
+            result,failed=delete_step(states,index,constraints,job)
+        else:
+            recipe=copy.deepcopy(op);base=_body(states[index-1][0],op['base'])
+            indices=edge_indices(base.shape,op['edges']);order=sorted(indices,key=lambda i:-base.shape.Edges()[i].Length())
+            removed=order[position]
+            recipe['edges']=[ref for ref,i in zip(op['edges'],indices) if i!=removed]
+            recipe['out']=[v for v in outputs if v!=body_id]
+            info=dict(original,op=recipe)
+            steps=[(states[index-1][0],states[index][0],info,original),*_steps(states,range(index+1,len(states)))]
+            tail,failed=rebuild(states[index-1][0],steps,constraints,job)
+            result=list(states[:index])+tail
+        if failed:raise kernel.CadError('Od tej ścianki zależą późniejsze operacje. Najpierw cofnij zależne kroki; model pozostał bez zmian.')
+        return result,failed
+    raise kernel.CadError('Nie znaleziono wstawienia tej ścianki w bieżącej historii.')
 
 
 def delete_step(states, j, constraints=(), job=None):
