@@ -1,5 +1,6 @@
-# RCCAD Desktop 0.4.82 — szyki szkiców, pełny przekrój i uchwyty wyboru
+# RCCAD Desktop 0.4.83 — szyki szkiców, pełny przekrój i uchwyty wyboru
 
+- Spóźniony wynik podświetlania profili nie przywraca usuniętego ani zmienionego zaznaczenia.
 - Szkice w dużych szykach są rysowane zbiorczo, razem ze znacznikami środków. Podświetlenie i wskazywanie pozostają osobne; przesuwany szkic odłącza się od zbiorczego rysowania.
 - Podgląd liniowego wyciągania/wycinania korzysta z zapamiętanej triangulacji profili, zamiast przy każdej zmianie odległości budować i sprawdzać setki brył CAD. Zatwierdzanie operacji nadal używa dokładnej geometrii OpenCascade.
 - Rozłączne kontury i obszary nieprzecinające granic ściany omijają zbędne dzielenie Boolean. Nakładające się i zagnieżdżone kontury nadal przechodzą pełne dzielenie.

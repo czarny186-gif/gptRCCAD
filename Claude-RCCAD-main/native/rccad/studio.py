@@ -3855,7 +3855,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         else:
             self.view.set_selection_meshes(None)
             def show(mesh,error):
-                if self.mode=='extrude' and not error:self.view.set_selection_meshes([mesh] if mesh is not None else None)
+                current=self.ex_profiles
+                if self.mode=='extrude' and not error and len(current)==len(profiles) and all(a is b for a,b in zip(current,profiles)):
+                    self.view.set_selection_meshes([mesh] if mesh is not None else None)
             self.run_preview('profile_selection',compute,show)
 
     # ----- wyciągnięcie do elementu: wysokość wskazanej płaszczyzny, ściany, krawędzi albo punktu -----

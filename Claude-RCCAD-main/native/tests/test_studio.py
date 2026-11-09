@@ -1910,6 +1910,19 @@ class StudioTests(unittest.TestCase):
         w.mod_kind.setCurrentIndex(1);w._place_mod_handle();w._timers['mod'].stop()
         np.testing.assert_allclose(w.view.handles[0]['start'],k.edge_handle(b.shape,4)[0])
 
+    def test_late_profile_highlight_cannot_restore_removed_or_replaced_selection(self):
+        w=self.w;w.selected=[];w.set_mode('extrude')
+        profiles=[w._sketch_profile(Body(str(i),k.sketch('circle','XY',2,x=i*4),kind='sketch').prepared()) for i in range(12)]
+        w.ex_profiles=profiles;callbacks=[]
+        with patch.object(w,'run_preview',side_effect=lambda key,compute,show:callbacks.append(show)):
+            w._mark_profiles()
+        mesh=k.display_mesh(profiles[0]['wire'])
+        w.ex_profiles=[];w.view.set_selection_meshes(None);callbacks[0](mesh,None)
+        self.assertFalse(w.view.selection_items)
+        w.ex_profiles=[profiles[-1]];w._mark_profiles();current=list(w.view.selection_items)
+        callbacks[0](mesh,None)
+        self.assertEqual(current,w.view.selection_items)
+
     def test_move_and_scale_arrows_start_at_last_selected_object(self):
         w=self.w;a=Body('A',k.box(10,10,10)).prepared();b=Body('B',k.box(10,10,10).translate((40,0,0))).prepared()
         w.document.commit([a,b]);w.refresh();w.selected=[b.id,a.id];w.set_mode('move')
