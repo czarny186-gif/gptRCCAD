@@ -516,7 +516,7 @@ class PlywoodTools:
             hit=self.view.pick_face(x,y)
             body=self.document.get(hit[0]) if hit else None
             if body is None:return
-            try:face,_=kernel.face_at(body.shape,hit[1],hit[2])
+            try:face,_=self.view.face_at(body,hit)
             except kernel.CadError:return
             kept=[f for f in self.pb_faces if not (f['id']==body.id and f['face'].isSame(face))]
             if len(kept)==len(self.pb_faces):return
@@ -647,7 +647,7 @@ class PlywoodTools:
             self.toast('Kliknij płaską ścianę bryły albo płyty.')
             return
         try:
-            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            face, normal = self.view.face_at(body,hit)
         except kernel.CadError:
             self.toast('Kliknij płaską ścianę.')
             return

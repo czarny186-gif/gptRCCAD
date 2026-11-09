@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.81 — płynniejsze wskazywanie i przekrój
+
+- Pamięć danych wskazywania oraz siatek usuwa pojedyncze najstarsze wpisy według limitu danych, zamiast kasować całość po 256 modelach.
+- Indeksy przestrzenne wybierają kandydatów pod kursorem i na drodze promienia. Dotyczy to brył, szkiców, krawędzi i wierzchołków, również przy przekroju i podglądzie przesunięcia/obrotu.
+- Macierz kamery, rzutowanie krawędzi i wierzchołków pozostają w pamięci do zmiany widoku lub modelu.
+- Powiązanie trójkątów ze ścianami CAD i pamięć dokładnych obwiedni przyspieszają rozpoznawanie powierzchni. Wskazanie jest nadal sprawdzane na dokładnej geometrii.
+- GPU przycina krawędzie przekroju bez przebudowy buforów podczas przesuwania. Renderowanie pomija obiekty poza kadrem.
+- Proces operacji zachowuje wcześniej przesłane kształty; operacje Boolean przekazują tylko możliwych odbiorców. Brakująca lub usunięta z pamięci geometria jest przesyłana ponownie przed wykonaniem operacji.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.80 — pełny, kreskowany przekrój
 
 - Przecięty materiał bryły ma nieprzezroczyste wypełnienie z ukośnym kreskowaniem, aktualizowane podczas przesuwania płaszczyzny przekroju.

@@ -16,6 +16,8 @@ from .document import Body
 from . import kernel
 from .sectionview import clip_segments
 from .sectioncaps import SectionCaps
+from .perfcache import LRU
+from .spatial import BoundsTree
 
 
 # pyqtgraph caches shader programs globally; their GL share group must outlive
@@ -298,6 +300,11 @@ class Overlay2D(QWidget):
 
 class SectionMesh(gl.GLMeshItem):
     """Clip fragments in the shader: moving a section never rebuilds CAD or mesh buffers."""
+    def paint(self):
+        view=getattr(self,'section_view',None);bid=getattr(self,'section_body_id',None)
+        if bid is not None and view is not None and bid not in view._visible_body_ids():return
+        super().paint()
+
     def shader(self):
         view=getattr(self,'section_view',None)
         plane=view.item_section(self) if view is not None else None
@@ -308,28 +315,37 @@ class SectionMesh(gl.GLMeshItem):
 
 
 class SectionLine(gl.GLLinePlotItem):
-    """Clip just the displayed line segments; restore their original positions on disable."""
-    def setData(self,**kw):
-        if 'pos' in kw:
-            self._section_original=None if kw['pos'] is None else np.asarray(kw['pos']).copy()
-            self._section_key=None
-        if 'mode' in kw:self._section_mode=kw['mode']
-        super().setData(**kw)
+    """Clip line fragments on the GPU; preserve VBOs throughout section dragging."""
+    _cut_programs={}
 
-    def paint(self):
+    def getShaderProgram(self):
         view=getattr(self,'section_view',None)
         plane=view.item_section(self) if view is not None and not getattr(self,'section_ignore',False) else None
-        key=tuple(plane) if plane is not None else ()
-        if key!=getattr(self,'_section_key',None):
-            original=getattr(self,'_section_original',None)
-            if original is not None:
-                if plane is not None:
-                    pairs=original if getattr(self,'_section_mode',self.mode)=='lines' else _segments([original])
-                    clipped=clip_segments(pairs,plane) if pairs is not None else np.empty((0,3))
-                    if not hasattr(self,'_section_mode'):self._section_mode=self.mode
-                    super().setData(pos=clipped,mode='lines')
-                else:super().setData(pos=original,mode=getattr(self,'_section_mode',self.mode))
-            self._section_key=key
+        if plane is None:return super().getShaderProgram()
+        import importlib
+        from OpenGL.GL import shaders as compiler
+        from PySide6.QtGui import QOpenGLContext
+        module=importlib.import_module('pyqtgraph.opengl.items.GLLinePlotItem')
+        ctx=QOpenGLContext.currentContext();es=ctx.isOpenGLES();version=ctx.format().version()
+        core=version>=(3,0) if es else version>=(3,1)
+        prefix=('#version 300 es\n' if es else '#version 140\n') if core else ''
+        key=(es,core);program=self._cut_programs.get(key)
+        if program is None:
+            sources=module.SHADER_CORE if core else module.SHADER_LEGACY
+            vertex=sources[GL.GL_VERTEX_SHADER];fragment=sources[GL.GL_FRAGMENT_SHADER]
+            vertex=vertex.replace('void main()',('out' if core else 'varying')+' float v_cut; uniform vec4 u_cut; void main()')
+            vertex=vertex.replace('v_color = a_color;','v_color = a_color; v_cut = dot(a_position,u_cut);')
+            fragment=fragment.replace('void main()',('in' if core else 'varying')+' float v_cut; void main()')
+            fragment=fragment.replace('void main() {','void main() { if(v_cut < -0.00001) discard;')
+            program=compiler.compileProgram(compiler.compileShader(prefix+vertex,GL.GL_VERTEX_SHADER),compiler.compileShader(prefix+fragment,GL.GL_FRAGMENT_SHADER))
+            GL.glBindAttribLocation(program,0,'a_position');GL.glBindAttribLocation(program,1,'a_color');GL.glLinkProgram(program)
+            self._cut_programs[key]=program
+        with program:GL.glUniform4fv(GL.glGetUniformLocation(program,'u_cut'),1,np.asarray(plane,np.float32))
+        return program
+
+    def paint(self):
+        view=getattr(self,'section_view',None);bid=getattr(self,'section_body_id',None)
+        if bid is not None and view is not None and bid not in view._visible_body_ids():return
         super().paint()
 
 
@@ -368,7 +384,7 @@ class OverLine(SectionLine):
                            'glBlendFunc': (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)})
 
 
-_MESHDATA = {}
+_MESHDATA = LRU(192*1024*1024)
 
 
 def _meshdata(mesh):
@@ -390,13 +406,11 @@ def _meshdata(mesh):
         length = np.linalg.norm(normals, axis=1)
         normals /= np.where(length > 1e-20, length, 1.0)[:, None]
         md._vertexNormals = normals.astype(np.float32)
-    if len(_MESHDATA) > 256:
-        _MESHDATA.clear()
     _MESHDATA[id(mesh)] = (mesh, md)
     return md
 
 
-_PICK = {}
+_PICK = LRU(256*1024*1024)
 PICK_CHUNK = 1024
 
 
@@ -424,8 +438,6 @@ def _pick_data(mesh):
         for q in (points[0], points[-1]):
             ends[tuple(np.round(q, 3))] = q
     data['ends'] = np.array(list(ends.values()), dtype=float) if ends else None
-    if len(_PICK) > 256:
-        _PICK.clear()
     _PICK[id(mesh)] = (mesh, data)
     return data
 
@@ -628,6 +640,8 @@ class CadView(gl.GLViewWidget):
         self.overlay.raise_()
         self.section_caps=SectionCaps();self.addItem(self.section_caps)
         self._section_classifiers={}
+        self._scene_revision=0;self._scene_signature=None
+        self._projection_cache=LRU(96*1024*1024)
 
     def _refresh_grid(self):
         """Siatka zagęszcza się przy przybliżaniu (min. GRID_PX px między cienkimi liniami) i podąża za środkiem widoku."""
@@ -764,9 +778,11 @@ class CadView(gl.GLViewWidget):
         else:
             self._body_m[bid] = QMatrix4x4(matrix)
         self._apply_body_matrix(bid)
+        self._scene_revision+=1
         self.update()
 
     def clear_body_matrices(self):
+        self._scene_revision+=1
         for bid in list(self._body_m):
             self._body_m.pop(bid)
             self._apply_body_matrix(bid)
@@ -781,6 +797,9 @@ class CadView(gl.GLViewWidget):
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
         self.bodies = tuple(bodies)
+        signature=tuple((b.id,id(b.mesh),id(b.shape),b.kind,b.visible) for b in self.bodies)
+        if signature!=self._scene_signature:
+            self._scene_signature=signature;self._scene_revision+=1
         live_ids={b.id for b in self.bodies}
         self.section_caps.retain_bodies(live_ids)
         self._section_classifiers={bid:c for bid,c in self._section_classifiers.items() if bid in live_ids}
@@ -812,6 +831,7 @@ class CadView(gl.GLViewWidget):
                     if len(mesh.triangles):
                         fill = OffsetMesh(meshdata=_meshdata(mesh), smooth=True, color=shown, shader='rccad', drawEdges=False)
                         fill.setGLOptions('translucent' if self.xray else 'opaque')
+                        fill.section_body_id=body.id
                         self.addItem(fill)
                 elif fill is not None and old_parts.get('color') != shown:
                     fill.setColor(shown)
@@ -826,6 +846,7 @@ class CadView(gl.GLViewWidget):
                     line = (OverLine if body.kind == 'sketch' else SectionLine)(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
                     if body.kind != 'sketch':
                         line.setGLOptions('additive' if self.xray else 'translucent')
+                    line.section_body_id=body.id
                     self.addItem(line)
                     lines.append(line)
                 parts = self._parts[body.id] = dict(fill_key=fill_key, line_key=line_key, fill=fill, lines=lines, color=shown, cap_solid=body.kind=='solid' and bool(body.shape.Solids()))
@@ -1470,7 +1491,7 @@ class CadView(gl.GLViewWidget):
             return None
         origin, direction = ray
         best = None;blocked=None
-        for body in self.bodies:
+        for body in self._ray_bodies(origin,direction):
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
             cap=self._section_cap_hit(body,origin,direction)
@@ -1483,9 +1504,18 @@ class CadView(gl.GLViewWidget):
                 if m is not None:
                     n = m[:3, :3] @ n
                 n = n / max(np.linalg.norm(n), 1e-12)
-                best = (hit[0], body.id, n, origin + direction * hit[0])
+                best = (hit[0], body.id, n, origin + direction * hit[0],hit[1],id(body.mesh))
         if blocked is not None and (best is None or blocked<best[0]-1e-5):return None
+        if best is not None:
+            self._face_hint=(best[1],best[4],tuple(best[3]),best[5])
         return None if best is None else (best[1], best[2], best[3])
+
+    def face_at(self,body,hit,curved=False):
+        hint=getattr(self,'_face_hint',None);face_id=None
+        if hint is not None and hint[0]==body.id and tuple(hit[2])==hint[2] and id(body.mesh)==hint[3]:
+            ids=getattr(body.mesh,'face_ids',None)
+            if ids is not None and hint[1]<len(ids):face_id=int(ids[hint[1]])
+        return kernel.face_at(body.shape,hit[1],hit[2],curved=curved,face_hint=face_id)
 
     def pick_profile(self, x, y):
         """Identyfikator szkicu, którego zamknięty obrys obejmuje punkt pod kursorem."""
@@ -1607,16 +1637,16 @@ class CadView(gl.GLViewWidget):
         Zapamiętany dla tych samych brył i środka (liczony był przy każdym rzucie punktu - setki razy na ruch myszy)."""
         center = np.array([self.opts['center'].x(), self.opts['center'].y(), self.opts['center'].z()], float)
         bodies = getattr(self, 'bodies', ())
-        key = (id(bodies), len(bodies), tuple(np.round(center, 6)))
+        key = (getattr(self,'_scene_revision',0), tuple(center))
         cached = getattr(self, '_extent_cache', None)
         if cached is not None and cached[0] == key:
             return cached[1]
-        meshes = [b.mesh for b in bodies if b.mesh is not None]
-        extent = 100.0
-        if meshes:
-            centres = np.array([np.asarray(m.center, float) for m in meshes])
-            sizes = np.array([float(m.size) for m in meshes])
-            extent = max(extent, float((np.linalg.norm(centres - center, axis=1) + sizes).max()))
+        extent=100.0
+        if hasattr(self,'_scene_revision'):
+            _,_,tree=self._scene_index()
+            if len(tree.low):
+                centres=(tree.low+tree.high)*.5;sizes=np.linalg.norm(tree.high-tree.low,axis=1)*.5
+                extent=max(extent,float((np.linalg.norm(centres-center,axis=1)+sizes).max()))
         self._extent_cache = (key, extent)
         return extent
 
@@ -1640,43 +1670,113 @@ class CadView(gl.GLViewWidget):
         matrix.ortho(left, right, bottom, top, -depth, depth)
         return matrix
 
+    def _camera_key(self):
+        c=self.opts['center']
+        return (self.width(),self.height(),self.ortho,getattr(self,'_scene_revision',0),c.x(),c.y(),c.z(),
+                self.opts['distance'],self.opts['elevation'],self.opts['azimuth'],self.roll(),self.opts['fov'])
+
+    def _camera_data(self):
+        key=self._camera_key();cached=getattr(self,'_camera_cache',None)
+        if cached is None or cached[0]!=key:
+            viewport=(0,0,max(1,self.width()),max(1,self.height()))
+            matrix=self.projectionMatrix(viewport,viewport)*self.viewMatrix()
+            inverse,ok=matrix.inverted()
+            array=np.array(matrix.data(),float).reshape(4,4).T
+            cached=(key,matrix,array,inverse,ok);self._camera_cache=cached
+        return cached
+
     def camera_matrix(self):
-        viewport = (0, 0, max(1,self.width()), max(1,self.height()))
-        return self.projectionMatrix(viewport,viewport) * self.viewMatrix()
+        return QMatrix4x4(self._camera_data()[1])
 
     def project_points(self, points):
-        # Explicit Qt matrix data avoid NumPy/Qt row-major ambiguity.
-        matrix = self.camera_matrix()
-        m = np.array([[r.x(), r.y(), r.z(), r.w()] for r in (matrix.row(i) for i in range(4))])
-        homogeneous = np.column_stack((points, np.ones(len(points)))) @ m.T
-        w = homogeneous[:, 3]
-        safe = np.where(np.abs(w) > 1e-12, w, np.nan)
-        ndc = homogeneous[:, :3] / safe[:, None]
-        xy = np.column_stack(((ndc[:, 0] + 1) * self.width() / 2, (1 - ndc[:, 1]) * self.height() / 2))
-        return xy, ndc[:, 2], w
+        m=self._camera_data()[2]
+        homogeneous=np.asarray(points)@m[:,:3].T+m[:,3]
+        w=homogeneous[:,3];safe=np.where(np.abs(w)>1e-12,w,np.nan)
+        ndc=homogeneous[:,:3]/safe[:,None]
+        xy=np.column_stack(((ndc[:,0]+1)*self.width()/2,(1-ndc[:,1])*self.height()/2))
+        return xy,ndc[:,2],w
+
+    def _scene_index(self):
+        cached=getattr(self,'_scene_index_cache',None)
+        if cached is not None and cached[0]==self._scene_revision:return cached
+        bodies=[];lows=[];highs=[]
+        for b in self.bodies:
+            if not b.visible or b.mesh is None:continue
+            mesh=b.mesh;bounds=getattr(mesh,'_scene_bounds',None)
+            if bounds is None:
+                arrays=[a for a in (mesh.vertices,*mesh.edges.values()) if len(a)]
+                if not arrays:continue
+                points=np.concatenate(arrays)
+                bounds=(points.min(axis=0),points.max(axis=0));mesh._scene_bounds=bounds
+            lo,hi=bounds
+            m=self._moved(b.id)
+            if m is not None:
+                corners=np.array([[x,y,z] for x in (lo[0],hi[0]) for y in (lo[1],hi[1]) for z in (lo[2],hi[2])])
+                corners=self._apply_m(m,corners);lo=corners.min(axis=0);hi=corners.max(axis=0)
+            bodies.append(b);lows.append(lo);highs.append(hi)
+        tree=BoundsTree(lows,highs)
+        cached=(self._scene_revision,bodies,tree);self._scene_index_cache=cached
+        return cached
+
+    def _ray_bodies(self,origin,direction):
+        _,bodies,tree=self._scene_index()
+        return (bodies[i] for i in tree.ray(origin,direction))
+
+    def _screen_bodies(self,x,y,radius=11):
+        key=self._camera_key();cached=getattr(self,'_screen_index_cache',None)
+        _,bodies,tree=self._scene_index()
+        if cached is None or cached[0]!=key:
+            lows=[];highs=[];indices=[];always=[]
+            if bodies:
+                corners=np.array([[[a,b,c] for a in (lo[0],hi[0]) for b in (lo[1],hi[1]) for c in (lo[2],hi[2])]
+                                  for lo,hi in zip(tree.low,tree.high)])
+                xy,z,w=self.project_points(corners.reshape(-1,3));xy=xy.reshape(-1,8,2);w=w.reshape(-1,8)
+                for i,pts in enumerate(xy):
+                    if np.any(w[i]<=0) or not np.isfinite(pts).all():always.append(i);continue
+                    lows.append([*pts.min(axis=0),0]);highs.append([*pts.max(axis=0),0]);indices.append(i)
+            cached=(key,BoundsTree(lows,highs),indices,always);self._screen_index_cache=cached
+        _,screen,indices,always=cached
+        margin=np.broadcast_to(np.asarray(radius,float),(2,))
+        ids=sorted({*always,*(indices[i] for i in screen.point([x,y,0],[*margin,0]))})
+        return (bodies[i] for i in ids)
+
+    def _visible_body_ids(self):
+        key=self._camera_key();cached=getattr(self,'_visible_ids_cache',None)
+        if cached is None or cached[0]!=key:
+            bodies=self._screen_bodies(self.width()/2,self.height()/2,np.array([self.width(),self.height()])/2+12)
+            cached=(key,frozenset(b.id for b in bodies));self._visible_ids_cache=cached
+        return cached[1]
+
+    def _edge_projection(self,body):
+        plane=None if self.section_plane is None else tuple(self.section_plane)
+        key=('edges',body.id,id(body.mesh),self._camera_key(),plane)
+        cached=self._projection_cache.get(key)
+        if cached is not None:return cached[1]
+        data=_pick_data(body.mesh)
+        if 'a' not in data:return None
+        m=self._moved(body.id)
+        a,b=(data['a'],data['b']) if m is None else (self._apply_m(m,data['a']),self._apply_m(m,data['b']))
+        ids=data['edge']
+        if self.section_plane is not None:
+            cut=self.section_plane;keep=np.maximum(a@cut[:3]+cut[3],b@cut[:3]+cut[3])>=-1e-7
+            if not keep.any():return None
+            pairs=clip_segments(np.stack((a,b),axis=1).reshape(-1,3),cut).reshape(-1,2,3)
+            a,b=pairs[:,0],pairs[:,1];ids=ids[keep]
+        pa,_,wa=self.project_points(a);pb,_,wb=self.project_points(b)
+        result=(a,b,ids,pa,pb,wa,wb);self._projection_cache[key]=(body.mesh,result)
+        return result
 
     def nearest_edge(self, x, y, solids_only=False, kinds=None):
         """Krawędź najbliżej kursora (do 10 px), widoczna (nie zasłonięta bryłą, chyba że przezroczystość): (id, indeks) albo None.
         Wszystkie odcinki krawędzi bryły rzutowane naraz; zasłonięcie sprawdzane tylko dla najbliższych kandydatów."""
         found = []
         cursor = np.array([x, y], dtype=float)
-        for body in self.bodies:
+        for body in self._screen_bodies(x,y,10):
             if (not body.visible or body.id in self.locked) or not body.mesh or (solids_only and body.kind != 'solid') or (kinds and body.kind not in kinds):
                 continue
-            data = _pick_data(body.mesh)
-            if 'a' not in data:
-                continue
-            m = self._moved(body.id)
-            seg_a, seg_b = (data['a'], data['b']) if m is None else (self._apply_m(m, data['a']), self._apply_m(m, data['b']))
-            edge_ids=data['edge']
-            if self.section_plane is not None:
-                plane=self.section_plane
-                keep=np.maximum(seg_a@plane[:3]+plane[3],seg_b@plane[:3]+plane[3])>=-1e-7
-                if not keep.any():continue
-                pairs=clip_segments(np.stack((seg_a,seg_b),axis=1).reshape(-1,3),plane).reshape(-1,2,3)
-                seg_a,seg_b=pairs[:,0],pairs[:,1];edge_ids=edge_ids[keep]
-            pa, za, wa = self.project_points(seg_a)
-            pb, zb, wb = self.project_points(seg_b)
+            projected=self._edge_projection(body)
+            if projected is None:continue
+            seg_a,seg_b,edge_ids,pa,pb,wa,wb=projected
             delta = pb - pa
             denom = (delta * delta).sum(axis=1)
             t = np.clip(((cursor - pa) * delta).sum(axis=1) / np.maximum(denom, 1e-12), 0, 1)
@@ -1701,15 +1801,19 @@ class CadView(gl.GLViewWidget):
     def nearest_vertex(self, x, y, radius=11.0, solids_only=True):
         """Wierzchołek (koniec krawędzi) najbliżej kursora: (id obiektu, punkt 3D) albo None; solids_only=False obejmuje też punkty szkiców."""
         best = None
-        for body in self.bodies:
+        for body in self._screen_bodies(x,y,radius):
             if (not body.visible or body.id in self.locked) or not body.mesh or (solids_only and body.kind != 'solid') or body.kind not in ('solid', 'sketch'):
                 continue
-            pts = _pick_data(body.mesh)['ends']
-            if pts is None:
-                continue
-            m=self._moved(body.id)
-            if m is not None:pts=self._apply_m(m,pts)
-            xy, z, w = self.project_points(pts)
+            key=('vertices',body.id,id(body.mesh),self._camera_key())
+            cached=self._projection_cache.get(key)
+            if cached is None:
+                pts=_pick_data(body.mesh)['ends']
+                if pts is None:continue
+                m=self._moved(body.id)
+                if m is not None:pts=self._apply_m(m,pts)
+                xy,_,w=self.project_points(pts)
+                cached=(body.mesh,(pts,xy,w));self._projection_cache[key]=cached
+            pts,xy,w=cached[1]
             if len(xy) != len(pts):
                 continue
             dist = np.linalg.norm(xy - [x, y], axis=1)
@@ -1722,7 +1826,7 @@ class CadView(gl.GLViewWidget):
         return None if best is None else (best[1], best[2])
 
     def _ray(self, x, y):
-        inverse, ok = (self.camera_matrix()).inverted()
+        _,_,_,inverse,ok=self._camera_data()
         if not ok:
             return None
         from PySide6.QtGui import QVector4D
@@ -1756,7 +1860,7 @@ class CadView(gl.GLViewWidget):
 
     def _hit(self, origin, direction, with_cap=False):
         best = None
-        for body in self.bodies:
+        for body in self._ray_bodies(origin,direction):
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
             hit = _ray_triangles(_pick_data(body.mesh), *self._local_ray(body.id, origin, direction),cut=self._local_section(body.id))
@@ -1835,12 +1939,12 @@ class CadView(gl.GLViewWidget):
         self.update()
 
     def _hover(self, pos):
-        if getattr(self,'section_picking',False):
-            self.viewHover.emit(pos.x(),pos.y());return
         now = time.monotonic()
         if now - self._hover_time < .04:
             return
         self._hover_time = now
+        if getattr(self,'section_picking',False):
+            self.viewHover.emit(pos.x(),pos.y());return
         try:
             if self.click_mode and not self.plane_pick:
                 if self.sketch_plane and self.sketch_tool:

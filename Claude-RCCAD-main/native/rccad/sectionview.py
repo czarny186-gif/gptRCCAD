@@ -93,7 +93,7 @@ class SectionTools:
         hit=self.view.pick_face(x,y)
         body=self.document.get(hit[0]) if hit else None
         if body is None or body.kind!='solid':return None
-        try:face,normal=kernel.face_at(body.shape,hit[1],hit[2])
+        try:face,normal=self.view.face_at(body,hit)
         except kernel.CadError:return None
         return face,np.asarray(normal,float),np.asarray(hit[2],float)
 

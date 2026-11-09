@@ -163,6 +163,24 @@ class WorkerTests(unittest.TestCase):
         self.assertAlmostEqual(float(meshes[0].vertices[:, 2].max()), 15, 3)
         self.assertGreater(len(cut.triangles), 12)
 
+    def test_persistent_boolean_shapes_are_reused_and_match_local(self):
+        a=Body('A',k.box(20,20,10)).prepared()
+        far=Body('Far',k.box(10,10,10).translate((200,0,0))).prepared()
+        tool=k.box(3,24,12).translate((8,-2,-1))
+        local=hist.combine([a,far],[tool],'cut')
+        with patch.object(workers,'call_affine',wraps=workers.call_affine) as spy:
+            first=hist.offloaded(hist.combine,[a,far],[tool],'cut')
+            self.assertEqual(spy.call_count,2)
+            spy.reset_mock()
+            again=hist.offloaded(hist.combine,[a,far],[tool],'cut')
+            self.assertEqual(spy.call_count,1)
+            self.assertTrue(all(p[2] is None for p in spy.call_args.args[4]))
+        self.assertEqual([b.id for b in first],[b.id for b in local])
+        for remote in (first,again):
+            for x,y in zip(remote,local):
+                self.assertLess(x.shape.cut(y.shape).Volume()+y.shape.cut(x.shape).Volume(),1e-6)
+        self.assertIs(first[-1],far)
+
 
 if __name__ == '__main__':
     unittest.main()

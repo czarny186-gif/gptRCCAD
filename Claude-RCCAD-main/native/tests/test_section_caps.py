@@ -133,3 +133,20 @@ class StencilSectionTests(unittest.TestCase):
         self.v.makeCurrent();self.assertEqual(GL.glGetError(),GL.GL_NO_ERROR);self.v.doneCurrent()
         self.v.set_section_plane(None);self.v.set_models([])
         self.assertFalse(self.v.section_caps._bounds)
+
+    def test_line_clipping_preserves_buffers_and_restores_both_sides(self):
+        from rccad.viewport import SectionLine
+        from OpenGL import GL
+        self.v.set_models([]);self.v.opts['center']=QVector3D(0,0,0)
+        self.v.setCameraPosition(distance=100,elevation=0,azimuth=-90)
+        line=SectionLine(pos=np.array([[-20,0,0],[20,0,0]],np.float32),color=(1,0,0,1),width=5,antialias=False,mode='lines')
+        self.v.addItem(line);before=self.shot();original=line.pos;buffer_id=line.m_vbo_position.bufferId()
+        self.v.set_section_plane([1,0,0,0]);cut=self.shot()
+        self.assertIs(line.pos,original);self.assertEqual(buffer_id,line.m_vbo_position.bufferId())
+        self.assertGreater(np.abs(self.patch(before,(-10,0,0),4)-self.patch(cut,(-10,0,0),4)).max(),20)
+        self.assertLess(self.contrast(before,cut,(10,0,0),r=4),2)
+        self.v.set_section_plane([-1,0,0,0]);reverse=self.shot()
+        self.assertGreater(np.abs(self.patch(before,(10,0,0),4)-self.patch(reverse,(10,0,0),4)).max(),20)
+        self.assertLess(self.contrast(before,reverse,(-10,0,0),r=4),2)
+        self.v.set_section_plane(None);restored=self.shot();np.testing.assert_allclose(before,restored,atol=2)
+        self.v.makeCurrent();self.assertEqual(GL.glGetError(),GL.GL_NO_ERROR);self.v.doneCurrent()

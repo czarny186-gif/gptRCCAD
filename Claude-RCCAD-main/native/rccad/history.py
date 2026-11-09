@@ -15,6 +15,9 @@ from . import sketchmeta as sm
 from . import sheetmetal as shm
 from . import sheetedit as she
 from .document import Body
+from .perfcache import LRU
+import threading
+import weakref
 
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
@@ -718,28 +721,92 @@ def _remote_bodies(module, name, bodies, args, kwargs):
     return packed, extra
 
 
+_BODY_TOKENS=LRU(max_entries=2048)
+_REMOTE_SHAPES=LRU(128*1024*1024,max_entries=2048)
+_TOKEN_LOCK=threading.Lock()
+
+
+def _body_packet(body,include=False):
+    with _TOKEN_LOCK:
+        cached=_BODY_TOKENS.get(id(body.shape))
+        if cached is None or cached[0]() is not body.shape:
+            cached=(weakref.ref(body.shape),uuid.uuid4().hex);_BODY_TOKENS[id(body.shape)]=cached
+        token=cached[1]
+    fields={k:v for k,v in body.__dict__.items() if k not in ('shape','mesh')}
+    return fields,token,kernel._brep_bytes(body.shape) if include else None
+
+
+def _remote_cached_bodies(module,name,packets,args,kwargs):
+    """Missing shapes are requested before running any operation (safe retry)."""
+    bodies=[];missing=[]
+    for fields,token,raw in packets:
+        cached=_REMOTE_SHAPES.get(token)
+        if raw is not None:
+            cached=(raw,kernel._from_brep(raw));_REMOTE_SHAPES[token]=cached
+        if cached is None:missing.append(token)
+        else:bodies.append(Body(shape=cached[1],**fields))
+    if missing:return 'missing',missing
+    packed,extra=_remote_bodies(module,name,bodies,args,kwargs)
+    return 'result',packed,extra
+
+
+_OP_BOUNDS=LRU(max_entries=2048)
+
+
+def _operation_bounds(shape):
+    cached=_OP_BOUNDS.get(id(shape))
+    if cached is not None and cached[0]() is shape:return cached[1]
+    box=kernel.bounds(shape);_OP_BOUNDS[id(shape)]=(weakref.ref(shape),box)
+    return box
+
+
+def _combine_scope(existing,args,kwargs):
+    """Conservative Boolean bounds filter; preserve untouched bodies in the caller."""
+    import inspect
+    values=inspect.signature(combine).bind(existing,*args,**kwargs);values.apply_defaults();v=values.arguments
+    tools=v['tools'];skip=set(v['skip'] or ());only=None if v['only'] is None else set(v['only'])
+    boxes=[_operation_bounds(t) for t in tools]
+    active=[]
+    if v['op']!='new':
+        for body in existing:
+            if body.kind!='solid' or body.id in skip or (only is not None and body.id not in only):continue
+            box=_operation_bounds(body.shape)
+            if any(_boxes_touch(box,other) for other in boxes):active.append(body)
+    return active,set(v['spent'])
+
+
 def offloaded(function, existing, *args, **kwargs):
-    """function(bryły, *args) w procesie liczącym, gdy procesy są gotowe - okno w tym czasie działa normalnie (obracanie,
-    oglądanie), bo liczenie nie trzyma blokady Pythona w procesie okna. Bez procesów - tutaj. Wynik jak function:
-    lista brył albo (lista, dodatek)."""
+    """Run operations with persistent worker shapes; Booleans send only possible recipients."""
     from . import workers
-    existing = list(existing)
+    existing=list(existing)
     if workers.ready():
-        light = [replace(b, mesh=None) for b in existing]          # siatki nie są potrzebne do liczenia - nie przesyłamy ich
+        scoped=function is combine
+        active,spent=_combine_scope(existing,args,kwargs) if scoped else (existing,set())
+        packets=[_body_packet(b) for b in active]
         try:
-            packed, extra = workers.call_any(_remote_bodies, function.__module__, function.__name__, light, args, kwargs)
-        except workers.Unavailable:
-            packed = None
-        if packed is not None:
-            originals = {b.id: b for b in existing}
-            out = []
+            answer=workers.call_affine(('body-operations',),_remote_cached_bodies,function.__module__,function.__name__,packets,args,kwargs)
+            if answer[0]=='missing':
+                missing=set(answer[1]);packets=[_body_packet(b,packet[1] in missing) for b,packet in zip(active,packets)]
+                answer=workers.call_affine(('body-operations',),_remote_cached_bodies,function.__module__,function.__name__,packets,args,kwargs)
+            if answer[0]!='result':raise workers.Unavailable()
+            _,packed,extra=answer
+            originals={b.id:b for b in active};out=[]
             for item in packed:
-                if item[0] == 'keep':
-                    out.append(replace(originals[item[1]], **item[2]))
-                else:
-                    out.append(item[1])
-            return (out, extra) if extra is not None else out
-    return function(existing, *args, **kwargs)
+                out.append(replace(originals[item[1]],**item[2]) if item[0]=='keep' else item[1])
+            if scoped:
+                active_ids=set(originals);groups={};tail=[];anchor=None
+                for value in out:
+                    if value.id in active_ids:anchor=value.id
+                    if anchor is None:tail.append(value)
+                    else:groups.setdefault(anchor,[]).append(value)
+                result=[]
+                for body in existing:
+                    values=groups.get(body.id,[]) if body.id in active_ids else [body]
+                    result.extend(replace(value,visible=False) if value.id in spent else value for value in values)
+                out=[*result,*tail]
+            return (out,extra) if extra is not None else out
+        except workers.Unavailable:pass
+    return function(existing,*args,**kwargs)
 
 
 def shape_job(module, name, args, solid=True):

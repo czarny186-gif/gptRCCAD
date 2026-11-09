@@ -2196,7 +2196,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         body = self.document.get(hit[0]) if hit else None
         if body is not None and body.kind == 'solid':
             try:
-                face, normal = kernel.face_at(body.shape, hit[1], hit[2], curved=True)
+                face, normal = self.view.face_at(body,hit, curved=True)
                 if kernel.is_planar_face(face):
                     return kernel.face_frame(face.Center().toTuple(), normal), face
                 origin, fit = kernel.supporting_plane(face, hit[2], normal)
@@ -3350,7 +3350,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         face = None
         if body is not None and body.kind == 'solid':
             try:
-                face, _ = kernel.face_at(body.shape, hit[1], hit[2], curved=True)
+                face, _ = self.view.face_at(body,hit, curved=True)
             except kernel.CadError:
                 face = None
         key = ('mf', face.hashCode()) if face is not None else None
@@ -3587,7 +3587,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         picked = None
         if body is not None and body.kind == 'solid':
             try:
-                picked = kernel.face_at(body.shape, hit[1], hit[2], curved=True)
+                picked = self.view.face_at(body,hit, curved=True)
             except kernel.CadError:
                 picked = None
         if picked is not None and picked[0].geomType() == 'CYLINDER':
@@ -3907,7 +3907,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             body = self.document.get(hit[0])
             if body is not None and body.kind == 'solid':
                 try:
-                    face, normal = kernel.face_at(body.shape, hit[1], hit[2], curved=True)
+                    face, normal = self.view.face_at(body,hit, curved=True)
                     if abs(float(np.dot(np.asarray(normal, float), n))) > 1 - 1e-6:   # ściana równoległa do profilu: dokładna wysokość z jej środka
                         point = np.asarray(face.Center().toTuple(), float)
                 except Exception:
@@ -4607,7 +4607,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 face=profile_face(body.shape)
                 if face is None:return None
                 normal=kernel.frame_of(body.plane).normal
-            else:face,normal=kernel.face_at(body.shape,hit[1],hit[2],curved=kind!='faces')
+            else:face,normal=self.view.face_at(body,hit,curved=kind!='faces')
             point=measurement.on_shape(face,hit[2])
             if not self.view.section_contains(point):return None
             name='Punkt na szkicu' if body.kind=='sketch' else 'Płaska ściana' if kind=='faces' else 'Punkt na powierzchni'
@@ -4621,6 +4621,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         return None
 
     def _measure_hover(self,x,y):
+        old_text=self.ms_hover_label[self.mode].text()
         try:ref=self._measure_candidate(x,y)
         except (kernel.CadError,IndexError):ref=None
         self.ms_hover_label[self.mode].setText(ref['label'] if ref else 'Brak elementu. Wskaż widoczny punkt, krawędź lub właściwą ścianę.')
@@ -4637,7 +4638,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.view.measure_live=(self.ms_points[-1],ref['point'])
             if self.mode=='mdist' and len(self.ms_points)==1:
                 self.ms_hover_label[self.mode].setText(ref['label']+f' — {np.linalg.norm(ref["point"]-self.ms_points[0]):.3f} mm')
-        self._measure_panel_fit()
+        if self.ms_hover_label[self.mode].text()!=old_text:self._measure_panel_fit()
         self.view.overlay.update()
 
     def _measure_point(self, x, y):
@@ -4962,7 +4963,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.toast('Kliknij bryłę (nie szkic).')
             return
         try:
-            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            face, normal = self.view.face_at(body,hit)
             info = shm.sheet_of_face(body.shape, face)
         except kernel.CadError as exc:
             self.sheet_pick = None
@@ -5519,7 +5520,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self._sh_update()
             return
         try:
-            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            face, normal = self.view.face_at(body,hit)
         except kernel.CadError:
             self.toast('Otworzyć można tylko płaską ścianę.')
             return
@@ -6431,7 +6432,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 self.toast('Kliknij płaską ścianę - jej płaszczyzna przetnie bryłę.')
                 return
             try:
-                face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+                face, normal = self.view.face_at(body,hit)
             except kernel.CadError as exc:
                 self.toast(str(exc))
                 return
@@ -6593,7 +6594,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.toast('Kliknij ścianę, względem której ma nastąpić odbicie.')
             return
         try:
-            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            face, normal = self.view.face_at(body,hit)
         except kernel.CadError as exc:
             self.toast(str(exc))
             return
@@ -6633,7 +6634,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.toast('Kliknij płaską ścianę bryły.')
             return
         try:
-            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            face, normal = self.view.face_at(body,hit)
         except kernel.CadError:
             self.toast('Wybierz płaską ścianę.')
             return
@@ -8482,7 +8483,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 if body is None or body.kind != 'solid':
                     self.toast('Kliknij płaską ścianę bryły.')
                     return
-                face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+                face, normal = self.view.face_at(body,hit)
                 src = dict(kind='face', id=body.id, face=face, normal=tuple(float(c) for c in normal), center=face.Center().toTuple(), hit=tuple(float(c) for c in hit[2]))
                 new = dict(recipe, profiles=hist.describe_profiles([src], bodies))
             else:

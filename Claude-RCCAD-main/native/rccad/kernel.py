@@ -11,6 +11,8 @@ from OCP.BRepBndLib import BRepBndLib
 from OCP.GeomAbs import GeomAbs_C0
 from OCP.StlAPI import StlAPI_Reader
 from OCP.TopoDS import TopoDS_Shape
+from .perfcache import LRU
+from .spatial import BoundsTree
 
 
 class CadError(ValueError):
@@ -1073,6 +1075,7 @@ class DisplayMesh:
     center: tuple[float, float, float]
     size: float
     fine: bool = True          # False: zgrubna siatka pokazana od razu; dokładną liczy się w tle (refine)
+    face_ids: np.ndarray | None = None
 
 
 FINE_ANGLE = .2             # dokładna siatka: odchyłka kątowa (rad) - otwór R2 ma 32 odcinki na obwodzie, duże łuki prowadzi odchyłka liniowa
@@ -1134,7 +1137,7 @@ def _fast_triangles(shape):
     keys[:, 0] = face
     keys[:, 1:] = points.view(np.int32)
     _, first, inverse = np.unique(np.ascontiguousarray(keys).view(np.dtype((np.void, 16))).ravel(), return_index=True, return_inverse=True)
-    return points[first].astype(np.float32), inverse.reshape(-1, 3).astype(np.uint32)
+    return points[first].astype(np.float32), inverse.reshape(-1, 3).astype(np.uint32), np.repeat(np.arange(len(counts),dtype=np.int32),counts)
 
 
 def edge_points(edge, length=None):
@@ -1173,12 +1176,13 @@ def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
         fast = _fast_triangles(shape)
     except Exception:
         fast = None
+    face_ids=None
     if fast is None:
         vertices, triangles = shape.tessellate(tolerance, angular)
         vertices = np.asarray([v.toTuple() for v in vertices], dtype=np.float32).reshape(-1, 3)
         triangles = np.asarray(triangles, dtype=np.uint32).reshape(-1, 3)
     else:
-        vertices, triangles = fast
+        vertices, triangles, face_ids = fast
     edge_faces = {}
     faces = shape.Faces()
     for face in faces:
@@ -1201,7 +1205,7 @@ def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
         edges[i] = edge_points(edge, length)
     box_bounds = bounds(shape)
     return DisplayMesh(vertices, triangles, edges, box_bounds.center.toTuple(), max(box_bounds.xlen, box_bounds.ylen, box_bounds.zlen, 1),
-                       fine=not coarse)
+                       fine=not coarse,face_ids=face_ids)
 
 
 # ---------- etap 2: linie, łuki, punkty, prostokąt 3-punktowy, okrąg styczny, tekst, SVG ----------
@@ -1524,21 +1528,39 @@ def is_planar_face(face, tol=1e-4):
         return False
 
 
-def face_at(shape, normal, point, tol=1e-3, curved=False):
-    """Płaska ściana bryły zawierająca punkt (do szkicowania i wyciągania ścian). Ścianę wybiera położenie punktu, a normalna tylko
-    rozstrzyga między ścianami stykającymi się w tym punkcie (krawędź), więc działa też dla ścian B-sklejanych z wyciągnięcia złożonego."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
-    vertex = cq.Vertex.makeVertex(*[float(x) for x in point])
-    px, py, pz = (float(x) for x in point)
-    margin = max(0.06, 0.01 * float(np.linalg.norm([shape.BoundingBox().xlen, shape.BoundingBox().ylen, shape.BoundingBox().zlen])))
+_FACE_INDEX=LRU(96*1024*1024,max_entries=128)
 
-    def close(face):      # tani wstępny filtr: ramka ściany z zapasem
-        bb = face.BoundingBox()
-        return bb.xmin - margin <= px <= bb.xmax + margin and bb.ymin - margin <= py <= bb.ymax + margin and bb.zmin - margin <= pz <= bb.zmax + margin
 
-    near = sorted(((face.distance(vertex), i, face) for i, face in enumerate(shape.Faces()) if close(face)), key=lambda t: (t[0], t[1]))
-    size = float(np.linalg.norm([shape.BoundingBox().xlen, shape.BoundingBox().ylen, shape.BoundingBox().zlen]))
+def _face_index(shape):
+    cached=_FACE_INDEX.get(id(shape))
+    if cached is not None and cached[0] is shape:return cached[1:]
+    faces=shape.Faces();boxes=[bounds(face) for face in faces]
+    low=np.array([[b.xmin,b.ymin,b.zmin] for b in boxes]);high=np.array([[b.xmax,b.ymax,b.zmax] for b in boxes])
+    bb=bounds(shape);size=float(np.linalg.norm([bb.xlen,bb.ylen,bb.zlen]))
+    tree=BoundsTree(low,high);_FACE_INDEX[id(shape)]=(shape,faces,tree,size,low,high)
+    return faces,tree,size,low,high
+
+
+def face_at(shape, normal, point, tol=1e-3, curved=False, face_hint=None):
+    """Resolve an original CAD face using cached bounds and an optional display triangle hint.
+
+    Hints are verified against exact geometry; approximate curved triangles fall
+    back to the original distance/normal tie breaking among nearby faces.
+    """
+    n=np.asarray(normal,dtype=float);n=n/np.linalg.norm(n)
+    vertex=cq.Vertex.makeVertex(*[float(x) for x in point]);pv=cq.Vector(*[float(x) for x in point])
+    faces,tree,size,_,_=_face_index(shape)
+    if face_hint is not None and 0<=face_hint<len(faces):
+        face=faces[face_hint]
+        if face.distance(vertex)<=tol:
+            try:
+                fn=np.asarray(face.normalAt(pv).toTuple());agree=abs(float(fn@n))
+                planar=is_planar_face(face)
+                if agree>=.95 and (planar or curved):
+                    return face,np.asarray(face.normalAt().toTuple()) if planar else fn/np.linalg.norm(fn)
+            except Exception:pass
+    margin=max(.06,.01*size)
+    near=sorted(((faces[i].distance(vertex),i,faces[i]) for i in tree.point(point,margin)),key=lambda t:(t[0],t[1]))
     if not near or near[0][0] > max(tol, 0.05, 0.01 * size):
         raise CadError("Wskazana ściana nie jest płaska.")
     limit = near[0][0] + max(tol, 1e-3, 1e-3 * size)
@@ -1555,7 +1577,6 @@ def face_at(shape, normal, point, tol=1e-3, curved=False):
             best, score = (face, np.array(face.normalAt().toTuple())), agree
     if best is None and curved:
         # ściana skręcona / zakrzywiona (np. wyciągnięcie złożone przez różne czworokąty): pracujemy na płaszczyźnie stycznej w klikniętym punkcie
-        pv = cq.Vector(px, py, pz)
         for dist, _, face in near:
             if dist > limit:
                 break
@@ -1723,7 +1744,7 @@ def mesh_moved(mesh, matrix):
     move = lambda pts: np.asarray(pts, float) @ r.T + t if len(pts) else np.asarray(pts, float)
     centre = tuple(float(c) for c in r @ np.asarray(mesh.center, float) + t)
     return DisplayMesh(move(mesh.vertices).astype(np.asarray(mesh.vertices).dtype), mesh.triangles,
-                       {k: move(v) for k, v in mesh.edges.items()}, centre, mesh.size, mesh.fine)
+                       {k: move(v) for k, v in mesh.edges.items()}, centre, mesh.size, mesh.fine, mesh.face_ids)
 
 
 def transformed(shape, rotation, translation):

@@ -98,7 +98,9 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
         try:
             live={b.id for b in view.bodies}
             self.retain_bodies(live)
+            visible=view._visible_body_ids()
             for index,body in enumerate(view.bodies):
+                if body.id not in visible:continue
                 if body.kind!='solid' or not body.visible or body.mesh is None or not len(body.mesh.triangles):continue
                 parts=view._parts.get(body.id);fill=parts.get('fill') if parts else None
                 if fill is None or not fill.visible() or not parts.get('cap_solid'):continue

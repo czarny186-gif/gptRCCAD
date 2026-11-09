@@ -300,6 +300,12 @@ def run(report_path=None):
     studio.toggle_section(False)
     assert studio.view.section_plane is None and abs(studio.view.pick_face(*xy)[2][1])<1e-4
     checks.append('Section view: closed chamber revealed, original interior face picked, persistent across tools, non-destructive disable')
+    projection=studio.view._edge_projection(probe)
+    assert projection is studio.view._edge_projection(probe)
+    camera=studio.view._camera_data();studio.view.project_one((2,0,10))
+    assert camera is studio.view._camera_data()
+    assert len(probe.mesh.face_ids)==len(probe.mesh.triangles)
+    checks.append('Accelerated picking: cached projection, stable camera and triangle-to-CAD face mapping')
     studio.set_mode('mangle')
     assert [studio.ms_angle_kind.itemData(i) for i in range(studio.ms_angle_kind.count())]==['points','edges','faces']
     assert abs(measurement.angle_between([1,0,0],[-1,1,0],True)-45)<1e-8
