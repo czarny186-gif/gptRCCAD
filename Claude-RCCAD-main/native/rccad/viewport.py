@@ -14,6 +14,7 @@ from OpenGL import GL
 from PySide6.QtGui import QMatrix4x4
 from .document import Body
 from . import kernel
+from .sectionview import clip_segments
 
 
 class GradientBackground(gl.GLGraphicsItem.GLGraphicsItem):
@@ -160,8 +161,19 @@ class Overlay2D(QWidget):
                 p.setPen(QPen(QColor('#2f87e8'), 1.8))
                 p.setBrush(QColor('#ffffff'))
                 p.drawRect(QRectF(xy[0] - 4.5, xy[1] - 4.5, 9, 9))
+            if v.measure_live is not None:
+                a,b=(v.project_one(q) for q in v.measure_live)
+                if a is not None and b is not None:
+                    p.setPen(QPen(QColor('#e58a16'),1.5,Qt.DashLine));p.drawLine(QPointF(*a),QPointF(*b))
+            for q,label in v.measure_labels:
+                if not v.section_contains(q):continue
+                xy=v.project_one(q)
+                if xy is None:continue
+                p.setPen(QPen(QColor('#1664b1'),1.4));p.setBrush(QColor('white'))
+                rect=QRectF(xy[0]+8,xy[1]-25,21,21);p.drawEllipse(rect)
+                p.drawText(rect,Qt.AlignCenter,label)
             order = {'plane': 0, 'ring': 1, 'axis': 2, 'arrow': 3}
-            for h in sorted(v.handles, key=lambda h: order.get(h.get('kind', 'arrow'), 3)):
+            for h in sorted(v.all_handles(), key=lambda h: order.get(h.get('kind', 'arrow'), 3)):
                 hot = v.hover_handle == h['id'] or (v._handle_drag is not None and v._handle_drag['id'] == h['id'])
                 getattr(self, '_draw_' + h.get('kind', 'arrow'))(p, v, h, hot)
             snap = v.snap_marker
@@ -276,7 +288,44 @@ class Overlay2D(QWidget):
         self._badge(p, e, h['color'], h.get('label'), 13 if hot else 11.5)
 
 
-class OverMesh(gl.GLMeshItem):
+class SectionMesh(gl.GLMeshItem):
+    """Clip fragments in the shader: moving a section never rebuilds CAD or mesh buffers."""
+    def shader(self):
+        view=getattr(self,'section_view',None)
+        plane=view.item_section(self) if view is not None else None
+        if plane is None:return super().shader()
+        shader=shaders.getShaderProgram('rccad-section')
+        shader['u_cut']=plane
+        return shader
+
+
+class SectionLine(gl.GLLinePlotItem):
+    """Clip just the displayed line segments; restore their original positions on disable."""
+    def setData(self,**kw):
+        if 'pos' in kw:
+            self._section_original=None if kw['pos'] is None else np.asarray(kw['pos']).copy()
+            self._section_key=None
+        if 'mode' in kw:self._section_mode=kw['mode']
+        super().setData(**kw)
+
+    def paint(self):
+        view=getattr(self,'section_view',None)
+        plane=view.item_section(self) if view is not None and not getattr(self,'section_ignore',False) else None
+        key=tuple(plane) if plane is not None else ()
+        if key!=getattr(self,'_section_key',None):
+            original=getattr(self,'_section_original',None)
+            if original is not None:
+                if plane is not None:
+                    pairs=original if getattr(self,'_section_mode',self.mode)=='lines' else _segments([original])
+                    clipped=clip_segments(pairs,plane) if pairs is not None else np.empty((0,3))
+                    if not hasattr(self,'_section_mode'):self._section_mode=self.mode
+                    super().setData(pos=clipped,mode='lines')
+                else:super().setData(pos=original,mode=getattr(self,'_section_mode',self.mode))
+            self._section_key=key
+        super().paint()
+
+
+class OverMesh(SectionMesh):
     """Półprzezroczysta nakładka na ścianę: przesunięta ku kamerze, więc nie ginie w z-fightingu z bryłą."""
 
     def paint(self):
@@ -288,7 +337,7 @@ class OverMesh(gl.GLMeshItem):
             GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
 
 
-class OffsetMesh(gl.GLMeshItem):
+class OffsetMesh(SectionMesh):
     """Siatka z przesunięciem wielokątów w głąb: krawędzie leżą czysto na ścianach, a ukryte części są naprawdę zasłonięte."""
 
     def paint(self):
@@ -300,7 +349,7 @@ class OffsetMesh(gl.GLMeshItem):
             GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
 
 
-class OverLine(gl.GLLinePlotItem):
+class OverLine(SectionLine):
     """Linie szkicu: rysowane zawsze po bryłach (wyższa wartość depth), więc przebudowa bryły (zmiana zaznaczenia, koloru) nie zakrywa szkicu na jej ścianie."""
 
     def __init__(self, *args, **kwargs):
@@ -381,7 +430,7 @@ def _ray_box(origin, inv, low, high):
     return (far >= np.maximum(near, 0.0) - 1e-6)
 
 
-def _ray_triangles(data, origin, direction):
+def _ray_triangles(data, origin, direction, cut=None):
     """(t, indeks trójkąta) najbliższego trafienia albo None - tylko trójkąty z bloków, które promień przecina."""
     if 'v0' not in data:
         return None
@@ -404,6 +453,9 @@ def _ray_triangles(data, origin, direction):
     v = f * np.einsum('j,ij->i', direction, q)
     t = f * np.einsum('ij,ij->i', e2, q)
     ok = (np.abs(a) > 1e-9) & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6) & (t > 1e-6)
+    if cut is not None:
+        points=origin+t[:,None]*direction
+        ok &= points @ cut[:3]+cut[3]>=-1e-5
     if not ok.any():
         return None
     j = np.nonzero(ok)[0][int(np.argmin(t[ok]))]
@@ -479,6 +531,16 @@ class CadView(gl.GLViewWidget):
                     }
                 """),
             ])
+        if 'rccad-section' not in shaders.ShaderProgram.names:
+            vertex=shaders.getShaderProgram('shaded').shaders[0].code
+            vertex=vertex.replace('varying vec4 v_color;', 'varying vec4 v_color; varying vec3 v_position;').replace('v_color = a_color;', 'v_color = a_color; v_position = a_position.xyz;')
+            fragment=shaders.getShaderProgram('rccad').shaders[1].code
+            fragment=fragment.replace('varying vec4 v_color;', 'varying vec4 v_color; varying vec3 v_position; uniform float u_cut[4];').replace('vec3 n =', 'if (dot(vec3(u_cut[0],u_cut[1],u_cut[2]),v_position)+u_cut[3] < -0.00001) discard; vec3 n =')
+            shaders.ShaderProgram('rccad-section',[shaders.VertexShader(vertex),shaders.FragmentShader(fragment)])
+        self.section_plane=None
+        self.section_handles=[]
+        self.measure_labels=[];self.measure_live=None
+        self.section_hover_items=[]
         self.setMouseTracking(True)   # bez tego widok nie dostaje ruchów myszy bez wciśniętego przycisku (brak podglądu na żywo)
         self.setBackgroundColor(BACKGROUND)
         self.setCameraPosition(distance=120, elevation=25, azimuth=-55)
@@ -498,8 +560,9 @@ class CadView(gl.GLViewWidget):
         self.grid_item = self.grid_items[-1]
         for pts, col in (([(-1000, 0, 0), (1000, 0, 0)], (.89, .31, .33, .85)), ([(0, -1000, 0), (0, 1000, 0)], (.14, .64, .42, .85)),
                          ([(0, 0, 0), (0, 0, 1000)], (.2, .5, .9, .85))):
-            axis = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=col, width=2, antialias=True)
+            axis = SectionLine(pos=np.array(pts, dtype=np.float32), color=col, width=2, antialias=True)
             self.addItem(axis)
+            axis.section_ignore=True
             self.axis_lines.append((axis, np.array(pts[1], float) / 1000.0))
         self.custom_plane_items = []
         self.sketch_axis_items = []      # tymczasowy krzyż osi szkicu na ściance bryły
@@ -646,7 +709,7 @@ class CadView(gl.GLViewWidget):
             if old is not None:
                 self.removeItem(old[1])
             segs = np.concatenate([thread_lines(t) for t in threads]) if threads else np.zeros((0, 2, 3), np.float32)
-            item = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=self.THREAD_COLOR, width=1.5, antialias=True, mode='lines')
+            item = SectionLine(pos=segs.reshape(-1, 3), color=self.THREAD_COLOR, width=1.5, antialias=True, mode='lines')
             self.addItem(item)
             store[bid] = (key, item)
             m = self._body_m.get(bid)
@@ -664,7 +727,7 @@ class CadView(gl.GLViewWidget):
         threads = [t for t in (thread if isinstance(thread, (list, tuple)) else [thread]) if t is not None]
         if threads:
             segs = np.concatenate([thread_lines(t) for t in threads])
-            self._thread_preview = gl.GLLinePlotItem(pos=segs.reshape(-1, 3), color=(.35, .68, 1.0, 1), width=2.2, antialias=True, mode='lines')
+            self._thread_preview = SectionLine(pos=segs.reshape(-1, 3), color=(.35, .68, 1.0, 1), width=2.2, antialias=True, mode='lines')
             self.addItem(self._thread_preview)
         self.update()
 
@@ -746,7 +809,7 @@ class CadView(gl.GLViewWidget):
                     seg = _segments([pts for index, pts in mesh.edges.items() if (index in sel or picked) == hot])
                     if seg is None:
                         continue
-                    line = (OverLine if body.kind == 'sketch' else gl.GLLinePlotItem)(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
+                    line = (OverLine if body.kind == 'sketch' else SectionLine)(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
                     if body.kind != 'sketch':
                         line.setGLOptions('additive' if self.xray else 'translucent')
                     self.addItem(line)
@@ -805,10 +868,10 @@ class CadView(gl.GLViewWidget):
         for name, pts in corners.items():
             color = pg.mkColor(PLANE_COLORS[name])
             rgb = (color.redF(), color.greenF(), color.blueF())
-            fill = gl.GLMeshItem(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
+            fill = SectionMesh(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
                                  color=(*rgb, .10), smooth=False, drawEdges=False)
             fill.setGLOptions('translucent')
-            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*rgb, .75), width=1.6, antialias=True)
+            outline = SectionLine(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*rgb, .75), width=1.6, antialias=True)
             label = gl.GLTextItem(pos=np.array(pts[2], dtype=np.float32) * .8, text=name, color=QColor(PLANE_COLORS[name]))
             self.plane_items[name] = (fill, outline, label, rgb)
         self._apply_plane_size()
@@ -903,7 +966,7 @@ class CadView(gl.GLViewWidget):
             self.removeItem(self._sk_item)
             self._sk_item = None
         if points is not None:
-            self._sk_item = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR, width=2.5, antialias=True)
+            self._sk_item = SectionLine(pos=points, color=PREVIEW_COLOR, width=2.5, antialias=True)
             self.addItem(self._sk_item)
         self.update()
 
@@ -1017,7 +1080,7 @@ class CadView(gl.GLViewWidget):
             else:
                 seg = _segments(mesh.edges.values())
             if seg is not None:
-                line = gl.GLLinePlotItem(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
+                line = SectionLine(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
                 self.addItem(line)
                 self.preview_items.append(line)
         self.update()
@@ -1041,7 +1104,7 @@ class CadView(gl.GLViewWidget):
                 self.preview_items.append(item)
             seg = _segments(mesh.edges.values())
             if seg is not None:
-                item = gl.GLLinePlotItem(pos=seg, color=line, width=2.0, antialias=True, mode='lines')
+                item = SectionLine(pos=seg, color=line, width=2.0, antialias=True, mode='lines')
                 self.addItem(item)
                 self.preview_items.append(item)
         if cut is not None and len(cut.triangles):
@@ -1051,7 +1114,7 @@ class CadView(gl.GLViewWidget):
             self.preview_items.append(item)
             seg = _segments(cut.edges.values())
             if seg is not None:
-                item = gl.GLLinePlotItem(pos=seg, color=(.45, .25, .75, .9), width=1.6, antialias=True, mode='lines')
+                item = SectionLine(pos=seg, color=(.45, .25, .75, .9), width=1.6, antialias=True, mode='lines')
                 self.addItem(item)
                 self.preview_items.append(item)
         self.update()
@@ -1071,7 +1134,7 @@ class CadView(gl.GLViewWidget):
                 self.selection_items.append(item)
             seg = _segments(mesh.edges.values())
             if seg is not None:
-                line = gl.GLLinePlotItem(pos=seg, color=line_color, width=3.2, antialias=True, mode='lines')
+                line = SectionLine(pos=seg, color=line_color, width=3.2, antialias=True, mode='lines')
                 self.addItem(line)
                 self.selection_items.append(line)
         self.update()
@@ -1211,7 +1274,7 @@ class CadView(gl.GLViewWidget):
     def _grab_handle(self, x, y):
         """Najbliższy uchwyt pod kursorem: strzałki i osie mają pierwszeństwo, potem pierścienie, na końcu kwadraty płaszczyzn."""
         best = None
-        for h in self.handles:
+        for h in self.all_handles():
             kind = h.get('kind', 'arrow')
             try:
                 if kind in ('arrow', 'axis'):
@@ -1305,7 +1368,7 @@ class CadView(gl.GLViewWidget):
             self.handleDragged.emit(st['id'], st['total'] * st['radius'])
 
     def _update_hover_handle(self, pos):
-        if not self.handles and not self.free_drag:
+        if not self.all_handles() and not self.free_drag:
             if self.hover_handle is not None:
                 self.hover_handle = None
                 self.overlay.update()
@@ -1316,6 +1379,41 @@ class CadView(gl.GLViewWidget):
             self.hover_handle = hid
             self.setCursor(Qt.OpenHandCursor if hid else Qt.ArrowCursor)
             self.overlay.update()
+
+    def addItem(self,item):
+        item.section_view=self
+        super().addItem(item)
+
+    def item_section(self,item):
+        plane=getattr(self,'section_plane',None)
+        if plane is None:return None
+        m=np.array(item.transform().data(),float).reshape(4,4).T
+        return m.T @ plane
+
+    def _local_section(self,bid):
+        if self.section_plane is None:return None
+        m=self._moved(bid)
+        return self.section_plane if m is None else m.T @ self.section_plane
+
+    def section_contains(self,points):
+        points=np.asarray(points,float)
+        return np.ones(points.shape[:-1],bool) if self.section_plane is None else points @ self.section_plane[:3]+self.section_plane[3]>=-1e-5
+
+    def set_section_plane(self,plane):
+        self.section_plane=None if plane is None else np.asarray(plane,float)
+        self._set_hover_edge(None);self.hover_vertex=None
+        self.update();self.overlay.update()
+
+    def set_section_hover(self,mesh):
+        for item in self.section_hover_items:self.removeItem(item)
+        self.section_hover_items=[]
+        if mesh is not None:
+            item=OverMesh(vertexes=mesh.vertices,faces=mesh.triangles,color=(.55,.75,.92,.22),smooth=False,drawEdges=False)
+            item.setGLOptions('translucent');self.addItem(item);self.section_hover_items.append(item)
+        self.update()
+
+    def all_handles(self):
+        return [*self.handles,*self.section_handles]
 
     def pick_body(self, x, y):
         ray = self._ray(x, y)
@@ -1333,7 +1431,7 @@ class CadView(gl.GLViewWidget):
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
             data = _pick_data(body.mesh)
-            hit = _ray_triangles(data, *self._local_ray(body.id, origin, direction))
+            hit = _ray_triangles(data, *self._local_ray(body.id, origin, direction),cut=self._local_section(body.id))
             if hit is not None and (best is None or hit[0] < best[0]):
                 n = np.cross(data['e1'][hit[1]], data['e2'][hit[1]])
                 m = self._moved(body.id)
@@ -1355,7 +1453,7 @@ class CadView(gl.GLViewWidget):
             except Exception:
                 pass
             hit = self._plane_hit(body.plane, x, y)
-            if not hit:
+            if not hit or not self.section_contains(hit[1]):
                 continue
             frame = kernel.frame_of(body.plane)
             o, ux, uy = np.array(frame.origin), np.array(frame.xdir), np.array(frame.ydir)
@@ -1388,7 +1486,7 @@ class CadView(gl.GLViewWidget):
             lift = n * 0.02          # nad ścianką, żeby linie nie migotały na jej powierzchni
             for direction, col in ((x, (.89, .31, .33, .9)), (y, (.14, .64, .42, .9))):
                 pts = np.array([o + lift - direction * 1000.0, o + lift + direction * 1000.0], dtype=np.float32)
-                item = gl.GLLinePlotItem(pos=pts, color=col, width=2, antialias=True)
+                item = SectionLine(pos=pts, color=col, width=2, antialias=True)
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.sketch_axis_items.append(item)
@@ -1411,9 +1509,9 @@ class CadView(gl.GLViewWidget):
         self.custom_plane_items = []
         if frame is not None:
             pts = np.array([kernel.to_world(frame, u, v) for u, v in ((-half, -half), (half, -half), (half, half), (-half, half))], dtype=np.float32)
-            fill = gl.GLMeshItem(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
+            fill = SectionMesh(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
             fill.setGLOptions('translucent')
-            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*color, .9), width=2, antialias=True)
+            outline = SectionLine(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*color, .9), width=2, antialias=True)
             for item in (fill, outline):
                 self.addItem(item)
                 self.custom_plane_items.append(item)
@@ -1524,6 +1622,13 @@ class CadView(gl.GLViewWidget):
                 continue
             m = self._moved(body.id)
             seg_a, seg_b = (data['a'], data['b']) if m is None else (self._apply_m(m, data['a']), self._apply_m(m, data['b']))
+            edge_ids=data['edge']
+            if self.section_plane is not None:
+                plane=self.section_plane
+                keep=np.maximum(seg_a@plane[:3]+plane[3],seg_b@plane[:3]+plane[3])>=-1e-7
+                if not keep.any():continue
+                pairs=clip_segments(np.stack((seg_a,seg_b),axis=1).reshape(-1,3),plane).reshape(-1,2,3)
+                seg_a,seg_b=pairs[:,0],pairs[:,1];edge_ids=edge_ids[keep]
             pa, za, wa = self.project_points(seg_a)
             pb, zb, wb = self.project_points(seg_b)
             delta = pb - pa
@@ -1532,15 +1637,16 @@ class CadView(gl.GLViewWidget):
             dist = np.linalg.norm(pa + delta * t[:, None] - cursor, axis=1)
             dist[(wa <= 0) | (wb <= 0) | ~np.isfinite(dist)] = np.inf
             near = np.nonzero(dist < 10.)[0]
+            parameter=np.divide(t*wa,wb*(1-t)+wa*t,out=t.copy(),where=np.abs(wb*(1-t)+wa*t)>1e-12)
             for j in near:
-                found.append((float(dist[j]), len(found), body.id, int(data['edge'][j]), seg_a[j] + (seg_b[j] - seg_a[j]) * t[j]))
+                found.append((float(dist[j]), len(found), body.id, int(edge_ids[j]), seg_a[j] + (seg_b[j] - seg_a[j]) * parameter[j]))
         found.sort(key=lambda item: (item[0], item[1]))
         seen = set()
         for _, _, bid, index, world in found:
             if (bid, index) in seen:
                 continue
             seen.add((bid, index))
-            if self.xray or self._visible_point(world):
+            if self.section_contains(world) and (self.xray or self._visible_point(world)):
                 return (bid, index)
             if len(seen) > 24:
                 break
@@ -1555,14 +1661,18 @@ class CadView(gl.GLViewWidget):
             pts = _pick_data(body.mesh)['ends']
             if pts is None:
                 continue
+            m=self._moved(body.id)
+            if m is not None:pts=self._apply_m(m,pts)
             xy, z, w = self.project_points(pts)
             if len(xy) != len(pts):
                 continue
             dist = np.linalg.norm(xy - [x, y], axis=1)
-            dist[w <= 0] = np.inf
-            j = int(np.argmin(dist))
-            if dist[j] < radius and (best is None or dist[j] < best[0]) and (self.xray or self._visible_point(pts[j])):
-                best = (float(dist[j]), body.id, pts[j])
+            dist[(w <= 0) | ~self.section_contains(pts)] = np.inf
+            near=np.nonzero(dist<radius)[0]
+            for j in sorted(near,key=lambda i:dist[i]):
+                if best is not None and dist[j]>=best[0]:break
+                if self.xray or self._visible_point(pts[j]):
+                    best=(float(dist[j]),body.id,pts[j]);break
         return None if best is None else (best[1], best[2])
 
     def _ray(self, x, y):
@@ -1603,7 +1713,7 @@ class CadView(gl.GLViewWidget):
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
-            hit = _ray_triangles(_pick_data(body.mesh), *self._local_ray(body.id, origin, direction))
+            hit = _ray_triangles(_pick_data(body.mesh), *self._local_ray(body.id, origin, direction),cut=self._local_section(body.id))
             if hit is None:
                 continue
             # szkic leżący na ścianie bryły (ta sama odległość) wygrywa z bryłą - inaczej trafiałoby się w bryłę
@@ -1613,6 +1723,7 @@ class CadView(gl.GLViewWidget):
         return None if best is None else best[:2]
 
     def _visible_point(self, point):
+        if not self.section_contains(point):return False
         xy, _, _ = self.project_points(np.asarray([point]))
         ray = self._ray(*xy[0])
         if ray is None:
@@ -1673,6 +1784,8 @@ class CadView(gl.GLViewWidget):
         self.update()
 
     def _hover(self, pos):
+        if getattr(self,'section_picking',False):
+            self.viewHover.emit(pos.x(),pos.y());return
         now = time.monotonic()
         if now - self._hover_time < .04:
             return
@@ -1709,6 +1822,8 @@ class CadView(gl.GLViewWidget):
             event.accept()
             return
         self._press = (event.position().x(), event.position().y(), event.button())
+        if getattr(self,'section_picking',False) and event.button()==Qt.LeftButton:
+            event.accept();return
         if self.drag_hook is not None and event.button() == Qt.LeftButton and not event.modifiers() & Qt.ShiftModifier:
             if self.drag_hook('press', event.position().x(), event.position().y()):
                 self._hook_active = True
@@ -1717,13 +1832,13 @@ class CadView(gl.GLViewWidget):
                 return
         if (not self.click_mode and self.sketch_plane and self.sketch_tool and event.button() == Qt.LeftButton
                 and not event.modifiers() & Qt.ShiftModifier
-                and not (self.handles and self._grab_handle(event.position().x(), event.position().y()))):   # strzałka w szkicu (np. ofset) ma pierwszeństwo
+                and not (self.all_handles() and self._grab_handle(event.position().x(), event.position().y()))):   # strzałka w szkicu (np. ofset) ma pierwszeństwo
             point = self.plane_point(self.sketch_plane, event.position().x(), event.position().y())
             if point:
                 self._sk_start = self._snap(point, event)
                 event.accept()
                 return
-        if self.handles and event.button() == Qt.LeftButton:
+        if self.all_handles() and event.button() == Qt.LeftButton:
             grabbed = self._grab_handle(event.position().x(), event.position().y())
             if grabbed:
                 self._handle_drag = self._begin_drag(grabbed, event.position().x(), event.position().y())

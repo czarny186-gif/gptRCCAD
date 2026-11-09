@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.76 — Widok przekroju i dokładniejsze wskazywanie w pomiarach
+
+## Zmiany 0.4.76
+
+- **Widok przekroju** obok Skalowania w prawym górnym rogu. Wybierz płaską ścianę bryły (delikatne podświetlenie tylko tej ściany), przeciągnij pomarańczową strzałkę albo wpisz głębokość. Można odwrócić stronę przekroju, wybrać inną ścianę i wyłączyć podgląd.
+- Przekrój pozostaje aktywny przy innych narzędziach. Wskazywanie ścian, krawędzi i punktów pomija odciętą część modelu, umożliwiając operacje na oryginalnych powierzchniach wewnętrznych. Nie zmienia kolorów całej bryły, dokumentu ani eksportowanej geometrii.
+- **Pomiary:** przyciąganie do wierzchołków, środków i punktów krawędzi oraz powierzchni. Wskazany element ma podświetlenie, znacznik i nazwę; wybrane punkty/elementy są numerowane. Punkty krawędzi i powierzchni są rzutowane na dokładną geometrię CAD. Odległość pokazuje linię do punktu pod kursorem.
+- **Kąt:** trzy punkty (drugi jest wierzchołkiem), dwie proste krawędzie albo dwie płaskie ściany. Podświetlenie wybranych elementów, łuk kąta oraz wynik z dopełnieniem do 180°. Przy krawędziach i ścianach podawany jest mniejszy i większy kąt między kierunkami.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.75 — wybór ścianek i łączenie wyciągnięć
 
 ## Zmiany 0.4.75

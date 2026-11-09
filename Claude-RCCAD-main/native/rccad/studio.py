@@ -28,6 +28,9 @@ from . import settings
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 from .plywood_ui import PlywoodTools, PLY_MODES
 from .scale_ui import ScaleTools
+from .sectionview import SectionTools
+from . import measurement
+from html import escape as html_escape
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
         'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'line': 2, 'circleTangent2': 3}
@@ -224,7 +227,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
+class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -552,6 +555,12 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.clear_button = self._round(ui.style_icon('trash', 24), 'Wyczyść całe pole', self.clear_all)
         self.undo_button = self._round(ui.style_icon('undo', 24), 'Cofnij (Ctrl+Z)', self.undo)
         self.redo_button = self._round(ui.style_icon('redo', 24), 'Ponów (Ctrl+Y)', self.redo)
+        self.section_button=QToolButton(v)
+        self.section_button.setObjectName('layers');self.section_button.setCheckable(True)
+        self.section_button.setFixedSize(40,40);self.section_button.setIcon(ui.style_icon('section',26));self.section_button.setIconSize(QSize(26,26))
+        self.section_button.setToolTip('Widok przekroju — wybierz ścianę, przeciągnij strzałkę i pracuj wewnątrz modelu')
+        self.section_button.clicked.connect(self.toggle_section)
+        ui.shadow(self.section_button,12,3,28)
         self.scale_button = QToolButton(v)
         self.scale_button.setObjectName('layers')
         self.scale_button.setCheckable(True)
@@ -1307,11 +1316,19 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.ms_panels, self.ms_status = {}, {}
         for key, title, kind, sub, desc in (
                 ('mdist', 'Odległość', 'x_mdist', 'Dwa punkty', 'Kliknij dwa punkty (narożnik, koniec linii albo punkt na powierzchni bryły). Program poda odległość i jej składowe w osiach X, Y, Z.'),
-                ('mangle', 'Kąt', 'x_mangle', 'Trzy punkty', 'Kliknij trzy punkty: początek pierwszego ramienia, wierzchołek kąta i koniec drugiego ramienia.'),
+                ('mangle', 'Kąt', 'x_mangle', 'Punkty, krawędzie lub ściany', 'Wybierz trzy punkty (drugi jest wierzchołkiem kąta), dwie proste krawędzie albo dwie płaskie ściany.'),
                 ('mrad', 'Promień i średnica', 'x_mrad', 'Okrąg, łuk lub krawędź', 'Kliknij okrągłą krawędź bryły albo okrąg lub łuk szkicu. Prosta krawędź pokaże swoją długość.'),
                 ('mprops', 'Właściwości', 'x_mprops', 'Bryła lub szkic', 'Kliknij bryłę: objętość, pole powierzchni, wymiary i środek masy. Kliknij szkic: pole i obwód.')):
             panel, lay = self._panel(312, title, kind, sub, plain=True)
             lay.addWidget(_label(desc, 'small'))
+            if key=='mangle':
+                self.ms_angle_kind=QComboBox()
+                for text,value in [('Trzy punkty','points'),('Dwie proste krawędzie','edges'),('Dwie płaskie ściany','faces')]:self.ms_angle_kind.addItem(text,value)
+                lay.addWidget(self.ms_angle_kind)
+                self.ms_angle_kind.currentIndexChanged.connect(lambda *_:self._measure_reset())
+            self.ms_hover_label=getattr(self,'ms_hover_label',{})
+            hover=_label('Najedź na element, aby zobaczyć, co zostanie zmierzone.','small');hover.setWordWrap(True)
+            lay.addWidget(hover);self.ms_hover_label[key]=hover
             status = _label('Wskaż obiekt na polu roboczym.', 'status')
             status.setTextFormat(Qt.RichText)
             lay.addWidget(status)
@@ -1684,6 +1701,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
 
         self._build_ply_panels()
         self._build_scale_panel()
+        self._build_section()
         self.panels = (*self.ply_panels(), self.scale_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
@@ -1704,9 +1722,12 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         for i, key in enumerate(shown):
             self.tools[key].move(78 + 60 * i, TOOLS_TOP)
         self.shape_bar.move(18, 80 + TOOLS_TOP - 18)
-        self.clear_button.move(W - 494, 20)
-        self.undo_button.move(W - 446, 20)
-        self.redo_button.move(W - 398, 20)
+        self.clear_button.move(W - 542, 20)
+        self.undo_button.move(W - 494, 20)
+        self.redo_button.move(W - 446, 20)
+        self.section_button.move(W - 398,20)
+        self.section_panel.adjustSize();self.section_panel.move(max(340,W-650),68)
+        self.section_panel.raise_()
         self.scale_button.move(W - 350, 20)
         self.layers.move(W - 302, 20)
         self.xray.move(W - 254, 20)
@@ -1739,7 +1760,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170 + TOOLS_TOP - 18)
-        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit, self.hist_vars,
+        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.section_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit, self.hist_vars,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -1917,6 +1938,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         self.sh_id, self.sh_faces = None, []
         self.sw_profiles, self.sw_path, self.lf_profiles, self.lf_point = [], None, [], None
         self.ms_points = []
+        self.view.measure_labels=[];self.view.measure_live=None
         self.bool_ids = []
         self.mirror_id = None
         self.mirror_frame = None
@@ -3238,6 +3260,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
     # klikanie i najeżdżanie w widoku
     # =====================================================================
     def view_hover(self, x, y):
+        if self.section_picking and not self.busy:
+            self.section_hover(x,y);return
         if self.busy:
             return
         if self._lib_action is not None:
@@ -3280,13 +3304,9 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
                 self._hover_extrude(x, y)
             elif self.mode == 'extrude' and self.ex_extent.currentData() == 'upto':
                 self._hover_extent_target(x, y)
-            elif self.mode in ('mdist', 'mangle'):
-                vertex = self.view.nearest_vertex(x, y, solids_only=False)
-                self.view.hover_vertex = vertex[1] if vertex else None
-                self.view.overlay.update()
-            elif self.mode == 'mrad':
-                self.view._set_hover_edge(self.view.nearest_edge(x, y))
-            elif self.mode in ('mprops', 'sheetpick', 'plyfoldpick', 'scale') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
+            elif self.mode in MEASURE_MODES:
+                self._measure_hover(x,y)
+            elif self.mode in ('sheetpick', 'plyfoldpick', 'scale') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
@@ -3355,6 +3375,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
             return
+        if self.section_picking:
+            self.section_pick(x,y);return
         if self._repick is not None:
             self._repick_click(x, y)
             return
@@ -3829,16 +3851,28 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
     def _edge_point_near(view, points, x, y):
         """Punkt krawędzi (łamanej z siatki) najbliższy kursorowi na ekranie."""
         points = np.asarray(points, float)
-        xy, _, w = view.project_points(points)
+        if getattr(view,'section_plane',None) is not None:
+            from .sectionview import clip_segments
+            pairs=clip_segments(np.stack((points[:-1],points[1:]),axis=1).reshape(-1,3),view.section_plane).reshape(-1,2,3)
+            if not len(pairs):return None
+            starts,ends=pairs[:,0],pairs[:,1]
+            points=np.stack((starts,ends),axis=1).reshape(-1,3)
+            xy,_,w=view.project_points(points)
+            a,b=xy[0::2],xy[1::2];wa,wb=w[0::2],w[1::2]
+        else:
+            xy,_,w=view.project_points(points)
+            starts,ends=points[:-1],points[1:]
+            a,b=xy[:-1],xy[1:];wa,wb=w[:-1],w[1:]
         if len(xy) != len(points) or len(points) < 2:
             return points[0] if len(points) else None
-        a, b = xy[:-1], xy[1:]
         delta = b - a
         t = np.clip(((np.array([x, y]) - a) * delta).sum(axis=1) / np.maximum((delta * delta).sum(axis=1), 1e-12), 0, 1)
         dist = np.linalg.norm(a + delta * t[:, None] - [x, y], axis=1)
-        dist[(w[:-1] <= 0) | (w[1:] <= 0)] = np.inf
+        dist[(wa <= 0) | (wb <= 0)] = np.inf
         j = int(np.argmin(dist))
-        return points[j] + (points[j + 1] - points[j]) * t[j]
+        den=wb[j]*(1-t[j])+wa[j]*t[j]
+        parameter=t[j]*wa[j]/den if abs(den)>1e-12 else t[j]
+        return starts[j]+(ends[j]-starts[j])*parameter
 
     def _extent_target_at(self, x, y):
         """Element wskazujący wysokość wyciągnięcia: punkt (wierzchołek), krawędź, ściana bryły albo płaszczyzna środkowa.
@@ -4469,24 +4503,99 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
     # =====================================================================
     def _measure_reset(self):
         self.ms_points = []
+        self.ms_refs=[];self.ms_angle_refs=[];self._measure_hover_key=None
+        self.view.measure_labels=[];self.view.measure_live=None
+        self.view.hover_vertex=None;self.view.snap_marker=None;self.view._set_hover_edge(None)
+        self.view.overlay.update()
         self.view.set_selection_meshes(None)
         self.view.set_preview_mesh(None)
         if self.mode in MEASURE_MODES:
             self.ms_status[self.mode].setText('Wskaż obiekt na polu roboczym.')
+            self.ms_hover_label[self.mode].setText('Najedź na element, aby zobaczyć, co zostanie zmierzone.')
 
     def _measure_show(self, text, meshes=None):
+        refs=getattr(self,'ms_refs',[])
+        if refs:text+='<br><small>'+html_escape(' → '.join(r['label'] for r in refs))+'</small>'
         self.ms_status[self.mode].setText(text)
         self.view.set_selection_meshes(meshes or None, color=(.3, .8, .5, .5), line_color=(.05, .75, .25, 1))
 
-    def _measure_point(self, x, y):
-        vertex = self.view.nearest_vertex(x, y, solids_only=False)
-        if vertex is not None:
-            return np.array(vertex[1], float)
-        hit = self.view.pick_face(x, y)
-        if hit:
-            return np.array(hit[2], float)
-        self.toast('Kliknij narożnik, koniec linii albo powierzchnię bryły.')
+    def _measure_candidate(self,x,y):
+        mode=self.mode
+        kind=self.ms_angle_kind.currentData() if mode=='mangle' else 'points'
+        if mode in ('mdist','mangle') and kind=='points':
+            vertex=self.view.nearest_vertex(x,y,solids_only=False)
+            if vertex:
+                body=self.document.get(vertex[0])
+                return dict(kind='vertex',id=vertex[0],point=np.asarray(vertex[1]),label=f'Wierzchołek — {body.name if body else "obiekt"}')
+        if mode=='mrad' or (mode in ('mdist','mangle') and kind!='faces'):
+            hit=self.view.nearest_edge(x,y)
+            body=self.document.get(hit[0]) if hit else None
+            if body is not None:
+                edge=body.shape.Edges()[hit[1]]
+                if mode=='mangle' and kind=='edges' and edge.geomType()!='LINE':return None
+                points=body.mesh.edges[hit[1]]
+                point=self._edge_point_near(self.view,points,x,y)
+                if point is None:return None
+                point=measurement.on_edge(edge,point)
+                if not self.view.section_contains(point):return None
+                label=f'Krawędź {hit[1]+1} — {body.name}'
+                if mode in ('mdist','mangle') and kind=='points':
+                    a,b=np.asarray(edge.startPoint().toTuple()),np.asarray(edge.endPoint().toTuple())
+                    mid=np.asarray(edge.positionAt(.5).toTuple())
+                    xy=self.view.project_one(mid)
+                    if xy and np.linalg.norm(np.asarray(xy)-[x,y])<9 and self.view.section_contains(mid) and self.view._visible_point(mid):
+                        point=mid;label=f'Środek krawędzi {hit[1]+1} — {body.name}'
+                return dict(kind='edge',id=body.id,edge=hit[1],point=point,label=label)
+            if kind=='edges' or mode=='mrad':return None
+        hit=self.view.pick_face(x,y)
+        body=self.document.get(hit[0]) if hit else None
+        if body is not None:
+            if mode=='mprops':return dict(kind='body',id=body.id,point=np.asarray(hit[2]),label=f'Cały obiekt — {body.name}')
+            if body.kind=='sketch':
+                if kind=='faces':return None
+                face=profile_face(body.shape)
+                if face is None:return None
+                normal=kernel.frame_of(body.plane).normal
+            else:face,normal=kernel.face_at(body.shape,hit[1],hit[2],curved=kind!='faces')
+            point=measurement.on_shape(face,hit[2])
+            if not self.view.section_contains(point):return None
+            name='Punkt na szkicu' if body.kind=='sketch' else 'Płaska ściana' if kind=='faces' else 'Punkt na powierzchni'
+            return dict(kind='face',id=body.id,face=face,normal=np.asarray(normal),point=point,label=f'{name} — {body.name}')
+        if mode=='mprops':
+            bid=self.view.pick_profile(x,y)
+            edge=self.view.nearest_edge(x,y) if bid is None else None
+            body=self.document.get(bid or (edge[0] if edge else ''))
+            if body is not None:return dict(kind='body',id=body.id,point=np.asarray(body.shape.Center().toTuple()),label=f'Cały obiekt — {body.name}')
         return None
+
+    def _measure_hover(self,x,y):
+        try:ref=self._measure_candidate(x,y)
+        except (kernel.CadError,IndexError):ref=None
+        self.ms_hover_label[self.mode].setText(ref['label'] if ref else 'Brak elementu. Wskaż widoczny punkt, krawędź lub właściwą ścianę.')
+        self.view.hover_vertex=ref['point'] if ref and ref['kind']!='body' else None
+        self.view.snap_marker=(self.view.project_one(ref['point']),ref['label']) if ref and self.view.project_one(ref['point']) else None
+        self.view._set_hover_edge((ref['id'],ref['edge']) if ref and ref['kind']=='edge' else None)
+        key=(ref['id'],ref['face'].hashCode()) if ref and ref['kind']=='face' else (ref['id'],'body') if ref and ref['kind']=='body' else None
+        if key!=getattr(self,'_measure_hover_key',None):
+            self._measure_hover_key=key
+            mesh=kernel.display_mesh(ref['face']) if ref and ref['kind']=='face' else self.document.get(ref['id']).mesh if ref and ref['kind']=='body' else None
+            self.view.set_preview_mesh(mesh,color=(.45,.65,.9,.2),line_color=(.15,.45,.85,1))
+        self.view.measure_live=None
+        if ref and self.mode in ('mdist','mangle') and self.ms_points:
+            self.view.measure_live=(self.ms_points[-1],ref['point'])
+            if self.mode=='mdist' and len(self.ms_points)==1:
+                self.ms_hover_label[self.mode].setText(ref['label']+f' — {np.linalg.norm(ref["point"]-self.ms_points[0]):.3f} mm')
+        self.view.overlay.update()
+
+    def _measure_point(self, x, y):
+        try:ref=self._measure_candidate(x,y)
+        except (kernel.CadError,IndexError):ref=None
+        if ref is not None:
+            self.ms_refs.append(ref)
+            self.view.measure_labels=[(r['point'],str(i+1)) for i,r in enumerate(self.ms_refs)]
+            self.view.measure_live=None
+            return np.asarray(ref['point'],float)
+        self.toast('Wskaż widoczny narożnik, krawędź albo powierzchnię.');return None
 
     def _cross(self, point, r=1.5):
         q = np.asarray(point, float)
@@ -4494,9 +4603,11 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
 
     def pick_measure(self, x, y):
         mode = self.mode
+        if mode=='mangle' and self.ms_angle_kind.currentData()!='points':
+            self._measure_angle_entities(x,y);return
         if mode in ('mdist', 'mangle'):
             if len(self.ms_points) >= (2 if mode == 'mdist' else 3):
-                self.ms_points = []
+                self.ms_points = [];self.ms_refs=[]
             q = self._measure_point(x, y)
             if q is None:
                 return
@@ -4529,9 +4640,41 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             if float(np.linalg.norm(a)) < 1e-9 or float(np.linalg.norm(b)) < 1e-9:
                 self._measure_show('Punkty nie mogą się pokrywać z wierzchołkiem.', meshes)
                 return
-            angle = float(np.degrees(np.arccos(np.clip(float(a @ b) / (np.linalg.norm(a) * np.linalg.norm(b)), -1, 1))))
+            angle = measurement.angle_between(a,b)
+            arc=measurement.angle_arc(pts[1],a,b,min(np.linalg.norm(a),np.linalg.norm(b))*.25)
+            if arc is not None:meshes.append(self._polyline_mesh(arc))
             meshes.append(self._polyline_mesh([pts[0], pts[1], pts[2]]))
             self._measure_show(f'<b>Kąt: {angle:.2f}°</b><br>Dopełnienie do 180°: {180 - angle:.2f}°<br><small>Kolejne kliknięcie zaczyna nowy pomiar.</small>', meshes)
+
+    def _measure_angle_entities(self,x,y):
+        try:
+            ref=self._measure_candidate(x,y)
+            if ref is None:raise kernel.CadError('Wskaż prostą krawędź albo płaską ścianę zgodnie z wybranym trybem.')
+            refs=self.ms_angle_refs
+            if len(refs)>=2:refs=[]
+            if refs and ref['id']==refs[0]['id'] and ((ref['kind']=='edge' and ref['edge']==refs[0]['edge']) or (ref['kind']=='face' and ref['face'].isSame(refs[0]['face']))):
+                raise kernel.CadError('Ten element jest już wybrany. Wskaż drugi.')
+            refs=[*refs,ref];meshes=[];vectors=[]
+            for r in refs:
+                if r['kind']=='edge':
+                    b=self.document.get(r['id']);edge=b.shape.Edges()[r['edge']]
+                    vectors.append(np.asarray(edge.endPoint().toTuple())-np.asarray(edge.startPoint().toTuple()))
+                    meshes.append(self._polyline_mesh(b.mesh.edges[r['edge']]))
+                else:
+                    vectors.append(r['normal']);meshes.append(kernel.display_mesh(r['face']))
+            self.ms_angle_refs=refs
+            self.view.measure_labels=[(r['point'],str(i+1)) for i,r in enumerate(refs)]
+            names='<br>'.join(html_escape(r['label']) for r in refs)
+            if len(refs)==1:self._measure_show('Wskaż drugi element.<br>'+names,meshes);return
+            angle=measurement.angle_between(*vectors,unoriented=True)
+            a,b=vectors
+            if a@b<0:b=-b
+            o=(refs[0]['point']+refs[1]['point'])/2
+            radius=max(float(np.linalg.norm(refs[0]['point']-refs[1]['point']))*.15,1)
+            arc=measurement.angle_arc(o,a,b,radius)
+            if arc is not None:meshes.append(self._polyline_mesh(arc))
+            self._measure_show(f'<b>Kąt mniejszy: {angle:.2f}°</b><br>Kąt większy: {180-angle:.2f}°<br>{names}<br><small>Kolejne kliknięcie zaczyna nowy pomiar.</small>',meshes)
+        except kernel.CadError as exc:self.toast(str(exc))
 
     def _measure_radius(self, x, y):
         hit = self.view.nearest_edge(x, y)
@@ -7299,6 +7442,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self._place_gizmo()
 
     def handle_dragged(self, hid, delta):
+        if hid=='section':
+            self.section_dragged(delta);return
         if hid == 'ex':
             if self._hv is None:
                 self._hv = self.ex_value.value()
@@ -7352,6 +7497,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.view.stretch_preview(src['center'], src['normal'], factor)
 
     def handle_released(self, hid):
+        if hid=='section':
+            self._section_drag_start=None;return
         self._hv = None
         if hid in ('ex', 'ex2'):
             self._place_extrude_handle()
@@ -7857,6 +8004,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.history_export_text()
         elif recover is not None and chosen is recover:
             def loaded(doc):
+                self.toggle_section(False)
+                self.section_origin=self.section_normal=None
                 self.document = doc
                 self.selected = []
             self.run_operation('Otwieranie autozapisu', lambda: Document.load(auto), loaded, True)
@@ -8850,6 +8999,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
     def context_menu(self, x, y):
         if self.busy:
             return
+        if self.section_picking:
+            self.section_cancel_pick();return
         if self._lib_action is not None:          # prawy przycisk anuluje wskazywanie dla biblioteki
             self.library_cancel()
             return
@@ -8918,6 +9069,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
 
     def new_project(self):
         if self.confirm_discard():
+            self.toggle_section(False)
+            self.section_origin=self.section_normal=None
             self.set_mode(None)
             self.document = Document()
             self.selected = []
@@ -8933,6 +9086,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.set_mode(None)
 
             def loaded(doc):
+                self.toggle_section(False)
+                self.section_origin=self.section_normal=None
                 self.document = doc
                 self.selected = []
                 self.hidden_ids, self.locked_ids = set(), set()
@@ -9285,6 +9440,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
              Qt.Key_Home: lambda: self.history_step(0, True), Qt.Key_End: lambda: self.history_step(10 ** 6, True)}[key]()
             event.accept()
             return
+        if key == Qt.Key_Escape and self.section_picking:
+            self.section_cancel_pick();event.accept();return
         if key == Qt.Key_Escape and self._lib_action is not None:
             self.library_cancel()
             event.accept()

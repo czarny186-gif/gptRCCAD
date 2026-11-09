@@ -268,6 +268,29 @@ def run(report_path=None):
         assert not studio.busy and studio.document.get(test_body.id).meta['sheet']['flat']==flat
     checks.append('Qt editable sheet: unfold and refold buttons with persistent sheet identity')
 
+    from PySide6.QtGui import QVector3D
+    from . import measurement
+    import cadquery as cq
+    probe_shape=k.boolean('subtract',k.box(20,20,20),[k.box(10,10,10).translate(cq.Vector(5,5,5))])
+    probe=Body('Section chamber',probe_shape).prepared()
+    studio.document.commit([probe]);studio.selected=[];studio.refresh()
+    studio.view.opts['center']=QVector3D(10,10,10)
+    studio.view.setCameraPosition(distance=90,elevation=0,azimuth=-90)
+    xy=studio.view.project_one((10,15,10))
+    studio.toggle_section(True);studio.section_pick(*xy);studio.section_offset.setValue(10)
+    assert abs(studio.view.pick_face(*xy)[2][1]-15)<1e-4
+    studio.set_mode('mod')
+    assert studio.view.section_plane is not None and studio.document.get(probe.id).shape is probe_shape
+    studio.toggle_section(False)
+    assert studio.view.section_plane is None and abs(studio.view.pick_face(*xy)[2][1])<1e-4
+    checks.append('Section view: closed chamber revealed, original interior face picked, persistent across tools, non-destructive disable')
+    studio.set_mode('mangle')
+    assert [studio.ms_angle_kind.itemData(i) for i in range(studio.ms_angle_kind.count())]==['points','edges','faces']
+    assert abs(measurement.angle_between([1,0,0],[-1,1,0],True)-45)<1e-8
+    assert abs(float(sum(measurement.on_edge(cq.Edge.makeCircle(10),[7,7,0])**2))-100)<1e-6
+    studio.set_mode(None)
+    checks.append('Measurements: point/edge/face angle modes and exact CAD curve snapping')
+
     studio.document._saved_revision=studio.document._revision
     studio.close();app.processEvents()
     checks.append('Studio window (HTML layout), icons and click-click sketch')

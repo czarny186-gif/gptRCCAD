@@ -846,6 +846,85 @@ class StudioTests(unittest.TestCase):
         again=hist.run_recipe(w.document.states()[cur-1][0],infos[-1]['op']);self.assertAlmostEqual([x for x in again if x.kind=='solid'][0].shape.Volume(),solids[0].shape.Volume(),1)
         w.undo();self.wait();self.assertFalse(self._solids());w.redo();self.wait();self.assertEqual(len(self._solids()),1)
 
+    def test_section_persists_across_tools_and_extrudes_actual_inside_wall(self):
+        from PySide6.QtGui import QVector3D
+        w=self.w
+        shape=k.boolean('subtract',k.box(80,60,60),[k.box(60,40,48).translate(cq.Vector(10,10,6))])
+        b=Body('Komora',shape).prepared();w.document.commit([b]);w.refresh()
+        w.view.opts['center']=QVector3D(40,30,30);w.view.setCameraPosition(distance=180,elevation=0,azimuth=-90)
+        xy=w.view.project_one((40,50,30));revision=w.document._revision
+        w.toggle_section(True);w.view_clicked(*xy,False,False)
+        self.assertFalse(w.section_picking);self.assertEqual(w.selected,[])
+        for offset in (5,10,15,25):w.section_offset.setValue(offset)
+        self.assertIs(w.document.get(b.id).shape,shape);self.assertEqual(w.document._revision,revision)
+        self.assertEqual([h['id'] for h in w.view.all_handles()],['section'])
+        plane=w.view.section_plane.copy();w.set_mode('extrude')
+        np.testing.assert_allclose(w.view.section_plane,plane)
+        w.view_clicked(*xy,False,False)
+        self.assertEqual(len(w.ex_profiles),1)
+        self.assertAlmostEqual(w.ex_profiles[0]['center'][1],50,4)
+        w.ex_op.setCurrentIndex(w.ex_op.findData('join'));w.ex_value.setValue(5)
+        w.apply_extrude();self.wait()
+        self.assertGreater(w.document.get(b.id).shape.Volume(),shape.Volume())
+        np.testing.assert_allclose(w.view.section_plane,plane)
+        w.toggle_section(False);self.assertIsNone(w.view.section_plane)
+        self.assertFalse(w.view.section_handles);self.assertFalse(w.section_panel.isVisible())
+
+    def test_section_mouse_choice_hover_flip_and_cancel(self):
+        from PySide6.QtGui import QVector3D
+        from PySide6.QtTest import QTest
+        from PySide6.QtCore import QPoint
+        w=self.w;b=Body('Bryła',k.box(40,40,40)).prepared()
+        w.document.commit([b]);w.refresh();w.view.opts['center']=QVector3D(20,20,20)
+        w.view.setCameraPosition(distance=150,elevation=0,azimuth=-90)
+        xy=w.view.project_one((20,0,20));w.toggle_section(True);w.view_hover(*xy)
+        self.assertTrue(w.view.section_hover_items);self.assertEqual(w.selected,[])
+        QTest.mouseClick(w.view,Qt.LeftButton,pos=QPoint(round(xy[0]),round(xy[1])))
+        self.assertFalse(w.section_picking);self.assertFalse(w.view.section_hover_items)
+        w.section_offset.setValue(10);p=w.view.section_plane.copy();w.section_flip()
+        np.testing.assert_allclose(w.view.section_plane,-p)
+        w.section_repick();self.assertIsNone(w.view.section_plane)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier))
+        self.assertFalse(w.section_picking);np.testing.assert_allclose(w.view.section_plane,-p)
+        w.handle_dragged('section',7);w.handle_released('section')
+        self.assertAlmostEqual(w.section_offset.value(),17)
+        w.toggle_section(False);w.toggle_section(True)
+        self.assertAlmostEqual(w.section_offset.value(),17)
+
+    def test_angle_two_edges_and_faces_has_exact_references_and_supplement(self):
+        w=self.w
+        a=Body('Linia A',cq.Wire.assembleEdges([cq.Edge.makeLine((0,0,0),(20,0,0))]),'sketch','XY').prepared()
+        b=Body('Linia B',cq.Wire.assembleEdges([cq.Edge.makeLine((40,0,0),(30,10,0))]),'sketch','XY').prepared()
+        box=Body('Kostka',k.box(20,20,20)).prepared()
+        w.document.commit([a,b,box]);w.refresh();w.set_mode('mangle');w.ms_angle_kind.setCurrentIndex(1)
+        for body in (a,b):
+            with patch.object(w.view,'nearest_edge',return_value=(body.id,0)):
+                w.view_hover(5,5);self.assertIn(body.name,w.ms_hover_label['mangle'].text())
+                w.view_clicked(5,5,False,False)
+        self.assertIn('45.00°',w.ms_status['mangle'].text());self.assertIn('135.00°',w.ms_status['mangle'].text())
+        self.assertEqual([r['id'] for r in w.ms_angle_refs],[a.id,b.id]);self.assertEqual(len(w.view.measure_labels),2)
+        w.ms_angle_kind.setCurrentIndex(2);self.assertFalse(w.ms_angle_refs)
+        for n,p in [((0,0,1),(10,10,20)),((1,0,0),(20,10,10))]:
+            with patch.object(w.view,'pick_face',return_value=(box.id,n,p)):
+                w.view_clicked(5,5,False,False)
+        self.assertIn('90.00°',w.ms_status['mangle'].text())
+        self.assertEqual(len(w.ms_angle_refs),2)
+        w.set_mode('extrude');self.assertFalse(w.view.measure_labels)
+
+    def test_measure_snaps_to_sketch_edge_and_rejects_empty_space(self):
+        w=self.w
+        b=Body('Linia',cq.Wire.assembleEdges([cq.Edge.makeLine((0,0,0),(20,0,0))]),'sketch','XY').prepared()
+        w.document.commit([b]);w.refresh();w.set_mode('mdist')
+        xy=w.view.project_one((10,0,0))
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=(b.id,0)),patch.object(w.view,'_visible_point',return_value=True):
+            w.view_hover(*xy);w.view_clicked(*xy,False,False)
+        np.testing.assert_allclose(w.ms_points[0],[10,0,0],atol=1e-5)
+        self.assertIn('Środek krawędzi',w.ms_refs[0]['label'])
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_face',return_value=None):
+            w.view_clicked(0,0,False,False)
+        self.assertEqual(len(w.ms_points),1)
+        w._measure_reset();self.assertFalse(w.view.measure_labels);self.assertIsNone(w.view.snap_marker)
+
     def test_tabs_switch_with_tools_and_measurements(self):
         w=self.w;self.assertEqual(w._tab,'Szkic')
         w.toggle_mode('extrude');self.assertEqual(w._tab,'Bryła');self.assertTrue(w.tab_buttons['Bryła'].isChecked());w.set_mode(None)

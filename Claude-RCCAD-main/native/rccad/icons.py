@@ -96,6 +96,16 @@ def _draw_datum(p, which, ink, acc, soft, pen):
         p.drawPolygon(QPolygonF([Q(tip), Q(tip + 3.4 * back + 1.6 * across), Q(tip + 3.4 * back - 1.6 * across)]))
 
 
+def _draw_section(p,ink,acc,soft,pen):
+    p.setPen(pen(ink,1.8));p.setBrush(soft)
+    p.drawPolygon(QPolygonF([QPointF(8,16),QPointF(24,7),QPointF(40,16),QPointF(40,35),QPointF(24,43),QPointF(8,35)]))
+    p.drawLine(QPointF(24,25),QPointF(24,43));p.drawLine(QPointF(8,16),QPointF(24,25));p.drawLine(QPointF(24,25),QPointF(40,16))
+    p.setPen(pen(acc,2));p.setBrush(QColor(240,154,34,85))
+    p.drawPolygon(QPolygonF([QPointF(4,24),QPointF(25,13),QPointF(44,24),QPointF(23,35)]))
+    p.setPen(pen(acc,1.1))
+    for x in (12,19,26,33):p.drawLine(QPointF(x,26),QPointF(x+6,20))
+
+
 def _gear(p, cx, cy, r, color, pen, fill):
     """Mała zębatka (ustawienia): koło z sześcioma zębami i otworem."""
     path = QPainterPath()
@@ -371,6 +381,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_ply_tool(p, PLY_HEADERS[kind], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in PLY_ICONS:
         _draw_ply_icon(p, kind, pen)
+    elif kind=='x_section':
+        _draw_section(p,INK,ORANGE,QColor(BLUE_SOFT),pen)
     elif kind in ('x_scale', 'sc_center', 'sc_bottom', 'sc_origin'):
         # skalowanie: przerywany duży kwadrat, mały kwadrat, pomarańczowy punkt, który zostaje w miejscu
         dash = pen(BLUE, 2.2); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.4, 1.8])
@@ -1055,6 +1067,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 36)); p.drawLine(QPointF(18, 30), QPointF(30, 30))
             else:
                 st(acc, 2.6); p.drawLine(QPointF(14, 30), QPointF(34, 30))
+        elif name == 'section':
+            _draw_section(p,ink,acc,soft,pen)
         elif name == 'scale':
             # mały i duży kwadrat ze wspólnym narożnikiem, pomarańczowa strzałka po przekątnej - zmiana rozmiaru
             dash = pen(ink, 2.2); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.4, 1.8])
