@@ -29,6 +29,7 @@ from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 from .plywood_ui import PlywoodTools, PLY_MODES
 from .scale_ui import ScaleTools
 from .sectionview import SectionTools
+from PySide6.QtWidgets import QSizePolicy
 from . import measurement
 from html import escape as html_escape
 
@@ -389,7 +390,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         area, body = frame.scroll
         H = self.view.height()
         bottom = self.hist_bar.y() - 12 if self.hist_bar.isVisible() and self.hist_bar.y() > top else H - 18
-        natural = body.sizeHint().height()
+        natural = getattr(frame,'_measure_body_height',None)
+        if natural is None:natural=body.sizeHint().height()
         frame.layout().activate()
         frame.adjustSize()
         other = frame.height() - area.height()        # nagłówek, stopka z przyciskami i marginesy (rzeczywiste wymiary)
@@ -1319,7 +1321,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 ('mangle', 'Kąt', 'x_mangle', 'Punkty, krawędzie lub ściany', 'Wybierz trzy punkty (drugi jest wierzchołkiem kąta), dwie proste krawędzie albo dwie płaskie ściany.'),
                 ('mrad', 'Promień i średnica', 'x_mrad', 'Okrąg, łuk lub krawędź', 'Kliknij okrągłą krawędź bryły albo okrąg lub łuk szkicu. Prosta krawędź pokaże swoją długość.'),
                 ('mprops', 'Właściwości', 'x_mprops', 'Bryła lub szkic', 'Kliknij bryłę: objętość, pole powierzchni, wymiary i środek masy. Kliknij szkic: pole i obwód.')):
-            panel, lay = self._panel(312, title, kind, sub, plain=True)
+            panel, lay = self._panel(380, title, kind, sub, plain=True, scroll=True)
             lay.addWidget(_label(desc, 'small'))
             if key=='mangle':
                 self.ms_angle_kind=QComboBox()
@@ -1332,7 +1334,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             status = _label('Wskaż obiekt na polu roboczym.', 'status')
             status.setTextFormat(Qt.RichText)
             lay.addWidget(status)
-            self._buttons(lay, 'Wyczyść pomiar', 'Zamknij', lambda: self._measure_reset(), lambda: self.set_mode(None))
+            self._buttons(panel.footer, 'Wyczyść pomiar', 'Zamknij', lambda: self._measure_reset(), lambda: self.set_mode(None))
             self.ms_panels[key], self.ms_status[key] = panel, status
 
         # --- rysunek techniczny ---
@@ -4514,12 +4516,59 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if self.mode in MEASURE_MODES:
             self.ms_status[self.mode].setText('Wskaż obiekt na polu roboczym.')
             self.ms_hover_label[self.mode].setText('Najedź na element, aby zobaczyć, co zostanie zmierzone.')
+            self._measure_panel_fit()
 
     def _measure_show(self, text, meshes=None):
         refs=getattr(self,'ms_refs',[])
         if refs:text+='<br><small>'+html_escape(' → '.join(r['label'] for r in refs))+'</small>'
         self.ms_status[self.mode].setText(text)
+        self._measure_panel_fit()
         self.view.set_selection_meshes(meshes or None, color=(.3, .8, .5, .5), line_color=(.05, .75, .25, 1))
+
+    def _measure_panel_fit(self):
+        """Wrap the complete result above a fixed footer, with scrolling on short screens."""
+        panel=self.ms_panels.get(self.mode)
+        if panel is None:return
+        area,body=panel.scroll
+        width=max(100,panel.width()-52)
+        for label in body.findChildren(QLabel):
+            policy=label.sizePolicy()
+            policy.setHorizontalPolicy(QSizePolicy.Ignored)
+            policy.setVerticalPolicy(QSizePolicy.Minimum)
+            label.setSizePolicy(policy)
+            label.setWordWrap(True)
+            key=(label.text(),label.font().toString(),label.styleSheet(),width)
+            if key!=getattr(label,'_measure_size_key',None):
+                # heightForWidth respects the previous minimum: clear it before
+                # measuring, otherwise every hover grows the label by the padding.
+                label.setMinimumHeight(0)
+                label.setMinimumHeight(max(label.fontMetrics().height()+4,label.heightForWidth(width)+4))
+                label._measure_size_key=key
+        body.layout().setAlignment(Qt.AlignTop)
+        body.layout().invalidate()
+        # With an ignored horizontal size hint, QWidget.sizeHint() may wrap
+        # at a tiny width. Measure the column at its actual fixed panel width.
+        natural=body.layout().heightForWidth(width+12)
+        panel._measure_body_height=max(0,natural) if natural>=0 else body.layout().sizeHint().height()
+        body.setMinimumHeight(panel._measure_body_height);body.updateGeometry()
+        self._fit_panel(panel,88+TOOLS_TOP-18)
+
+    def _measure_back(self):
+        """One right click removes only the last reference; geometry/history stay intact."""
+        self.view.hover_vertex=None;self.view.snap_marker=None
+        self.view.measure_live=None;self.view._set_hover_edge(None)
+        self.view.set_preview_mesh(None);self._measure_hover_key=None
+        if self.mode=='mangle' and self.ms_angle_kind.currentData()!='points':
+            self.ms_angle_refs=self.ms_angle_refs[:-1]
+            if not self.ms_angle_refs:self._measure_reset()
+            else:self._measure_angle_refs_update(self.ms_angle_refs)
+        elif self.mode in ('mdist','mangle') and self.ms_points:
+            self.ms_points.pop();self.ms_refs=self.ms_refs[:-1]
+            self.view.measure_labels=[(r['point'],str(i+1)) for i,r in enumerate(self.ms_refs)]
+            if self.ms_points:self._measure_points_update()
+            else:self._measure_reset()
+        else:self._measure_reset()
+        self.view.overlay.update()
 
     def _measure_candidate(self,x,y):
         mode=self.mode
@@ -4587,6 +4636,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.view.measure_live=(self.ms_points[-1],ref['point'])
             if self.mode=='mdist' and len(self.ms_points)==1:
                 self.ms_hover_label[self.mode].setText(ref['label']+f' — {np.linalg.norm(ref["point"]-self.ms_points[0]):.3f} mm')
+        self._measure_panel_fit()
         self.view.overlay.update()
 
     def _measure_point(self, x, y):
@@ -4656,27 +4706,30 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             if len(refs)>=2:refs=[]
             if refs and ref['id']==refs[0]['id'] and ((ref['kind']=='edge' and ref['edge']==refs[0]['edge']) or (ref['kind']=='face' and ref['face'].isSame(refs[0]['face']))):
                 raise kernel.CadError('Ten element jest już wybrany. Wskaż drugi.')
-            refs=[*refs,ref];meshes=[];vectors=[]
-            for r in refs:
-                if r['kind']=='edge':
-                    b=self.document.get(r['id']);edge=b.shape.Edges()[r['edge']]
-                    vectors.append(np.asarray(edge.endPoint().toTuple())-np.asarray(edge.startPoint().toTuple()))
-                    meshes.append(self._polyline_mesh(b.mesh.edges[r['edge']]))
-                else:
-                    vectors.append(r['normal']);meshes.append(kernel.display_mesh(r['face']))
-            self.ms_angle_refs=refs
-            self.view.measure_labels=[(r['point'],str(i+1)) for i,r in enumerate(refs)]
-            names='<br>'.join(html_escape(r['label']) for r in refs)
-            if len(refs)==1:self._measure_show('Wskaż drugi element.<br>'+names,meshes);return
-            angle=measurement.angle_between(*vectors,unoriented=True)
-            a,b=vectors
-            if a@b<0:b=-b
-            o=(refs[0]['point']+refs[1]['point'])/2
-            radius=max(float(np.linalg.norm(refs[0]['point']-refs[1]['point']))*.15,1)
-            arc=measurement.angle_arc(o,a,b,radius)
-            if arc is not None:meshes.append(self._polyline_mesh(arc))
-            self._measure_show(f'<b>Kąt mniejszy: {angle:.2f}°</b><br>Kąt większy: {180-angle:.2f}°<br>{names}<br><small>Kolejne kliknięcie zaczyna nowy pomiar.</small>',meshes)
+            self._measure_angle_refs_update([*refs,ref])
         except kernel.CadError as exc:self.toast(str(exc))
+
+    def _measure_angle_refs_update(self,refs):
+        meshes=[];vectors=[]
+        for r in refs:
+            if r['kind']=='edge':
+                b=self.document.get(r['id']);edge=b.shape.Edges()[r['edge']]
+                vectors.append(np.asarray(edge.endPoint().toTuple())-np.asarray(edge.startPoint().toTuple()))
+                meshes.append(self._polyline_mesh(b.mesh.edges[r['edge']]))
+            else:
+                vectors.append(r['normal']);meshes.append(kernel.display_mesh(r['face']))
+        self.ms_angle_refs=refs
+        self.view.measure_labels=[(r['point'],str(i+1)) for i,r in enumerate(refs)]
+        names='<br>'.join(html_escape(r['label']) for r in refs)
+        if len(refs)==1:self._measure_show('Wskaż drugi element.<br>'+names,meshes);return
+        angle=measurement.angle_between(*vectors,unoriented=True)
+        a,b=vectors
+        if a@b<0:b=-b
+        o=(refs[0]['point']+refs[1]['point'])/2
+        radius=max(float(np.linalg.norm(refs[0]['point']-refs[1]['point']))*.15,1)
+        arc=measurement.angle_arc(o,a,b,radius)
+        if arc is not None:meshes.append(self._polyline_mesh(arc))
+        self._measure_show(f'<b>Kąt mniejszy: {angle:.2f}°</b><br>Kąt większy: {180-angle:.2f}°<br>{names}<br><small>Kolejne kliknięcie zaczyna nowy pomiar.</small>',meshes)
 
     def _measure_radius(self, x, y):
         hit = self.view.nearest_edge(x, y)
@@ -8006,7 +8059,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.history_export_text()
         elif recover is not None and chosen is recover:
             def loaded(doc):
-                self.toggle_section(False)
+                self.toggle_section(False,cancel_tool=False)
                 self.section_origin=self.section_normal=None
                 self.document = doc
                 self.selected = []
@@ -9006,6 +9059,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if self._lib_action is not None:          # prawy przycisk anuluje wskazywanie dla biblioteki
             self.library_cancel()
             return
+        if self.mode in MEASURE_MODES:
+            self._measure_back();return
         if self.mode == 'sketch':
             if self.points or self.tangent_lines:
                 self.end_current_shape()
@@ -9071,7 +9126,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def new_project(self):
         if self.confirm_discard():
-            self.toggle_section(False)
+            self.toggle_section(False,cancel_tool=False)
             self.section_origin=self.section_normal=None
             self.set_mode(None)
             self.document = Document()
@@ -9088,7 +9143,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.set_mode(None)
 
             def loaded(doc):
-                self.toggle_section(False)
+                self.toggle_section(False,cancel_tool=False)
                 self.section_origin=self.section_normal=None
                 self.document = doc
                 self.selected = []

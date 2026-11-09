@@ -846,6 +846,98 @@ class StudioTests(unittest.TestCase):
         again=hist.run_recipe(w.document.states()[cur-1][0],infos[-1]['op']);self.assertAlmostEqual([x for x in again if x.kind=='solid'][0].shape.Volume(),solids[0].shape.Volume(),1)
         w.undo();self.wait();self.assertFalse(self._solids());w.redo();self.wait();self.assertEqual(len(self._solids()),1)
 
+    def test_measure_right_click_undoes_one_point_and_keeps_the_tool(self):
+        w=self.w;b=Body('Bryła',k.box(20,20,20)).prepared();w.document.commit([b]);w.refresh()
+        revision=w.document._revision
+        for mode,points in [('mdist',[(0,0,0),(10,0,0)]),('mangle',[(10,0,0),(0,0,0),(0,10,0)])]:
+            w.set_mode(mode)
+            for point in points:
+                with patch.object(w.view,'nearest_vertex',return_value=(b.id,np.array(point,float))):w.view_clicked(5,5,False,False)
+            w.context_menu(5,5)
+            self.assertEqual(w.mode,mode);self.assertEqual(len(w.ms_points),len(points)-1)
+            np.testing.assert_allclose(w.ms_points[0],points[0])
+            self.assertEqual(len(w.view.measure_labels),len(points)-1)
+            with patch.object(w.view,'nearest_vertex',return_value=(b.id,np.array((0,0,10),float))):w.view_clicked(5,5,False,False)
+            self.assertEqual(len(w.ms_points),len(points))
+            while w.ms_points:w.context_menu(5,5)
+            self.assertFalse(w.ms_refs);self.assertFalse(w.view.measure_labels)
+        self.assertEqual(w.document._revision,revision)
+
+    def test_measure_panels_wrap_long_results_above_fixed_footer(self):
+        w=self.w;w.resize(1366,768);self.app.processEvents()
+        text='<b>Wynik pomiaru</b><br>'+('<br>'.join('Długa nazwa elementu: '+('przykładowa powierzchnia ' * 8) for _ in range(7)))
+        for mode in ('mdist','mangle','mrad','mprops'):
+            w.set_mode(mode);w.hist_bar.show();w._layout_overlays()
+            w._measure_show(text);self.app.processEvents();w._layout_overlays()
+            panel=w.ms_panels[mode];area,body=panel.scroll;label=w.ms_status[mode]
+            self.assertGreaterEqual(panel.width(),380)
+            self.assertGreaterEqual(label.height(),label.heightForWidth(panel.width()-52))
+            self.assertGreater(area.verticalScrollBar().maximum(),0)
+            footer=panel.footer.itemAt(0).layout().itemAt(0).widget()
+            self.assertTrue(footer.isVisible());self.assertGreater(footer.mapTo(panel,footer.rect().topLeft()).y(),area.geometry().bottom())
+            self.assertLessEqual(panel.geometry().bottom(),w.hist_bar.y())
+            w.context_menu(5,5) # also clears the single-reference tools
+
+    def test_measure_result_height_does_not_grow_with_hover_and_can_shrink(self):
+        w=self.w;w.set_mode('mdist')
+        w._measure_show('<br>'.join('Wynik pomiaru: 123.456 mm' for _ in range(8)))
+        label=w.ms_status['mdist'];height=label.minimumHeight();panel_height=w.ms_panels['mdist'].height()
+        for _ in range(30):w._measure_panel_fit()
+        self.assertEqual(label.minimumHeight(),height)
+        w._measure_show('Wskaż drugi punkt.')
+        self.assertLess(label.minimumHeight(),height)
+        self.assertLess(w.ms_panels['mdist'].height(),panel_height)
+
+    def test_section_work_hides_only_section_arrow_and_off_forgets_everything(self):
+        w=self.w;b=Body('Bryła',k.box(20,20,20)).prepared();w.document.commit([b]);w.refresh()
+        w.toggle_section(True)
+        with patch.object(w.view,'pick_face',return_value=(b.id,[0,-1,0],[10,0,10])):w.section_pick(5,5)
+        w.section_offset.setValue(7);plane=w.view.section_plane.copy();revision=w.document._revision
+        w.section_work_button.click()
+        self.assertTrue(w.section_working);self.assertEqual(w.section_work_button.text(),'PRZERWIJ')
+        self.assertFalse(w.view.section_handles);self.assertFalse(w.section_offset.isEnabled())
+        w.set_mode('extrude');np.testing.assert_allclose(w.view.section_plane,plane)
+        self.assertFalse(w.view.section_handles)
+        w.handle_dragged('section',12);self.assertEqual(w.section_offset.value(),7)
+        w.section_work_button.click()
+        self.assertFalse(w.section_working);self.assertTrue(w.view.section_handles)
+        self.assertEqual(w.section_work_button.text(),'PRACUJ');self.assertTrue(w.section_offset.isEnabled())
+        self.assertTrue(w.section_edit_buttons[0].isEnabled())
+        w.toggle_section(False)
+        self.assertIsNone(w.mode);self.assertIsNone(w.section_origin);self.assertIsNone(w.section_normal)
+        self.assertIsNone(w.view.section_plane);self.assertEqual(w.section_offset.value(),0)
+        self.assertFalse(w.section_working);self.assertEqual(w.document._revision,revision)
+        w.toggle_section(True)
+        self.assertTrue(w.section_picking);self.assertIsNone(w.view.section_plane)
+        self.assertFalse(w.section_work_button.isEnabled())
+
+    def test_section_off_cancels_pending_tool_without_applying_late_result(self):
+        import threading
+        w=self.w;gate=threading.Event();applied=[]
+        b=Body('Bryła',k.box(20,20,20)).prepared();w.document.commit([b]);w.refresh()
+        w.toggle_section(True)
+        with patch.object(w.view,'pick_face',return_value=(b.id,[0,-1,0],[10,0,10])):w.section_pick(5,5)
+        w.section_work(True);w.set_mode('extrude')
+        w.run_operation('Test',lambda:gate.wait(5),lambda value:applied.append(value))
+        try:
+            w.toggle_section(False)
+            self.assertFalse(w.busy);self.assertIsNone(w.mode);self.assertIsNone(w.view.section_plane)
+        finally:gate.set()
+        w.pool.waitForDone(5000);self.app.processEvents()
+        self.assertFalse(applied);self.assertIs(w.document.get(b.id).shape,b.shape)
+
+    def test_measure_angle_edge_right_click_retains_first_reference(self):
+        w=self.w;b=Body('Bryła',k.box(20,20,20)).prepared();w.document.commit([b]);w.refresh();w.set_mode('mangle')
+        w.ms_angle_kind.setCurrentIndex(1)
+        edges=[0,next(i for i,e in enumerate(b.shape.Edges()) if abs(np.dot(np.asarray(e.tangentAt().toTuple()),np.asarray(b.shape.Edges()[0].tangentAt().toTuple())))<.1)]
+        for i in edges:
+            with patch.object(w.view,'nearest_edge',return_value=(b.id,i)):w.view_clicked(5,5,False,False)
+        w.context_menu(5,5)
+        self.assertEqual(len(w.ms_angle_refs),1);self.assertEqual(w.ms_angle_refs[0]['edge'],edges[0])
+        self.assertIn('Wskaż drugi element',w.ms_status['mangle'].text())
+        with patch.object(w.view,'nearest_edge',return_value=(b.id,edges[1])):w.view_clicked(5,5,False,False)
+        self.assertIn('90.00',w.ms_status['mangle'].text())
+
     def test_section_persists_across_tools_and_extrudes_actual_inside_wall(self):
         from PySide6.QtGui import QVector3D
         w=self.w
@@ -889,7 +981,8 @@ class StudioTests(unittest.TestCase):
         w.handle_dragged('section',7);w.handle_released('section')
         self.assertAlmostEqual(w.section_offset.value(),17)
         w.toggle_section(False);w.toggle_section(True)
-        self.assertAlmostEqual(w.section_offset.value(),17)
+        self.assertEqual(w.section_offset.value(),0)
+        self.assertTrue(w.section_picking);self.assertIsNone(w.section_origin)
 
     def test_angle_two_edges_and_faces_has_exact_references_and_supplement(self):
         w=self.w

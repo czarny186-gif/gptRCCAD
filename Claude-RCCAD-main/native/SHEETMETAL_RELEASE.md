@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.79 — czytelne pomiary i tryb pracy w przekroju
+
+## Zmiany 0.4.79
+
+- Wszystkie cztery panele Pomiarów są szersze, dopasowują wysokość do zawijanego tekstu, a długie wyniki przewijają się nad stale widocznymi przyciskami. Wielokrotne wskazywanie nie powiększa etykiet, a krótszy wynik zmniejsza panel.
+- Prawy przycisk cofa jedno wskazanie w Odległości i Kącie: można poprawić drugi/trzeci punkt albo drugą krawędź/ścianę, zachowując wcześniejsze wybory. W Promieniu i Właściwościach czyści bieżący wynik.
+- Widok przekroju: PRACUJ ukrywa strzałkę i blokuje ustawienia przekroju; PRZERWIJ przywraca strzałkę i wybór innej ściany.
+- Wyłącz czyści płaszczyznę, odległość i tryb pracy; następne włączenie wymaga nowego wskazania ściany. Niezastosowane narzędzie/podgląd jest anulowane, a spóźniony wynik obliczeń nie trafia do modelu. Zatwierdzone zmiany pozostają zapisane.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.78 — Widok przekroju i dokładniejsze wskazywanie w pomiarach
 
 ## Zmiany 0.4.78

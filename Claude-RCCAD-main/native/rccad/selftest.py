@@ -279,8 +279,17 @@ def run(report_path=None):
     xy=studio.view.project_one((10,15,10))
     studio.toggle_section(True);studio.section_pick(*xy);studio.section_offset.setValue(10)
     assert abs(studio.view.pick_face(*xy)[2][1]-15)<1e-4
+    studio.section_work_button.click()
+    assert studio.section_working and not studio.view.section_handles and studio.section_work_button.text()=='PRZERWIJ'
     studio.set_mode('mod')
+    assert not studio.view.section_handles
     assert studio.view.section_plane is not None and studio.document.get(probe.id).shape is probe_shape
+    studio.section_work_button.click()
+    assert not studio.section_working and studio.view.section_handles
+    studio.toggle_section(False)
+    assert studio.section_origin is None and studio.section_offset.value()==0 and studio.mode is None
+    studio.toggle_section(True)
+    assert studio.section_picking and studio.view.section_plane is None
     studio.toggle_section(False)
     assert studio.view.section_plane is None and abs(studio.view.pick_face(*xy)[2][1])<1e-4
     checks.append('Section view: closed chamber revealed, original interior face picked, persistent across tools, non-destructive disable')
@@ -288,8 +297,15 @@ def run(report_path=None):
     assert [studio.ms_angle_kind.itemData(i) for i in range(studio.ms_angle_kind.count())]==['points','edges','faces']
     assert abs(measurement.angle_between([1,0,0],[-1,1,0],True)-45)<1e-8
     assert abs(float(sum(measurement.on_edge(cq.Edge.makeCircle(10),[7,7,0])**2))-100)<1e-6
+    studio.set_mode('mdist')
+    import numpy as np
+    studio.ms_points=[np.array([0.,0.,0.]),np.array([10.,0.,0.])]
+    studio.ms_refs=[dict(point=q,label='Vertex') for q in studio.ms_points]
+    studio._measure_points_update();studio.context_menu(5,5)
+    assert len(studio.ms_points)==1 and len(studio.view.measure_labels)==1
+    assert all(p.scroll is not None for p in studio.ms_panels.values())
     studio.set_mode(None)
-    checks.append('Measurements: point/edge/face angle modes and exact CAD curve snapping')
+    checks.append('Measurements: point/edge/face angle modes, exact CAD snapping, right-click undo and scrollable result panels')
 
     studio.document._saved_revision=studio.document._revision
     studio.close();app.processEvents()
