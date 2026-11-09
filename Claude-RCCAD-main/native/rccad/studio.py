@@ -4592,13 +4592,17 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         if state is None:
             self.toast('To nie jest blacha z zapisanymi gięciami.')
             return
-        shape = body.shape
-        flat_walls, folded_walls = self._flat_tab_walls(body), self._folded_tab_walls(body)      # ścianki na noski
-
+        source=body if (body.meta or {}).get('sheet') else replace(body,meta=dict(body.meta or {},sheet=state))
+        existing=[source if b.id==body.id else b for b in self.document.bodies]
         def build():
+            bodies=hist.ensure_sheet_joints(existing,body.id)
+            target=next(b for b in bodies if b.id==body.id)
+            shape=target.shape;state=target.meta['sheet']
+            moves=None if state.get('flat') else hist.sheet_tab_matrices(bodies,target,target,True)
+            flat_walls, folded_walls = self._flat_tab_walls(target,bodies,moves), self._folded_tab_walls(target,bodies)
             flat = shape if state.get('flat') else she.switch(shape, state, True)[0]
             flat_state = dict(state, flat=True)
-            lines = she.flat_bend_lines(flat, flat_state)
+            lines = [*she.flat_bend_lines(flat, flat_state),*self._tab_bend_lines(target,bodies,moves)]
             k = float((state['recipe'].get('rules') or {}).get('kfactor', shm.K_DEFAULT))
             bends = [(l['a'], l['b'], l['direction'], dict(angle=l.get('angle'), r=l.get('r'), index=l.get('index'))) for l in lines]
             folded = self._folded_of(shape, state)
@@ -4782,7 +4786,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             nominal=metadata['recipe']
             return dict(base=nominal['base'],t=nominal['t'],specs=list(nominal.get('flanges') or []),
                         rules=dict(nominal.get('rules') or {}),flat=metadata.get('flat',False),
-                        dirty=metadata.get('dirty',False),edited=metadata.get('edited',False),bend_engine=metadata.get('bend_engine',1))
+                        dirty=metadata.get('dirty',False),edited=metadata.get('edited',False),bend_engine=metadata.get('bend_engine',1),joints=metadata.get('joints'))
         infos, cur = self.document.infos()
         state = None
         for info in infos[:cur + 1]:
@@ -4805,7 +4809,7 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         if source is None:
             return None
         metadata=she.state(dict(base=source['base'],t=source['t'],flanges=source['specs'],rules=source['rules']),source.get('flat',False))
-        metadata.update(dirty=source.get('dirty',False),edited=source.get('edited',False),bend_engine=source.get('bend_engine',1))
+        metadata.update(dirty=source.get('dirty',False),edited=source.get('edited',False),bend_engine=source.get('bend_engine',1),joints=source.get('joints'))
         return metadata
 
     SHEET_COMMANDS = {'unfold_sheet': 'Rozłóż blachę', 'fold_sheet': 'Zegnij blachę', 'flat': 'Rozwinięcie DXF'}
@@ -4924,13 +4928,15 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         specs = [dict(spec, outside=spec.get('outside', state['rules'].get('outside',False))) for spec in state['specs']]
         recipe = dict(type='sheetbuild',id=body.id,base=state['base'],t=state['t'],flanges=specs,rules=self._flange_rules())
         def apply(result):
-            self.document.commit([result if b.id == body.id else b for b in self.document.bodies],
+            self.document.commit([result.get(b.id,b) for b in self.document.bodies],
                                  label='Narożniki blachy',icon='flange',op=recipe)
             self._tool_select([body.id])
             if self.mode == 'rules':
                 self.rl_status.setText(f'Reguły zastosowane do: {body.name}.')
         source=replace(body,meta=dict(body.meta or {},sheet=self._editable_sheet_state(body.id)))
-        self.run_operation('Narożniki blachy',lambda:hist.run_sheetbuild([source],recipe)[0],apply)
+        root=self._tab_root(body)
+        members=[source,*[b for b in [root,*hist.sheet_tab_walls(self.document.bodies,root.id)] if b.id!=body.id]]
+        self.run_operation('Narożniki blachy',lambda:{b.id:b for b in hist.run_sheetbuild(members,recipe)},apply)
 
     def pick_rules_sheet(self, x, y):
         bid = self.view.pick_body(x, y)
@@ -5154,7 +5160,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
         recipe = dict(type='sheetbuild', id=body.id, base=st['base'], t=st['t'], flanges=[*previous, spec], rules=self._flange_rules())
 
         source=replace(body,meta=dict(body.meta or {},sheet=dict(self._editable_sheet_state(body.id), **{k: v for k, v in ((body.meta or {}).get('sheet') or {}).items() if k == 'tabs'})))
-        walls=hist.sheet_tab_walls(self.document.bodies, body.id)      # ścianki na noski tej blachy - przeliczane po gięciu
+        root=self._tab_root(body)
+        walls=[b for b in [root,*hist.sheet_tab_walls(self.document.bodies,root.id)] if b.id!=body.id]      # cała blacha: także rodzice i rodzeństwo giętej ścianki
         def build():
             return {b.id: b for b in hist.run_sheetbuild([source, *walls],recipe)},recipe
 
@@ -5201,32 +5208,77 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
             self.toast(f'Zapisano DXF 1:1 (mm): {path}. CUT: cięcie; BEND_UP/DOWN: linie gięcia, nie do cięcia. K={pattern["kfactor"]:.3f}.', 12000)
 
         metadata=self._editable_sheet_state(body.id)
-        extra=self._flat_tab_walls(body)
-        self.run_operation('Rozwinięcie DXF',lambda:she.export_dxf(body.shape,metadata,path,extra),done)
+        source=body if (body.meta or {}).get('sheet') else replace(body,meta=dict(body.meta or {},sheet=metadata))
+        existing=[source if b.id==body.id else b for b in self.document.bodies]
+        def build():
+            bodies=hist.ensure_sheet_joints(existing,body.id)
+            target=next(b for b in bodies if b.id==body.id)
+            moves=None if target.meta['sheet'].get('flat') else hist.sheet_tab_matrices(bodies,target,target,True)
+            extra=self._flat_tab_walls(target,bodies,moves)
+            lines=self._tab_bend_lines(target,bodies,moves)
+            return she.export_dxf(target.shape,target.meta['sheet'],path,extra,lines)
+        self.run_operation('Rozwinięcie DXF',build,done)
 
-    def _flat_tab_walls(self, body):
+    def _flat_tab_walls(self, body, bodies=None, moves=None):
         """Ścianki na noski blachy położone płasko obok jej rozwinięcia (do DXF i rysunku blachy)."""
         from . import plywood as pw
-        walls = hist.sheet_tab_walls(self.document.bodies, body.id)
+        bodies=self.document.bodies if bodies is None else bodies
+        walls = hist.sheet_tab_walls(bodies, body.id)
         if not walls:
             return []
         state = (body.meta or {}).get('sheet') or {}
         if state.get('flat'):
             return [w.shape for w in walls]
         try:
-            moves = hist.sheet_tab_matrices(self.document.bodies, body, body, True)
-        except Exception:
-            return []
+            if moves is None:moves = hist.sheet_tab_matrices(bodies, body, body, True)
+        except Exception as exc:
+            raise kernel.CadError(f'Nie można rozwinąć wszystkich ścianek: {exc}. Eksport nie został wykonany.') from exc
+        if len(moves)!=len(walls):
+            raise kernel.CadError('Nie wszystkie ścianki mają położenie na rozwinięciu. Eksport nie został wykonany.')
         return [pw.apply_matrix(moves[w.id][1] if moves[w.id][1] is not None else w.shape, moves[w.id][0]) for w in walls if w.id in moves]
 
-    def _folded_tab_walls(self, body):
-        walls = hist.sheet_tab_walls(self.document.bodies, body.id)
+    def _tab_bend_lines(self,body,bodies=None,moves=None):
+        """All wall bend lines in the same XY placement as their CUT contours."""
+        from . import plywood as pw
+        bodies=self.document.bodies if bodies is None else bodies
+        walls=hist.sheet_tab_walls(bodies,body.id)
+        flat=bool(body.meta['sheet'].get('flat'))
+        moves={} if flat else moves if moves is not None else hist.sheet_tab_matrices(bodies,body,body,True)
+        lines=[];offset=len(body.meta['sheet']['recipe']['flanges'])
+        for wall in walls:
+            st=wall.meta.get('sheet') or {}
+            if not st.get('recipe',{}).get('flanges'):continue
+            actual=wall.shape
+            if flat:
+                info=wall.meta['ply']['tab'].get('unfold')
+                if not info:raise kernel.CadError(f'{wall.name}: brak położenia rozwinięcia.')
+                M=pw._mat(info.get('acc'))@np.linalg.inv(pw._mat(info['M']))
+                actual=pw.apply_matrix(actual,np.linalg.inv(M))
+            else:
+                M,local,developed=moves[wall.id]
+                if local is None or developed is None:raise kernel.CadError(f'{wall.name}: brak rozwinięcia gięć ścianki.')
+                actual,st=local,developed
+            for line in she.flat_bend_lines(actual,st):
+                value=dict(line,index=offset+line['index'])
+                for key in ('a','b'):
+                    point=line[key]
+                    value[key]=(M@np.array([point[0],point[1],float(st['recipe']['t'])/2,1.]))[:2].tolist()
+                if M[2,2]<0:value['direction']='DOWN' if value['direction']=='UP' else 'UP'
+                value['thickness']=float(st['recipe']['t'])
+                value['factor']=float(st['recipe'].get('rules',{}).get('kfactor',shm.K_DEFAULT))
+                lines.append(value)
+            offset+=len(st['recipe']['flanges'])
+        return lines
+
+    def _folded_tab_walls(self, body, bodies=None):
+        bodies=self.document.bodies if bodies is None else bodies
+        walls = hist.sheet_tab_walls(bodies, body.id)
         if not walls or not ((body.meta or {}).get('sheet') or {}).get('flat'):
             return [w.shape for w in walls]
         try:
-            moves = hist.sheet_tab_matrices(self.document.bodies, body, body, False)
-        except Exception:
-            return []
+            moves = hist.sheet_tab_matrices(bodies, body, body, False)
+        except Exception as exc:
+            raise kernel.CadError(f'Nie można złożyć wszystkich ścianek do rysunku: {exc}') from exc
         from . import plywood as pw
         return [moves[w.id][1] if moves[w.id][1] is not None else pw.apply_matrix(w.shape, moves[w.id][0]) for w in walls if w.id in moves]
 

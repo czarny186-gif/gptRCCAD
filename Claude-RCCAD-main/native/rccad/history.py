@@ -1436,23 +1436,84 @@ def _sheet_result(bodies, body, kind, source, args):
     return _replace(bodies, out)
 
 
+def sheet_root(bodies,body_id):
+    root=_body(bodies,body_id);seen=set()
+    while ((root.meta or {}).get('ply') or {}).get('tab'):
+        if root.id in seen:raise kernel.CadError('Nieprawidłowy cykl powiązań ścianek blachy.')
+        seen.add(root.id)
+        parent=next((b for b in bodies if b.id==root.meta['ply']['tab']['sheet']),None)
+        if parent is None:break
+        root=parent
+    return root
+
+
+def ensure_sheet_joints(bodies,body_id):
+    """Migrate pre-baseline projects without changing any saved geometry.
+
+    Replay only automatic construction to identify its material; actual user
+    holes/fillets remain in the real parts and are measured against that replay.
+    """
+    from . import sheetjoints as joints
+    root=sheet_root(bodies,body_id)
+    if not (root.meta or {}).get('sheet'):return bodies
+    walls=sheet_tab_walls(bodies,root.id)
+    if not walls or all((b.meta or {}).get('sheet',{}).get('joints') for b in [root,*walls]):return bodies
+    state=root.meta['sheet']
+    if state.get('flat'):return bodies
+    clean=replace(root,shape=shm.build_sheet(state['recipe']),mesh=None,meta=_with_sheet(root,she.state(state['recipe'])))
+    current=[clean]
+    for w in walls:
+        tab=w.meta['ply']['tab'];parent=_body(current,tab['sheet']);frame=_sheet_frame(parent)
+        ends=[(frame@np.append(q,1.))[:3] for q in tab['seg']]
+        index=_edge_on_segment(parent.shape,*ends)
+        if index is None:raise kernel.CadError(f'{w.name}: nie można odtworzyć połączenia starszego projektu.')
+        rec=dict(tab['recipe'],type='sheet_tabwall',id=parent.id,edges=edge_refs(parent.shape,[index]),out=[w.id],group=w.group,_legacy=True)
+        current=run_sheet_tabwall(current,rec)
+        nominal=w.meta.get('sheet',{}).get('recipe') or {}
+        if nominal.get('flanges'):
+            b=_body(current,w.id);source={key:value for key,value in b.meta['sheet'].items() if key!='joints'}
+            current=_sheet_result(current,b,'build',source,nominal)
+    automatic={b.id:b for b in current}
+    out=[]
+    for b in bodies:
+        if b.id in automatic and not (b.meta or {}).get('sheet',{}).get('joints'):
+            state=(b.meta or {}).get('sheet') or automatic[b.id].meta['sheet']
+            b=replace(b,meta=_with_sheet(b,joints.remember(automatic[b.id].shape,state)))
+        out.append(b)
+    return out
+
+
 def run_sheetbuild(bodies, recipe):
     """Blacha od podstaw: płyta bazowa i lista kołnierzy zapisane w kroku (geometria liczy się z nich, nie z poprzedniego stanu).
     Blacha ze ściankami na noski (bez innych zmian): blacha liczy się bez gniazd, a ścianki od nowa z zapamiętanych ustawień -
     dopasowują się do nowego gięcia (gniazda nie trafiają w łuk, noski powstają też przy nowym kołnierzu)."""
+    bodies=ensure_sheet_joints(bodies,recipe['id'])
     body = _body(bodies, recipe['id'])
+    root=sheet_root(bodies,body.id)
+    assembly_walls=sheet_tab_walls(bodies,root.id)
+    if assembly_walls and ((body is not root and recipe.get('flanges')) or any(_bent_wall(w) for w in assembly_walls)):
+        from . import sheetassembly
+        return sheetassembly.rebuild(bodies,recipe)
     walls = sheet_tab_walls(bodies, body.id)
     if walls and _tabs_regenerable(body, walls):
-        state = dict(body.meta['sheet'], dirty=False, edited=False)
+        from . import sheetjoints as joints
+        if body.meta['sheet'].get('joints'):
+            shape,state=joints.edited_bare(body.shape,body.meta['sheet'])
+            body=replace(body,shape=shape,meta=_with_sheet(body,state))
+        else:state = dict(body.meta['sheet'], dirty=False, edited=False)
         state.pop('tabs', None)
         clean = replace(body, meta=_with_sheet(body, state))
         rest = [clean if b.id == body.id else b for b in bodies if b.id not in {w.id for w in walls}]
         out = _sheet_result(rest, clean, 'build', state, recipe)
-        return regenerate_tab_walls(out, walls)
+        rebuilt=_body(out,body.id)
+        rebuilt=replace(rebuilt,meta=_with_sheet(rebuilt,joints.remember(shm.build_sheet(recipe),rebuilt.meta['sheet'])))
+        return regenerate_tab_walls(_replace(out,rebuilt), walls)
     return _sheet_result(bodies, body, 'build', (body.meta or {}).get('sheet'), recipe)
 
 
 def _tabs_regenerable(sheet, walls):
+    if (sheet.meta or {}).get('sheet',{}).get('joints'):
+        return all((w.meta['ply'].get('tab') or {}).get('recipe') and (w.meta['ply'].get('tab') or {}).get('seg') and not (w.meta['ply'].get('tab') or {}).get('unfold') for w in walls)
     info = ((sheet.meta or {}).get('sheet') or {}).get('tabs') or {}
     if not info.get('clean') or info.get('volume') is None or abs(sheet.shape.Volume() - float(info['volume'])) > 1e-6:
         return False
@@ -1467,6 +1528,10 @@ def regenerate_tab_walls(bodies, walls):
     """Ścianki na noski od nowa (ta sama kolejność, id, nazwy): każda na swojej krawędzi płyty, z zapamiętanymi ustawieniami."""
     current = list(bodies)
     for w in walls:
+        from . import sheetjoints as joints
+        old_state=(w.meta or {}).get('sheet') or {}
+        auto=joints.baseline(old_state) if old_state else None
+        removed,added=she._diff(auto,w.shape) if auto is not None else (None,None)
         tab = w.meta['ply']['tab']
         parent = _body(current, tab['sheet'])
         frame = _sheet_frame(parent)
@@ -1478,8 +1543,33 @@ def regenerate_tab_walls(bodies, walls):
         rec = dict(tab['recipe'], type='sheet_tabwall', id=parent.id, edges=edge_refs(parent.shape, [index]), out=[w.id], group=w.group)
         current = run_sheet_tabwall(current, rec)
         new = _body(current, w.id)
-        current = [replace(new, name=w.name, visible=w.visible) if x.id == w.id else x for x in current]
+        if (old_state.get('recipe') or {}).get('flanges'):
+            nominal=_wall_bend_recipe(old_state['recipe'],new.meta['sheet']['recipe']['base'])
+            current=_sheet_result(current,new,'build',new.meta['sheet'],nominal)
+            new=_body(current,w.id)
+        shape=new.shape
+        if removed is not None and she._volume(removed)>1e-7:shape=kernel.boolean('subtract',shape,[removed])
+        if added is not None and she._volume(added)>1e-7:shape=kernel.boolean('union',shape,[added])
+        if len(shape.Solids())!=1:raise kernel.CadError(f'{w.name}: zmiany użytkownika rozdzieliły ściankę.')
+        new=replace(new.changed(shape),name=w.name,visible=w.visible)
+        current = [new if x.id == w.id else x for x in current]
     return current
+
+
+def _wall_bend_recipe(old, base):
+    import copy
+    out=copy.deepcopy(old);out['base']=base
+    before=old['base']
+    axes=np.column_stack([before[k] for k in ('x','y','z')])
+    target=np.column_stack([base[k] for k in ('x','y','z')])
+    for f in out['flanges']:
+        if f['kind']!='base':continue
+        for key in ('p0','p1'):
+            uv=axes.T@(np.asarray(f[key])-np.asarray(before['o']))
+            uv*=np.array([base['lx']/before['lx'],base['ly']/before['ly'],base['lz']/before['lz']])
+            f[key]=(np.asarray(base['o'])+target@uv).tolist()
+        for key in ('n','m'):f[key]=(target@axes.T@np.asarray(f[key])).tolist()
+    return out
 
 
 def _edge_on_segment(shape, a, b):
@@ -1508,9 +1598,19 @@ def _edge_on_segment(shape, a, b):
 
 
 def run_sheetmode(bodies,recipe):
+    bodies=ensure_sheet_joints(bodies,recipe['id'])
     body=_body(bodies,recipe['id'])
     source=(body.meta or {}).get('sheet') or recipe['state']
+    if not source.get('flat') and not source.get('assembly') and any(_bent_wall(w) for w in sheet_tab_walls(bodies,body.id)):
+        from . import sheetassembly
+        if not (body.meta or {}).get('sheet'):
+            body=replace(body,meta=_with_sheet(body,source));bodies=ensure_sheet_joints(_replace(bodies,body),body.id)
+        bodies=sheetassembly.rebuild(bodies,dict(source['recipe'],id=body.id))
+        body=_body(bodies,body.id)
+    source=(body.meta or {}).get('sheet') or recipe['state']
     out=_sheet_result(bodies, body, 'mode', source, (recipe['flat'], recipe.get('sync', False)))
+    if source.get('assembly'):
+        b=_body(out,body.id);out=_replace(out,replace(b,meta=_with_sheet(b,dict(b.meta['sheet'],assembly=source['assembly']))))
     tabs=((body.meta or {}).get('sheet') or {}).get('tabs')
     if tabs and not recipe.get('sync'):
         # zapis „blacha ma tylko gniazda ścianek na noski” przechodzi przez rozłożenie i zgięcie (ścianki dalej
@@ -1939,6 +2039,8 @@ def run_sheet_tabwall(bodies, recipe):
     noskami z płytą, z której wychodzi, i z sąsiednimi ściankami na noski. Blacha dostaje gniazda / noski jak przy
     zwykłym cięciu (zmiana kształtu blachy), ścianka jest osobną płytą (do cięcia jak płyty ze Sklejki)."""
     from . import plywood as pw
+    if not recipe.get('_legacy'):bodies=ensure_sheet_joints(bodies,recipe['id'])
+    originals={b.id:b for b in bodies}
     sheet = _body(bodies, recipe['id'])
     index = edge_indices(sheet.shape, recipe['edges'])[0]
     edge = sheet.shape.Edges()[index]
@@ -1949,6 +2051,19 @@ def run_sheet_tabwall(bodies, recipe):
         flat_region = None
     edge, plate = _nominal_edge(sheet, edge)
     wall, plate, up = pw.tab_wall(sheet.shape, edge, t, float(recipe['length']), recipe.get('measure', 'outer'), bool(recipe.get('flip')), plate)
+    root=sheet_root(bodies,sheet.id)
+    if not recipe.get('_legacy') and any(_bent_wall(w) for w in sheet_tab_walls(bodies,root.id)):
+        from . import sheetassembly,sheetjoints
+        wid=(recipe.get('out') or [uuid.uuid4().hex])[0] if isinstance(recipe.get('out'),list) else recipe.get('out') or uuid.uuid4().hex
+        frame=np.linalg.inv(_sheet_frame(sheet))
+        seg=[(frame@np.append(np.array(q.toTuple()),1.))[:3].tolist() for q in (edge.startPoint(),edge.endPoint())]
+        meta=pw.ply_meta(t,'laser')
+        meta['ply']['tab']=dict(sheet=sheet.id,length=float(recipe['length']),measure=recipe.get('measure','outer'),seg=seg,
+                               recipe={key:recipe.get(key) for key in ('t','length','measure','flip','width','fit','corner')})
+        nominal=dict(base=_wall_base(wall,t,up),t=t,flanges=[],rules={})
+        meta['sheet']=sheetjoints.remember(wall,she.state(nominal))
+        new=Body(_next_names(bodies,'Ścianka blachy',1)[0],wall,id=wid,meta=meta,group=root.group,folder=root.folder or root.name)
+        return sheetassembly.rebuild([*bodies,new],dict(root.meta['sheet']['recipe'],id=root.id))
     box_wall = wall
     pieces = _flat_pieces(sheet)            # płaskie części blachy (podstawa, ramiona kołnierzy) - tylko tam noski i gniazda
     neighbours = [b for b in bodies if b.kind == 'solid' and b.visible and b.id != sheet.id and pw.is_panel(b) and pw._boxes_near(wall, b.shape)]
@@ -2097,7 +2212,8 @@ def run_sheet_tabwall(bodies, recipe):
         pass
     name = _next_names(bodies, 'Ścianka blachy', 1)[0]
     new = Body(name, out.get(wid, wall), id=wid, meta=meta, folder=folder, group=group).prepared()
-    return [*result, new]
+    from . import sheetjoints as joints
+    return [joints.updated(originals.get(b.id),b) if b is new or (b.id in out and b.id!=wid) else b for b in [*result,new]]
 
 
 def _wall_params(recipe):

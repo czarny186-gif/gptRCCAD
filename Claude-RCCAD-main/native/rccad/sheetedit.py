@@ -459,7 +459,7 @@ def _diff(baseline, actual):
         return full()
 
 
-def _changes(actual, model, flat):
+def _changes(actual, model, flat, automatic=False):
     baseline=model.flat if flat else model.folded
     removed,added=_diff(baseline,actual)
     changes={p.key:{'removed':[], 'added':[]} for p in [*model.panels,*model.bends]}
@@ -503,6 +503,13 @@ def _changes(actual, model, flat):
             gaps=[centre.distance(p.flat if flat else p.folded) for p in owners]
             best=min(gaps)
             if sum(1 for g in gaps if g<best+1e-6)==1:owners=[owners[gaps.index(best)]]
+        if automatic and len(owners)>1:
+            def contact_area(panel):
+                source=panel.flat if flat else panel.folded
+                frame=panel.flat_frame if flat else panel.folded_frame
+                eps=1e-4
+                return max(_volume(solid.intersect(source.translate(tuple(sign*eps*frame[row,col] for row in range(3))))) for col in (0,1) for sign in (-1,1))
+            owners=[max(owners,key=contact_area)]
         if len(owners)!=1 or any(solid.distance(bend)<1e-5 and _volume(solid.intersect(bend))>1e-7 for bend in bends):
             raise k.CadError('Dodany materiał musi należeć do jednej prostej ściany blachy i nie przekraczać obszaru gięcia. Bieżące zmiany zostały zachowane.')
         panel=owners[0];frame=panel.flat_frame if flat else panel.folded_frame
@@ -510,8 +517,8 @@ def _changes(actual, model, flat):
     return changes
 
 
-def _apply(model, changes, flat):
-    result=model.flat if flat else model.folded
+def _apply(model, changes, flat, automatic=False, initial=None):
+    result=initial if initial is not None else model.flat if flat else model.folded
     panels={p.key:p for p in model.panels}
     bends={b.key:b for b in model.bends}
     for key,delta in changes.items():
@@ -521,7 +528,7 @@ def _apply(model, changes, flat):
             for cut in delta['removed']:
                 tools=[cut.transformShape(bend.flat_frame)] if flat else _bend_cut(cut,bend)
                 for tool in tools:
-                    if _volume(tool)-_volume(result.intersect(tool))>max(2e-5,_volume(tool)*1e-6):
+                    if not automatic and _volume(tool)-_volume(result.intersect(tool))>max(2e-5,_volume(tool)*1e-6):
                         raise k.CadError('Kontur wycięcia wychodzi poza obszar materiału przy narożniku gięcia. Bieżący model został zachowany.')
                     result=k.boolean('subtract',result,[tool])
             continue
@@ -531,7 +538,7 @@ def _apply(model, changes, flat):
         for cut in delta['removed']:
             tool=cut.transformShape(frame)
             available=_volume(result.intersect(tool))
-            if _volume(tool)-available>max(1e-5,_volume(tool)*1e-7):
+            if not automatic and _volume(tool)-available>max(1e-5,_volume(tool)*1e-7):
                 raise k.CadError('Nie można dokładnie przenieść zmiany przy zakończeniu lub narożniku gięcia. Model i wykonane zmiany pozostają bez zmian.')
             result=k.boolean('subtract',result,[tool])
     for key,delta in changes.items():
@@ -540,7 +547,15 @@ def _apply(model, changes, flat):
         frame=panel.flat_frame if flat else panel.folded_frame
         for added in delta['added']:
             tool=added.transformShape(frame)
-            if _volume(result.intersect(tool))>max(1e-5,_volume(tool)*1e-7):
+            if automatic:
+                blockers=[*(model.flat_bends if flat else model.folded_bends), *[p.flat if flat else p.folded for p in model.panels if p.key!=key]]
+                for blocker in blockers:
+                    if _volume(tool.intersect(blocker))>1e-7:tool=tool.cut(blocker).clean()
+                if _volume(tool)<1e-7:continue
+                if tool.distance(result)>1e-5:continue
+                if _volume(tool.intersect(result))>1e-7:tool=tool.cut(result).clean()
+                if _volume(tool)<1e-7:continue
+            if not automatic and _volume(result.intersect(tool))>max(1e-5,_volume(tool)*1e-7):
                 raise k.CadError('Dodany materiał po zgięciu koliduje z inną częścią blachy. Zmień jego kształt lub położenie.')
             result=k.boolean('union',result,[tool])
     if len(result.Solids())!=1:raise k.CadError('Operacja rozdzieliłaby blachę na osobne części. Bieżący model został zachowany.')
@@ -562,10 +577,35 @@ def _unchanged(actual, baseline):
         return False
 
 
+@lru_cache(maxsize=32)
+def _joint_changes_cached(data,recipe_key,version,flat):
+    from . import sheetjoints as joints
+    source=dict(state(json.loads(recipe_key),flat),joints=data,bend_engine=version)
+    model=_source_layout(source)
+    return _changes(joints.baseline(source),model,flat,automatic=True)
+
+
+def _joint_changes(source):
+    values=_joint_changes_cached(source['joints'],json.dumps(source['recipe'],sort_keys=True,allow_nan=False),_source_engine(source),bool(source.get('flat')))
+    # Rebuild may reanchor panel coordinates; never modify the cached lists.
+    return {key:{kind:list(shapes) for kind,shapes in delta.items()} for key,delta in values.items()}
+
+
 def _switch(actual, source_state, flat, sync=False):
     """Switch atomically, including all accumulated edits on straight panels."""
     model=layout(source_state['recipe'])
     source_model=model if _source_engine(source_state)==s.ENGINE else _source_layout(source_state)
+    if source_state.get('joints'):
+        from . import sheetjoints as joints
+        bare,clean=joints.edited_bare(actual,source_state,source_model)
+        user_changes=_changes(bare,source_model,source_state.get('flat',False))
+        auto_changes=_joint_changes(source_state)
+        base=_apply(model,auto_changes,flat,automatic=True)
+        result=_apply(model,user_changes,flat,initial=base)
+        target=joints.remember(base,state(source_state['recipe'],flat))
+        target['edited']=any(any(d.values()) for d in user_changes.values())
+        if sync:_apply(model,user_changes,not flat,initial=_apply(model,auto_changes,not flat,automatic=True))
+        return result,target
     source_flat=source_state.get('flat',False)
     if not source_state.get('dirty') and not source_state.get('edited') and _unchanged(actual,source_model.flat if source_flat else source_model.folded):
         changes={p.key:{'removed':[],'added':[]} for p in [*source_model.panels,*source_model.bends]}      # blacha bez zmian: bez kosztownego porównania brył
@@ -591,6 +631,23 @@ def rebuild(actual, source_state, recipe):
     """Retain panel edits when another flange or new corner rules are added."""
     if source_state.get('flat'):
         raise k.CadError('Najpierw zegnij blachę, zanim dodasz kołnierz lub zmienisz reguły gięć.')
+    if source_state.get('joints'):
+        from . import sheetjoints as joints
+        old=_source_layout(source_state)
+        bare,clean=joints.edited_bare(actual,source_state,old)
+        user_shape,user_state=rebuild(bare,clean,recipe)
+        auto_changes=_joint_changes(source_state)
+        new=layout(recipe)
+        old_panels={p.key:p for p in old.panels};new_panels={p.key:p for p in new.panels}
+        for key,delta in auto_changes.items():
+            a,b=old_panels.get(key),new_panels.get(key)
+            if a is not None and b is not None:
+                for kind in ('removed','added'):
+                    delta[kind]=[sh.transformShape(a.folded_frame).transformShape(_inverse(b.folded_frame)) for sh in delta[kind]]
+        auto=_apply(new,auto_changes,False,automatic=True)
+        changes=_changes(user_shape,new,False)
+        result=_apply(new,changes,False,initial=auto)
+        return result,joints.remember(auto,user_state)
     if not source_state.get('dirty') and not source_state.get('edited'):
         return s.build_sheet(recipe),state(recipe,False)
     # Carrying edits in folded space does not require the complete model to
@@ -642,7 +699,7 @@ def flat_bend_lines(actual, source_state):
     return _bend_lines(model,_flat_sections(blank,t),source_state['recipe'])
 
 
-def export_dxf(actual, source_state, path, extra=()):
+def export_dxf(actual, source_state, path, extra=(), extra_bends=()):
     """Export the edited constant-thickness blank, with analytic cut curves.
     Linie gięcia: BEND_UP ciągła, BEND_DOWN przerywana (typ linii GIECIE_DOL), obie przycięte do konturu cięcia."""
     import os
@@ -672,15 +729,19 @@ def export_dxf(actual, source_state, path, extra=()):
             contour=wire.translate((0,0,-face.Center().z)).copy()
             writer.add_shape(cq.Workplane('XY').newObject([contour]),layer='CUT')
     for part in extra:          # ścianki na noski położone obok rozwinięcia (te same współrzędne)
-        for face in _flat_sections(part,t):
+        part_sections=_flat_sections(part,t)
+        slab=_faces_slab(part_sections,t)
+        if _volume(part.cut(slab))+_volume(slab.cut(part))>max(1e-5,_volume(part)*1e-8):
+            raise k.CadError('Ścianka nie ma stałej grubości w rozwinięciu. Nie zapisano niepełnego DXF.')
+        for face in part_sections:
             for wire in face.Wires():
                 writer.add_shape(cq.Workplane('XY').newObject([wire.translate((0,0,-face.Center().z)).copy()]),layer='CUT')
     writer.document.appids.add('RCCAD')
     factor=float((source_state['recipe'].get('rules') or {}).get('kfactor',s.K_DEFAULT))
-    lines=_bend_lines(model,sections,source_state['recipe'])
+    lines=[*_bend_lines(model,sections,source_state['recipe']),*extra_bends]
     for bend in lines:
         line=writer.msp.add_line(tuple(bend['a']),tuple(bend['b']),dxfattribs={'layer':'BEND_'+bend['direction'],'linetype':'CONTINUOUS' if bend['direction']=='UP' else 'GIECIE_DOL'})
-        line.set_xdata('RCCAD',[(1070,bend['index']),(1040,bend['angle']),(1040,bend['r']),(1040,t),(1040,factor)])
+        line.set_xdata('RCCAD',[(1070,bend['index']),(1040,bend['angle']),(1040,bend['r']),(1040,bend.get('thickness',t)),(1040,bend.get('factor',factor))])
     target=Path(path);fd,tmp=tempfile.mkstemp(prefix='.rccad-edited-flat-',suffix='.dxf',dir=target.parent);os.close(fd)
     try:
         writer.document.saveas(tmp);os.replace(tmp,target)

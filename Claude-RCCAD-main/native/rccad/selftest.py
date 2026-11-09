@@ -177,6 +177,36 @@ def run(report_path=None):
     auto_folded,_=she.switch(auto_flat,auto_state,False)
     assert auto_folded.isValid() and abs(auto_folded.Volume(1e-9)-auto_body.Volume(1e-9))<1e-4
     checks.append('automatic corners: forced neighbour fitting and hem maximum limited by its supporting flange')
+
+    # Exercise the packaged assembly/joint-baseline modules, not just bare sheets.
+    from . import history as history
+    with k.deferred_mesh():
+        seed=Body('Joint regression',k.box(40,30,1))
+        face=max(seed.shape.Faces(),key=lambda f:f.Center().z)
+        bodies=history.run_sheet([seed],dict(id=seed.id,face=history.face_ref(face,(0,0,1),face.Center().toTuple(),seed.shape)))
+        plate=bodies[0];base=plate.meta['sheet']['recipe']['base']
+        import numpy as np
+        O=np.array(base['o'])+np.array(base['z']);X=np.array(base['x'])*base['lx'];Y=np.array(base['y'])*base['ly']
+        idx=history._edge_on_segment(plate.shape,O,O+X)
+        bodies=history.run_sheet_tabwall(bodies,dict(id=plate.id,edges=history.edge_refs(plate.shape,[idx]),t=1,length=12,width=4,fit=.1,corner='parallel'))
+        wall=bodies[-1];wb=wall.meta['sheet']['recipe']['base'];Z=np.array(wb['z'])
+        C=np.array(wb['o'])+wb['lx']/2*np.array(wb['x'])+wb['ly']/2*np.array(wb['y'])-Z
+        drill=cq.Solid.makeCylinder(.8,3,cq.Vector(*C),cq.Vector(*Z))
+        bodies=[b.changed(b.shape.cut(drill)) if b.id==wall.id else b for b in bodies]
+        W=np.array(wb['o'])+Z;A=np.array(wb['x'])*wb['lx'];B=np.array(wb['y'])*wb['ly']
+        for bid,mid,L in ((wall.id,W+B+A/2,4),(plate.id,O+X+Y/2,12)):
+            body=next(b for b in bodies if b.id==bid);r=body.meta['sheet']['recipe']
+            spec=shm.spec_for_edge(r['base'],1,r['flanges'],r.get('rules'),mid,.1)
+            spec.update(r=.5,angle=90,length=L,measure='outer')
+            bodies=history.run_sheetbuild(bodies,dict(id=bid,base=r['base'],t=1,flanges=[*r['flanges'],spec],rules=dict(auto_corners=True,miter=True,joint='parallel',gap=.1)))
+        if workers.ready():
+            r=next(b for b in bodies if b.id==plate.id).meta['sheet']['recipe']
+            bodies=history.offloaded(history.run_sheetbuild,bodies,dict(r,id=plate.id))
+        assert next(b for b in bodies if b.id==wall.id).shape.intersect(drill).Volume()<1e-6
+        for flat in (True,False):
+            bodies=history.run_sheetmode(bodies,dict(id=plate.id,flat=flat))
+            assert all(b.shape.isValid() and len(b.shape.Solids())==1 for b in bodies)
+    checks.append('tab-wall assembly: user hole retained after wall/base bending, unfold and refold')
     drag = k.sketch_from_drag('rectangle','XZ',0,0,20,10)
     assert abs(k.extrude(k.sketch(**drag),'XZ',5).Volume()-1000) < 1e-5
     checks.append('mouse sketch geometry')

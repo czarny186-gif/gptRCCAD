@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.72 — blacha gięta ze ściankami na noski w dowolnej kolejności
+# RCCAD Desktop 0.4.73 — zachowanie edycji i pełne rozwinięcia zespołów blachy
+
+## Poprawki 0.4.73
+
+- **Otwory i cięcia w ściankach na noski pozostają po dodaniu gięcia.** Program przechowuje automatyczne połączenia oddzielnie od edycji użytkownika. Dane połączeń zapisują się w projekcie i przenoszą razem z blachą przy przesuwaniu, obracaniu, jednakowym skalowaniu i wstawianiu z biblioteki.
+- **Gięcie podstawy po otworach, gięciach i zawinięciach ścianek.** Zespół przelicza się z zapisanych parametrów, zachowując własne kołnierze ścianek, nazwy, położenia i edycje. Nowe gniazda powstają na płaskich częściach; końce sąsiednich łuków są docinane wzdłuż osi gięcia, zamiast ścinania ich krzywizny.
+- **Kołnierze 135° na ściankach oraz wielopoziomowe wywinięcia.** Dopasowanie połączeń uwzględnia rzeczywiste płaskie części każdej zgiętej ścianki, co pozwala rozłożyć i ponownie złożyć sprawdzane skrzynki. Kontrola przenikania oraz odrzucanie rzeczywistych kolizji pozostają aktywne.
+- **Kompletny zbiorczy DXF.** Błąd rozwinięcia dowolnej ścianki przerywa eksport z komunikatem; program nie zapisuje samej podstawy i nie nadpisuje poprzedniego pliku. Dodatkowe części są sprawdzane pod kątem jednakowej grubości.
+- **Wszystkie linie gięcia w DXF i na rysunku.** Linie z kołnierzy ścianek trafiają do BEND_UP/BEND_DOWN w położeniu odpowiadającym ich konturom CUT, z kierunkiem i parametrami gięcia. Eksport działa ze złożonego i rozłożonego zespołu.
+- **Starsze zapisane projekty:** przy operacji odtwarzany jest automatyczny wzorzec połączeń, aby odróżnić go od istniejących otworów i wycięć. Przebudowa nie odtwarza otworów, które zostały już utracone i zapisane w poprzedniej wersji — taki stan trzeba cofnąć do wcześniejszego kroku historii.
+- Dodane testy regresji dla zachowania otworów, kolejności operacji, narożników, starszych projektów, rozłożenia / zgięcia i kompletności eksportu. Autotest gotowego EXE sprawdza także zespół blachy ze ścianką na noski oraz zachowanie otworu po kolejnych gięciach.
+
+## Wcześniejsze wydanie RCCAD Desktop 0.4.72 — blacha gięta ze ściankami na noski w dowolnej kolejności
 
 ## Zmiany 0.4.72
 
