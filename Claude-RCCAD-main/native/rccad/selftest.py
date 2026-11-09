@@ -279,6 +279,13 @@ def run(report_path=None):
     xy=studio.view.project_one((10,15,10))
     studio.toggle_section(True);studio.section_pick(*xy);studio.section_offset.setValue(10)
     assert abs(studio.view.pick_face(*xy)[2][1]-15)<1e-4
+    wall_xy=studio.view.project_one((2,10,10))
+    assert studio.view.pick_body(*wall_xy)==probe.id
+    assert studio.view.pick_face(*wall_xy) is None
+    if studio.view.isValid():
+        assert not studio.view.grabFramebuffer().isNull()
+        assert studio.view.section_caps.available is True
+    checks.append('Section material: opaque hatched wall blocks hidden faces and preserves open chamber')
     studio.section_work_button.click()
     assert studio.section_working and not studio.view.section_handles and studio.section_work_button.text()=='PRZERWIJ'
     studio.set_mode('mod')

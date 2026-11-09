@@ -31,8 +31,9 @@ def main():
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QMessageBox
     from PySide6.QtGui import QFont, QIcon, QSurfaceFormat
-    format=QSurfaceFormat();format.setDepthBufferSize(24);format.setSamples(4)
+    format=QSurfaceFormat();format.setDepthBufferSize(24);format.setStencilBufferSize(8);format.setSamples(4)
     QSurfaceFormat.setDefaultFormat(format)
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app=QApplication(sys.argv[:1]);app.setApplicationName('RCCAD Desktop');app.setOrganizationName('RCCAD');app.setFont(QFont('Segoe UI',10))
     icon_path=Path(__file__).resolve().parent/'rccad'/'assets'/'rccad.png'
     if icon_path.exists():app.setWindowIcon(QIcon(str(icon_path)))

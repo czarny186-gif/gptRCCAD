@@ -938,6 +938,17 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'nearest_edge',return_value=(b.id,edges[1])):w.view_clicked(5,5,False,False)
         self.assertIn('90.00',w.ms_status['mangle'].text())
 
+    def test_section_material_can_select_body_properties_without_selecting_hidden_face(self):
+        from PySide6.QtGui import QVector3D
+        w=self.w;b=Body('Pełny blok',k.box(80,60,60)).prepared();w.document.commit([b]);w.refresh()
+        w.view.opts['center']=QVector3D(40,30,30);w.view.setCameraPosition(distance=200,elevation=0,azimuth=-90)
+        w.toggle_section(True);xy=w.view.project_one((40,0,30));w.section_pick(*xy)
+        w.section_offset.setValue(25);w.section_work(True);w.set_mode('mprops')
+        xy=w.view.project_one((40,25,30));self.assertIsNone(w.view.pick_face(*xy))
+        self.assertEqual(w._measure_candidate(*xy)['id'],b.id)
+        w.view_clicked(*xy,False,False)
+        self.assertIn('Pełny blok',w.ms_status['mprops'].text());self.assertIn('288,000.00',w.ms_status['mprops'].text())
+
     def test_section_persists_across_tools_and_extrudes_actual_inside_wall(self):
         from PySide6.QtGui import QVector3D
         w=self.w

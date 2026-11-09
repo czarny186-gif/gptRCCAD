@@ -6,15 +6,23 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import shaders
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal, QCoreApplication
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QVector3D, QVector4D, QColor
 from OpenGL import GL
-from PySide6.QtGui import QMatrix4x4
+from PySide6.QtGui import QMatrix4x4, QSurfaceFormat
 from .document import Body
 from . import kernel
 from .sectionview import clip_segments
+from .sectioncaps import SectionCaps
+
+
+# pyqtgraph caches shader programs globally; their GL share group must outlive
+# individual model/drawing windows. Main also enables this before QApplication.
+if QCoreApplication.instance() is None:
+    _format=QSurfaceFormat.defaultFormat();_format.setStencilBufferSize(8);QSurfaceFormat.setDefaultFormat(_format)
+    QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
 
 
 class GradientBackground(gl.GLGraphicsItem.GLGraphicsItem):
@@ -512,6 +520,7 @@ class CadView(gl.GLViewWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        fmt=self.format();fmt.setStencilBufferSize(8);self.setFormat(fmt)
         if 'rccad' not in shaders.ShaderProgram.names:
             shaders.ShaderProgram('rccad', [
                 shaders.VertexShader(shaders.getShaderProgram('shaded').shaders[0].code),
@@ -617,6 +626,8 @@ class CadView(gl.GLViewWidget):
         self.overlay = Overlay2D(self)
         self.overlay.setGeometry(0, 0, self.width(), self.height())
         self.overlay.raise_()
+        self.section_caps=SectionCaps();self.addItem(self.section_caps)
+        self._section_classifiers={}
 
     def _refresh_grid(self):
         """Siatka zagęszcza się przy przybliżaniu (min. GRID_PX px między cienkimi liniami) i podąża za środkiem widoku."""
@@ -770,6 +781,9 @@ class CadView(gl.GLViewWidget):
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
         self.bodies = tuple(bodies)
+        live_ids={b.id for b in self.bodies}
+        self.section_caps.retain_bodies(live_ids)
+        self._section_classifiers={bid:c for bid,c in self._section_classifiers.items() if bid in live_ids}
         self.selected_bodies = set(selected_bodies)
         self.selected_edges = selected_edges or {}
         live = set()
@@ -814,7 +828,7 @@ class CadView(gl.GLViewWidget):
                         line.setGLOptions('additive' if self.xray else 'translucent')
                     self.addItem(line)
                     lines.append(line)
-                parts = self._parts[body.id] = dict(fill_key=fill_key, line_key=line_key, fill=fill, lines=lines, color=shown)
+                parts = self._parts[body.id] = dict(fill_key=fill_key, line_key=line_key, fill=fill, lines=lines, color=shown, cap_solid=body.kind=='solid' and bool(body.shape.Solids()))
                 self._cache[body.id] = (line_key, ([fill] if fill is not None else []) + lines)
                 if body.id in self._body_m:
                     self._apply_body_matrix(body.id)
@@ -1415,6 +1429,35 @@ class CadView(gl.GLViewWidget):
     def all_handles(self):
         return [*self.handles,*self.section_handles]
 
+    def _section_cap_hit(self,body,origin,direction):
+        """Depth of visible cut material; the hatch is not a new editable CAD face."""
+        plane=self.section_plane
+        if plane is None or body.kind!='solid' or not self.section_caps.visible() or self.section_caps.available is False:return None
+        denominator=float(plane[:3]@direction)
+        if abs(denominator)<1e-12:return None
+        distance=-float(plane[:3]@origin+plane[3])/denominator
+        if distance<=1e-6:return None
+        parts=self._parts.get(body.id);fill=parts.get('fill') if parts else None
+        if fill is None or not fill.visible() or not parts.get('cap_solid'):return None
+        local_origin,local_direction=self._local_ray(body.id,origin,direction)
+        point=local_origin+distance*local_direction
+        data=_pick_data(body.mesh)
+        if 'box' not in data:return None
+        low,high=data['box']
+        if np.any(point<low-1e-5) or np.any(point>high+1e-5):return None
+        from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+        from OCP.gp import gp_Pnt
+        from OCP.TopAbs import TopAbs_IN,TopAbs_ON
+        cached=self._section_classifiers.get(body.id)
+        if cached is None or cached[0] is not body.shape:
+            cached=(body.shape,[BRepClass3d_SolidClassifier(solid.wrapped) for solid in body.shape.Solids()])
+            self._section_classifiers[body.id]=cached
+        p=gp_Pnt(*map(float,point))
+        for classifier in cached[1]:
+            classifier.Perform(p,1e-6)
+            if classifier.State() in (TopAbs_IN,TopAbs_ON):return distance
+        return None
+
     def pick_body(self, x, y):
         ray = self._ray(x, y)
         hit = self._hit(*ray) if ray else None
@@ -1426,10 +1469,12 @@ class CadView(gl.GLViewWidget):
         if ray is None:
             return None
         origin, direction = ray
-        best = None
+        best = None;blocked=None
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
+            cap=self._section_cap_hit(body,origin,direction)
+            if cap is not None:blocked=cap if blocked is None else min(blocked,cap)
             data = _pick_data(body.mesh)
             hit = _ray_triangles(data, *self._local_ray(body.id, origin, direction),cut=self._local_section(body.id))
             if hit is not None and (best is None or hit[0] < best[0]):
@@ -1439,6 +1484,7 @@ class CadView(gl.GLViewWidget):
                     n = m[:3, :3] @ n
                 n = n / max(np.linalg.norm(n), 1e-12)
                 best = (hit[0], body.id, n, origin + direction * hit[0])
+        if blocked is not None and (best is None or blocked<best[0]-1e-5):return None
         return None if best is None else (best[1], best[2], best[3])
 
     def pick_profile(self, x, y):
@@ -1708,19 +1754,23 @@ class CadView(gl.GLViewWidget):
         inv = np.linalg.inv(r)            # obrót + przesunięcie: odległość wzdłuż promienia się nie zmienia
         return inv @ (np.asarray(origin, float) - t), inv @ np.asarray(direction, float)
 
-    def _hit(self, origin, direction):
+    def _hit(self, origin, direction, with_cap=False):
         best = None
         for body in self.bodies:
             if (not body.visible or body.id in self.locked) or not body.mesh or not len(body.mesh.triangles):
                 continue
             hit = _ray_triangles(_pick_data(body.mesh), *self._local_ray(body.id, origin, direction),cut=self._local_section(body.id))
+            cap=self._section_cap_hit(body,origin,direction)
+            is_cap=cap is not None and (hit is None or cap<hit[0])
+            if is_cap:hit=(cap,-1)
             if hit is None:
                 continue
             # szkic leżący na ścianie bryły (ta sama odległość) wygrywa z bryłą - inaczej trafiałoby się w bryłę
             tie = 1e-4 * max(1.0, hit[0])
             if best is None or hit[0] < best[0] - tie or (abs(hit[0] - best[0]) <= tie and body.kind == 'sketch' and best[2] != 'sketch'):
-                best = (hit[0], body.id, body.kind)
-        return None if best is None else best[:2]
+                best = (hit[0], body.id, body.kind,is_cap)
+        if best is None:return None
+        return (best[0],best[1],best[3]) if with_cap else best[:2]
 
     def _visible_point(self, point):
         if not self.section_contains(point):return False
@@ -1729,8 +1779,9 @@ class CadView(gl.GLViewWidget):
         if ray is None:
             return False
         origin, direction = ray
-        hit = self._hit(origin, direction)
-        return hit is None or hit[0] >= np.linalg.norm(point-origin)-.25
+        hit = self._hit(origin, direction,with_cap=True)
+        tolerance=1e-5 if hit is not None and hit[2] else .25
+        return hit is None or hit[0] >= np.linalg.norm(point-origin)-tolerance
 
     def mouseMoveEvent(self, event):
         pos = event.position()

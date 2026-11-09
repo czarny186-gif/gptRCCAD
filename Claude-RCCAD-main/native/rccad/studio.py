@@ -4613,7 +4613,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             name='Punkt na szkicu' if body.kind=='sketch' else 'Płaska ściana' if kind=='faces' else 'Punkt na powierzchni'
             return dict(kind='face',id=body.id,face=face,normal=np.asarray(normal),point=point,label=f'{name} — {body.name}')
         if mode=='mprops':
-            bid=self.view.pick_profile(x,y)
+            bid=self.view.pick_body(x,y) if self.view.section_plane is not None else None
+            if bid is None:bid=self.view.pick_profile(x,y)
             edge=self.view.nearest_edge(x,y) if bid is None else None
             body=self.document.get(bid or (edge[0] if edge else ''))
             if body is not None:return dict(kind='body',id=body.id,point=np.asarray(body.shape.Center().toTuple()),label=f'Cały obiekt — {body.name}')
@@ -4760,7 +4761,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
     def _measure_props(self, x, y):
         hit = self.view.pick_face(x, y)
         edge = None if hit else self.view.nearest_edge(x, y)
-        bid = hit[0] if hit else (self.view.pick_profile(x, y) or (edge[0] if edge else None))
+        bid = hit[0] if hit else ((self.view.pick_body(x,y) if self.view.section_plane is not None else None) or self.view.pick_profile(x, y) or (edge[0] if edge else None))
         body = self.document.get(bid) if bid else None
         if body is None:
             self.toast('Kliknij bryłę albo zamknięty szkic.')

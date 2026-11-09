@@ -1,3 +1,14 @@
+# RCCAD Desktop 0.4.80 — pełny, kreskowany przekrój
+
+- Przecięty materiał bryły ma nieprzezroczyste wypełnienie z ukośnym kreskowaniem, aktualizowane podczas przesuwania płaszczyzny przekroju.
+- Otwory, kanały i komory pozostają puste; kreskowanie obejmuje wyłącznie materiał. Sąsiednie bryły mają naprzemienny kierunek kreskowania.
+- Pełne wypełnienie blokuje wskazywanie zasłoniętych ścian i punktów. Przez rzeczywiste otwory nadal można wskazywać wnętrze.
+- Przekrój pozostaje ustawieniem widoku i nie zmienia geometrii ani eksportu modelu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.79 — czytelne pomiary i tryb pracy w przekroju
 
 ## Zmiany 0.4.79
