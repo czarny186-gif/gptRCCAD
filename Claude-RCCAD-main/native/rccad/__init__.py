@@ -1,5 +1,5 @@
 """RCCAD Desktop: native Qt interface and OpenCascade solid modelling."""
-__version__ = "0.4.73"
+__version__ = "0.4.74"
 try:
     from ._build import BUILD, BUILD_DATE      # zapisywane przez stamp_build.py w CI
 except ImportError:

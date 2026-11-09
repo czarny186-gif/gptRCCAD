@@ -4935,7 +4935,8 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
                 self.rl_status.setText(f'Reguły zastosowane do: {body.name}.')
         source=replace(body,meta=dict(body.meta or {},sheet=self._editable_sheet_state(body.id)))
         root=self._tab_root(body)
-        members=[source,*[b for b in [root,*hist.sheet_tab_walls(self.document.bodies,root.id)] if b.id!=body.id]]
+        member_ids={root.id,*[b.id for b in hist.sheet_tab_walls(self.document.bodies,root.id)]}
+        members=[source if b.id==body.id else b for b in self.document.bodies if b.id in member_ids]
         self.run_operation('Narożniki blachy',lambda:{b.id:b for b in hist.run_sheetbuild(members,recipe)},apply)
 
     def pick_rules_sheet(self, x, y):
@@ -5161,9 +5162,10 @@ class StudioWindow(ScaleTools, PlywoodTools, QMainWindow):
 
         source=replace(body,meta=dict(body.meta or {},sheet=dict(self._editable_sheet_state(body.id), **{k: v for k, v in ((body.meta or {}).get('sheet') or {}).items() if k == 'tabs'})))
         root=self._tab_root(body)
-        walls=[b for b in [root,*hist.sheet_tab_walls(self.document.bodies,root.id)] if b.id!=body.id]      # cała blacha: także rodzice i rodzeństwo giętej ścianki
+        member_ids={root.id,*[b.id for b in hist.sheet_tab_walls(self.document.bodies,root.id)]}
+        members=[source if b.id==body.id else b for b in self.document.bodies if b.id in member_ids]
         def build():
-            return {b.id: b for b in hist.run_sheetbuild([source, *walls],recipe)},recipe
+            return {b.id: b for b in hist.run_sheetbuild(members,recipe)},recipe
 
         def apply(result):
             new, rec = result

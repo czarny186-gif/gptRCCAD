@@ -1,4 +1,12 @@
-# RCCAD Desktop 0.4.73 — zachowanie edycji i pełne rozwinięcia zespołów blachy
+# RCCAD Desktop 0.4.74 — kompletna poprawka gięć i ścianek na noski
+
+## Poprawki 0.4.74
+
+- Wszystkie poprawki zachowania otworów, kolejności gięcia i zbiorczego eksportu z 0.4.73, opisane poniżej.
+- **Stała kolejność części przy przebudowie z interfejsu.** Dodanie kołnierza albo zastosowanie Reguł blach do później dodanej ścianki zachowuje kolejność części z dokumentu. Wybrana ścianka nie trafia już na początek listy przed podstawę i wcześniejsze ścianki.
+- Dodatkowy test sprawdza kolejność zarówno przy dodawaniu gięcia, jak i zmianie reguł. Model pozostaje bez zmian przy nieudanej operacji.
+
+## Wcześniejsze wydanie RCCAD Desktop 0.4.73 — zachowanie edycji i pełne rozwinięcia zespołów blachy
 
 ## Poprawki 0.4.73
 

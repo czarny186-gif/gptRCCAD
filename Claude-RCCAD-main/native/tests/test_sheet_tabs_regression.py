@@ -214,3 +214,19 @@ class SheetTabDxfTests(unittest.TestCase):
             w.export_flat_pattern(legacy);self.wait()
         doc=ezdxf.readfile(path);self.assertFalse(doc.audit().errors)
         self.assertTrue(any(x.dxf.layer.startswith('BEND_') for x in doc.modelspace()))
+
+    def test_gui_rebuild_keeps_document_order_when_a_later_wall_is_selected(self):
+        from unittest.mock import patch
+        with k.deferred_mesh():
+            a=Assembly();a.wall('R');wid=a.wall('L')
+        w=self.w;w.document.commit(a.bodies);w.refresh()
+        body=w.document.get(wid);r=body.meta['sheet']['recipe'];index=a.edge(wid,'B')
+        spec=s.spec_for_edge(r['base'],r['t'],r['flanges'],a.rules,body.shape.Edges()[index].positionAt(.5).toTuple(),.1)
+        spec.update(r=.5,angle=90,length=5,measure='outer')
+        expected=[b.id for b in a.bodies]
+        def build_only(label,build,apply,**kwargs):return build()
+        with patch.object(w,'run_operation',side_effect=build_only),patch.object(w,'_quick_flange_preview'),patch('rccad.history.run_sheetbuild',return_value=list(a.bodies)) as build:
+            w.fl_pick=dict(id=wid);w._commit_edge(spec,'Kołnierz')
+            self.assertEqual([b.id for b in build.call_args.args[0]],expected)
+            w.selected=[wid];w.apply_sheet_rules()
+            self.assertEqual([b.id for b in build.call_args.args[0]],expected)
