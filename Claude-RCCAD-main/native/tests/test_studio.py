@@ -1024,8 +1024,24 @@ class StudioTests(unittest.TestCase):
                     for key in okeys:self.assertFalse(w.tools[key].isVisibleTo(w.view),key)
         w.set_tab('Szkic')
         self.assertEqual(w.cube.width(),138);self.assertEqual(w.cube.x(),W-160)
-        self.assertEqual(w.undo_button.x(),W-446);self.assertEqual(w.redo_button.x(),W-398);self.assertEqual(w.scale_button.x(),W-350);self.assertEqual(w.layers.x(),W-302);self.assertEqual(w.xray.x(),W-254)
+        controls=[w.clear_button,w.undo_button,w.redo_button,w.section_button,w.scale_button,w.layers,w.xray,w.home]
+        for left,right in zip(controls,controls[1:]):self.assertLess(left.geometry().right(),right.x())
+        self.assertTrue(w.section_button.isVisible());self.assertLess(w.home.geometry().right(),w.cube.x())
+        last=max(b.geometry().right() for b in w.tab_buttons.values())
+        self.assertTrue(w.clear_button.x()>last or w.clear_button.y()>=60)
         self.assertFalse(w.shape_bar.isVisible())
+
+    def test_top_controls_fit_narrow_and_wide_windows(self):
+        w=self.w
+        for width in (1200,1366,1400,1920):
+            w.resize(width,850);self.app.processEvents();w._layout_overlays()
+            controls=[w.clear_button,w.undo_button,w.redo_button,w.section_button,w.scale_button,w.layers,w.xray,w.home]
+            for left,right in zip(controls,controls[1:]):self.assertLess(left.geometry().right(),right.x())
+            end=max(b.geometry().right() for b in w.tab_buttons.values())
+            self.assertTrue(w.clear_button.x()>end or w.clear_button.y()>=60,width)
+            self.assertLess(w.home.geometry().right(),w.cube.x())
+            self.assertGreaterEqual(w.section_button.width(),32)
+        self.assertEqual(w.section_button.x(),w.view.width()-398)
 
     def test_rectangle_is_live_on_any_plane(self):
         w=self.w

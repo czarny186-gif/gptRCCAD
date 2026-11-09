@@ -1722,16 +1722,18 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         for i, key in enumerate(shown):
             self.tools[key].move(78 + 60 * i, TOOLS_TOP)
         self.shape_bar.move(18, 80 + TOOLS_TOP - 18)
-        self.clear_button.move(W - 542, 20)
-        self.undo_button.move(W - 494, 20)
-        self.redo_button.move(W - 446, 20)
-        self.section_button.move(W - 398,20)
-        self.section_panel.adjustSize();self.section_panel.move(max(340,W-650),68)
+        # Fit the extra section button between tabs and the view cube. On narrow
+        # windows the compact row goes below the tabs, keeping every tool reachable.
+        ratio=min(1.0,max(.75,(W-205-x-12)/337))
+        controls_y=20 if W-205-337*ratio>=x+4 else 64
+        size=40 if ratio==1 else max(32,int(48*ratio)-4)
+        controls=((self.clear_button,542),(self.undo_button,494),(self.redo_button,446),
+                  (self.section_button,398),(self.scale_button,350),(self.layers,302),(self.xray,254),(self.home,205))
+        for button,offset in controls:
+            button.setFixedSize(size,size)
+            button.move(round(W-205-(offset-205)*ratio),controls_y)
+        self.section_panel.adjustSize();self.section_panel.move(max(340,W-650),max(68,controls_y+48))
         self.section_panel.raise_()
-        self.scale_button.move(W - 350, 20)
-        self.layers.move(W - 302, 20)
-        self.xray.move(W - 254, 20)
-        self.home.move(W - 205, 20)
         self.cube.move(W - 160, 20)
         self.busy_bar.move(W - 160 + (138 - self.busy_bar.width()) // 2, 164)
         self.objects.relayout()
