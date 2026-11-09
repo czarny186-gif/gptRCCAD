@@ -7,7 +7,7 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import shaders
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal, QCoreApplication
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QVector3D, QVector4D, QColor
 from OpenGL import GL
@@ -120,15 +120,17 @@ class Overlay2D(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         try:
-            for c in v.sketch_centers:
-                xy = v.project_one(c)
-                if xy is None:
-                    continue
-                p.setPen(QPen(QColor('#087d55'), 1.6))
-                p.setBrush(QColor('#ffffff'))
-                p.drawEllipse(QPointF(*xy), 4.5, 4.5)
-                p.drawLine(QPointF(xy[0] - 9, xy[1]), QPointF(xy[0] + 9, xy[1]))
-                p.drawLine(QPointF(xy[0], xy[1] - 9), QPointF(xy[0], xy[1] + 9))
+            if v.sketch_centers:
+                key=(v._camera_key(),id(v.sketch_centers));cached=getattr(v,'_centers_overlay_cache',None)
+                if cached is None or cached[0]!=key:
+                    xy,_,w=v.project_points(np.asarray(v.sketch_centers,float))
+                    keep=(w>0)&np.isfinite(xy).all(axis=1)&(xy[:,0]>=-12)&(xy[:,0]<=v.width()+12)&(xy[:,1]>=-12)&(xy[:,1]<=v.height()+12)
+                    path=QPainterPath()
+                    for x,y in xy[keep]:
+                        path.addEllipse(QRectF(x-4.5,y-4.5,9,9))
+                        path.moveTo(x-9,y);path.lineTo(x+9,y);path.moveTo(x,y-9);path.lineTo(x,y+9)
+                    cached=(key,v.sketch_centers,path);v._centers_overlay_cache=cached
+                p.setPen(QPen(QColor('#087d55'),1.6));p.setBrush(QColor('#ffffff'));p.drawPath(cached[2])
             box = v.sketch_box
             if box:
                 pts = [v.project_one(c) for c in box['corners']]
@@ -640,6 +642,7 @@ class CadView(gl.GLViewWidget):
         self.overlay.raise_()
         self.section_caps=SectionCaps();self.addItem(self.section_caps)
         self._section_classifiers={}
+        self._sketch_batches=[];self._sketch_batch_key=None
         self._scene_revision=0;self._scene_signature=None
         self._projection_cache=LRU(96*1024*1024)
 
@@ -771,21 +774,23 @@ class CadView(gl.GLViewWidget):
             else:
                 item.setTransform(m)
 
-    def set_body_matrix(self, bid, matrix):
-        """Natychmiastowy podgląd przesunięcia / obrotu: macierz 4x4 nakładana na elementy GL bryły."""
-        if matrix is None:
-            self._body_m.pop(bid, None)
-        else:
-            self._body_m[bid] = QMatrix4x4(matrix)
-        self._apply_body_matrix(bid)
-        self._scene_revision+=1
-        self.update()
+    def set_body_matrix(self,bid,matrix):
+        self.set_body_matrices({bid:matrix})
+
+    def set_body_matrices(self,matrices):
+        """Update a whole selection, rebuilding sketch batches just once."""
+        for bid,matrix in matrices.items():
+            if matrix is None:self._body_m.pop(bid,None)
+            else:self._body_m[bid]=QMatrix4x4(matrix)
+            self._apply_body_matrix(bid)
+        self._scene_revision+=1;self._sync_sketch_batches();self.update()
 
     def clear_body_matrices(self):
         self._scene_revision+=1
         for bid in list(self._body_m):
             self._body_m.pop(bid)
             self._apply_body_matrix(bid)
+        self._sync_sketch_batches()
         self.update()
 
     def project_one(self, point):
@@ -866,7 +871,26 @@ class CadView(gl.GLViewWidget):
                 self.removeItem(item)
             self._parts.pop(bid, None)
         self.sketch_centers = centers
+        self._sync_sketch_batches()
         self.update()
+
+    def _sync_sketch_batches(self):
+        sketches=[b for b in self.bodies if b.visible and b.kind=='sketch' and b.id in self._parts]
+        eligible=[b for b in sketches if b.id not in self._body_m]
+        key=tuple((b.id,self._parts[b.id]['line_key']) for b in eligible) if len(eligible)>=24 else ()
+        if key==self._sketch_batch_key:return
+        self._sketch_batch_key=key
+        for item in self._sketch_batches:self.removeItem(item)
+        self._sketch_batches=[];groups={};merged={b.id for b in eligible} if key else set()
+        for body in sketches:
+            for line in self._parts[body.id]['lines']:
+                line.setVisible(body.id not in merged)
+                if body.id in merged:
+                    style=(tuple(line.color),line.width)
+                    groups.setdefault(style,[]).append(line.pos)
+        for (color,width),arrays in groups.items():
+            item=OverLine(pos=np.concatenate(arrays),color=color,width=width,antialias=True,mode='lines')
+            self.addItem(item);self._sketch_batches.append(item)
 
     def fit_all(self):
         visible = [b for b in self.bodies if b.visible and b.mesh is not None and len(b.mesh.vertices)]
@@ -1520,7 +1544,7 @@ class CadView(gl.GLViewWidget):
     def pick_profile(self, x, y):
         """Identyfikator szkicu, którego zamknięty obrys obejmuje punkt pod kursorem."""
         best = None
-        for body in self.bodies:
+        for body in self._screen_bodies(x,y,1):
             if body.kind != 'sketch' or (not body.visible or body.id in self.locked) or not body.mesh:
                 continue
             try:

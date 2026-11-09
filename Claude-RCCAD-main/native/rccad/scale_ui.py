@@ -168,8 +168,7 @@ class ScaleTools:
         self.sc_status.setText('Enter albo Zastosuj zmienia rozmiar' + (' całej grupy.' if n > 1 else '.'))
         m = kernel.scale_matrix(f, self._sc_center(box))
         q = QMatrix4x4(*[float(v) for v in m.flatten()])
-        for i in self.sc_ids:
-            self.view.set_body_matrix(i, q)
+        self.view.set_body_matrices({i:q for i in self.sc_ids})
         self._sc_handles(box, f)
 
     def _sc_handles(self, box, f):
@@ -177,8 +176,10 @@ class ScaleTools:
         if self._hv is not None:
             return                                  # w trakcie przeciągania strzałka zostaje pod kursorem
         c = np.array(self._sc_center(box), float)
-        lo = np.array([box.xmin, box.ymin, box.zmin], float)
-        hi = np.array([box.xmax, box.ymax, box.zmax], float)
+        anchor=self.document.get(self.sc_ids[-1]) if self.sc_ids else None
+        visual=kernel.bounds(anchor.shape) if anchor is not None else box
+        lo = np.array([visual.xmin, visual.ymin, visual.zmin], float)
+        hi = np.array([visual.xmax, visual.ymax, visual.zmax], float)
         f = np.array(f, float)
         lo2, hi2 = c + (lo - c) * f, c + (hi - c) * f
         size = float(max(np.max(hi2 - lo2), 1.0))

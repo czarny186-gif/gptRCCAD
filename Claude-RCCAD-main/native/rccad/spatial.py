@@ -40,3 +40,13 @@ class BoundsTree:
                 keep=np.all((p>=self.low[ids]-margin)&(p<=self.high[ids]+margin),axis=1);out.extend(ids[keep])
             else:stack.extend(children)
         return sorted(out)
+
+    def overlap(self,low,high,margin=0):
+        out=[];stack=[0] if self.nodes else [];low=np.asarray(low)-margin;high=np.asarray(high)+margin
+        while stack:
+            lo,hi,ids,children=self.nodes[stack.pop()]
+            if np.any(hi<low) or np.any(lo>high):continue
+            if ids is not None:
+                keep=np.all((self.high[ids]>=low)&(self.low[ids]<=high),axis=1);out.extend(ids[keep])
+            else:stack.extend(children)
+        return sorted(out)

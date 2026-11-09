@@ -150,3 +150,34 @@ class StencilSectionTests(unittest.TestCase):
         self.assertLess(self.contrast(before,reverse,(-10,0,0),r=4),2)
         self.v.set_section_plane(None);restored=self.shot();np.testing.assert_allclose(before,restored,atol=2)
         self.v.makeCurrent();self.assertEqual(GL.glGetError(),GL.GL_NO_ERROR);self.v.doneCurrent()
+
+    def test_portable_material_without_stencil_matches_reference_open_box(self):
+        import time
+        self.v.section_caps.force_portable=True
+        shape=k.box(80,60,60).cut(k.box(60,40,60).translate((10,10,8))).fuse(k.box(10,20,40).translate((50,10,8))).clean()
+        b=self.body(shape);self.v.set_section_plane([0,1,0,-25])
+        end=time.monotonic()+8
+        while time.monotonic()<end:
+            cap=self.shot()
+            if b.id in self.v.section_caps._solid_patches:break
+            time.sleep(.005)
+        self.assertIn(b.id,self.v.section_caps._solid_patches)
+        open_view=self.shot(False)
+        self.assertGreater(self.contrast(cap,open_view,(5,25,30),r=4),10)
+        self.assertGreater(self.contrast(cap,open_view,(55,25,30),r=4),10)
+        self.assertLess(self.contrast(cap,open_view,(30,25,30),r=4),2)
+        self.v.setCameraPosition(distance=200,elevation=25,azimuth=-65)
+        hit=self.v.pick_face(*self.v.project_one((20,32,8)))
+        self.assertIsNotNone(hit);self.assertAlmostEqual(hit[2][2],8,4)
+        frame,normal=self.v.face_at(b,hit)
+        self.assertAlmostEqual(normal[2],1,5)
+
+    def test_batched_sketches_keep_original_overlay_appearance_on_solid(self):
+        solid=self.body(k.box(80,60,60))
+        sketches=[Body(str(i),k.sketch('circle','XZ',3,x=7+i%10*6,y=8+i//10*8),kind='sketch',plane='XZ').prepared() for i in range(60)]
+        self.v.set_models([solid,*sketches]);batched=self.shot()
+        for item in self.v._sketch_batches:item.setVisible(False)
+        for body in sketches:
+            for item in self.v._parts[body.id]['lines']:item.setVisible(True)
+        self.v.update();separate=self.shot()
+        self.assertLess(float(np.abs(batched.astype(float)-separate.astype(float)).mean()),.2)

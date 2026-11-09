@@ -727,12 +727,12 @@ class PlywoodTools:
                 else:
                     self.pw_step1.set_state('done', f'{base.name} · krawędzie: {len(self.pw_edges)}')
                     shapes = hist.ply_walls(list(self.document.bodies), base, self.pw_edges, recipe)
-                    up = pw.edge_wall(base.shape, base.shape.Edges()[self.pw_edges[0]], recipe['t'], recipe['h'], recipe['side'], recipe['flip'],
-                                      (base.meta or {}).get('ply', {}).get('t'))[1]
-                    top = shapes[0].Center().toTuple() if shapes else None
+                    anchor,up = pw.edge_wall(base.shape, base.shape.Edges()[self.pw_edges[-1]], recipe['t'], recipe['h'], recipe['side'], recipe['flip'],
+                                      (base.meta or {}).get('ply', {}).get('t'))
+                    top = anchor.Center().toTuple() if shapes else None
                     if top is not None:
                         c = np.array(top, float)
-                        lo, hi = pw.extent(shapes[0], up)
+                        lo, hi = pw.extent(anchor, up)
                         start = c + up * (hi - float(c @ up))
                         handles.append(dict(id='plyH', start=start, tip=start + up * max(15.0, recipe['h'] * .35), dir=up, color=(.94, .6, .13, 1)))
                     status = f"Ścianki: {len(shapes)} × {recipe['h']:g} mm. Przeciągnij strzałkę albo wpisz wysokość."

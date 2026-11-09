@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
+import cadquery as cq
 from dataclasses import replace
 from pathlib import Path
 import numpy as np
@@ -16,6 +17,9 @@ from . import shell_ui as ui
 from . import snap as snapping
 icons_green = '#2fa56d'
 icons_orange = '#f09a22'
+from .perfcache import LRU
+from .spatial import BoundsTree
+
 from .document import Body, Document
 from . import history as hist
 from . import workers
@@ -1934,6 +1938,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self.view.set_grid_frame(None)
         self.sketch_plane = None
         self.ex_profiles = []
+        self._ex_pick_order=[];self._mod_pick_order=[]
         self.ex_target = None
         self._ex_join_scope_update()
         if hasattr(self, 'ex_target_label'):
@@ -2135,7 +2140,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Kliknij bryłę lub szkic, który chcesz ' + ('przesunąć.' if mode == 'move' else 'obrócić.'))
             if self.selected:
-                body = self.document.get(self.selected[0])
+                body = self.document.get(self.selected[-1])
                 if body is not None:
                     self.select_transform_target(body)
         self.refresh()
@@ -3507,17 +3512,18 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def _drawn_sketches(self):
         """Szkice (bez konstrukcji i punktów) pogrupowane według płaszczyzn: klucz -> (płaszczyzna, [bryły])."""
+        cached=getattr(self,'_drawn_cache',None)
+        if cached is not None and cached[0] is self.document.bodies:return cached[1]
         groups = {}
         for b in self.document.bodies:
             if b.kind == 'sketch' and b.visible and not b.name.startswith(('Konstrukcja', 'Punkt')):
-                cache = self.__dict__.setdefault('_frame_cache', {})
+                cache = self.__dict__.setdefault('_frame_cache', LRU(max_entries=8192))
                 hit = cache.get(id(b.shape))
                 if hit is None or hit[0] is not b.shape or hit[2] != b.plane:
                     hit = cache[id(b.shape)] = (b.shape, kernel.actual_frame(b.shape, b.plane), b.plane)
-                    if len(cache) > 400:
-                        cache.clear()
                 plane = hit[1]   # obrócony / przesunięty szkic ma własną płaszczyznę
                 groups.setdefault(self._plane_key(plane), (plane, []))[1].append(b)
+        self._drawn_cache=(self.document.bodies,groups)
         return groups
 
     def _regions_for(self, key, plane, bodies):
@@ -3545,7 +3551,16 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             hit = self.view._plane_hit(plane, x, y)
             if hit is None:
                 continue
-            for face in self._regions_for(key, plane, bodies):
+            if not self.view.section_contains(hit[1]):continue
+            faces=self._regions_for(key,plane,bodies)
+            store=self.__dict__.setdefault('_region_bounds',LRU(max_entries=128))
+            indexed=store.get((key,id(faces)))
+            if indexed is None:
+                boxes=[kernel.bounds(f) for f in faces]
+                tree=BoundsTree([[b.xmin,b.ymin,b.zmin] for b in boxes],[[b.xmax,b.ymax,b.zmax] for b in boxes])
+                indexed=(faces,tree);store[(key,id(faces))]=indexed
+            for i in indexed[1].point(hit[1],1e-5):
+                face=faces[i]
                 if kernel.face_contains(face, hit[1]):
                     try:
                         area = float(face.Area())
@@ -3671,12 +3686,15 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 for m in mine:
                     bb = kernel.bounds(m.shape)
                     boxes.append((np.array([bb.xmin, bb.ymin, bb.zmin]) - 1e-6, np.array([bb.xmax, bb.ymax, bb.zmax]) + 1e-6, m))
+                tree=BoundsTree([lo for lo,hi,m in boxes],[hi for lo,hi,m in boxes])
                 material = {}
                 for f in self._regions_for(key, plane, bodies):
                     point = np.asarray(hist._inner_point(f), float)
-                    for low, high, m in boxes:
+                    for candidate in tree.point(point):
+                        low,high,m=boxes[candidate]
                         if (point >= low).all() and (point <= high).all():
-                            faces = material.setdefault(m.id, hist.material_faces([m]))
+                            faces=material.get(m.id)
+                            if faces is None:faces=material[m.id]=hist.material_faces([m])
                             if any(kernel.face_contains(face, point) for face in faces):
                                 siblings.append(dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=src['normal'],
                                                      center=f.Center().toTuple(), cluster=cluster))
@@ -3734,10 +3752,12 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 return
             self.ex_profiles = [p for p in self.ex_profiles if p not in dup]
         elif dup:
-            return                    # już wybrany - zostaje
+            self._ex_pick_order=[*getattr(self,'_ex_pick_order',[]),dup[0]]
+            self._place_extrude_handle();return
         else:
             same = lambda p, q: p['id'] == q['id'] and p['kind'] == q['kind'] and np.allclose(p['center'], q['center'], atol=1e-6)
             self.ex_profiles = [*self.ex_profiles, *[g for g in group if not any(same(g, p) for p in self.ex_profiles)]]
+        if not shift:self._ex_pick_order=[*getattr(self,'_ex_pick_order',[]),src]
         self._ex_profiles_changed(had)
 
     def _selected_sketch_profiles(self):
@@ -3759,6 +3779,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             for m in mine:
                 bb = kernel.bounds(m.shape)
                 boxes.append((np.array([bb.xmin, bb.ymin, bb.zmin]) - 1e-6, np.array([bb.xmax, bb.ymax, bb.zmax]) + 1e-6, m))
+            tree=BoundsTree([lo for lo,hi,m in boxes],[hi for lo,hi,m in boxes])
             material = {}
             try:
                 regions = self._regions_for(key, plane, bodies)
@@ -3766,18 +3787,21 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 regions = []
             for f in regions:
                 point = np.asarray(hist._inner_point(f), float)
-                for low, high, m in boxes:
+                for candidate in tree.point(point):
+                    low,high,m=boxes[candidate]
                     if (point >= low).all() and (point <= high).all():
-                        faces = material.setdefault(m.id, hist.material_faces([m]))
+                        faces=material.get(m.id)
+                        if faces is None:faces=material[m.id]=hist.material_faces([m])
                         if any(kernel.face_contains(face, point) for face in faces):
-                            out.append(dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=tuple(frame.normal),
+                            out.append(dict(kind='region', id=None, source_id=m.id, face=f, wire=f.outerWire(), plane=plane, normal=tuple(frame.normal),
                                             center=f.Center().toTuple()))
                             covered.add(m.id)
                             break
         for m in chosen:
             if m.id not in covered and getattr(m.shape, 'IsClosed', lambda: False)():
                 out.append(self._sketch_profile(m))
-        return out
+        order={body.id:i for i,body in enumerate(chosen)}
+        return sorted(out,key=lambda p:order.get(p.get('source_id',p.get('id')),-1))
 
     def _ex_profiles_changed(self, shift=False):
         self._hover_key = None
@@ -3819,14 +3843,20 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         QTimer.singleShot(0, go)
 
     def _mark_profiles(self):
-        meshes = []
-        for src in self.ex_profiles:
-            try:
-                face = src.get('face') or profile_face(src['wire'])
-                meshes.append(kernel.display_mesh(face) if face is not None else None)
-            except Exception:
-                pass
-        self.view.set_selection_meshes(meshes)
+        profiles=tuple(self.ex_profiles)
+        def compute():
+            meshes=[]
+            for src in profiles:
+                face=src.get('face') or profile_face(src['wire'])
+                if face is not None:meshes.append(kernel.display_mesh(face))
+            return _merge_meshes(meshes) if meshes else None
+        if len(profiles)<12:
+            mesh=compute();self.view.set_selection_meshes([mesh] if mesh is not None else None)
+        else:
+            self.view.set_selection_meshes(None)
+            def show(mesh,error):
+                if self.mode=='extrude' and not error:self.view.set_selection_meshes([mesh] if mesh is not None else None)
+            self.run_preview('profile_selection',compute,show)
 
     # ----- wyciągnięcie do elementu: wysokość wskazanej płaszczyzny, ściany, krawędzi albo punktu -----
     def _ex_extent_changed(self, *_):
@@ -4135,7 +4165,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if self.mode != 'extrude' or not self.ex_profiles:
             self.view.set_handles([])
             return
-        src = self.ex_profiles[0]
+        order=[p for p in getattr(self,'_ex_pick_order',[]) if any(p is q for q in self.ex_profiles)]
+        self._ex_pick_order=order
+        src=order[-1] if order else self.ex_profiles[-1]
         n = np.array(src['normal'], float)
         c = np.array(src['center'], float)
         d = self.ex_value.value()
@@ -5600,7 +5632,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                  ((0, 1, 0), b.ymax - c[1]), ((0, 0, -1), c[2] - b.zmin)]
         n, reach = next(((np.array(v, float), r) for v, r in sides if not any(float(o @ np.array(v, float)) > .9 for o in opened)),
                         (np.array((0., 0., 1.)), b.zmax - c[2]))
-        point = c + n * reach                           # środek boku bryły (ściany, która zostaje)
+        point = c + n * reach
+        if self.sh_faces:
+            last=self.sh_faces[-1];point=np.asarray(last['point'],float);n=np.asarray(last['normal'],float)
         inward = self.sh_dir.currentData() == 'in'
         d = -n if inward else n                         # strzałka w stronę, w którą rośnie ścianka
         t = float(self.sh_thick.value())
@@ -6071,7 +6105,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         body = self.document.get(bid)
         if body is None or body.kind != 'solid':
             return
-        self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl)
+        self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl, mark=index)
 
     def _mod_reset_size(self):
         if not any(self.mod_vertices.values()) and not any(self.edges.values()):
@@ -6090,6 +6124,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         elif not same:
             points.append(point)
         self.mod_vertices = {k: v for k, v in self.mod_vertices.items() if v}
+        if not shift:self._mod_pick_order=[*getattr(self,'_mod_pick_order',[]),('vertex',bid,tuple(point))]
         self._mod_face_mesh = None
         self.update_mod_status()
 
@@ -6103,6 +6138,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         else:
             current |= ids
         self.edges = {k: v for k, v in self.edges.items() if v}
+        if not shift:
+            picked=mark if mark in ids else max(ids) if ids else None
+            if picked is not None:self._mod_pick_order=[*getattr(self,'_mod_pick_order',[]),('edge',bid,picked)]
         self.update_mod_status()
 
     def _mod_items(self):
@@ -6136,8 +6174,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.mod_size.blockSignals(True)
             self.mod_size.setValue(2.0)
             self.mod_size.blockSignals(False)
-        self.edges = dict(self.edges)
-        self.edges[body.id] = set(self.edges.get(body.id, ())) | ids      # obwód ściany dochodzi do wybranych
+        nearest=min(ids,key=lambda i:body.shape.Edges()[i].distance(cq.Vertex.makeVertex(*map(float,hit[2]))))
+        self.edges=dict(self.edges);self.edges[body.id]=set(self.edges.get(body.id,()))|ids
+        self._mod_pick_order=[*getattr(self,'_mod_pick_order',[]),('edge',body.id,nearest)]
         self._mod_face_mesh = None          # zaznaczają się krawędzie obwodu; sama ściana się nie podświetla (widać tworzone zaokrąglenie)
         self.update_mod_status()
 
@@ -6164,33 +6203,29 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         return 'Zaznaczone ' + ', '.join(parts) + (f' (bryły: {bodies})' if bodies > 1 else '')
 
     def _place_mod_handle(self):
-        if self.mode == 'mod' and self.mod_vertices and not any(self.edges.values()):
-            bid, pts = next(iter(self.mod_vertices.items()))
-            body = self.document.get(bid)
-            try:
-                mid, direction = kernel.vertex_handle(body.shape, pts[-1])
-            except Exception:
-                self.view.set_handles([])
-                return
-            mid, d = np.array(mid, float), np.array(direction, float)
-            self.view.set_handles([dict(id='mod', start=mid, tip=mid + d * self.mod_size.value(), dir=d, color=(.94, .6, .13, 1))])
-            return
-        if self.mode != 'mod' or not any(self.edges.values()):
-            self.view.set_handles([])
-            return
-        bid, ids = next((k, v) for k, v in self.edges.items() if v)
-        body = self.document.get(bid)
+        if self.mode!='mod':self.view.set_handles([]);return
+        order=[]
+        for kind,bid,value in getattr(self,'_mod_pick_order',[]):
+            alive=(value in self.edges.get(bid,())) if kind=='edge' else any(np.linalg.norm(np.asarray(value)-q)<1e-3 for q in self.mod_vertices.get(bid,()))
+            if alive and self.document.get(bid) is not None:order.append((kind,bid,value))
+        self._mod_pick_order=order
+        if order:kind,bid,value=order[-1]
+        elif any(self.edges.values()):
+            bid,ids=next((bid,ids) for bid,ids in reversed(list(self.edges.items())) if ids);kind,value='edge',max(ids)
+        elif self.mod_vertices:
+            bid,points=next(iter(reversed(list(self.mod_vertices.items()))));kind,value='vertex',points[-1]
+        else:self.view.set_handles([]);return
+        body=self.document.get(bid)
         try:
-            hkey = (id(body.shape), max(ids))
-            cached = getattr(self, '_mod_handle', None)
-            if not cached or cached[0] != hkey:
-                cached = self._mod_handle = (hkey, kernel.edge_handle(body.shape, max(ids)))   # przy zmianie wartości bez liczenia
-            mid, direction = cached[1]
-        except Exception:
-            self.view.set_handles([])
-            return
-        mid, d = np.array(mid, float), np.array(direction, float)
-        self.view.set_handles([dict(id='mod', start=mid, tip=mid + d * self.mod_size.value(), dir=d, color=(.94, .6, .13, 1))])
+            hkey=(id(body.shape),kind,tuple(value) if kind=='vertex' else value)
+            cached=getattr(self,'_mod_handle',None)
+            if cached is None or cached[0]!=hkey:
+                result=kernel.vertex_handle(body.shape,value) if kind=='vertex' else kernel.edge_handle(body.shape,value)
+                cached=self._mod_handle=(hkey,result)
+            mid,direction=cached[1]
+        except Exception:self.view.set_handles([]);return
+        mid=np.asarray(mid,float);d=np.asarray(direction,float)
+        self.view.set_handles([dict(id='mod',start=mid,tip=mid+d*self.mod_size.value(),dir=d,color=(.94,.6,.13,1))])
     def update_mod_preview(self):
         if self.mode != 'mod':
             return
@@ -7417,7 +7452,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.toast('Kliknij bryłę lub szkic.')
             return
         if self.t_target is not None and bid in (getattr(self, 't_group', None) or [self.t_target.id]):
-            return          # ten sam obiekt: ustawione przesunięcie / obrót zostaje, można je dalej poprawiać
+            self.t_target=body;self._place_gizmo()
+            return          # zachowaj parametry; uchwyt podąża za ostatnio klikniętym obiektem
         self.select_transform_target(body)
 
     def select_transform_target(self, body):
@@ -7456,6 +7492,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.view.set_handles([])
             return
         c, r = self.t_center, self.t_radius
+        if self.mode=='move' and self.t_target is not None and self.t_target.mesh is not None:c=np.asarray(self.t_target.mesh.center,float)
         axes = [np.array(a) for a in AXES]
         handles = []
         if self.mode == 'move':
@@ -7593,8 +7630,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 if angle:
                     m.rotate(float(angle), *[1.0 if i == axis else 0.0 for i in range(3)])
             m.translate(*(-c))
-        for identifier in getattr(self, 't_group', None) or [self.t_target.id]:
-            self.view.set_body_matrix(identifier, m)
+        self.view.set_body_matrices({identifier:m for identifier in (getattr(self,'t_group',None) or [self.t_target.id])})
     def apply_transform(self):
         if self.busy or self.t_target is None:
             self.toast('Kliknij obiekt, aby go zaznaczyć.')

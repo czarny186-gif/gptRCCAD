@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.82 — szyki szkiców, pełny przekrój i uchwyty wyboru
+
+- Szkice w dużych szykach są rysowane zbiorczo, razem ze znacznikami środków. Podświetlenie i wskazywanie pozostają osobne; przesuwany szkic odłącza się od zbiorczego rysowania.
+- Podgląd liniowego wyciągania/wycinania korzysta z zapamiętanej triangulacji profili, zamiast przy każdej zmianie odległości budować i sprawdzać setki brył CAD. Zatwierdzanie operacji nadal używa dokładnej geometrii OpenCascade.
+- Rozłączne kontury i obszary nieprzecinające granic ściany omijają zbędne dzielenie Boolean. Nakładające się i zagnieżdżone kontury nadal przechodzą pełne dzielenie.
+- Pełne różowe powierzchnie przekroju z ukośnym kreskowaniem także wtedy, gdy bufor szablonu OpenGL jest niedostępny. Kontury materiału powstają w tle z siatki widoku, bez przecinania bryły CAD; zapamiętana siatka pozostaje w procesie obliczeniowym.
+- Otwory i komory pozostają puste. Można szkicować i wykonywać operacje na odsłoniętych oryginalnych ścianach wewnętrznych. Przekrój nie zmienia eksportowanej geometrii.
+- Strzałki wyciągania, zaokrąglania/fazowania, grubości skorupy, gwintowania, przesuwania, skalowania i ścianek sklejki są umieszczane przy ostatnim wyborze. Odznaczenie ostatniego profilu/krawędzi/narożnika przywraca uchwyt przy poprzednim wyborze.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.81 — płynniejsze wskazywanie i przekrój
 
 - Pamięć danych wskazywania oraz siatek usuwa pojedyncze najstarsze wpisy według limitu danych, zamiast kasować całość po 256 modelach.

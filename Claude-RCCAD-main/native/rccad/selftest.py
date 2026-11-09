@@ -286,6 +286,13 @@ def run(report_path=None):
         assert not studio.view.grabFramebuffer().isNull()
         assert studio.view.section_caps.available is True
     checks.append('Section material: opaque hatched wall blocks hidden faces and preserves open chamber')
+    from .sectionmesh import cap_mesh
+    import numpy as np
+    material=cap_mesh(probe.mesh,[0,1,0,-10])
+    triangles=material.vertices[material.triangles]
+    area=np.linalg.norm(np.cross(triangles[:,1]-triangles[:,0],triangles[:,2]-triangles[:,0]),axis=1).sum()/2
+    assert abs(float(area)-300)<1e-3
+    checks.append('Portable section material: bundled contour triangulator preserves chamber independently of stencil')
     studio.section_work_button.click()
     assert studio.section_working and not studio.view.section_handles and studio.section_work_button.text()=='PRZERWIJ'
     studio.set_mode('mod')

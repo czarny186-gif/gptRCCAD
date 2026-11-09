@@ -1880,6 +1880,65 @@ class StudioTests(unittest.TestCase):
         self.sketch('arc',(10,0),(0,10),(-10,0));self.sketch('point',(3,3));self.sketch('construction',(0,0),(30,0))
         self.sketch('rect3',(0,0),(10,0),(5,4));self.assertEqual(len(self.w.document.bodies),4)
 
+    def test_extrude_arrow_follows_last_clicked_profile_including_group_and_deselect(self):
+        w=self.w
+        bodies=[Body(str(i),k.sketch('circle','XY',6,x=i*30),kind='sketch').prepared() for i in range(3)]
+        w.document.commit(bodies);w.selected=[];w.refresh();w.set_mode('extrude')
+        a,b,c=[w._sketch_profile(body) for body in bodies]
+        b=dict(b,cluster=('group','B'),siblings=[dict(c,cluster=('group','B'))])
+        with patch.object(w,'update_extrude_preview',side_effect=w._place_extrude_handle):
+            for src in (a,b):
+                with patch.object(w,'_profile_at',return_value=src):w.pick_profile(5,5)
+                np.testing.assert_allclose(w.view.handles[0]['start'],src['center'])
+            self.assertEqual(len(w.ex_profiles),3)
+            with patch.object(w,'_profile_at',return_value=b):w.pick_profile(5,5,True)
+            np.testing.assert_allclose(w.view.handles[0]['start'],a['center'])
+        w._timers['extrude'].stop()
+
+    def test_fillet_chamfer_arrow_tracks_click_order_across_edges_bodies_and_vertices(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(20,20,20).translate((60,0,0))).prepared()
+        w.document.commit([a,b]);w.selected=[];w.refresh();w.set_mode('mod')
+        for body,index in ((a,10),(b,4),(a,0)):
+            w._mod_select(body.id,{index},False,False,mark=index);w._timers['mod'].stop()
+            np.testing.assert_allclose(w.view.handles[0]['start'],k.edge_handle(body.shape,index)[0])
+        point=np.array([60.,0.,0.]);w._mod_vertex_select(b.id,point,False,False);w._timers['mod'].stop()
+        np.testing.assert_allclose(w.view.handles[0]['start'],k.vertex_handle(b.shape,point)[0])
+        w._mod_vertex_select(b.id,point,True,False);w._timers['mod'].stop()
+        np.testing.assert_allclose(w.view.handles[0]['start'],k.edge_handle(a.shape,0)[0])
+        w._mod_select(a.id,{0},True,False);w._timers['mod'].stop()
+        np.testing.assert_allclose(w.view.handles[0]['start'],k.edge_handle(b.shape,4)[0])
+        w.mod_kind.setCurrentIndex(1);w._place_mod_handle();w._timers['mod'].stop()
+        np.testing.assert_allclose(w.view.handles[0]['start'],k.edge_handle(b.shape,4)[0])
+
+    def test_move_and_scale_arrows_start_at_last_selected_object(self):
+        w=self.w;a=Body('A',k.box(10,10,10)).prepared();b=Body('B',k.box(10,10,10).translate((40,0,0))).prepared()
+        w.document.commit([a,b]);w.refresh();w.selected=[b.id,a.id];w.set_mode('move')
+        self.assertEqual(w.t_target.id,a.id)
+        np.testing.assert_allclose(w.view.handles[0]['start'],a.mesh.center)
+        with patch.object(w,'pick_object',return_value=b.id):w.pick_transform_target(5,5)
+        np.testing.assert_allclose(w.view.handles[0]['start'],b.mesh.center)
+        w.set_mode(None);w.selected=[b.id,a.id];w.toggle_scale(True)
+        handle=next(h for h in w.view.handles if h['id']=='scA')
+        np.testing.assert_allclose(handle['start'],[10,10,10])
+        w._sc_set([a.id,b.id]);handle=next(h for h in w.view.handles if h['id']=='scA')
+        np.testing.assert_allclose(handle['start'],[50,10,10])
+
+    def test_section_inside_floor_accepts_sketch_and_cut_after_opening_material(self):
+        from PySide6.QtGui import QVector3D
+        w=self.w;shape=k.box(80,60,60).cut(k.box(60,40,60).translate((10,10,8))).fuse(k.box(10,20,40).translate((50,10,8))).clean()
+        body=Body('Open box',shape).prepared();w.document.commit([body]);w.selected=[];w.refresh()
+        w.view.opts['center']=QVector3D(40,30,30);w.view.setCameraPosition(distance=200,elevation=25,azimuth=-65)
+        w.view.set_section_plane([0,1,0,-25]);xy=w.view.project_one((20,32,8))
+        plane,face=w.pick_surface(*xy);self.assertIsNotNone(face)
+        self.assertAlmostEqual(face.Center().z,8,5)
+        w.enter_sketch(plane);w.choose_tool('rect');u,v=k.uv_of(plane,[20,32,8])
+        w.sketch_clicked(plane,u-2,v-2);w.sketch_clicked(plane,u+2,v+2);self.wait()
+        sketch=next(b for b in w.document.bodies if b.kind=='sketch')
+        cutter=k.extrude_dir(sketch.shape,k.frame_of(plane).normal,-4)
+        result=k.boolean('subtract',body.shape,[cutter])
+        self.assertAlmostEqual(body.shape.Volume()-result.Volume(),64,4)
+        self.assertIsNotNone(w.view.section_plane)
+
     def test_measure_does_not_create_geometry(self):
         self.sketch('measure',(0,0),(3,4));self.assertEqual(len(self.w.document.bodies),0);self.assertIn('5,000',self.w.notice.text())
 
@@ -2354,12 +2413,13 @@ class StudioTests(unittest.TestCase):
         vols=sorted(round(b.shape.Volume()) for b in w.document.bodies if b.kind=='solid');self.assertEqual(vols,[2000,6000])
         w.set_mode('split');self.assertIsNone(w.view._hover_key)
 
-    def test_shell_thickness_arrow_and_panel_fits(self):
+    def test_shell_thickness_arrow_follows_last_selected_face_and_panel_fits(self):
         w=self.w;a=Body('Kostka',k.box(30,30,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('shell')
         with patch.object(w.view,'pick_face',return_value=(a.id,np.array([0,0,1.]),np.array([15,15,20.]))):
             w.view_clicked(5,5,False,False);w.view_clicked(5,5,False,False)        # bryła, potem otwarta górna ściana
         h=[x for x in w.view.handles if x['id']=='shell'];self.assertEqual(len(h),1)
-        self.assertAlmostEqual(abs(float(h[0]['dir'][2])),0,6)                   # strzałka na ścianie, która zostaje (nie na otwartej)
+        self.assertAlmostEqual(abs(float(h[0]['dir'][2])),1,6)                   # uchwyt przy ostatniej wskazanej ścianie
+        np.testing.assert_allclose(h[0]['start'],[15,15,18])
         w.handle_dragged('shell',1.5);self.assertAlmostEqual(w.sh_thick.value(),3.5)
         w.handle_dragged('shell',-5);self.assertAlmostEqual(w.sh_thick.value(),.1);w.handle_released('shell')
         self.assertTrue(w._timers['shell'].isActive())
@@ -2936,6 +2996,7 @@ class StudioTests(unittest.TestCase):
                 w.view_clicked(5,5,shift,False)
         self.assertEqual(len(w.th_extra),1)
         self.assertIn('2 otworach',w.th_status.text())
+        np.testing.assert_allclose(next(h for h in w.view.handles if h['id']=='thD')['start'][:2],[15,0],atol=1e-5)
         w.apply_thread();self.wait()
         b=w.document.bodies[0];self.assertEqual(len(b.threads),2)                # dwa gwinty jednym krokiem
         self.assertEqual({t['size'] for t in b.threads},{'M10'})

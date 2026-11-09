@@ -11,7 +11,7 @@ datas += [(str(root/'rccad'/'assets'), 'rccad/assets')]
 binaries = collect_dynamic_libs('OCP')
 if sys.platform == 'win32':
     datas, binaries = collect_delvewheel_libs_directory('OCP', libdir_name='cadquery_ocp.libs', datas=datas, binaries=binaries)
-hiddenimports = collect_submodules('OCP') + collect_submodules('cadquery') + ['pyqtgraph.opengl', 'vtkmodules.util.numpy_support']
+hiddenimports = collect_submodules('OCP') + collect_submodules('cadquery') + ['pyqtgraph.opengl', 'vtkmodules.util.numpy_support','vtkmodules.vtkFiltersGeneral']
 a = Analysis([str(root/'main.py')], pathex=[str(root)], binaries=binaries, datas=datas,
     hiddenimports=hiddenimports,
     excludes=['PyQt5','PyQt6','PySide2','tkinter','IPython','jupyter','notebook','pytest','matplotlib.tests','scipy.tests'],

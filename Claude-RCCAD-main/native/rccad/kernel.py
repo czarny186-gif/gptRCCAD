@@ -1667,6 +1667,23 @@ def split_edges(edges):
     return out
 
 
+def _separate_wire_faces(edges,wires):
+    """Skip General Fuse only for valid, complete, strictly separated closed wires."""
+    from collections import Counter
+    if not wires:return None
+    parts=[w.Edges() for w in wires]
+    if Counter(e.hashCode() for e in edges)!=Counter(e.hashCode() for part in parts for e in part):return None
+    boxes=[bounds(w) for w in wires]
+    low=np.array([[b.xmin,b.ymin,b.zmin] for b in boxes]);high=np.array([[b.xmax,b.ymax,b.zmax] for b in boxes])
+    tree=BoundsTree(low,high)
+    for i in range(len(wires)):
+        if any(j!=i for j in tree.overlap(low[i],high[i],1e-6)):return None
+    try:
+        faces=[cq.Face.makeFromWires(w) for w in wires]
+        return faces if all(w.IsClosed() and f.isValid() for w,f in zip(wires,faces)) else None
+    except Exception:return None
+
+
 def regions(plane, edges, wires=()):
     """Wszystkie obszary ograniczone krawędziami szkiców (jak 'region' w HTML): nakładające się kształty tną się nawzajem."""
     from OCP.BOPAlgo import BOPAlgo_BuilderFace
@@ -1674,6 +1691,8 @@ def regions(plane, edges, wires=()):
     from OCP.gp import gp_Ax3, gp_Dir, gp_Pln, gp_Pnt
     if not edges:
         return []
+    separate=_separate_wire_faces(edges,wires)
+    if separate is not None:return separate
     unique, seen = [], set()
     for pieces in split_edges(edges):
         for p in pieces:
@@ -1805,8 +1824,15 @@ def split_by_faces(regions, faces):
     from OCP.BOPAlgo import BOPAlgo_Builder
     if not regions or not faces:
         return regions
+    boundaries=[bounds(e) for face in faces for e in face.Edges()]
+    tree=BoundsTree([[b.xmin,b.ymin,b.zmin] for b in boundaries],[[b.xmax,b.ymax,b.zmax] for b in boundaries])
+    affected=set()
+    for i,region in enumerate(regions):
+        box=bounds(region)
+        if not boundaries or tree.overlap([box.xmin,box.ymin,box.zmin],[box.xmax,box.ymax,box.zmax],1e-6):affected.add(i)
+    if not affected:return regions
     builder = BOPAlgo_Builder()
-    for f in [*regions, *faces]:
+    for f in [*[regions[i] for i in sorted(affected)], *faces]:
         builder.AddArgument(f.wrapped)
     builder.SetRunParallel(False)
     builder.SetFuzzyValue(1e-6)
@@ -1814,7 +1840,9 @@ def split_by_faces(regions, faces):
     if builder.HasErrors():
         return regions
     out = []
-    for region in regions:
+    for index,region in enumerate(regions):
+        if index not in affected:
+            out.append(region);continue
         pieces = []
         for piece in _fromlist(builder.Modified(region.wrapped)) or [region.wrapped]:
             f = cq.Face(piece) if piece.ShapeType() == 4 else None

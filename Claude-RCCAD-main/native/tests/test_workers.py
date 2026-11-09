@@ -181,6 +181,20 @@ class WorkerTests(unittest.TestCase):
                 self.assertLess(x.shape.cut(y.shape).Volume()+y.shape.cut(x.shape).Volume(),1e-6)
         self.assertIs(first[-1],far)
 
+    def test_portable_section_mesh_is_cached_in_worker_and_keeps_chamber_open(self):
+        import uuid,numpy as np
+        from rccad.sectionmesh import cached_cap_mesh
+        mesh=k.display_mesh(k.box(20,20,20).cut(k.box(10,10,10).translate((5,5,5))))
+        key=('section-material-test',);token=uuid.uuid4().hex
+        status,_=workers.call_affine(key,cached_cap_mesh,token,None,[0,1,0,-10])
+        self.assertEqual(status,'missing')
+        status,cap=workers.call_affine(key,cached_cap_mesh,token,mesh,[0,1,0,-10])
+        self.assertEqual(status,'ready')
+        p=cap.vertices[cap.triangles];area=np.linalg.norm(np.cross(p[:,1]-p[:,0],p[:,2]-p[:,0]),axis=1).sum()/2
+        self.assertAlmostEqual(float(area),300,3)
+        status,again=workers.call_affine(key,cached_cap_mesh,token,None,[0,1,0,-11])
+        self.assertEqual(status,'ready');self.assertEqual(len(cap.triangles),len(again.triangles))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,20 +1,17 @@
-"""GPU winding caps for a display-only section, including holes and nested shells.
+"""Portable section material with an immediate GPU stencil preview.
 
-A stencil pass reuses each body's existing vertex buffers. No CAD Boolean or
-triangulation runs while dragging the plane. Only a four-vertex hatch plane moves.
+Stable planar contours are prepared outside the GUI thread and cached. While
+moving the plane, the stencil preview reuses the original mesh vertex buffers.
 """
 import numpy as np
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import shaders
 from OpenGL import GL
-
-
-def section_frame(plane):
-    p=np.asarray(plane,float);length=np.linalg.norm(p[:3])
-    n=p[:3]/length;o=-p[3]*p[:3]/(length*length)
-    axis=np.eye(3)[int(np.argmin(np.abs(n)))]
-    u=np.cross(n,axis);u/=np.linalg.norm(u)
-    return o,u,np.cross(n,u)
+from PySide6.QtCore import QObject,Signal,QRunnable,QThreadPool,QTimer
+from .perfcache import LRU
+from .sectionmesh import section_frame
+import uuid
+import weakref
 
 
 def section_quad(low,high,plane,matrix=None):
@@ -75,20 +72,89 @@ def _stencil_state():
     GL.glStencilOpSeparate(GL.GL_BACK,GL.GL_KEEP,GL.GL_KEEP,GL.GL_DECR_WRAP)
 
 
+class _SolidHatch(_HatchPlane):
+    def setupGLState(self):
+        GL.glEnable(GL.GL_DEPTH_TEST);GL.glDepthFunc(GL.GL_LEQUAL)
+        GL.glDisable(GL.GL_BLEND);GL.glDisable(GL.GL_CULL_FACE);GL.glDisable(GL.GL_STENCIL_TEST)
+        GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
+        GL.glColorMask(True,True,True,True);GL.glDepthMask(True)
+
+
+class _CapSignals(QObject):
+    done=Signal(object)
+
+
+class _CapWork(QRunnable):
+    def __init__(self,requests):
+        super().__init__();self.requests=requests;self.signals=_CapSignals()
+    def run(self):
+        from .sectionmesh import cap_mesh,cached_cap_mesh
+        from . import workers
+        results=[]
+        for bid,key,mesh,plane,matrix,token in self.requests:
+            try:
+                if workers.ready():
+                    try:
+                        answer=workers.call_affine(('section-material',bid),cached_cap_mesh,token,None,plane,matrix)
+                        if answer[0]=='missing':answer=workers.call_affine(('section-material',bid),cached_cap_mesh,token,mesh,plane,matrix)
+                        value=answer[1]
+                    except workers.Unavailable:value=cap_mesh(mesh,plane,matrix)
+                else:value=cap_mesh(mesh,plane,matrix)
+            except Exception:value=None
+            results.append((bid,key,mesh,value))
+        self.signals.done.emit(results)
+
+
 class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
     def __init__(self):
         super().__init__();self.setDepthValue(9);self._planes={};self._bounds={};self.available=None
+        self._mesh_tokens=LRU(max_entries=2048);self._material=LRU(96*1024*1024,max_entries=256);self._solid_patches={};self._pending={};self._running=False
+        self._cap_pool=QThreadPool(self);self._cap_pool.setMaxThreadCount(1)
+        self._cap_timer=QTimer(self);self._cap_timer.setSingleShot(True);self._cap_timer.setInterval(40)
+        self._cap_timer.timeout.connect(self._start_caps)
         register_shader()
 
     def retain_bodies(self,live):
         self._planes={bid:value for bid,value in self._planes.items() if bid in live}
         self._bounds={bid:value for bid,value in self._bounds.items() if bid in live}
+        self._solid_patches={bid:value for bid,value in self._solid_patches.items() if bid in live}
+        self._pending={bid:value for bid,value in self._pending.items() if bid in live}
+
+    def _request_cap(self,body,key,matrix):
+        cached=self._material.get(key)
+        if cached is not None and cached[0] is body.mesh:return cached
+        token=self._mesh_tokens.get(id(body.mesh))
+        if token is None or token[0]() is not body.mesh:
+            token=(weakref.ref(body.mesh),uuid.uuid4().hex);self._mesh_tokens[id(body.mesh)]=token
+        self._pending[body.id]=(body.id,key,body.mesh,np.array(self.view().section_plane,float),matrix,token[1])
+        if not self._running and not self._cap_timer.isActive():self._cap_timer.start()
+        return None
+
+    def _start_caps(self):
+        if self._running or not self._pending:return
+        view=self.view()
+        if view is None or view.section_plane is None:
+            self._pending.clear();return
+        requests=list(self._pending.values());self._pending.clear();self._running=True
+        work=self._cap_work=_CapWork(requests)
+        work.signals.done.connect(self._caps_ready)
+        self._cap_pool.start(work)
+
+    def _caps_ready(self,results):
+        self._running=False
+        for bid,key,source,mesh in results:
+            if bid in self._pending and self._pending[bid][1]==key:self._pending.pop(bid,None)
+            # Cache completed snapshots; a newer plane will only use its matching key.
+            self._material[key]=(source,mesh)
+        view=self.view()
+        if view is not None:view.update()
+        if self._pending:self._cap_timer.start()
 
     def paint(self):
         view=self.view()
         if view.section_plane is None or not view.bodies:return
-        self.available=int(GL.glGetIntegerv(GL.GL_STENCIL_BITS))>0
-        if not self.available:return
+        stencil=int(GL.glGetIntegerv(GL.GL_STENCIL_BITS))>0 and not getattr(self,'force_portable',False)
+        self.available=True
         enabled={k:bool(GL.glIsEnabled(k)) for k in (GL.GL_DEPTH_TEST,GL.GL_STENCIL_TEST,GL.GL_BLEND,GL.GL_CULL_FACE,GL.GL_POLYGON_OFFSET_FILL,GL.GL_ALPHA_TEST,GL.GL_SAMPLE_ALPHA_TO_COVERAGE)}
         color=GL.glGetBooleanv(GL.GL_COLOR_WRITEMASK);depth=bool(GL.glGetBooleanv(GL.GL_DEPTH_WRITEMASK))
         offset=(float(GL.glGetFloatv(GL.GL_POLYGON_OFFSET_FACTOR)),float(GL.glGetFloatv(GL.GL_POLYGON_OFFSET_UNITS)))
@@ -123,8 +189,20 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
                         patch=cached[1];patch.setMeshData(vertexes=quad,faces=np.array([[0,1,2],[0,2,3]]))
                     self._planes[body.id]=(key,patch,u,v,spacing)
                 _,patch,u,v,spacing=self._planes[body.id]
+                matrix=np.array(fill.transform().data(),float).reshape(4,4).T
+                material=self._request_cap(body,key,matrix)
+                if material is not None and material[1] is not None:
+                    solid=self._solid_patches.get(body.id)
+                    if solid is None or solid[0]!=key:
+                        mesh=material[1]
+                        item=_SolidHatch(vertexes=mesh.vertices,faces=mesh.triangles,smooth=False,drawEdges=False,shader='rccad-cap')
+                        item._setView(view);item.initialize();solid=(key,item);self._solid_patches[body.id]=solid
+                    item=solid[1];item.hatch=[*((u+(1 if index%2==0 else -1)*v)/spacing),0.0]
+                    item.opts['color']=(.96,.75,.91,1.0);item.paint()
+                    continue
+                if not stencil:continue
                 patch.hatch=[*((u+(1 if index%2==0 else -1)*v)/spacing),0.0]
-                base=parts['color'][:3];patch.opts['color']=tuple(.38+.62*float(c) for c in base)+(1.0,)
+                patch.opts['color']=(.96,.75,.91,1.0)
                 GL.glStencilMask(0xff);GL.glClearStencil(0);GL.glClear(GL.GL_STENCIL_BUFFER_BIT)
                 old=fill.__dict__.get('setupGLState');had='setupGLState' in fill.__dict__
                 fill.setupGLState=_stencil_state

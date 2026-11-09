@@ -3119,7 +3119,12 @@ def light(bodies):
 
 def preview_meshes(makers, tol):
     """Siatki brył-narzędzi (wyciągnięcie, obrót, przeciągnięcie...): `makers` to funkcje z argumentami (functools.partial)."""
-    return [kernel.display_mesh(make(), tol) for make in makers]
+    from .linearpreview import preview
+    out=[]
+    for make in makers:
+        mesh=preview(make,tol)
+        out.append(mesh if mesh is not None else kernel.display_mesh(make(),tol))
+    return out
 
 
 def mesh_of(function, args, tol):
