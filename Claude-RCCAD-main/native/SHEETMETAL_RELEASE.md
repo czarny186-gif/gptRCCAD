@@ -1,6 +1,6 @@
-# RCCAD Desktop 0.4.77 — Widok przekroju i dokładniejsze wskazywanie w pomiarach
+# RCCAD Desktop 0.4.78 — Widok przekroju i dokładniejsze wskazywanie w pomiarach
 
-## Zmiany 0.4.77
+## Zmiany 0.4.78
 
 - Pasek przycisków widoku dopasowuje się do szerokości okna; przy węższych oknach kompaktowy rząd przechodzi pod zakładki, bez ich zasłaniania.
 - **Widok przekroju** obok Skalowania w prawym górnym rogu. Wybierz płaską ścianę bryły (delikatne podświetlenie tylko tej ściany), przeciągnij pomarańczową strzałkę albo wpisz głębokość. Można odwrócić stronę przekroju, wybrać inną ścianę i wyłączyć podgląd.

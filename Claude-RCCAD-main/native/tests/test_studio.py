@@ -1041,7 +1041,12 @@ class StudioTests(unittest.TestCase):
             self.assertTrue(w.clear_button.x()>end or w.clear_button.y()>=60,width)
             self.assertLess(w.home.geometry().right(),w.cube.x())
             self.assertGreaterEqual(w.section_button.width(),32)
-        self.assertEqual(w.section_button.x(),w.view.width()-398)
+        # Pixel positions depend on Windows DPI/font metrics; retain adjacency
+        # and fall back below the tabs when their captions need more space.
+        first=next(iter(w.tab_buttons.values()))
+        first.setText('Szeroka zakładka ' * 12);w._layout_overlays()
+        self.assertGreaterEqual(w.clear_button.y(),60)
+        self.assertLess(w.section_button.geometry().right(),w.scale_button.x())
 
     def test_rectangle_is_live_on_any_plane(self):
         w=self.w
