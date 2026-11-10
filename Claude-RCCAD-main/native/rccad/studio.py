@@ -1938,7 +1938,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self.view.set_grid_frame(None)
         self.sketch_plane = None
         self.ex_profiles = []
-        self._ex_pick_order=[];self._mod_pick_order=[]
+        self._ex_pick_order=[];self._mod_pick_order=[];self._pending_profile_picks=[]
         self.ex_target = None
         self._ex_join_scope_update()
         if hasattr(self, 'ex_target_label'):
@@ -2210,6 +2210,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 return kernel.face_frame(origin, fit), face
             except kernel.CadError:
                 return None, None
+        section=self.view.section_reference(x,y)
+        if section is not None:return section,None
         return self.view.plane_at(x, y), None
 
     def enter_sketch(self, plane):
@@ -3526,6 +3528,35 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self._drawn_cache=(self.document.bodies,groups)
         return groups
 
+    def _prefetch_sketch_regions(self):
+        if not workers.ready():return
+        snapshot=self.document.bodies
+        if getattr(self,'_sketch_regions_snapshot',None) is snapshot or getattr(self,'_sketch_regions_running',False):return
+        if sum(b.kind=='sketch' and b.visible for b in snapshot)<24:return
+        self._sketch_regions_snapshot=snapshot;self._sketch_regions_running=True
+        work=self._sketch_regions_work=_Work(lambda:workers.call_any(hist.prepare_sketch_regions,hist.light(snapshot)))
+        def finished(value=None):
+            self._sketch_regions_running=False
+            if value is not None and self.document.bodies is snapshot:
+                by_id={b.id:b for b in snapshot};groups={};fast_groups={}
+                solids=tuple((b.id,id(b.shape)) for b in snapshot if b.kind=='solid' and b.visible)
+                for key,plane,ids,faces,fast in value:
+                    members=[by_id[i] for i in ids];groups[key]=(plane,members)
+                    self._region_cache[key]=((tuple((b.id,id(b.shape)) for b in members),solids),faces)
+                    normal=tuple(kernel.frame_of(plane).normal)
+                    for group,bid,face in fast:
+                        fast_groups.setdefault(group,[]).append(dict(kind='region',id=None,source_id=bid,face=face,wire=face.outerWire(),plane=plane,normal=normal,center=face.Center().toTuple(),cluster=('group',group)))
+                expected={}
+                for body in snapshot:
+                    if body.group and body.kind=='sketch':expected.setdefault(body.group,set()).add(body.id)
+                fast_groups={group:profiles for group,profiles in fast_groups.items() if {p['source_id'] for p in profiles}==expected.get(group) and len(profiles)==len(expected[group])}
+                self._prepared_group_profiles=(snapshot,fast_groups)
+                self._drawn_cache=(snapshot,groups)
+            self._finish_pattern_picks()
+            if self.document.bodies is not snapshot:self._prefetch_sketch_regions()
+        work.signals.done.connect(finished);work.signals.failed.connect(lambda _error:finished())
+        self.warm_pool.start(work,-1)
+
     def _regions_for(self, key, plane, bodies):
         solids = tuple((b.id, id(b.shape)) for b in self.document.bodies if b.kind == 'solid' and b.visible)
         sig = (tuple((b.id, id(b.shape)) for b in bodies), solids)
@@ -3598,6 +3629,15 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         region = self._region_at(x, y)
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
+        # A sketch region already identifies the intended profile. Do not cut
+        # every sketch out of the supporting face just to discard that face.
+        if region is not None:
+            ray=self.view._ray(x,y)
+            distance=float(np.linalg.norm(np.asarray(hit[2])-ray[0])) if hit is not None and ray is not None else None
+            if body is None or body.kind!='solid' or distance is None or region[0]<=distance+max(5e-3,1e-4*distance):
+                frame=kernel.frame_of(region[1]);face=region[2]
+                src=dict(kind='region',id=None,face=face,wire=face.outerWire(),plane=region[1],normal=tuple(frame.normal),center=face.Center().toTuple())
+                return self._with_group(self._with_letters(src,x,y),x,y)
         solid = None
         picked = None
         if body is not None and body.kind == 'solid':
@@ -3654,6 +3694,10 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         try:
             if src.get('letters'):
                 return src
+            cache=self.__dict__.setdefault('_profile_group_cache',LRU(max_entries=32))
+            cache_key=(id(self.document.bodies),src['kind'],src.get('id'),src['wire'].hashCode(),tuple(src['center']))
+            hit=cache.get(cache_key)
+            if hit is not None and hit[0] is self.document.bodies:return hit[1]
             if src['kind'] == 'sketch':
                 body = self.document.get(src['id'])
             else:
@@ -3662,9 +3706,18 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 hit = self.view._plane_hit(plane, x, y)
                 if not found or hit is None:
                     return src
-                body = next((b for b in found[1] if b.group and any(kernel.face_contains(m, hit[1]) for m in hist.material_faces([b]))), None)
+                eligible=[b for b in found[1] if b.group]
+                bounds=[kernel.bounds(b.shape) for b in eligible]
+                index=BoundsTree([[b.xmin,b.ymin,b.zmin] for b in bounds],[[b.xmax,b.ymax,b.zmax] for b in bounds])
+                body=next((eligible[i] for i in index.point(hit[1],1e-5) if any(kernel.face_contains(m,hit[1]) for m in hist.material_faces([eligible[i]]))),None)
             if body is None or not body.group:
                 return src
+            prepared=getattr(self,'_prepared_group_profiles',None)
+            if prepared is not None and prepared[0] is self.document.bodies and body.group in prepared[1]:
+                siblings=[p for p in prepared[1][body.group] if p['source_id']!=body.id]
+                result=dict(src,source_id=body.id,cluster=('group',body.group),siblings=siblings)
+                cache[cache_key]=(self.document.bodies,result)
+                return result
             members = [b for b in self.document.bodies if b.group == body.group and b.kind == 'sketch' and b.id != body.id]
             if not members:
                 return src
@@ -3697,13 +3750,15 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                             if faces is None:faces=material[m.id]=hist.material_faces([m])
                             if any(kernel.face_contains(face, point) for face in faces):
                                 siblings.append(dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=plane, normal=src['normal'],
-                                                     center=f.Center().toTuple(), cluster=cluster))
+                                                     center=f.Center().toTuple(), source_id=m.id, cluster=cluster))
                                 covered.add(m.id)
                                 break
             for member in members:
                 if member.id not in covered and (member.shape.IsClosed() if hasattr(member.shape, 'IsClosed') else False):
                     siblings.append(dict(self._sketch_profile(member), cluster=cluster))
-            return dict(src, cluster=cluster, siblings=[*src.get('siblings', ()), *siblings])
+            result=dict(src,source_id=body.id,cluster=cluster,siblings=[*src.get('siblings',()),*siblings])
+            cache[cache_key]=(self.document.bodies,result)
+            return result
         except Exception:
             return src
     def _with_letters(self, src, x, y):
@@ -3731,7 +3786,41 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             pass
         return src
 
+    def _defer_pattern_pick(self,x,y,shift):
+        if not getattr(self,'_sketch_regions_running',False) or getattr(self,'_sketch_regions_snapshot',None) is not self.document.bodies:return False
+        bid=self.view.pick_profile(x,y);body=self.document.get(bid) if bid else None
+        if body is None or not body.group:return False
+        plane=kernel.actual_frame(body.shape,body.plane);hit=self.view._plane_hit(plane,x,y)
+        if hit is None:return False
+        pending=self.__dict__.setdefault('_pending_profile_picks',[])
+        pending.append((self.document.bodies,bid,np.asarray(hit[1],float),shift))
+        self.ex_status.setText('Przygotowuję profile szyku. Możesz nadal obracać widok.')
+        return True
+
+    def _finish_pattern_picks(self):
+        pending=self.__dict__.pop('_pending_profile_picks',[])
+        for snapshot,bid,point,shift in pending:
+            if self.mode!='extrude' or self.document.bodies is not snapshot:continue
+            body=self.document.get(bid);prepared=getattr(self,'_prepared_group_profiles',None)
+            profiles=prepared[1].get(body.group,[]) if body is not None and prepared is not None and prepared[0] is snapshot else []
+            source=next((p for p in profiles if p['source_id']==bid),None)
+            if source is not None:
+                src=dict(source,siblings=[p for p in profiles if p is not source])
+                self._accept_profile(src,shift);continue
+            # Unsplit fast references are unavailable for overlapping patterns.
+            # Resolve the saved world point on its own plane, independently of camera movement.
+            for key,(plane,members) in self._drawn_sketches().items():
+                if not any(b.id==bid for b in members):continue
+                faces=self._regions_for(key,plane,members)
+                inside=[f for f in faces if kernel.face_contains(f,point)]
+                if not inside:continue
+                face=min(inside,key=lambda f:f.Area());xy=self.view.project_one(point)
+                src=dict(kind='region',id=None,face=face,wire=face.outerWire(),plane=plane,normal=tuple(kernel.frame_of(plane).normal),center=face.Center().toTuple())
+                if xy is not None:self._accept_profile(self._with_group(src,*xy),shift)
+                break
+
     def pick_profile(self, x, y, shift=False):
+        if self._defer_pattern_pick(x,y,shift):return
         try:
             src = self._profile_at(x, y)
         except Exception as exc:
@@ -3740,6 +3829,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if src is None:
             self.toast('Kliknij zamknięty profil szkicu albo płaską ścianę bryły.')
             return
+        self._accept_profile(src,shift)
+
+    def _accept_profile(self,src,shift=False):
         group = [src, *src.get('siblings', ())]
         had = bool(self.ex_profiles)
         # kliknięcie dodaje kolejny profil (bez Shift), Shift + klik odznacza pomyłkowo wybrany
@@ -3752,7 +3844,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 return
             self.ex_profiles = [p for p in self.ex_profiles if p not in dup]
         elif dup:
-            self._ex_pick_order=[*getattr(self,'_ex_pick_order',[]),dup[0]]
+            anchor=next((p for p in dup if p['kind']==src['kind'] and p.get('id')==src.get('id') and np.allclose(p['center'],src['center'],atol=1e-6)),dup[0])
+            self._ex_pick_order=[*getattr(self,'_ex_pick_order',[]),anchor]
             self._place_extrude_handle();return
         else:
             same = lambda p, q: p['id'] == q['id'] and p['kind'] == q['kind'] and np.allclose(p['center'], q['center'], atol=1e-6)
@@ -4239,11 +4332,13 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self._place_extrude_handle()
     def _consumed_sketches(self, profiles):
         """Id szkiców, z których powstały wybrane profile (cały szkic albo obszar leżący w jego obrysie)."""
-        ids = set()
+        ids = set();live={b.id for b in self.document.bodies}
         for prof in profiles:
             ids |= set(prof.get('hole_ids', ()))      # szkice, które zrobiły otwory w wybranej ścianie
             if prof.get('kind') == 'sketch' and prof.get('id'):
                 ids.add(prof['id'])
+            elif prof.get('source_id') in live:
+                ids.add(prof['source_id'])
             elif prof.get('kind') == 'region' and prof.get('face') is not None:
                 c = np.array(prof['center'], float)
                 for _, bodies in self._drawn_sketches().values():
@@ -4274,7 +4369,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
         def build():
             receivers=hist.extrusion_receivers(existing,profiles,scope,target.get('body') if target else None) if scope else None
-            bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, skip=skip, folder=folder,only=receivers)
+            bodies = hist.offloaded(hist.combine_makers, existing, makers, op, spent, out, skip=skip, folder=folder,only=receivers)
             recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
             if receivers is not None:recipe.update(join_to=receivers,join_side=scope)
             if folder:
@@ -7750,6 +7845,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if shown:      # obiekt wskazany na liście jest widoczny i podświetlony, także gdy był ukryty albo wygaszony (np. szkic użyty w wyciągnięciu)
             bodies = [replace(b, visible=True) if (b.id in shown and not b.visible) else b for b in bodies]
         self.view.locked = frozenset(self.locked_ids)
+        self._prefetch_sketch_regions()
         self.objects_update()
         self._hist_update()
         self._hist_compare_update()

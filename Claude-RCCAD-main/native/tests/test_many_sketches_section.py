@@ -37,6 +37,13 @@ class PatternPreviewTests(unittest.TestCase):
                 again=preview(make,.12)
             self.assertEqual(len(mesh.triangles),len(again.triangles))
 
+    def test_interior_point_avoids_tessellation_only_when_centroid_is_inside(self):
+        face=cq.Face.makeFromWires(k.sketch('rectangle','XY',20,20))
+        with patch.object(cq.Face,'tessellate',side_effect=AssertionError('unneeded selection triangulation')):
+            np.testing.assert_allclose(h._inner_point(face),[0,0,0],atol=1e-7)
+        ring=cq.Face.makeFromWires(cq.Wire.makeCircle(10,cq.Vector(),cq.Vector(0,0,1)),[cq.Wire.makeCircle(5,cq.Vector(),cq.Vector(0,0,1))])
+        point=h._inner_point(ring);self.assertGreater(np.linalg.norm(point),5);self.assertTrue(k.face_contains(ring,point))
+
     def test_distinct_pattern_wires_skip_global_edge_splitting(self):
         wires=[cq.Wire.makeCircle(1,cq.Vector(i%10*5,i//10*5,0),cq.Vector(0,0,1)) for i in range(100)]
         with patch.object(k,'split_edges',side_effect=AssertionError('global General Fuse')):

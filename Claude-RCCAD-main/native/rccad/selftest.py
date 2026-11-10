@@ -283,6 +283,11 @@ def run(report_path=None):
     assert studio.view.pick_body(*wall_xy)==probe.id
     assert studio.view.pick_face(*wall_xy) is None
     if studio.view.isValid():
+        end=time.monotonic()+15
+        while probe.id not in studio.view.section_caps._solid_patches and time.monotonic()<end:
+            app.processEvents();time.sleep(.005)
+        assert probe.id in studio.view.section_caps._solid_patches
+        assert studio.view.section_caps.last_error is None
         assert not studio.view.grabFramebuffer().isNull()
         assert studio.view.section_caps.available is True
     checks.append('Section material: opaque hatched wall blocks hidden faces and preserves open chamber')

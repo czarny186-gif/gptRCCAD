@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.84 — przekrój materiału i wybieranie dużych szyków
+
+- Wypełnienie i ukośne kreskowanie przekroju są zwykłymi obiektami sceny. Ich przygotowanie nie wymaga odczytów stanu bufora szablonu ani dodatkowego przejścia renderowania. Kontury powstają w tle; otwory i komory pozostają puste.
+- Na wypełnionej powierzchni przekroju można wskazać płaszczyznę odniesienia do szkicu. Odsłonięte rzeczywiste ściany nadal można wybierać i obrabiać. Sam przekrój nie zmienia bryły ani eksportu.
+- Wybór profilu szkicu na bryle omija zbędne wycinanie wszystkich obrysów z całej ściany. Profile dużych szyków są przygotowywane w tle, a ponowny wybór korzysta z pamięci podręcznej.
+- Kliknięcie podczas przygotowywania szyku zapamiętuje miejsce na modelu i nie blokuje obracania widoku. Po przygotowaniu wybierana jest wskazana grupa.
+- Budowa dokładnych narzędzi wyciągania oraz zbiorcze wycinanie odbywają się w tym samym procesie obliczeniowym. Usuwanie wykorzystanych szkiców i zapis powiązań historii nie przeszukują ponownie wszystkich par profili.
+- Strzałka podąża także za wyborem innego profilu w już zaznaczonym szyku.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.83 — szyki szkiców, pełny przekrój i uchwyty wyboru
 
 - Spóźniony wynik podświetlania profili nie przywraca usuniętego ani zmienionego zaznaczenia.

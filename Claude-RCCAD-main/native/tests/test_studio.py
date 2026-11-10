@@ -1936,6 +1936,57 @@ class StudioTests(unittest.TestCase):
         w._sc_set([a.id,b.id]);handle=next(h for h in w.view.handles if h['id']=='scA')
         np.testing.assert_allclose(handle['start'],[50,10,10])
 
+    def test_section_material_can_define_an_internal_sketch_plane_without_fake_cad_faces(self):
+        from PySide6.QtGui import QVector3D
+        w=self.w;body=Body('Solid',k.box(80,60,40)).prepared();w.document.commit([body]);w.selected=[];w.refresh()
+        w.view.opts['center']=QVector3D(40,30,20);w.view.setCameraPosition(distance=200,elevation=0,azimuth=-90)
+        w.view.set_section_plane([0,1,0,-25]);xy=w.view.project_one((40,25,20))
+        self.assertIsNone(w.view.pick_face(*xy))
+        plane,face=w.pick_surface(*xy);self.assertIsNone(face);self.assertIsNotNone(plane)
+        self.assertAlmostEqual(plane.origin[1],25,4)
+        w.enter_sketch(plane);w.choose_tool('rect');w.sketch_clicked(plane,-2,-2);w.sketch_clicked(plane,2,2);self.wait()
+        sketch=next(b for b in w.document.bodies if b.kind=='sketch')
+        cutter=k.extrude_dir(sketch.shape,k.frame_of(plane).normal,4)
+        self.assertAlmostEqual(body.shape.Volume()-k.boolean('subtract',body.shape,[cutter]).Volume(),64,4)
+
+    def test_first_pattern_click_waits_without_blocking_and_keeps_world_selection(self):
+        from PySide6.QtGui import QVector3D
+        from threading import Event
+        import cadquery as cq
+        w=self.w;plane=k.Frame((0,0,10),(1,0,0),(0,0,1));base=Body('P',k.box(100,100,10)).prepared()
+        sketches=[Body(str(i),cq.Wire.makeCircle(1,cq.Vector(5+i%10*7,5+i//10*7,10),cq.Vector(0,0,1)),kind='sketch',plane=plane,group='p').prepared() for i in range(30)]
+        w.document.commit([base,*sketches]);w.selected=[];w.refresh();w.set_mode('extrude')
+        w.view.opts['center']=QVector3D(50,50,5);w.view.setCameraPosition(distance=200,elevation=90,azimuth=-90)
+        data=hist.prepare_sketch_regions(hist.light(w.document.bodies));gate=Event()
+        from rccad import workers
+        def call(function,*args):
+            if function is hist.prepare_sketch_regions:gate.wait(5);return data
+            return function(*args)
+        with patch.object(workers,'ready',return_value=True),patch.object(workers,'call_any',side_effect=call),patch.object(w,'update_extrude_preview',side_effect=w._place_extrude_handle):
+            w._prefetch_sketch_regions();xy=w.view.project_one((5,5,10));w.pick_profile(*xy)
+            self.assertFalse(w.ex_profiles);self.assertEqual(len(w._pending_profile_picks),1)
+            w.view.orbit(25,10);gate.set();end=time.monotonic()+10
+            while w._sketch_regions_running and time.monotonic()<end:self.app.processEvents();time.sleep(.005)
+            self.assertFalse(w._sketch_regions_running);self.assertEqual(len(w.ex_profiles),30)
+            np.testing.assert_allclose(w.view.handles[0]['start'],[5,5,10],atol=1e-5)
+            self.preview()
+        w._timers['extrude'].stop()
+
+    def test_pattern_region_selection_skips_support_face_boolean_and_reuses_group(self):
+        from PySide6.QtGui import QVector3D
+        import cadquery as cq
+        w=self.w;plane=k.Frame((0,0,10),(1,0,0),(0,0,1));base=Body('Plate',k.box(100,100,10)).prepared()
+        sketches=[Body(str(i),cq.Wire.makeCircle(1,cq.Vector(5+i%10*7,5+i//10*7,10),cq.Vector(0,0,1)),kind='sketch',plane=plane,group='pattern').prepared() for i in range(100)]
+        w.document.commit([base,*sketches]);w.refresh();w.view.opts['center']=QVector3D(50,50,5);w.view.setCameraPosition(distance=200,elevation=90,azimuth=-90)
+        xy=w.view.project_one((5,5,10))
+        with patch.object(w,'_face_with_holes',side_effect=AssertionError('support face Boolean during profile selection')):
+            first=w._profile_at(*xy);again=w._profile_at(*xy)
+        self.assertIs(first,again);profiles=[first,*first['siblings']];self.assertEqual(len(profiles),100)
+        with patch.object(k,'bounds',side_effect=AssertionError('quadratic sketch bounds scan')):
+            self.assertEqual(w._consumed_sketches(profiles),{b.id for b in sketches})
+        specs=hist.describe_profiles(profiles,[base,*sketches])
+        self.assertEqual({spec['anchor']['id'] for spec in specs},{b.id for b in sketches})
+
     def test_section_inside_floor_accepts_sketch_and_cut_after_opening_material(self):
         from PySide6.QtGui import QVector3D
         w=self.w;shape=k.box(80,60,60).cut(k.box(60,40,60).translate((10,10,8))).fuse(k.box(10,20,40).translate((50,10,8))).clean()

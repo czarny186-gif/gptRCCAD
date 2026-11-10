@@ -21,6 +21,15 @@ class SectionMaterialTests(unittest.TestCase):
     def body(self,shape):
         b=Body('Model',shape).prepared();self.view.set_models([b]);return b
 
+    def test_preparing_material_does_not_query_legacy_opengl_state(self):
+        from unittest.mock import patch
+        from OpenGL import GL
+        body=self.body(k.box(40,40,40));v=self.view
+        with patch.object(GL,'glGetIntegerv',side_effect=AssertionError('legacy GL query')),patch.object(GL,'glIsEnabled',side_effect=AssertionError('legacy GL query')):
+            v.set_section_plane([0,1,0,-20]);v.section_caps.update_section();v.section_caps.paint()
+        self.assertIn(body.id,v.section_caps._pending)
+        v.set_section_plane(None)
+
     def test_full_cut_is_an_occluder_not_an_editable_back_face(self):
         b=self.body(k.box(80,60,60));v=self.view;v.set_section_plane([0,1,0,-25])
         xy=v.project_one((40,25,30));ray=v._ray(*xy)
@@ -80,7 +89,14 @@ class StencilSectionTests(unittest.TestCase):
         b=Body('Model',shape).prepared();self.v.set_models([b]);return b
     def shot(self,caps=True):
         self.v.section_caps.setVisible(caps)
-        for _ in range(3):self.app.processEvents()
+        import time
+        end=time.monotonic()+8
+        while True:
+            for _ in range(3):self.app.processEvents()
+            service=self.v.section_caps
+            if not caps or self.v.section_plane is None or (not service._running and not service._pending and not service._cap_timer.isActive()):break
+            if time.monotonic()>end:raise AssertionError('section material did not complete: '+str(service.last_error))
+            time.sleep(.002)
         img=self.v.grabFramebuffer().convertToFormat(QImage.Format_RGBA8888)
         return np.frombuffer(img.constBits(),np.uint8).reshape(img.height(),img.width(),4).copy()
     def patch(self,img,point,r=8):

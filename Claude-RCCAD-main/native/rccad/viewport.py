@@ -783,7 +783,7 @@ class CadView(gl.GLViewWidget):
             if matrix is None:self._body_m.pop(bid,None)
             else:self._body_m[bid]=QMatrix4x4(matrix)
             self._apply_body_matrix(bid)
-        self._scene_revision+=1;self._sync_sketch_batches();self.update()
+        self._scene_revision+=1;self._sync_sketch_batches();self.section_caps.update_section();self.update()
 
     def clear_body_matrices(self):
         self._scene_revision+=1
@@ -791,6 +791,7 @@ class CadView(gl.GLViewWidget):
             self._body_m.pop(bid)
             self._apply_body_matrix(bid)
         self._sync_sketch_batches()
+        self.section_caps.update_section()
         self.update()
 
     def project_one(self, point):
@@ -871,6 +872,7 @@ class CadView(gl.GLViewWidget):
                 self.removeItem(item)
             self._parts.pop(bid, None)
         self.sketch_centers = centers
+        self.section_caps.update_section()
         self._sync_sketch_batches()
         self.update()
 
@@ -1460,6 +1462,7 @@ class CadView(gl.GLViewWidget):
 
     def set_section_plane(self,plane):
         self.section_plane=None if plane is None else np.asarray(plane,float)
+        self.section_caps.update_section()
         self._set_hover_edge(None);self.hover_vertex=None
         self.update();self.overlay.update()
 
@@ -1502,6 +1505,17 @@ class CadView(gl.GLViewWidget):
             classifier.Perform(p,1e-6)
             if classifier.State() in (TopAbs_IN,TopAbs_ON):return distance
         return None
+
+    def section_reference(self,x,y):
+        """A construction plane on visible section material, not a new CAD face."""
+        if self.section_plane is None:return None
+        ray=self._ray(x,y)
+        if ray is None:return None
+        hits=[(t,body.id) for body in self._ray_bodies(*ray) if body.id not in self.locked
+              for t in [self._section_cap_hit(body,*ray)] if t is not None]
+        if not hits:return None
+        t,_=min(hits);point=ray[0]+t*ray[1]
+        return kernel.face_frame(point,-np.asarray(self.section_plane[:3],float))
 
     def pick_body(self, x, y):
         ray = self._ray(x, y)

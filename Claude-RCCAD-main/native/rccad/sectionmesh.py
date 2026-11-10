@@ -40,6 +40,7 @@ def cap_mesh(mesh,plane,matrix=None):
     vertices=np.asarray(mesh.vertices,float)
     if matrix is not None:vertices=vertices@matrix[:3,:3].T+matrix[:3,3]
     if not len(vertices) or not len(mesh.triangles):return None
+    mesh_vertices=vertices
     distances=vertices@plane[:3]+plane[3]
     epsilon=max(1e-8,float(np.ptp(vertices,axis=0).max())*1e-9)
     if distances.min()>=-epsilon or distances.max()<=epsilon:return None
@@ -120,4 +121,22 @@ def cap_mesh(mesh,plane,matrix=None):
     p=vtk_to_numpy(result.GetPoints().GetData())
     vertices=(origin+p[:,0,None]*u+p[:,1,None]*v).astype(np.float32)
     low,high=vertices.min(axis=0),vertices.max(axis=0)
-    return k.DisplayMesh(vertices,cells[:,1:].astype(np.uint32),edges,tuple((low+high)*.5),float(max(1,np.max(high-low))))
+    mesh=k.DisplayMesh(vertices,cells[:,1:].astype(np.uint32),edges,tuple((low+high)*.5),float(max(1,np.max(high-low))))
+    spacing=max(float(np.linalg.norm(np.ptp(np.asarray(mesh_vertices),axis=0)))*.025,1e-5)
+    mesh.hatches=tuple(_hatch_lines(oriented,origin,u,v,spacing,sign) for sign in (1,-1))
+    return mesh
+
+
+def _hatch_lines(rings,origin,u,v,spacing,sign):
+    a=np.concatenate(rings);b=np.concatenate([np.roll(r,-1,axis=0) for r in rings])
+    normal=np.array([1.,float(sign)])/np.sqrt(2);direction=np.array([1.,-float(sign)])/np.sqrt(2)
+    ta=a@normal;tb=b@normal;lines=[]
+    for level in np.arange(np.floor(min(ta.min(),tb.min())/spacing),np.ceil(max(ta.max(),tb.max())/spacing))+.5:
+        value=level*spacing;cross=((ta<=value)&(tb>value))|((tb<=value)&(ta>value))
+        if not cross.any():continue
+        aa=a[cross];bb=b[cross];t=(value-ta[cross])/(tb[cross]-ta[cross])
+        hits=aa+(bb-aa)*t[:,None];hits=hits[np.argsort(hits@direction)]
+        if len(hits)%2:continue
+        pairs=hits.reshape(-1,2,2);pairs=pairs[np.linalg.norm(pairs[:,1]-pairs[:,0],axis=1)>1e-7]
+        if len(pairs):lines.append(origin+pairs[:,:,0,None]*u+pairs[:,:,1,None]*v)
+    return np.concatenate(lines).reshape(-1,3).astype(np.float32) if lines else np.empty((0,3),np.float32)

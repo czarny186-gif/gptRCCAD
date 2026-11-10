@@ -268,6 +268,25 @@ def text_group_of(identifier):
     return identifier[:24] if isinstance(identifier, str) and len(identifier) == 32 and identifier[12] == 'f' else None
 
 
+def prepare_sketch_regions(bodies):
+    """Prepare regions and exact, unsplit pattern-member references in a worker."""
+    prepared=[]
+    for key,(plane,members) in sketch_groups(bodies).items():
+        faces=_group_regions(plane,members,bodies);wires={}
+        for body in members:
+            if body.group and isinstance(body.shape,cq.Wire):
+                edges=body.shape.Edges();signature=tuple(sorted(e.hashCode() for e in edges))
+                wires.setdefault(signature,[]).append((body,edges))
+        fast=[]
+        for face in faces:
+            if face.innerWires():continue
+            edges=face.outerWire().Edges();signature=tuple(sorted(e.hashCode() for e in edges))
+            owners=[body for body,original in wires.get(signature,()) if all(any(e.isSame(old) for old in original) for e in edges)]
+            if len(owners)==1:fast.append((owners[0].group,owners[0].id,face))
+        prepared.append((key,plane,[b.id for b in members],faces,fast))
+    return prepared
+
+
 def _group_regions(plane, members, bodies=None):
     """Obszary szkiców w płaszczyźnie. Pojedynczy kształt (np. jeden okrąg) nie przechodzi przez General Fuse - wtedy obszarem jest ściana z jego konturu
     (tak samo jak przy wskazywaniu obszaru w oknie), inaczej przeliczenie historii gubiłoby takie kroki.
@@ -297,12 +316,17 @@ def split_on_solids(plane, faces, bodies):
 
 
 def _inner_point(face):
-    """Punkt leżący wewnątrz ściany (środek pierwszego trójkąta siatki) - środek ciężkości pierścienia leży poza nim."""
-    vertices, triangles = face.tessellate(0.05, 0.2)
-    if not triangles:
-        return np.array(face.Center().toTuple(), float)
-    t = triangles[0]
-    return np.mean([np.array(vertices[i].toTuple(), float) for i in t], axis=0)
+    """Use an exact interior centroid when possible; mesh only rings/concave faces."""
+    if face.geomType()=='PLANE':
+        from OCP.BRepClass import BRepClass_FaceClassifier
+        from OCP.TopAbs import TopAbs_IN
+        from OCP.gp import gp_Pnt
+        center=face.Center().toTuple()
+        if BRepClass_FaceClassifier(face.wrapped,gp_Pnt(*center),1e-7).State()==TopAbs_IN:
+            return np.asarray(center,float)
+    vertices,triangles=face.tessellate(.05,.2)
+    if not triangles:return np.asarray(face.Center().toTuple(),float)
+    return np.mean([np.asarray(vertices[i].toTuple(),float) for i in triangles[0]],axis=0)
 
 
 def material_faces(sketches):
@@ -397,6 +421,7 @@ def describe_profiles(profiles, bodies=(), merge=True):
     i przesunięcie względem jego środka, więc podąża za szkicem po zmianie jego wymiarów."""
     out = []
     profiles = [p for p in profiles if not p.get('sibling')]      # pozostałe obszary tej samej ściany (wyspy): przepis odtwarza je razem z główną
+    owners={b.id:b for b in bodies}
     groups, boxes = None, {}           # liczone raz dla wszystkich profili (przy setkach otworów z szyku to sekundy)
     for src in profiles:
         if src['kind'] == 'sketch':
@@ -404,6 +429,13 @@ def describe_profiles(profiles, bodies=(), merge=True):
         elif src['kind'] == 'region':
             center = np.array(src['center'], float)
             spec = {'k': 'region', 'plane': plane_to_json(src['plane']), 'center': [float(c) for c in center], 'split': 1}
+            owner=owners.get(src.get('source_id'))
+            if owner is not None and owner.kind=='sketch':
+                box=_operation_bounds(owner.shape)
+                lo=np.array([box.xmin,box.ymin,box.zmin]);hi=np.array([box.xmax,box.ymax,box.zmax])
+                if np.all(center>=lo-1e-6) and np.all(center<=hi+1e-6):
+                    spec['anchor']={'id':owner.id,'offset':[float(v) for v in center-(lo+hi)*.5]}
+                    out.append(spec);continue
             if groups is None:
                 groups = sketch_groups(bodies)
             group = groups.get(plane_key(src['plane']))
@@ -699,6 +731,15 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
     if not used:
         raise kernel.CadError('Nie ma bryły, z którą można wykonać tę operację. Profil musi dotykać bryły lub ją przecinać.')
     return fade(split_parts(bodies, touched) if op != 'join' else bodies)
+
+
+def combine_makers(existing,makers,op,spent=(),ids=(),name='Wyciągnięcie',skip=(),folder='',only=None):
+    """Build exact tools and perform one batched Boolean in the same worker.
+
+    Send planar profiles, not hundreds of completed BREP solids, across processes.
+    Every tool and the resulting solid still pass the normal CAD validation.
+    """
+    return combine(existing,[make() for make in makers],op,spent,ids,name,skip,folder,only)
 
 
 def _remote_bodies(module, name, bodies, args, kwargs):

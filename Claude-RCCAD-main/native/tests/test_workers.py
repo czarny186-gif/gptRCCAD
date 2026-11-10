@@ -195,6 +195,24 @@ class WorkerTests(unittest.TestCase):
         status,again=workers.call_affine(key,cached_cap_mesh,token,None,[0,1,0,-11])
         self.assertEqual(status,'ready');self.assertEqual(len(cap.triangles),len(again.triangles))
 
+    def test_bulk_extrusion_builds_exact_tools_in_worker(self):
+        from functools import partial
+        base=Body('Plate',k.box(60,60,10)).prepared()
+        faces=[cq.Face.makeFromWires(cq.Wire.makeCircle(1,cq.Vector(5+i%5*10,5+i//5*10,10),cq.Vector(0,0,1))) for i in range(25)]
+        makers=[partial(k.extrude_face,f,(0,0,1),-10) for f in faces]
+        with patch.object(k,'valid',side_effect=AssertionError('exact tools built in GUI process')):
+            result=hist.offloaded(hist.combine_makers,[base],makers,'cut')
+        self.assertEqual(len(result),1);self.assertTrue(result[0].shape.isValid())
+        self.assertAlmostEqual(base.shape.Volume()-result[0].shape.Volume(),250*__import__('math').pi,4)
+
+    def test_prefetched_regions_match_complete_pattern_members(self):
+        plane=k.Frame((0,0,10),(1,0,0),(0,0,1))
+        sketches=[Body(str(i),cq.Wire.makeCircle(1,cq.Vector(5+i%10*5,5+i//10*5,10),cq.Vector(0,0,1)),kind='sketch',plane=plane,group='p').prepared() for i in range(100)]
+        data=workers.call_any(hist.prepare_sketch_regions,hist.light(sketches))
+        self.assertEqual(len(data),1)
+        key,frame,ids,faces,fast=data[0]
+        self.assertEqual(len(faces),100);self.assertEqual({item[1] for item in fast},set(ids))
+
 
 if __name__ == '__main__':
     unittest.main()
