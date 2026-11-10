@@ -1930,6 +1930,71 @@ def extrude_face(face, normal, d1, d2=0.0, symmetric=False):
         return valid(cq.Solid.extrudeLinear(move(face.outerWire()), [move(w) for w in face.innerWires()], vec))
 
 
+def surface_stamp_tool(shape, face, normal, height, operation='join'):
+    """A profile-limited offset layer following planar, cylindrical and filleted faces.
+
+    The planar profile is a projected footprint.  The offset layer supplies
+    constant normal thickness; the footprint clips it across adjacent faces.
+    """
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.gp import gp_Vec
+    depth=abs(float(height))
+    if not isfinite(depth) or depth<1e-5:
+        raise CadError('Wysokość na powierzchni musi być większa od zera.')
+    n=np.asarray(normal,float);n/=np.linalg.norm(n)
+    if len(shape.Solids())!=1:
+        raise CadError('Szkic na powierzchni wymaga jednej zamkniętej bryły.')
+    b=bounds(shape);corners=np.array([[x,y,z] for x in (b.xmin,b.xmax) for y in (b.ymin,b.ymax) for z in (b.zmin,b.zmax)])
+    extent=float(np.ptp(corners@n))
+    fb=bounds(face);size=max(fb.xlen,fb.ylen,fb.zlen)
+    reach=min(max(size,2*depth,1.),.49*extent)
+    if reach<depth*.5:
+        raise CadError('Wysokość jest za duża względem wymiarów bryły.')
+    sign=-1 if operation=='cut' else 1
+    try:
+        layer=shape.Solids()[0].shell([],sign*depth,kind='arc')
+        vec=cq.Vector(*[float(c) for c in n])
+        base=face.translate(vec.multiply(-reach))
+        prism=cq.Shape.cast(BRepPrimAPI_MakePrism(base.wrapped,gp_Vec(*vec.multiply(2*reach).toTuple()),False,True).Shape())
+        common=BRepAlgoAPI_Common(layer.wrapped,prism.wrapped)
+        common.Build()
+        result=cq.Shape.cast(common.Shape())
+        return valid(result)
+    except CadError:
+        raise
+    except Exception as exc:
+        raise CadError('Nie udało się dopasować wyciągnięcia do powierzchni. Zmniejsz wysokość lub obszar szkicu.') from exc
+
+
+def project_surface_mesh(mesh, shape, normal):
+    """Display a planar sketch on the first solid surface seen along its normal."""
+    from OCP.IntCurvesFace import IntCurvesFace_Intersector
+    from OCP.gp import gp_Lin,gp_Pnt,gp_Dir
+    n=np.asarray(normal,float);n/=np.linalg.norm(n)
+    box=bounds(shape);span=max(box.xlen,box.ylen,box.zlen)*1.1
+    local=max(.5,min(float(mesh.size),span*.15))
+    intersectors=[IntCurvesFace_Intersector(face.wrapped,1e-5) for face in shape.Faces()]
+    cache={}
+    def projected(point):
+        key=tuple(round(float(c),6) for c in point)
+        if key not in cache:
+            start=np.asarray(point,float)+n*local
+            ray=gp_Lin(gp_Pnt(*[float(c) for c in start]),gp_Dir(*[float(c) for c in -n]))
+            hits=[]
+            for item in intersectors:
+                item.Perform(ray,0,local+span)
+                hits.extend((item.WParameter(i),item.Pnt(i)) for i in range(1,item.NbPnt()+1) if item.WParameter(i)>=0)
+            if hits:
+                _,hit=min(hits,key=lambda pair:pair[0]);cache[key]=(hit.X(),hit.Y(),hit.Z())
+            else:cache[key]=key
+        return cache[key]
+    vertices=np.asarray([projected(v) for v in mesh.vertices],np.float32).reshape(-1,3)
+    edges={i:np.asarray([projected(v) for v in pts],np.float32).reshape(-1,3) for i,pts in mesh.edges.items()}
+    center=projected(mesh.center)
+    return DisplayMesh(vertices,mesh.triangles,edges,center,mesh.size,mesh.fine,mesh.face_ids)
+
+
 def revolve_face(face, point, direction, angle=360.0):
     """Obrót ściany / obszaru (z otworami) wokół osi (punkt, kierunek) o kąt w stopniach: bryła obrotowa (wałek, miska, gałka...)."""
     from math import radians

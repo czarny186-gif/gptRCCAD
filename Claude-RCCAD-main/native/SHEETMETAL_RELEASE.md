@@ -1,3 +1,14 @@
+# RCCAD Desktop 0.4.87 — szkic na powierzchni bryły
+
+- W zakładce **Szkic** są nowe narzędzia „Szkic na powierzchni” i „Szkic na narożniku”. Wskaż walec, ostrą krawędź albo wypukłe lub wklęsłe zaokrąglenie i narysuj zamknięty kształt lub tekst.
+- Obrys szkicu jest wyświetlany na powierzchni bryły. Wyciągnięcie dopasowuje grubość do bryły i może dodawać albo wycinać materiał na powierzchni walcowej, ostrym narożniku oraz wypukłym i wklęsłym zaokrągleniu.
+- Tekst zachowuje otwory liter. Szkic i operacja pozostają zapisane w projekcie i historii; po przesunięciu szkicu lub zmianie bryły obrys jest ponownie dopasowywany do powierzchni.
+- Testy geometrii sprawdzają dodawanie i wycinanie na pięciu typach powierzchni, w tym wklęsłym zaokrągleniu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.86 — zakres szyku punktami i uchwytami na ścieżce
 
 - W prostokątnym szyku opcja „Zakres kopii z 3 punktów” pozwala wskazać płaszczyznę, po czym pierwszy punkt powstaje w rzucie środka wybranego obiektu. Dwa kliknięcia wyznaczają środki ostatnich kopii w obu kierunkach. Liczba kopii pozostaje edytowalna; odstępy są liczone dokładnie z końców zakresu. Dwie strzałki pozwalają później przesuwać te końce.

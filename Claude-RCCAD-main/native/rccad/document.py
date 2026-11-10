@@ -11,6 +11,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 import cadquery as cq
 import numpy as np
 from .kernel import CadError, DisplayMesh, Frame, display_mesh, heavy, mesh_deferred, valid
+from . import kernel
 
 
 def _mesh(shape):
@@ -70,6 +71,8 @@ class Body:
     def changed(self, shape, mesh=False):
         """Ta sama bryła z nowym kształtem. mesh: gotowa siatka (np. policzona w procesie liczącym); domyślnie liczona tutaj."""
         meta = None
+        if self.kind == 'sketch' and self.meta and self.meta.get('surface'):
+            meta = dict(self.meta)
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             meta = {'sheet': dict(self.meta['sheet'], dirty=True)}
         if self.kind == 'solid' and self.meta and self.meta.get('ply'):
@@ -145,6 +148,20 @@ class Document:
         bodies = tuple(bodies)
         if len({b.id for b in bodies}) != len(bodies):
             raise CadError("Powtórzony identyfikator obiektu.")
+        previous = {b.id: b for b in self.bodies}
+        current = {b.id: b for b in bodies}
+        projected = []
+        for body in bodies:
+            surface = (body.meta or {}).get('surface') if body.kind == 'sketch' else None
+            target = current.get(surface['target']) if surface else None
+            old = previous.get(body.id)
+            old_target = previous.get(surface['target']) if surface else None
+            if target is not None and (body.mesh is None or (old is not None and old.shape is not body.shape)
+                                       or (old_target is not None and old_target.shape is not target.shape)):
+                planar = display_mesh(body.shape)
+                body = replace(body, mesh=kernel.project_surface_mesh(planar, target.shape, surface['normal']))
+            projected.append(body)
+        bodies = tuple(projected)
         auto_label, auto_icon = self._auto_label(self.bodies, bodies)
         info = {'label': label or self.pending_label or auto_label, 'icon': icon or self.pending_icon or (auto_icon if not (label or self.pending_label) else 'move')}
         op = op or self.pending_op
@@ -185,9 +202,14 @@ class Document:
                     raise CadError(error)
                 self._mesh_cache[id(b.shape)] = (b.shape, mesh)
         out = []
+        by_id = {b.id: b for b in bodies}
         for b in bodies:
             if b.mesh is None:
                 b = replace(b, mesh=self._mesh_cache[id(b.shape)][1])
+                surface = (b.meta or {}).get('surface') if b.kind == 'sketch' else None
+                target = by_id.get(surface['target']) if surface else None
+                if target is not None:
+                    b = replace(b, mesh=kernel.project_surface_mesh(b.mesh, target.shape, surface['normal']))
             out.append(b)
         return tuple(out)
 

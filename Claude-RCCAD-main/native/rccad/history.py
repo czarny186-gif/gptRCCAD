@@ -424,7 +424,11 @@ def describe_profiles(profiles, bodies=(), merge=True):
     owners={b.id:b for b in bodies}
     groups, boxes = None, {}           # liczone raz dla wszystkich profili (przy setkach otworów z szyku to sekundy)
     for src in profiles:
-        if src['kind'] == 'sketch':
+        if src['kind'] == 'surfacetext':
+            out.append({'k': 'surfacetext', 'group': src['group']})
+        elif src['kind'] == 'surface':
+            out.append({'k': 'surface', 'id': src['id']})
+        elif src['kind'] == 'sketch':
             out.append({'k': 'sketch', 'id': src['id']})
         elif src['kind'] == 'region':
             center = np.array(src['center'], float)
@@ -521,6 +525,18 @@ def match_cylinder(shape, spec):
 def resolve_profile(bodies, spec):
     """Odtwarza profil (wire, normal, plane, face) w podanym stanie albo rzuca CadError."""
     by_id = {b.id: b for b in bodies}
+    if spec['k'] == 'surface':
+        body = by_id.get(spec['id'])
+        if body is None or body.kind != 'sketch' or not (body.meta or {}).get('surface'):
+            raise kernel.CadError('Szkic powierzchniowy nie istnieje.')
+        target = by_id.get(body.meta['surface']['target'])
+        if target is None or target.kind != 'solid':
+            raise kernel.CadError('Bryła pod szkicem powierzchniowym nie istnieje.')
+        face = profile_face(body.shape)
+        if face is None:
+            raise kernel.CadError('Szkic powierzchniowy musi być zamknięty.')
+        return dict(face=face, wire=face.outerWire(), normal=tuple(body.meta['surface']['normal']),
+                    plane=body.plane, surface=body.meta['surface'], target_shape=target.shape)
     if spec['k'] == 'cyl':
         body = by_id.get(spec['id'])
         if body is None or body.kind != 'solid':
@@ -568,6 +584,19 @@ def resolve_profile(bodies, spec):
 
 def resolve_profiles(bodies, spec):
     """Lista profili dla jednej pozycji przepisu (napis = wszystkie jego obszary, reszta = jeden profil)."""
+    if spec['k'] == 'surfacetext':
+        members = [b for b in bodies if b.kind == 'sketch' and text_group_of(b.id) == spec['group'] and (b.meta or {}).get('surface')]
+        if not members:
+            raise kernel.CadError('Napis na powierzchni już nie istnieje.')
+        surface = members[0].meta['surface']
+        target = next((b for b in bodies if b.id == surface['target'] and b.kind == 'solid'), None)
+        if target is None:
+            raise kernel.CadError('Bryła pod napisem już nie istnieje.')
+        faces = material_faces(members)
+        if not faces:
+            raise kernel.CadError('Napis nie tworzy zamkniętego obszaru.')
+        return [dict(face=f, wire=f.outerWire(), normal=tuple(surface['normal']), plane=members[0].plane,
+                     surface=surface, target_shape=target.shape) for f in faces]
     if spec['k'] == 'face' and spec.get('holes'):      # ściana z otworami po szkicach: cały jej materiał, także wyspy (wnętrza liter o, a, d, p...)
         body = next((b for b in bodies if b.id == spec['id']), None)
         if body is not None and body.kind == 'solid':
@@ -589,7 +618,9 @@ def resolve_profiles(bodies, spec):
     return [dict(wire=f.outerWire(), normal=tuple(kernel.frame_of(found[0]).normal), plane=found[0], face=f) for f in faces]
 
 
-def make_tool(src, d1, d2, mode):
+def make_tool(src, d1, d2, mode, operation='join'):
+    if src.get('surface'):
+        return kernel.surface_stamp_tool(src['target_shape'], src['face'], src['normal'], d1, operation)
     if src.get('cyl') is not None:          # ściana walcowa: pierścień zmieniający promień (kierunek obustronny nie ma sensu)
         return kernel.cylinder_offset_tool(src['cyl'], d1)
     face, wire, normal, plane = src['face'], src['wire'], src['normal'], src['plane']
@@ -997,20 +1028,22 @@ def run_extrude(bodies, recipe):
     """Ponownie wykonuje zapisane wyciągnięcie / wycięcie na podanym stanie."""
     mode = recipe.get('dir', 'one')
     sources = [src for spec in recipe['profiles'] for src in resolve_profiles(bodies, spec)]
+    if mode != 'one' and any(src.get('surface') for src in sources):
+        raise kernel.CadError('Wyciągnięcie na powierzchni wymaga jednej wysokości.')
     d1 = float(recipe['d1'])
     tools = []
     for src in sources:
-        pad = gap_pad(bodies, src) if mode == 'one' else 0.0
+        pad = gap_pad(bodies, src) if mode == 'one' and not src.get('surface') else 0.0
         if pad > 0:      # szkic leży na płaszczyźnie przylegającej do skręconej ściany: narzędzie zaczyna się cofnięte, więc nie zostaje przerwa
             tools.append(make_tool(src, d1, -pad if d1 < 0 else pad, 'two'))
         else:
-            tools.append(make_tool(src, d1, float(recipe.get('d2', 0)), mode))
+            tools.append(make_tool(src, d1, float(recipe.get('d2', 0)), mode, recipe['mode']))
     if mode == 'ends':        # na obu końcach: druga część na przeciwległej ścianie (liczona na stanie sprzed kroku)
         tools += [opposite_tool(bodies, src, d1) for src in sources]
     spent = set(recipe.get('spent', ()))
     for src in sources:
         spent |= set(src.get('spent', ()))
-    groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] == 'textgroup'}
+    groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] in ('textgroup', 'surfacetext')}
     spent |= {b.id for b in bodies if text_group_of(b.id) in groups}      # wszystkie litery napisu (także nowe po zmianie treści)
     return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()), folder=recipe.get('folder', ''),only=recipe.get('join_to'))
 
@@ -1903,7 +1936,15 @@ def run_text(bodies, recipe):
     else:
         ids = pad_ids(ids, len(shapes), ids[0] if ids else None)
     folder = text_folder(q['text'])        # napis od razu jako grupa na liście obiektów
-    return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i], folder=folder).prepared() for i, sh in enumerate(shapes)]]
+    surface = recipe.get('surface')
+    target = next((b for b in bodies if surface and b.id == surface['target']), None)
+    made = []
+    for i, sh in enumerate(shapes):
+        body = Body(recipe['name'], sh, 'sketch', plane, id=ids[i], folder=folder, meta={'surface': surface} if surface else None).prepared()
+        if target is not None and body.mesh is not None:
+            body = replace(body, mesh=kernel.project_surface_mesh(body.mesh, target.shape, surface['normal']))
+        made.append(body)
+    return [*bodies, *made]
 
 
 def text_folder(text):

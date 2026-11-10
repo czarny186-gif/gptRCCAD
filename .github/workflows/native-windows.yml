@@ -91,5 +91,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --verify-tag --title "RCCAD Desktop ${GITHUB_REF_NAME#rccad-desktop-v} — blachy" \
+            --verify-tag --title "RCCAD Desktop ${GITHUB_REF_NAME#rccad-desktop-v}" \
             --notes-file Claude-RCCAD-main/native/SHEETMETAL_RELEASE.md

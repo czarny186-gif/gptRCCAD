@@ -58,6 +58,34 @@ class StudioTests(unittest.TestCase):
         for p in points:self.w.sketch_clicked(plane,*p)
         self.wait()
 
+    def test_surface_sketch_toolbar_create_and_join(self):
+        w = self.w
+        solid = Body('Walec', cq.Workplane().cylinder(20, 10).val(), 'solid').prepared()
+        w.document.commit([solid])
+        w.refresh()
+        w.begin_surface_sketch(corner=True)
+        self.assertTrue(w.wrap_corner)
+        w.begin_surface_sketch()
+        self.assertTrue(w.wrap_sketch)
+        self.assertFalse(w.wrap_corner)
+        normal = (1, 0, 0)
+        origin = (10, 0, 0)
+        w.surface_target = {'target': solid.id, 'normal': list(normal)}
+        plane = k.face_frame(origin, normal)
+        w.enter_sketch(plane)
+        wire = cq.Workplane(cq.Plane(origin=origin, normal=normal)).circle(3).val()
+        w.create_sketch([wire])
+        self.wait()
+        sketch = next(b for b in w.document.bodies if b.kind == 'sketch')
+        self.assertEqual(sketch.meta['surface']['target'], solid.id)
+        w.set_mode('extrude')
+        w._accept_profile(w._sketch_profile(sketch))
+        w.ex_value.setValue(.5)
+        self.preview()
+        w.apply_extrude()
+        self.wait()
+        self.assertGreater(next(b.shape for b in w.document.bodies if b.kind == 'solid').Volume(), solid.shape.Volume())
+
     def test_objects_panel_lists_selects_hides_deletes(self):
         w=self.w
         a=Body('Szkic XY',k.sketch('rectangle','XY',10,10),'sketch','XY').prepared()

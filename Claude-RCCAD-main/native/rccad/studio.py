@@ -219,13 +219,13 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface', 'wrapsketch', 'wrapcorner'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
 # narzędzia, które można dodać do Ulubionych (bez Pliku, Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu)
-FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for tool in tools if tool != 'surface']
+FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for tool in tools if tool not in ('surface', 'wrapsketch', 'wrapcorner')]
 TAB_TOP = 14        # pasek zakładek
 TOOLS_TOP = 50      # przyciski narzędzi pod zakładkami
 MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
@@ -481,6 +481,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                  ('mate', ui.style_icon('mate', 38), 'Dopasowanie — ściana jednej bryły przylega do ściany drugiej, środkami ścian'),
                  ('align', ui.style_icon('align', 38), 'Wyrównanie — ściana jednej bryły na tej samej wysokości co ściana drugiej'),
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
+                 ('wrapsketch', ui.style_icon('surface', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
+                 ('wrapcorner', ui.style_icon('surface', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
                  ('split', ui.style_icon('split', 38), 'Przetnij bryłę — płaszczyzną, ścianą, szkicem albo inną bryłą'),
@@ -529,6 +531,10 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 button.clicked.connect(lambda _=False: self.import_drawing_file())
             elif key == 'surface':
                 button.clicked.connect(lambda _=False: self.pick_other_surface())
+            elif key == 'wrapsketch':
+                button.clicked.connect(lambda _=False: self.begin_surface_sketch())
+            elif key == 'wrapcorner':
+                button.clicked.connect(lambda _=False: self.begin_surface_sketch(corner=True))
             elif key == 'toolbox':
                 button.clicked.connect(lambda _=False: self.open_toolbox())
             elif key == 'libimport':
@@ -1909,6 +1915,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         """Przełącza narzędzie; None = zwykłe zaznaczanie."""
         if self.busy:
             return
+        self.wrap_sketch = False
+        self.wrap_corner = False
+        self.surface_target = None
         self._sh_xray(False)
         self._result_preview = False
         self.override = {}
@@ -2209,11 +2218,28 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def pick_surface(self, x, y, announce=False):
         """Płaszczyzna szkicu spod kursora: płaska ściana bryły (Frame) albo jedna z płaszczyzn XY / XZ / YZ."""
+        if getattr(self, 'wrap_sketch', False) and announce:
+            edge_hit = self.view.nearest_edge(x, y, solids_only=True)
+            edge_body = self.document.get(edge_hit[0]) if edge_hit else None
+            if edge_body is not None:
+                try:
+                    origin, inward = kernel.edge_handle(edge_body.shape, edge_hit[1])
+                    normal = tuple(-float(v) for v in inward)
+                    self.surface_target = {'target': edge_body.id, 'normal': list(normal)}
+                    return kernel.face_frame(origin, normal), None
+                except (kernel.CadError, ValueError, IndexError):
+                    pass
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         if body is not None and body.kind == 'solid':
             try:
                 face, normal = self.view.face_at(body,hit, curved=True)
+                if self.wrap_sketch:
+                    if self.wrap_corner and kernel.is_planar_face(face):
+                        self.surface_target = None
+                        return None, None
+                    self.surface_target = {'target': body.id, 'normal': list(map(float, normal))}
+                    return kernel.face_frame(hit[2], normal), face
                 if kernel.is_planar_face(face):
                     return kernel.face_frame(face.Center().toTuple(), normal), face
                 origin, fit = kernel.supporting_plane(face, hit[2], normal)
@@ -2222,9 +2248,21 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 return kernel.face_frame(origin, fit), face
             except kernel.CadError:
                 return None, None
+        if getattr(self, 'wrap_sketch', False):
+            self.surface_target = None
+            return None, None
         section=self.view.section_reference(x,y)
         if section is not None:return section,None
         return self.view.plane_at(x, y), None
+
+    def begin_surface_sketch(self, corner=False):
+        self.set_mode('plane')
+        self.wrap_sketch = True
+        self.wrap_corner = bool(corner)
+        self.tools['sketch'].setChecked(False)
+        self.tools['wrapsketch'].setChecked(not corner)
+        self.tools['wrapcorner'].setChecked(corner)
+        self.toast('Wskaż narożnik bryły.' if corner else 'Wskaż ścianę bryły do szkicowania na jej powierzchni.')
 
     def enter_sketch(self, plane):
         self.mode = 'sketch'
@@ -2787,11 +2825,22 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def create_sketch(self, shapes, label=None, meta=None, select=False, op=None):
         plane = self.sketch_plane
+        surface = self.surface_target if getattr(self, 'wrap_sketch', False) else None
+        if surface:
+            meta = dict(meta or {}, surface=surface)
         name = f'{label or "Szkic"} {self._plane_label()}'
         ids = (hist.text_ids(hist.new_text_group(), len(shapes)) if op.get('type') == 'text' else [uuid.uuid4().hex for _ in shapes]) if op else None
         if op:
             op = dict(op, plane=hist.plane_to_json(plane), name=name, out=ids)
-        made = [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes] if select else None
+            if surface:
+                op['surface'] = surface
+        target = self.document.get(surface['target']) if surface else None
+        def prepare(sh, ident=None):
+            body = Body(name, sh, 'sketch', plane, id=ident or uuid.uuid4().hex).prepared()
+            if target is not None:
+                body = replace(body, mesh=kernel.project_surface_mesh(body.mesh, target.shape, surface['normal']))
+            return replace(body, meta=meta)
+        made = [prepare(sh, ids[i] if ids else None) for i, sh in enumerate(shapes)] if select else None
 
         def after():
             if select and made:
@@ -2817,7 +2866,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.add_prepared_many(bodies)
 
         self.run_operation('Tworzenie szkicu', (lambda: made) if select else
-                           (lambda: [replace(Body(name, sh, 'sketch', plane, id=(ids[i] if ids else uuid.uuid4().hex)).prepared(), meta=meta) for i, sh in enumerate(shapes)]),
+                           (lambda: [prepare(sh, ids[i] if ids else None) for i, sh in enumerate(shapes)]),
                            commit_new, after=after if select else None)
         self.show_sketch_hint()
 
@@ -3442,7 +3491,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if self.mode == 'plane':
             plane, _ = self.pick_surface(x, y, True)
             if plane is None:
-                self.toast('Kliknij płaszczyznę lub płaską ścianę bryły.')
+                self.toast('Kliknij ścianę lub krawędź bryły.' if self.wrap_sketch else 'Kliknij płaszczyznę lub płaską ścianę bryły.')
                 return
             self.enter_sketch(plane)
         elif self.mode == 'extrude':
@@ -3537,7 +3586,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if cached is not None and cached[0] is self.document.bodies:return cached[1]
         groups = {}
         for b in self.document.bodies:
-            if b.kind == 'sketch' and b.visible and not b.name.startswith(('Konstrukcja', 'Punkt')):
+            if b.kind == 'sketch' and b.visible and not (b.meta or {}).get('surface') and not b.name.startswith(('Konstrukcja', 'Punkt')):
                 cache = self.__dict__.setdefault('_frame_cache', LRU(max_entries=8192))
                 hit = cache.get(id(b.shape))
                 if hit is None or hit[0] is not b.shape or hit[2] != b.plane:
@@ -3645,6 +3694,35 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         return main, [r for r in regions if r is not main], [b.id for b in holes]
 
     def _profile_at(self, x, y):
+        candidates = self.view._screen_bodies(x, y, 2)
+        if any(b.kind == 'sketch' and (b.meta or {}).get('surface') for b in candidates):
+            ray = self.view._ray(x, y)
+            visual_hit = self.view._hit(*ray) if ray is not None else None
+            visual_body = self.document.get(visual_hit[1]) if visual_hit else None
+            if visual_body is not None and visual_body.kind == 'sketch' and (visual_body.meta or {}).get('surface'):
+                return self._sketch_profile(visual_body)
+        for sketch in candidates:
+            surface = (sketch.meta or {}).get('surface') if sketch.kind == 'sketch' else None
+            if not surface or not sketch.visible:
+                continue
+            hit_sketch = self.view._plane_hit(sketch.plane, x, y)
+            face_sketch = hist.profile_face(sketch.shape)
+            if hit_sketch and face_sketch is not None and kernel.face_contains(face_sketch, hit_sketch[1]):
+                frame = kernel.frame_of(sketch.plane)
+                group = hist.text_group_of(sketch.id)
+                if group:
+                    members = [b for b in self.document.bodies if b.kind == 'sketch' and hist.text_group_of(b.id) == group]
+                    faces = hist.material_faces(members)
+                    picked = next((f for f in faces if kernel.face_contains(f, hit_sketch[1])), None)
+                    if picked is not None:
+                        def text_source(f, sibling):
+                            return dict(kind='surfacetext', id=sketch.id, group=group, face=f, wire=f.outerWire(),
+                                        plane=sketch.plane, normal=tuple(frame.normal), center=f.Center().toTuple(),
+                                        surface=surface, sibling=sibling)
+                        return dict(text_source(picked, False), siblings=[text_source(f, True) for f in faces if f is not picked])
+                    continue
+                return dict(kind='surface', id=sketch.id, face=face_sketch, wire=face_sketch.outerWire(),
+                            plane=sketch.plane, normal=tuple(frame.normal), center=face_sketch.Center().toTuple(), surface=surface)
         region = self._region_at(x, y)
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
@@ -3695,6 +3773,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         bid = self.view.pick_profile(x, y)
         if bid is not None:
             body = self.document.get(bid)
+            if (body.meta or {}).get('surface'):
+                return self._sketch_profile(body)
             frame = kernel.frame_of(body.plane)
             normal = kernel.profile_normal(body.shape, frame.normal)   # szkic mógł zostać obrócony: wyciągamy wzdłuż jego rzeczywistej normalnej
             tilted = abs(float(np.dot(normal, frame.normal))) < 1 - 1e-6
@@ -3702,6 +3782,22 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         return None
 
     def _sketch_profile(self, body):
+        surface = (body.meta or {}).get('surface')
+        if surface:
+            group = hist.text_group_of(body.id)
+            if group:
+                members = [b for b in self.document.bodies if b.kind == 'sketch' and hist.text_group_of(b.id) == group]
+                faces = hist.material_faces(members)
+                if faces:
+                    def source(f, sibling):
+                        return dict(kind='surfacetext', id=body.id, group=group, face=f, wire=f.outerWire(), plane=body.plane,
+                                    normal=tuple(surface['normal']), center=f.Center().toTuple(), surface=surface, sibling=sibling)
+                    return dict(source(faces[0], False), siblings=[source(f, True) for f in faces[1:]])
+            face = hist.profile_face(body.shape)
+            if face is None:
+                raise kernel.CadError('Szkic na powierzchni musi być zamknięty.')
+            return dict(kind='surface', id=body.id, face=face, wire=face.outerWire(), plane=body.plane,
+                        normal=tuple(surface['normal']), center=face.Center().toTuple(), surface=surface)
         frame = kernel.frame_of(body.plane)
         normal = kernel.profile_normal(body.shape, frame.normal)
         tilted = abs(float(np.dot(normal, frame.normal))) < 1 - 1e-6
@@ -3880,6 +3976,15 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if not chosen:
             return []
         out, covered = [], set()
+        surface_groups = set()
+        for m in chosen:
+            if (m.meta or {}).get('surface'):
+                group = hist.text_group_of(m.id)
+                if group in surface_groups and group is not None:
+                    continue
+                if group:
+                    surface_groups.add(group)
+                out.append(self._sketch_profile(m))
         groups = self._drawn_sketches()
         ids = {b.id for b in chosen}
         for key, (plane, bodies) in groups.items():
@@ -3910,6 +4015,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                             covered.add(m.id)
                             break
         for m in chosen:
+            if (m.meta or {}).get('surface'):
+                continue
             if m.id not in covered and getattr(m.shape, 'IsClosed', lambda: False)():
                 out.append(self._sketch_profile(m))
         order={body.id:i for i,body in enumerate(chosen)}
@@ -3921,7 +4028,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self._ex_op_manual = False
             for spin in (self.ex_value, self.ex_second):
                 spin.blockSignals(True)
-                spin.setValue(10.0)
+                spin.setValue(1.0 if any(p.get('surface') for p in self.ex_profiles) else 10.0)
                 spin.blockSignals(False)
         self._auto_extrude_op()
         if not self.ex_profiles:
@@ -3960,7 +4067,13 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             meshes=[]
             for src in profiles:
                 face=src.get('face') or profile_face(src['wire'])
-                if face is not None:meshes.append(kernel.display_mesh(face))
+                if face is not None:
+                    mesh = kernel.display_mesh(face)
+                    surface = src.get('surface')
+                    target = self.document.get(surface['target']) if surface else None
+                    if target is not None:
+                        mesh = kernel.project_surface_mesh(mesh, target.shape, surface['normal'])
+                    meshes.append(mesh)
             return _merge_meshes(meshes) if meshes else None
         if len(profiles)<12:
             mesh=compute();self.view.set_selection_meshes([mesh] if mesh is not None else None)
@@ -4150,6 +4263,11 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self._focus_ex_value()
 
     def _ex_dir_changed(self, *_):
+        if any(p.get('surface') for p in self.ex_profiles) and self.ex_dir.currentData() != 'one':
+            self.ex_dir.blockSignals(True)
+            self.ex_dir.setCurrentIndex(self.ex_dir._data.index('one'))
+            self.ex_dir.blockSignals(False)
+            self.toast('Szkic na powierzchni używa jednej wysokości mierzonej prostopadle do bryły.')
         two = self.ex_dir.currentData() == 'two'
         self.ex_second_label.setVisible(two)
         self.ex_second.setVisible(two)
@@ -4188,6 +4306,14 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if getattr(self, '_ex_op_manual', False) or len({p.get('cluster', id(p)) for p in self.ex_profiles}) != 1 or self.ex_dir.currentData() != 'one':
             return
         src = self.ex_profiles[0]
+        if src.get('surface'):
+            if self.ex_op.currentData() != 'join':
+                self._ex_auto = True
+                try:
+                    self.ex_op.setCurrentIndex(self.ex_op._data.index('join'))
+                finally:
+                    self._ex_auto = False
+            return
         value = self.ex_value.value()
         if abs(value) < 1e-6:
             return
@@ -4298,9 +4424,17 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             raise kernel.CadError('Wybierz profil szkicu lub ścianę.')
         d1, d2 = self.ex_value.value(), self.ex_second.value()
         mode = self.ex_dir.currentData()
+        if mode != 'one' and any(src.get('surface') for src in self.ex_profiles):
+            raise kernel.CadError('Wyciągnięcie na powierzchni wymaga jednej wysokości.')
         out = []
         for src in self.ex_profiles:
             wire, normal, plane, face = src['wire'], src['normal'], src['plane'], src.get('face')
+            if src.get('kind') in ('surface', 'surfacetext'):
+                target = self.document.get(src['surface']['target'])
+                if target is None:
+                    raise kernel.CadError('Bryła pod szkicem powierzchniowym nie istnieje.')
+                out.append(partial(kernel.surface_stamp_tool, target.shape, face, normal, d1, self.ex_op.currentData()))
+                continue
             if src.get('kind') == 'cyl':          # ściana walcowa: zmiana promienia o d1 (+ dodaje, - wycina materiał)
                 out.append(partial(kernel.cylinder_offset_tool, src['cyl'], d1))
                 continue
@@ -4354,8 +4488,10 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         ids = set();live={b.id for b in self.document.bodies}
         for prof in profiles:
             ids |= set(prof.get('hole_ids', ()))      # szkice, które zrobiły otwory w wybranej ścianie
-            if prof.get('kind') == 'sketch' and prof.get('id'):
+            if prof.get('kind') in ('sketch', 'surface', 'surfacetext') and prof.get('id'):
                 ids.add(prof['id'])
+            if prof.get('kind') == 'surfacetext':
+                ids |= {b.id for b in self.document.bodies if hist.text_group_of(b.id) == prof['group']}
             elif prof.get('source_id') in live:
                 ids.add(prof['source_id'])
             elif prof.get('kind') == 'region' and prof.get('face') is not None:
