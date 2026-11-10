@@ -1171,9 +1171,12 @@ def run_pattern(bodies, recipe):
     group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
     # osobne elementy: oryginał i kopie trafiają do wspólnej grupy (folderu) na liście obiektów
     folder = body.folder or ('' if group else (recipe.get('folder') or f'{body.name} — szyk'))
-    made = prepared_many(Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder,
-                              threads=_moved_threads(body.threads, kernel.op_matrix(ops[i])))
-                         for i, sh in enumerate(copies))
+    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder,
+                 threads=_moved_threads(body.threads, kernel.op_matrix(ops[i])),
+                 mesh=kernel.transformed_display_mesh(body.mesh, ops[i]) if body.mesh is not None else None)
+            for i, sh in enumerate(copies)]
+    if body.mesh is None:
+        made = prepared_many(made)
     source_body = body.changed(source) if moved else body
     if group:
         source_body = replace(source_body, group=group)

@@ -2837,7 +2837,10 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(np.allclose(hx['tip'],np.array(hx['start'])+[w.pat_gaps[0].value(),0,0]),(hx,w.pat_gaps[0].value(),w.pat_counts[0].value()))     # koniec strzałki X na pierwszej kopii
         g=[x.value() for x in w.pat_gaps]
         w.handle_dragged('patX',5);self.assertAlmostEqual(w.pat_gaps[0].value(),g[0]+5)
-        w.handle_dragged('patX',8);self.assertAlmostEqual(w.pat_gaps[0].value(),g[0]+8);w.handle_released('patX')
+        w.handle_dragged('patX',8.12);self.assertAlmostEqual(w.pat_gaps[0].value(),g[0]+8.12,places=2)
+        hx=next(h for h in w.view.handles if h['id']=='patX')
+        self.assertAlmostEqual(hx['tip'][0]-hx['start'][0],g[0]+8.12,places=2)
+        w.handle_released('patX')
         w.handle_dragged('patY',15);w.handle_released('patY')
         self.assertEqual((w.pat_counts[1].value(),w.pat_gaps[1].value()),(2,g[1]+15))   # jedna kopia w Y -> przeciągnięcie dodaje kopię
         w.handle_dragged('patZ',-(g[2]+30));w.handle_released('patZ')

@@ -21,6 +21,26 @@ class SectionMaterialTests(unittest.TestCase):
     def body(self,shape):
         b=Body('Model',shape).prepared();self.view.set_models([b]);return b
 
+    def test_large_idle_pattern_uses_one_draw_batch_and_restores_individual_cuts(self):
+        from dataclasses import replace
+        from rccad import kernel as k
+        source=Body('Cylinder',cq.Workplane('XY').circle(2.5).extrude(10).val()).prepared()
+        bodies=[replace(source,id=f'copy-{i}',folder='batch',shape=source.shape.translate(cq.Vector(i*10,0,0)),
+                        mesh=k.transformed_display_mesh(source.mesh,('t',(i*10,0,0)))) for i in range(30)]
+        self.view.set_models(bodies)
+        self.assertEqual(len(self.view._solid_batches),1)
+        self.assertEqual(len(self.view._parts),0)
+        self.view.set_section_plane([0,0,1,-5])
+        self.assertEqual(len(self.view._solid_batches),0)
+        self.assertEqual(len(self.view._parts),30)
+        self.view.set_section_plane(None)
+        self.assertEqual(len(self.view._solid_batches),1)
+        self.assertEqual(len(self.view._parts),0)
+        self.view.set_models(bodies,selected_bodies=[bodies[0].id])
+        self.assertEqual(len(self.view._solid_batches),1)
+        self.assertEqual(len(self.view._parts),1)
+        self.assertNotIn(bodies[0].id,[bid for bid,_ in self.view._solid_batches["batch"][0]])
+
     def test_preparing_material_does_not_query_legacy_opengl_state(self):
         from unittest.mock import patch
         from OpenGL import GL

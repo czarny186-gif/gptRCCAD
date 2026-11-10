@@ -7458,7 +7458,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         new_sign = 1 if signed >= 0 else -1
         for b in pair:
             b.setChecked(b.sign == new_sign)
-        self.pat_gaps[i].setValue(round(abs(signed), 1))
+        self.pat_gaps[i].setValue(round(abs(signed), 2))
+        self._place_pattern_handles()
         self._timers['pattern'].start()
 
     def update_pattern_preview(self):
@@ -7474,7 +7475,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             return
         try:
             ops, moved = self._pattern_ops(body)
-            mesh = kernel.pattern_mesh(body.mesh, ([moved] if moved else []) + ops, original=moved is None)
+            mesh = kernel.pattern_mesh(body.mesh, ([moved] if moved else []) + ops, original=moved is None,
+                                       include_edges=body.kind == 'sketch' or len(ops) < 80)
         except kernel.CadError as exc:
             self.view.set_preview_mesh(None)
             self.pat_status.setText(str(exc))

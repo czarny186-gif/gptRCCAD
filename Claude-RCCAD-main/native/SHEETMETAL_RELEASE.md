@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.85 — płynniejszy szyk brył i szkiców
+
+- Przeciąganie strzałki szyku od razu przesuwa uchwyt i ustawia odstęp z dokładnością 0,01 mm.
+- Podgląd przekształca wierzchołki wszystkich kopii zbiorczo. Przy dużych szykach brył pomija rysowanie kosztownych krawędzi podglądu; gotowe bryły zachowują krawędzie.
+- Gotowe kopie szyku korzystają z przekształconej siatki źródłowej, więc utworzenie wielu kopii nie wymaga ponownej triangulacji każdej bryły.
+- Co najmniej 24 widoczne kopie z tej samej grupy lub folderu są rysowane wspólnie. Każda nadal zachowuje własną bryłę CAD do wskazywania i edycji; zaznaczone kopie oraz przekrój są wyświetlane prawidłowo.
+- Spóźniony wynik przygotowania przekroju po zamknięciu okna nie wywołuje już błędu.
+- W lokalnym teście OpenGL 400 walców i 20 obrotów widoku zajęło 2,42 s zamiast 6,69 s. Obrazy obu metod były identyczne piksel w piksel; wynik zależy od komputera i sterownika.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.84 — przekrój materiału i wybieranie dużych szyków
 
 - Wypełnienie i ukośne kreskowanie przekroju są zwykłymi obiektami sceny. Ich przygotowanie nie wymaga odczytów stanu bufora szablonu ani dodatkowego przejścia renderowania. Kontury powstają w tle; otwory i komory pozostają puste.

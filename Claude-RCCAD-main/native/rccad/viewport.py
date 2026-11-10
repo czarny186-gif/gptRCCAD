@@ -637,6 +637,7 @@ class CadView(gl.GLViewWidget):
         self._body_m = {}             # id bryły -> macierz podglądu przesunięcia / obrotu (bez ponownego liczenia geometrii)
         self._cache = {}              # id bryły -> (klucz, elementy GL): bez przebudowy całej sceny przy każdej zmianie
         self._parts = {}              # id bryły -> wypełnienie i linie z kluczami (wypełnienie zostaje przy zmianie koloru)
+        self._solid_batches = {}      # stałe szyki rysowane wspólnym buforem zamiast setkami wywołań GL
         self.overlay = Overlay2D(self)
         self.overlay.setGeometry(0, 0, self.width(), self.height())
         self.overlay.raise_()
@@ -800,6 +801,45 @@ class CadView(gl.GLViewWidget):
             return None
         return float(xy[0][0]), float(xy[0][1])
 
+    def _sync_solid_batches(self):
+        """Draw idle pattern solids together; their individual CAD shapes remain pickable."""
+        groups={}
+        if self.section_plane is None and not self.xray:
+            for body in self.bodies:
+                key=body.group or body.folder
+                if (key and body.kind=='solid' and body.visible and body.mesh is not None
+                        and body.id not in self._body_m and not self.selected_edges.get(body.id)
+                        and body.id not in self.tints):
+                    batch_key=(key,'picked') if body.id in self.selected_bodies else key
+                    groups.setdefault(batch_key,[]).append(body)
+        groups={key:members for key,members in groups.items() if len(members)>=24}
+        old=self._solid_batches
+        fresh={}
+        for key,members in groups.items():
+            signature=tuple((b.id,id(b.mesh)) for b in members)
+            previous=old.pop(key,None)
+            if previous is not None and previous[0]==signature:
+                fresh[key]=previous;continue
+            if previous is not None:
+                for item in previous[1:]:self.removeItem(item)
+            vertices=np.concatenate([b.mesh.vertices for b in members])
+            offsets=np.cumsum([0]+[len(b.mesh.vertices) for b in members[:-1]],dtype=np.uint32)
+            triangles=np.concatenate([b.mesh.triangles+offset for b,offset in zip(members,offsets)])
+            edges={i:pts for i,pts in enumerate(pts for b in members for pts in b.mesh.edges.values())}
+            combined=kernel.DisplayMesh(vertices,triangles,edges,(0.,0.,0.),1.)
+            picked=isinstance(key,tuple) and key[1]=='picked'
+            fill=OffsetMesh(meshdata=_meshdata(combined),smooth=True,color=PICKED_FILL if picked else SOLID_COLOR,shader='rccad',drawEdges=False)
+            fill.setGLOptions('opaque');self.addItem(fill)
+            items=[fill];segments=_segments(edges.values())
+            if segments is not None:
+                line=SectionLine(pos=segments,color=PICKED_COLOR if picked else EDGE_COLOR,width=4.0 if picked else 1.5,antialias=True,mode='lines')
+                line.setGLOptions('translucent');self.addItem(line);items.append(line)
+            fresh[key]=(signature,*items)
+        for previous in old.values():
+            for item in previous[1:]:self.removeItem(item)
+        self._solid_batches=fresh
+        return {bid for signature,*_ in fresh.values() for bid,_ in signature}
+
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
         self.bodies = tuple(bodies)
@@ -811,10 +851,11 @@ class CadView(gl.GLViewWidget):
         self._section_classifiers={bid:c for bid,c in self._section_classifiers.items() if bid in live_ids}
         self.selected_bodies = set(selected_bodies)
         self.selected_edges = selected_edges or {}
+        batched=self._sync_solid_batches()
         live = set()
         centers = []
         for body in self.bodies:
-            if not body.visible or body.mesh is None:
+            if not body.visible or body.mesh is None or body.id in batched:
                 continue
             live.add(body.id)
             mesh = body.mesh
@@ -1461,7 +1502,10 @@ class CadView(gl.GLViewWidget):
         return np.ones(points.shape[:-1],bool) if self.section_plane is None else points @ self.section_plane[:3]+self.section_plane[3]>=-1e-5
 
     def set_section_plane(self,plane):
+        previous_plane=self.section_plane
         self.section_plane=None if plane is None else np.asarray(plane,float)
+        if self._solid_batches or (previous_plane is not None and plane is None):
+            self.set_models(self.bodies,self.selected_bodies,self.selected_edges)
         self.section_caps.update_section()
         self._set_hover_edge(None);self.hover_vertex=None
         self.update();self.overlay.update()

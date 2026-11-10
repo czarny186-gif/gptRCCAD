@@ -5,6 +5,7 @@ import numpy as np
 import pyqtgraph.opengl as gl
 from OpenGL import GL
 from PySide6.QtCore import QObject,Signal,QRunnable,QThreadPool,QTimer
+from shiboken6 import isValid
 from .perfcache import LRU
 from .sectionmesh import section_frame
 
@@ -94,7 +95,7 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
     def _start_caps(self):
         if self._running or not self._pending:return
         view=self.view()
-        if view is None or view.section_plane is None:self._pending.clear();return
+        if view is None or not isValid(view) or view.section_plane is None:self._pending.clear();return
         requests=list(self._pending.values());self._pending.clear();self._running=True
         work=self._cap_work=_CapWork(requests);work.signals.done.connect(self._caps_ready);self._cap_pool.start(work)
 
@@ -109,7 +110,7 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
 
     def update_section(self):
         view=self.view()
-        if view is None:return
+        if view is None or not isValid(view):return
         active=set();live={b.id for b in view.bodies};self.retain_bodies(live)
         if view.section_plane is not None:
             for index,body in enumerate(view.bodies):

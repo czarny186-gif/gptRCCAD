@@ -1003,27 +1003,33 @@ def apply_op(shape, op):
     return shape.rotate(pivot, end, float(op[3]))
 
 
-def pattern_mesh(mesh, ops, original=True):
-    """Siatka podglądu szyku: kopie siatki bazowej przekształcone macierzami (czysty numpy, więc płynnie w czasie rzeczywistym).
-    original=False pomija nieprzesunięty oryginał (gdy pierwszą operacją jest jego przesunięcie na zadaną odległość)."""
-    vertices, triangles, edges = [], [], {}
-    key, offset = 0, 0
-    if original:
-        vertices.append(mesh.vertices.astype(np.float32))
-        triangles.append(mesh.triangles)
-        offset = len(mesh.vertices)
-        for points in mesh.edges.values():
-            edges[key] = points
-            key += 1
-    for op in ops:
-        m = op_matrix(op)
-        vertices.append((mesh.vertices @ m[:3, :3].T + m[:3, 3]).astype(np.float32))
-        triangles.append(mesh.triangles + offset)
-        offset += len(mesh.vertices)
-        for points in mesh.edges.values():
-            edges[key] = (points @ m[:3, :3].T + m[:3, 3]).astype(np.float32)
-            key += 1
-    return DisplayMesh(np.vstack(vertices), np.vstack(triangles) if len(mesh.triangles) else mesh.triangles, edges, mesh.center, mesh.size)
+def transformed_display_mesh(mesh, operation):
+    """Reuse a source tessellation for a rigid pattern copy."""
+    m=op_matrix(operation);rotation=m[:3,:3];shift=m[:3,3]
+    vertices=(mesh.vertices@rotation.T+shift).astype(np.float32)
+    edges={key:(points@rotation.T+shift).astype(np.float32) for key,points in mesh.edges.items()}
+    center=tuple(np.asarray(mesh.center)@rotation.T+shift)
+    return DisplayMesh(vertices,mesh.triangles,edges,center,mesh.size,mesh.fine,mesh.face_ids)
+
+
+def pattern_mesh(mesh, ops, original=True, include_edges=True):
+    """Preview copies from one tessellation, vectorizing all vertex transforms."""
+    matrices=[np.eye(4)] if original else []
+    matrices.extend(op_matrix(op) for op in ops)
+    transforms=np.asarray(matrices,float)
+    if not len(transforms):
+        return DisplayMesh(np.empty((0,3),np.float32),np.empty((0,3),np.uint32),{},mesh.center,mesh.size)
+    base=np.asarray(mesh.vertices,float)
+    vertices=(np.einsum('nij,vj->nvi',transforms[:,:3,:3],base)+transforms[:,:3,3,None].transpose(0,2,1)).astype(np.float32).reshape(-1,3)
+    count=len(base);triangles=np.asarray(mesh.triangles)
+    faces=(triangles[None,:,:]+count*np.arange(len(transforms),dtype=np.uint32)[:,None,None]).reshape(-1,3) if len(triangles) else triangles
+    edges={}
+    if include_edges:
+        key=0
+        for matrix in transforms:
+            for points in mesh.edges.values():
+                edges[key]=(points@matrix[:3,:3].T+matrix[:3,3]).astype(np.float32);key+=1
+    return DisplayMesh(vertices,faces,edges,mesh.center,mesh.size)
 
 
 def mirror(shape, plane):
