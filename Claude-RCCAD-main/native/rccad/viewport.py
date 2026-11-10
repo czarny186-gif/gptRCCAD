@@ -1620,6 +1620,27 @@ class CadView(gl.GLViewWidget):
         for body in self._screen_bodies(x,y,1):
             if body.kind != 'sketch' or (not body.visible or body.id in self.locked) or not body.mesh:
                 continue
+            if (body.meta or {}).get('surface'):
+                # Wskazuj widoczny, rzutowany obrys, nie jego niewidoczną płaszczyznę styczną.
+                key=('surface-profile',body.id,id(body.mesh),self._camera_key())
+                outlines=self._projection_cache.get(key)
+                if outlines is None:
+                    outlines=[]
+                    for points in body.mesh.edges.values():
+                        if len(points)<2:continue
+                        xy, _, w = self.project_points(points)
+                        if np.all(w>0) and np.isfinite(xy).all():outlines.append(xy)
+                    self._projection_cache[key]=outlines
+                crossings = 0
+                for xy in outlines:
+                    ax, ay, bx, by = xy[:-1, 0], xy[:-1, 1], xy[1:, 0], xy[1:, 1]
+                    straddle = (ay > y) != (by > y)
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        xc = ax + (y - ay) * (bx - ax) / (by - ay)
+                    crossings += int(np.count_nonzero(straddle & (xc > x)))
+                if crossings % 2:
+                    return body.id
+                continue
             try:
                 if not body.shape.IsClosed():
                     continue

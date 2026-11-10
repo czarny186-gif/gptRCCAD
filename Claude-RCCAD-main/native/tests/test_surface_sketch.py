@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import cadquery as cq
+import numpy as np
 from rccad import history, kernel
 from rccad.document import Body, Document
 
@@ -70,6 +71,53 @@ class SurfaceSketchTests(unittest.TestCase):
         sources = history.resolve_profiles(bodies, {'k': 'surfacetext', 'group': group})
         self.assertEqual(len(sources), 1)
         self.assertTrue(sources[0]['face'].innerWires())
+
+    def test_cylinder_projection_preserves_unfolded_width(self):
+        shape = cq.Workplane().cylinder(20, 10).val()
+        wire = cq.Workplane(cq.Plane(origin=(10, 0, 0), normal=(1, 0, 0))).circle(7).val()
+        flat = kernel.display_mesh(wire)
+        curved = kernel.project_surface_mesh(flat, shape, (1, 0, 0))
+        original = next(iter(flat.edges.values()))
+        mapped = next(iter(curved.edges.values()))
+        self.assertTrue(np.allclose(np.hypot(mapped[:, 0], mapped[:, 1]), 10, atol=2e-4))
+        self.assertTrue(np.allclose(10*np.arctan2(mapped[:, 1], mapped[:, 0]), original[:, 1], atol=.015))
+        face = cq.Face.makeFromWires(wire)
+        for operation in ('join', 'cut'):
+            tool = kernel.surface_stamp_tool(shape, face, (1, 0, 0), .5, operation)
+            self.assertTrue(tool.isValid())
+            self.assertEqual(len(tool.Solids()), 1)
+
+    def test_too_wide_surface_sketch_fails_instead_of_floating(self):
+        shape = cq.Workplane().cylinder(20, 10).val()
+        wire = cq.Workplane(cq.Plane(origin=(10, 0, 0), normal=(1, 0, 0))).circle(15).val()
+        with self.assertRaises(kernel.CadError):
+            kernel.project_surface_mesh(kernel.display_mesh(wire), shape, (1, 0, 0))
+
+    def test_corner_projection_keeps_profile_radius(self):
+        for name, shape, origin, normal, radius in self.cases():
+            if name == 'cylinder':
+                continue
+            with self.subTest(name=name):
+                wire = cq.Workplane(cq.Plane(origin=origin, normal=normal)).circle(radius).val()
+                projected = kernel.project_surface_mesh(kernel.display_mesh(wire), shape, normal)
+                points = np.concatenate(list(projected.edges.values()))
+                # The farthest projected outline point remains close to the
+                # requested radius; the old orthographic corner grew by √2.
+                self.assertLess(float(np.max(np.linalg.norm(points-np.asarray(origin),axis=1))), radius+.15)
+
+    def test_rectangular_profile_adds_and_cuts_across_corners(self):
+        for name, shape, origin, normal, _ in self.cases():
+            if name == 'cylinder':
+                continue
+            with self.subTest(name=name):
+                wire = cq.Workplane(cq.Plane(origin=origin, normal=normal)).rect(4, 2).val()
+                face = cq.Face.makeFromWires(wire)
+                kernel.project_surface_mesh(kernel.display_mesh(wire), shape, normal)
+                for operation in ('join', 'cut'):
+                    tool = kernel.surface_stamp_tool(shape, face, normal, .5, operation)
+                    result = kernel.boolean('union' if operation == 'join' else 'subtract', shape, [tool])
+                    self.assertEqual(len(result.Solids()), 1)
+                    self.assertTrue(result.isValid())
 
     def test_saved_sketch_reprojects_on_load(self):
         shape = cq.Workplane().cylinder(20, 10).val()

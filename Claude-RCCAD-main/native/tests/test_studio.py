@@ -86,6 +86,49 @@ class StudioTests(unittest.TestCase):
         self.wait()
         self.assertGreater(next(b.shape for b in w.document.bodies if b.kind == 'solid').Volume(), solid.shape.Volume())
 
+    def test_projected_surface_sketch_is_picked_on_visible_outline(self):
+        w = self.w
+        solid = Body('Cylinder', cq.Workplane().cylinder(20, 10).val(), 'solid').prepared()
+        origin, normal = (10, 0, 0), (1, 0, 0)
+        frame = k.face_frame(origin, normal)
+        wire = cq.Workplane(cq.Plane(origin=origin, normal=normal)).circle(4).val()
+        sketch = Body('Surface sketch', wire, 'sketch', frame,
+                      meta={'surface': {'target': solid.id, 'normal': list(normal)}}).prepared()
+        sketch = replace(sketch, mesh=k.project_surface_mesh(sketch.mesh, solid.shape, normal))
+        w.document.commit([solid, sketch]);w.refresh()
+        w.view.look_along(frame);self.app.processEvents()
+        xy = w.view.project_one(sketch.mesh.center)
+        self.assertIsNotNone(xy)
+        self.assertEqual(w.view.pick_profile(*xy[:2]), sketch.id)
+        w.set_mode('extrude')
+        self.assertEqual(w._profile_at(*xy[:2])['kind'], 'surface')
+
+    def test_surface_tool_buttons_are_distinct_and_next_to_new_sketch(self):
+        w=self.w;w.set_tab('Szkic');w._layout_overlays()
+        keys=('sketch','wrapsketch','wrapcorner','surface')
+        self.assertEqual([b for b in keys],[b for b in w._tab_tools('Szkic')])
+        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),4)
+        self.assertEqual([w.tools[key].x() for key in keys],sorted(w.tools[key].x() for key in keys))
+
+    def test_surface_hover_shows_point_and_corner_hover_shows_edge(self):
+        w=self.w
+        cylinder=Body('Cylinder',cq.Workplane().cylinder(20,10).val(),'solid').prepared()
+        w.document.commit([cylinder]);w.refresh();w.begin_surface_sketch()
+        face=next(f for f in cylinder.shape.Faces() if f.geomType()=='CYLINDER')
+        point=np.array([10.,0.,0.])
+        with patch.object(w.view,'pick_face',return_value=(cylinder.id,np.array([1.,0.,0.]),point)), \
+             patch.object(w.view,'face_at',return_value=(face,(1.,0.,0.))):
+            w.view_hover(100,100)
+        self.assertTrue(np.allclose(w.view.hover_vertex,point))
+        box=Body('Box',k.box(20,20,20),'solid').prepared()
+        w.document.commit([box]);w.refresh();w.begin_surface_sketch(corner=True)
+        with patch.object(w.view,'nearest_edge',return_value=(box.id,0)), \
+             patch.object(w.view,'pick_face',return_value=None):
+            w.view_hover(100,100)
+            frame,_=w.pick_surface(100,100,True)
+        self.assertIsNotNone(frame)
+        self.assertTrue(np.allclose(w.view.hover_vertex,k.edge_handle(box.shape,0)[0]))
+
     def test_objects_panel_lists_selects_hides_deletes(self):
         w=self.w
         a=Body('Szkic XY',k.sketch('rectangle','XY',10,10),'sketch','XY').prepared()
@@ -2879,17 +2922,23 @@ class StudioTests(unittest.TestCase):
         w.pat_kind.setCurrentIndex(1);w.update_pattern_preview();self.assertFalse([h for h in w.view.handles if h['id'].startswith('pat')])
 
     def test_three_point_rectangular_range_keeps_last_copy_at_clicked_centers(self):
-        w=self.w;body=Body('Plate',k.box(10,10,2)).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')
+        w=self.w
+        plane=k.face_frame((5,5,2),(0,0,1))
+        wire=cq.Workplane(cq.Plane(origin=(5,5,2),normal=(0,0,1))).rect(10,10).val()
+        body=Body('Plate sketch',wire,'sketch',plane).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')
         with patch.object(w.view,'pick_body',return_value=body.id),patch.object(w.view,'nearest_edge',return_value=None):
             w.pick_pattern(10,10)
+        w.view.set_grid_visible(False)
         w.pat_range_button.setChecked(True)
-        top=max(body.shape.Faces(),key=lambda face:face.Center().z)
-        with patch.object(w.view,'pick_face',return_value=(body.id,top,np.array([5.,5.,2.]))):
-            w.pick_pattern(10,10)
+        self.assertIsNotNone(w._pat_range_frame)
+        self.assertIs(w.view._grid_plane,w._pat_range_frame)
+        self.assertTrue(w.view._grid_on)
         origin=w._pat_range_points[0].copy();self.assertTrue(np.allclose(origin,[5,5,2]))
         endpoints=[origin+40*w._pat_range_axes[0],origin-30*w._pat_range_axes[1]]
         w.pat_counts[0].setValue(5)
-        with patch.object(w.view,'_plane_hit',side_effect=[(1,endpoints[0]),(1,endpoints[1])]):
+        with patch.object(w.view,'pick_face',side_effect=AssertionError('nie pytaj ponownie o powierzchnię')), \
+             patch.object(w.view,'_plane_hit',side_effect=[(1,endpoints[0]),(1,endpoints[1])]), \
+             patch.object(w.view.grid_items[0],'spacing',return_value=(1,1,None)):
             w.pick_pattern(10,10);w.pick_pattern(20,20)
         w.pat_counts[1].setValue(4)
         ops,_=w._pattern_ops(body)
@@ -2903,6 +2952,16 @@ class StudioTests(unittest.TestCase):
         w.handle_dragged('patX',5.25);w.handle_released('patX')
         self.assertAlmostEqual(w._pattern_spacing()[0],45.25/4)
         self.assertAlmostEqual(w.pat_gaps[0].value(),11.31)
+        w.pat_range_button.setChecked(False)
+        self.assertFalse(w.view._grid_on)
+
+    def test_three_point_range_is_unavailable_for_solids(self):
+        w=self.w;body=Body('Block',k.box(10,10,2)).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=body.id),patch.object(w.view,'nearest_edge',return_value=None):
+            w.pick_pattern(10,10)
+        self.assertFalse(w.pat_range_button.isEnabled())
+        w.pat_range_button.setChecked(True)
+        self.assertFalse(w.pat_range_button.isChecked())
 
     def test_path_handles_move_both_endpoints_and_actual_pattern(self):
         w=self.w;body=Body('Block',k.box(5,5,5)).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')

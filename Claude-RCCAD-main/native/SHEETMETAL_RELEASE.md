@@ -1,3 +1,14 @@
+# RCCAD Desktop 0.4.89 — szkic dopasowany do bryły i szyk z trzech punktów
+
+- Dwa przyciski szkicu na powierzchni i narożniku mają różne ikony i stoją tuż za „Nowy szkic”; „Inna powierzchnia” jest na końcu zakładki. Zmiana powierzchni zachowuje wybrany rodzaj szkicu.
+- Pod kursorem widać punkt na walcu albo podświetloną krawędź narożnika. Gotowy szkic wskazuje się na jego widocznym obrysie, bez podświetlania całej ściany.
+- Szkic jest rzutowany na najbliższą właściwą stronę bryły. Szerokość na walcu i pionowych narożnikach odpowiada odległości po powierzchni; wyciągnięcia zachowują ostre narożniki. Zbyt szeroki obrys zgłasza błąd zamiast pozostawać wewnątrz bryły. Podgląd kosztownej operacji jest uruchamiany rzadziej podczas przeciągania.
+- „Zakres szkiców z 3 punktów” działa wyłącznie dla szyku prostokątnego szkiców. Pierwszym punktem jest środek szkicu; siatka pojawia się automatycznie na tej samej płaszczyźnie, a dwa kolejne punkty wskazuje się na niej. Usunięto przyczynę błędu `numpy.ndarray ... geomType`.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.88 — szkic na powierzchni bryły
 
 - W zakładce **Szkic** są nowe narzędzia „Szkic na powierzchni” i „Szkic na narożniku”. Wskaż walec, ostrą krawędź albo wypukłe lub wklęsłe zaokrąglenie i narysuj zamknięty kształt lub tekst.

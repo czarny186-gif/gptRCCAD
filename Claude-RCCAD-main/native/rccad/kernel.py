@@ -1930,6 +1930,86 @@ def extrude_face(face, normal, d1, d2=0.0, symmetric=False):
         return valid(cq.Solid.extrudeLinear(move(face.outerWire()), [move(w) for w in face.innerWires()], vec))
 
 
+def _cylinder_surface_warp(shape, normal, point):
+    """Map tangent-plane distance to arc length on a complete cylindrical wall."""
+    n = _unit(normal)
+    point = np.asarray(point, float)
+    for candidate in shape.Faces():
+        if candidate.geomType() != 'CYLINDER':
+            continue
+        info = cylinder_info(candidate, shape)
+        if not info['full']:
+            continue
+        radial = n * info['outward']
+        axis = np.asarray(info['axis'], float)
+        delta = point - np.asarray(info['origin'], float)
+        if abs(float(delta @ radial) - info['radius']) > max(.02, info['radius'] * .01):
+            continue
+        if abs(float(delta @ axis)) > max(abs(info['v0']), abs(info['v1'])) + info['radius']:
+            continue
+        tangent = np.cross(axis, radial)
+        return tangent, np.asarray(info['origin'], float), float(info['radius'])
+    return None
+
+
+def _warp_cylinder_point(point, warp):
+    tangent, origin, radius = warp
+    p = np.asarray(point, float)
+    arc = float((p-origin) @ tangent)
+    if abs(arc) >= radius * 1.4:
+        raise CadError('Szkic jest zbyt szeroki dla tego walca. Zmniejsz obrys lub podziel go na kilka szkiców.')
+    return p + tangent * (radius * np.sin(arc/radius) - arc)
+
+
+def _surface_arc_mapper(shape, normal, center, samples):
+    """Preserve width across a vertical fold by measuring distance on its faces."""
+    n = _unit(normal)
+    cylinder = _cylinder_surface_warp(shape, n, center)
+    if cylinder is not None:
+        return lambda point: _warp_cylinder_point(point, cylinder)
+    if abs(float(n[2])) > .2:
+        return None
+    c = np.asarray(center, float)
+    tangent = np.asarray(face_frame(c, n).xdir, float)
+    extent = max((abs(float((np.asarray(point, float)-c) @ tangent)) for point in samples), default=0.)
+    if extent < 1e-4:
+        return None
+    offsets = np.linspace(-extent, extent, 97)
+    probes = np.asarray([c + tangent * offset for offset in offsets], np.float32)
+    probe_mesh = DisplayMesh(probes, np.empty((0,3),np.uint32), {}, tuple(c), extent)
+    projected = project_surface_mesh(probe_mesh, shape, n, conformal=False).vertices.astype(float)
+    distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(projected, axis=0), axis=1))]
+    distance -= distance[len(distance)//2]
+    if distance[0] > -extent + 1e-3 or distance[-1] < extent - 1e-3:
+        raise CadError('Szkic wychodzi poza dostępną powierzchnię narożnika.')
+    if float(np.max(np.abs(distance-offsets))) < 1e-4:
+        return None
+    def mapped(point):
+        p = np.asarray(point, float)
+        u = float((p-c) @ tangent)
+        s = float(np.interp(u, distance, offsets))
+        return p + tangent * (s-u)
+    return mapped
+
+
+def _warp_surface_face(face, mapped):
+    def mapped_wire(wire):
+        edges = []
+        for edge in wire.Edges():
+            count = max(16, min(96, int(edge.Length()/.4)))
+            start, end = edge.startPoint(), edge.endPoint()
+            displacement = mapped(start.toTuple()) - np.asarray(start.toTuple())
+            if edge.geomType() == 'LINE' and np.linalg.norm(displacement-(mapped(end.toTuple())-np.asarray(end.toTuple()))) < 1e-8:
+                edges.append(edge.translate(tuple(displacement)))
+                continue
+            periodic = float(start.sub(end).Length) < 1e-7
+            samples = (np.linspace(0, 1, count, endpoint=not periodic))
+            points = [cq.Vector(*[float(c) for c in mapped(edge.positionAt(float(t)).toTuple())]) for t in samples]
+            edges.append(cq.Edge.makeSpline(points, periodic=periodic))
+        return cq.Wire.assembleEdges(edges)
+    return cq.Face.makeFromWires(mapped_wire(face.outerWire()), [mapped_wire(w) for w in face.innerWires()])
+
+
 def surface_stamp_tool(shape, face, normal, height, operation='join'):
     """A profile-limited offset layer following planar, cylindrical and filleted faces.
 
@@ -1953,7 +2033,12 @@ def surface_stamp_tool(shape, face, normal, height, operation='join'):
         raise CadError('Wysokość jest za duża względem wymiarów bryły.')
     sign=-1 if operation=='cut' else 1
     try:
-        layer=shape.Solids()[0].shell([],sign*depth,kind='arc')
+        samples=[vertex.toTuple() for vertex in face.Vertices()]
+        samples += [edge.positionAt(t).toTuple() for edge in face.Edges() for t in (.25,.5,.75)]
+        mapped=_surface_arc_mapper(shape,n,face.Center().toTuple(),samples)
+        if mapped is not None:
+            face=_warp_surface_face(face,mapped)
+        layer=shape.Solids()[0].shell([],sign*depth,kind='intersection')
         vec=cq.Vector(*[float(c) for c in n])
         base=face.translate(vec.multiply(-reach))
         prism=cq.Shape.cast(BRepPrimAPI_MakePrism(base.wrapped,gp_Vec(*vec.multiply(2*reach).toTuple()),False,True).Shape())
@@ -1967,27 +2052,35 @@ def surface_stamp_tool(shape, face, normal, height, operation='join'):
         raise CadError('Nie udało się dopasować wyciągnięcia do powierzchni. Zmniejsz wysokość lub obszar szkicu.') from exc
 
 
-def project_surface_mesh(mesh, shape, normal):
-    """Display a planar sketch on the first solid surface seen along its normal."""
+def project_surface_mesh(mesh, shape, normal, conformal=True):
+    """Project a sketch onto the nearest outward-facing part of the solid."""
     from OCP.IntCurvesFace import IntCurvesFace_Intersector
     from OCP.gp import gp_Lin,gp_Pnt,gp_Dir
     n=np.asarray(normal,float);n/=np.linalg.norm(n)
     box=bounds(shape);span=max(box.xlen,box.ylen,box.zlen)*1.1
-    local=max(.5,min(float(mesh.size),span*.15))
-    intersectors=[IntCurvesFace_Intersector(face.wrapped,1e-5) for face in shape.Faces()]
+    faces=shape.Faces()
+    intersectors=[IntCurvesFace_Intersector(face.wrapped,1e-5) for face in faces]
+    sample_points=[point for edge in mesh.edges.values() for point in edge]
+    sample_points.extend(mesh.vertices)
+    mapped=_surface_arc_mapper(shape,n,mesh.center,sample_points) if conformal else None
     cache={}
     def projected(point):
         key=tuple(round(float(c),6) for c in point)
         if key not in cache:
-            start=np.asarray(point,float)+n*local
-            ray=gp_Lin(gp_Pnt(*[float(c) for c in start]),gp_Dir(*[float(c) for c in -n]))
+            anchor=mapped(point) if mapped is not None else point
+            ray=gp_Lin(gp_Pnt(*[float(c) for c in anchor]),gp_Dir(*[float(c) for c in n]))
             hits=[]
-            for item in intersectors:
-                item.Perform(ray,0,local+span)
-                hits.extend((item.WParameter(i),item.Pnt(i)) for i in range(1,item.NbPnt()+1) if item.WParameter(i)>=0)
+            for face,item in zip(faces,intersectors):
+                item.Perform(ray,-span,span)
+                for i in range(1,item.NbPnt()+1):
+                    hit=item.Pnt(i)
+                    location=cq.Vector(hit.X(),hit.Y(),hit.Z())
+                    if np.dot(np.asarray(face.normalAt(location).toTuple(),float),n) > .02:
+                        hits.append((abs(item.WParameter(i)),hit))
             if hits:
                 _,hit=min(hits,key=lambda pair:pair[0]);cache[key]=(hit.X(),hit.Y(),hit.Z())
-            else:cache[key]=key
+            else:
+                raise CadError('Część szkicu nie daje się dopasować do powierzchni bryły. Zmniejsz obrys lub wybierz inną powierzchnię.')
         return cache[key]
     vertices=np.asarray([projected(v) for v in mesh.vertices],np.float32).reshape(-1,3)
     edges={i:np.asarray([projected(v) for v in pts],np.float32).reshape(-1,3) for i,pts in mesh.edges.items()}

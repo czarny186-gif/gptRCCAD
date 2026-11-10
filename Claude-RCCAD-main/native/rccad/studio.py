@@ -219,7 +219,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'surface', 'wrapsketch', 'wrapcorner'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -481,8 +481,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                  ('mate', ui.style_icon('mate', 38), 'Dopasowanie — ściana jednej bryły przylega do ściany drugiej, środkami ścian'),
                  ('align', ui.style_icon('align', 38), 'Wyrównanie — ściana jednej bryły na tej samej wysokości co ściana drugiej'),
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
-                 ('wrapsketch', ui.style_icon('surface', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
-                 ('wrapcorner', ui.style_icon('surface', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
+                 ('wrapsketch', ui.style_icon('wrapsketch', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
+                 ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
                  ('split', ui.style_icon('split', 38), 'Przetnij bryłę — płaszczyzną, ścianą, szkicem albo inną bryłą'),
@@ -1547,7 +1547,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.pat_dirs.append(pair)
             grid.addLayout(box, i + 1, 3)
         grid.setColumnStretch(2, 1)
-        self.pat_range_button = QCheckBox('Zakres kopii z 3 punktów')
+        self.pat_range_button = QCheckBox('Zakres szkiców z 3 punktów')
         self.pat_range_button.toggled.connect(self._pattern_range_toggled)
         grid.addWidget(self.pat_range_button, 4, 0, 1, 4)
         self.pat_range_status = _label('', 'status')
@@ -1933,6 +1933,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self.view.hover_gate = None
         self.view.free_drag = None
         self.mode = mode
+        self._timers['extrude'].setInterval(16)
         self.points = []
         self.tangent_lines = []
         self._hv = None
@@ -2218,6 +2219,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def pick_surface(self, x, y, announce=False):
         """Płaszczyzna szkicu spod kursora: płaska ściana bryły (Frame) albo jedna z płaszczyzn XY / XZ / YZ."""
+        self._surface_hover_point = None
         if getattr(self, 'wrap_sketch', False) and announce:
             edge_hit = self.view.nearest_edge(x, y, solids_only=True)
             edge_body = self.document.get(edge_hit[0]) if edge_hit else None
@@ -2232,6 +2234,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         if body is not None and body.kind == 'solid':
+            self._surface_hover_point = hit[2]
             try:
                 face, normal = self.view.face_at(body,hit, curved=True)
                 if getattr(self, 'wrap_sketch', False):
@@ -2301,7 +2304,15 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         """Z trybu szkicu wraca do wskazywania powierzchni, bez wychodzenia z szkicowania i ponownego włączania narzędzia."""
         if self.busy or self.mode != 'sketch':
             return
+        wrapped = getattr(self, 'wrap_sketch', False)
+        corner = getattr(self, 'wrap_corner', False)
         self.set_mode('plane')
+        if wrapped:
+            self.wrap_sketch = True
+            self.wrap_corner = corner
+            self.tools['sketch'].setChecked(False)
+            self.tools['wrapsketch'].setChecked(not corner)
+            self.tools['wrapcorner'].setChecked(corner)
 
     def plane_picked(self, name):
         self.enter_sketch(name)
@@ -3341,12 +3352,23 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             return
         try:
             if self.mode == 'plane' or (self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'surface'):
+                edge = self.view.nearest_edge(x, y, solids_only=True) if getattr(self, 'wrap_corner', False) else None
+                self.view._set_hover_edge(edge)
                 frame, face = self.pick_surface(x, y)
-                key = ('f', face.hashCode()) if face is not None else ('p', frame if isinstance(frame, str) else None)
+                key = ('edge', edge) if edge is not None else (('f', face.hashCode()) if face is not None else ('p', frame if isinstance(frame, str) else None))
                 if key != self._hover_key:
                     self._hover_key = key
-                    self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None,
+                    self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None and edge is None else None,
                                                color=(1, .55, .1, .35), line_color=SKETCH_ORANGE, width=2)
+                point = None
+                if edge is not None:
+                    body = self.document.get(edge[0])
+                    if body is not None:
+                        point = kernel.edge_handle(body.shape, edge[1])[0]
+                elif getattr(self, 'wrap_sketch', False):
+                    point = self._surface_hover_point
+                self.view.hover_vertex = point
+                self.view.overlay.update()
             elif self.mode == 'sketch' and self.tool is None:
                 hit = self.view.nearest_edge(x, y, kinds=('sketch',))
                 self.view._set_hover_edge(hit)
@@ -3450,7 +3472,11 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         key = src['cluster'] if src.get('kind') == 'cyl' else (src['kind'], src.get('id'), tuple(round(c, 3) for c in src['center']))
         if key != self._hover_key:
             self._hover_key = key
-            self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
+            if src.get('surface'):
+                sketch = self.document.get(src.get('id'))
+                self.view.set_preview_mesh(sketch.mesh if sketch is not None else None, **blue)
+            else:
+                self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
             return
@@ -3694,35 +3720,12 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         return main, [r for r in regions if r is not main], [b.id for b in holes]
 
     def _profile_at(self, x, y):
-        candidates = self.view._screen_bodies(x, y, 2)
-        if any(b.kind == 'sketch' and (b.meta or {}).get('surface') for b in candidates):
-            ray = self.view._ray(x, y)
-            visual_hit = self.view._hit(*ray) if ray is not None else None
-            visual_body = self.document.get(visual_hit[1]) if visual_hit else None
-            if visual_body is not None and visual_body.kind == 'sketch' and (visual_body.meta or {}).get('surface'):
-                return self._sketch_profile(visual_body)
-        for sketch in candidates:
-            surface = (sketch.meta or {}).get('surface') if sketch.kind == 'sketch' else None
-            if not surface or not sketch.visible:
-                continue
-            hit_sketch = self.view._plane_hit(sketch.plane, x, y)
-            face_sketch = hist.profile_face(sketch.shape)
-            if hit_sketch and face_sketch is not None and kernel.face_contains(face_sketch, hit_sketch[1]):
-                frame = kernel.frame_of(sketch.plane)
-                group = hist.text_group_of(sketch.id)
-                if group:
-                    members = [b for b in self.document.bodies if b.kind == 'sketch' and hist.text_group_of(b.id) == group]
-                    faces = hist.material_faces(members)
-                    picked = next((f for f in faces if kernel.face_contains(f, hit_sketch[1])), None)
-                    if picked is not None:
-                        def text_source(f, sibling):
-                            return dict(kind='surfacetext', id=sketch.id, group=group, face=f, wire=f.outerWire(),
-                                        plane=sketch.plane, normal=tuple(frame.normal), center=f.Center().toTuple(),
-                                        surface=surface, sibling=sibling)
-                        return dict(text_source(picked, False), siblings=[text_source(f, True) for f in faces if f is not picked])
-                    continue
-                return dict(kind='surface', id=sketch.id, face=face_sketch, wire=face_sketch.outerWire(),
-                            plane=sketch.plane, normal=tuple(frame.normal), center=face_sketch.Center().toTuple(), surface=surface)
+        # Szkic dopasowany do bryły wybiera się z jego widocznego obrysu.
+        if any(b.kind == 'sketch' and (b.meta or {}).get('surface') for b in self.view._screen_bodies(x, y, 2)):
+            bid = self.view.pick_profile(x, y)
+            body = self.document.get(bid) if bid else None
+            if body is not None and (body.meta or {}).get('surface'):
+                return self._sketch_profile(body)
         region = self._region_at(x, y)
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
@@ -4031,6 +4034,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 spin.setValue(1.0 if any(p.get('surface') for p in self.ex_profiles) else 10.0)
                 spin.blockSignals(False)
         self._auto_extrude_op()
+        self._timers['extrude'].setInterval(120 if any(p.get('surface') for p in self.ex_profiles) else 16)
         if not self.ex_profiles:
             self.view.set_selection_meshes(None)
             self.ex_bar.hide()
@@ -7097,47 +7101,46 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def _pattern_range_toggled(self, enabled):
         self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        if enabled and (body is None or body.kind != 'sketch' or self.pat_kind.currentData() != 'rect'):
+            self.pat_range_button.blockSignals(True);self.pat_range_button.setChecked(False);self.pat_range_button.blockSignals(False)
+            self.toast('Zakres z 3 punktów działa tylko dla prostokątnego szyku szkiców.')
+            enabled = False
         self._pattern_range_controls(enabled)
         if enabled:
             self.pat_counts[2].setValue(1)
-            self.pat_range_status.setText('Wskaż płaszczyznę na modelu; pierwszy punkt będzie środkiem obiektu.')
+            frame = kernel.actual_frame(body.shape, body.plane)
+            normal = np.asarray(frame.normal, float)
+            axes = self._pattern_axes(body)
+            center = np.asarray(kernel.bounds(body.shape).center.toTuple(), float)
+            origin = np.asarray(frame.origin, float)
+            self._pat_range_frame = frame
+            self._pat_range_axes = tuple(np.asarray(axes[a], float) for a in 'XYZ')
+            self._pat_range_points = [center-normal*((center-origin)@normal)]
+            self._pat_grid_was_on = getattr(self.view, '_grid_on', self.grid_button.isChecked())
+            self.view.set_grid_visible(True)
+            self.view.set_grid_frame(frame)
+            self.pat_range_status.setText('Punkt 1: środek szkicu. Kliknij środek ostatniej kopii w lewo lub prawo na siatce.')
         else:
+            self.view.set_grid_frame(None)
+            self.view.set_grid_visible(getattr(self, '_pat_grid_was_on', self.grid_button.isChecked()))
             self.pat_range_status.setText('')
-        self.view.sel_vertices=[];self.view.overlay.update()
+        self.view.sel_vertices=list(self._pat_range_points);self.view.overlay.update()
         self._place_pattern_handles()
         self._timers['pattern'].start()
 
     def _pattern_range_click(self, x, y):
         body=self.document.get(self.pat_id)
-        if body is None:return
-        if self._pat_range_frame is None:
-            hit=self.view.pick_face(x,y)
-            if hit is not None:
-                if hit[1].geomType()!='PLANE':
-                    self.toast('Wskaż płaską ścianę lub płaszczyznę.');return
-                normal=hit[1].normalAt()
-                frame=kernel.face_frame(hit[2],normal.toTuple())
-            else:
-                name=self.view.plane_at(x,y)
-                if name is None:
-                    self.toast('Kliknij płaską ścianę lub płaszczyznę dla zakresu szyku.');return
-                frame=kernel.frame_of(name)
-            normal=np.asarray(frame.normal,float);normal/=np.linalg.norm(normal)
-            axes=self._pattern_axes(body)
-            candidates=sorted((np.asarray(axes[a],float) for a in 'XYZ'),key=lambda a:abs(a@normal))
-            first=candidates[0]-normal*(candidates[0]@normal);first/=np.linalg.norm(first)
-            second=candidates[1]-normal*(candidates[1]@normal)-first*(candidates[1]@first)
-            second/=np.linalg.norm(second)
-            center=np.asarray(body.mesh.center,float);origin=np.asarray(frame.origin,float)
-            self._pat_range_frame=frame;self._pat_range_axes=(first,second,normal)
-            self._pat_range_points=[center-normal*((center-origin)@normal)]
-            self.view.sel_vertices=list(self._pat_range_points);self.view.overlay.update()
-            self.pat_range_status.setText('Punkt 1: środek. Kliknij środek ostatniej kopii w lewo lub prawo.')
-            return
+        if body is None or body.kind != 'sketch' or self._pat_range_frame is None:return
         hit=self.view._plane_hit(self._pat_range_frame,x,y)
         if hit is None:return
         index=0 if len(self._pat_range_points)==1 else 1
-        distance=float((np.asarray(hit[1],float)-self._pat_range_points[0])@self._pat_range_axes[index])
+        axis=self._pat_range_axes[index]
+        origin=np.asarray(self._pat_range_frame.origin,float)
+        step=float(self.view.grid_items[0].spacing()[0])
+        coordinate=float((np.asarray(hit[1],float)-origin)@axis)
+        snapped=round(coordinate/step)*step if step>0 else coordinate
+        distance=snapped-float((self._pat_range_points[0]-origin)@axis)
         if abs(distance)<.01:
             self.toast('Wskaż punkt dalej od środka obiektu.');return
         if self.pat_counts[index].value()<2:self.pat_counts[index].setValue(2)
@@ -7239,6 +7242,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
     def update_pattern_status(self):
         body = self.document.get(self.pat_id) if self.pat_id else None
         path = self.pat_kind.currentData() == 'path'
+        self.pat_range_button.setEnabled(body is not None and body.kind == 'sketch' and self.pat_kind.currentData() == 'rect')
         if body is None:
             self.pat_step1.set_state('active', 'Kliknij bryłę lub szkic')
             self.pat_step2.set_state('pending', 'Najpierw wybierz obiekt')
@@ -7792,7 +7796,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         kind = self.pat_kind.currentData()
         if kind == 'rect':
             if self.pat_range_button.isChecked() and len(self._pat_range_points)<3:
-                self.toast('Wskaż płaszczyznę i oba punkty końcowe zakresu.');return
+                self.toast('Wskaż oba końce zakresu na siatce szkicu.');return
             axes = dict(zip('XYZ',self._pat_range_axes)) if self.pat_range_button.isChecked() else self._pattern_axes(body)
             params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing(), axes=[list(axes[a]) for a in 'XYZ'])
         elif kind == 'circ':

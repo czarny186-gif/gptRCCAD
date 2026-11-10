@@ -860,6 +860,29 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawLine(QPointF(*a), QPointF(*b))
             p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawPolygon(lower)
             p.setBrush(QColor(acc)); p.setPen(pen(acc, 2.4)); p.drawPolygon(upper)
+        elif name == 'wrapsketch':
+            # Walec: pomarańczowy obrys szkicu biegnie po jego bocznej powierzchni.
+            p.setBrush(soft);p.setPen(pen(ink, 2.4))
+            p.drawEllipse(QRectF(9, 6, 30, 11))
+            p.drawLine(QPointF(9, 11.5), QPointF(9, 37))
+            p.drawLine(QPointF(39, 11.5), QPointF(39, 37))
+            p.drawArc(QRectF(9, 31, 30, 11), 180*16, 180*16)
+            st(acc, 3.2)
+            curve=QPainterPath(QPointF(13, 28))
+            curve.cubicTo(17, 19, 30, 19, 35, 27)
+            curve.cubicTo(31, 34, 18, 34, 13, 28)
+            p.drawPath(curve)
+            p.setBrush(QColor(acc));p.setPen(Qt.NoPen);p.drawEllipse(QPointF(13, 28), 2.4, 2.4)
+        elif name == 'wrapcorner':
+            # Dwie ściany i linia załamania: szkic przechodzi przez narożnik.
+            left=poly([(5, 10), (24, 18), (24, 43), (5, 35)])
+            right=poly([(24, 18), (43, 10), (43, 35), (24, 43)])
+            p.setBrush(soft);p.setPen(pen(ink, 2.4));p.drawPolygon(left)
+            p.setBrush(Qt.NoBrush);p.drawPolygon(right)
+            st(ink, 2.6);p.drawLine(QPointF(24, 18), QPointF(24, 43))
+            st(acc, 3.4);p.drawPolyline(poly([(10, 27), (24, 33), (38, 27)]))
+            p.setBrush(QColor(acc));p.setPen(Qt.NoPen)
+            for point in ((10, 27), (38, 27)):p.drawEllipse(QPointF(*point), 2.2, 2.2)
         elif name == 'surface':
             lower = poly([(5, 30), (30, 30), (43, 40), (18, 40)]); upper = poly([(8, 10), (30, 10), (41, 19), (19, 19)])
             p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawPolygon(lower)
