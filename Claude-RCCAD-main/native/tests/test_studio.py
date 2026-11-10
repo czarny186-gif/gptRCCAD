@@ -2850,6 +2850,53 @@ class StudioTests(unittest.TestCase):
         ops,_=w._pattern_ops(a);self.assertEqual(len(ops),3*2*2-1)
         w.pat_kind.setCurrentIndex(1);w.update_pattern_preview();self.assertFalse([h for h in w.view.handles if h['id'].startswith('pat')])
 
+    def test_three_point_rectangular_range_keeps_last_copy_at_clicked_centers(self):
+        w=self.w;body=Body('Plate',k.box(10,10,2)).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=body.id),patch.object(w.view,'nearest_edge',return_value=None):
+            w.pick_pattern(10,10)
+        w.pat_range_button.setChecked(True)
+        top=max(body.shape.Faces(),key=lambda face:face.Center().z)
+        with patch.object(w.view,'pick_face',return_value=(body.id,top,np.array([5.,5.,2.]))):
+            w.pick_pattern(10,10)
+        origin=w._pat_range_points[0].copy();self.assertTrue(np.allclose(origin,[5,5,2]))
+        endpoints=[origin+40*w._pat_range_axes[0],origin-30*w._pat_range_axes[1]]
+        w.pat_counts[0].setValue(5)
+        with patch.object(w.view,'_plane_hit',side_effect=[(1,endpoints[0]),(1,endpoints[1])]):
+            w.pick_pattern(10,10);w.pick_pattern(20,20)
+        w.pat_counts[1].setValue(4)
+        ops,_=w._pattern_ops(body)
+        self.assertEqual(len(ops),19)
+        self.assertAlmostEqual(w._pattern_spacing()[0],10)
+        self.assertAlmostEqual(w._pattern_spacing()[1],-10)
+        self.assertTrue(any(np.allclose(np.asarray(op[1]),endpoints[0]-origin) for op in ops))
+        self.assertTrue(any(np.allclose(np.asarray(op[1]),endpoints[1]-origin) for op in ops))
+        w.update_pattern_preview();items=tuple(w.view.preview_items);w.update_pattern_preview()
+        self.assertEqual(items,tuple(w.view.preview_items))
+        w.handle_dragged('patX',5.25);w.handle_released('patX')
+        self.assertAlmostEqual(w._pattern_spacing()[0],45.25/4)
+        self.assertAlmostEqual(w.pat_gaps[0].value(),11.31)
+
+    def test_path_handles_move_both_endpoints_and_actual_pattern(self):
+        w=self.w;body=Body('Block',k.box(5,5,5)).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=body.id),patch.object(w.view,'nearest_edge',return_value=None):
+            w.pick_pattern(10,10)
+        w.pat_kind.setCurrentIndex(2)
+        w.pat_path=np.array([[0.,0.,0.],[100.,0.,0.]])
+        w._pat_path_limits=(0.,100.);w.pat_lcount.setValue(5);w.update_pattern_preview()
+        self.assertEqual({h['id'] for h in w.view.handles},{'patS','patE'})
+        w.handle_dragged('patS',10);w.handle_released('patS')
+        w.handle_dragged('patE',20);w.handle_released('patE')
+        self.assertTrue(np.allclose(w._pat_path_limits,(10,80)))
+        ops,moved=w._pattern_ops(body)
+        self.assertTrue(np.allclose(moved[1],[10,0,0]))
+        self.assertEqual([round(op[1][0],2) for op in ops],[27.5,45,62.5,80])
+        recipe=dict(type='pattern',id=body.id,kind='path',params=dict(points=w.pat_path.tolist(),count=5,fit=True,
+                     spacing=20,start=10,end=80),join=False,out=[])
+        actual=hist.run_pattern([body],recipe)
+        self.assertEqual(len(actual),5)
+        self.assertAlmostEqual(actual[0].shape.BoundingBox().xmin,10,places=6)
+        self.assertAlmostEqual(actual[-1].shape.BoundingBox().xmin,80,places=6)
+
     # 0.4.54: gwint
     def test_thread_tool_live_preview_arrows_and_apply(self):
         import cadquery as cq

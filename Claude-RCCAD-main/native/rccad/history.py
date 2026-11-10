@@ -1140,6 +1140,9 @@ def pattern_ops_for(body, recipe):
         offset = tuple(float(c) for c in direction * (float(p['radius']) - d0))
         ops = kernel.pattern_ops('circ', dict(p, offset=offset))
         return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
+    if kind == 'path' and float(p.get('start', 0.0)) > 1e-9:
+        offset = tuple(float(c) for c in kernel.path_position(p['points'], p['start']) - np.asarray(p['points'][0], float))
+        return kernel.pattern_ops(kind, p), ('t', offset)
     return kernel.pattern_ops(kind, p), None
 
 

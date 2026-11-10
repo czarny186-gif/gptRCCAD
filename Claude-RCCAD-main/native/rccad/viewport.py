@@ -1187,6 +1187,21 @@ class CadView(gl.GLViewWidget):
                 self.preview_items.append(line)
         self.update()
 
+    def set_pattern_preview_mesh(self, mesh):
+        """Keep pattern GL items alive while only their vertex data changes."""
+        segments=_segments(mesh.edges.values())
+        has_fill=bool(len(mesh.triangles));has_line=segments is not None
+        old=getattr(self,'_pattern_preview_items',None)
+        if old and tuple(self.preview_items)==old[0] and (has_fill,has_line)==old[1]:
+            index=0
+            if has_fill:
+                self.preview_items[index].setMeshData(vertexes=mesh.vertices,faces=mesh.triangles)
+                index+=1
+            if has_line:self.preview_items[index].setData(pos=segments)
+            self.update();return
+        self.set_preview_mesh(mesh,color=(.3,.8,.5,.55),line_color=(.05,.4,.2,1),width=2)
+        self._pattern_preview_items=(tuple(self.preview_items),(has_fill,has_line))
+
     SPLIT_COLORS = {1: ((.30, .80, .50, .62), (.08, .50, .25, 1)), 2: ((.96, .58, .18, .62), (.65, .33, .03, 1))}
 
     def set_split_preview(self, parts, cut=None):

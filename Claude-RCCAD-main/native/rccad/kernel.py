@@ -923,6 +923,18 @@ def _unit(v):
     return v / n
 
 
+def path_position(points, distance):
+    """Point at an arc length along a displayed polyline."""
+    pts = np.asarray(points, dtype=float)
+    if len(pts) < 2:
+        raise CadError("Wskaż linię lub krawędź jako ścieżkę.")
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+    if cum[-1] < 1e-9:
+        raise CadError("Ścieżka ma zerową długość.")
+    d = float(np.clip(distance, 0.0, cum[-1]))
+    return np.array([np.interp(d, cum, pts[:, axis]) for axis in range(3)])
+
+
 def pattern_ops(kind, p):
     """Kopie szyku (bez oryginału) jako lista operacji: ('t', (x, y, z)) - przesunięcie, ('r', oś, punkt, kąt°) - obrót.
     kind: 'rect' (counts, spacing), 'circ' (axis, pivot, count, angle) albo 'path' (points, count, fit, spacing)."""
@@ -962,12 +974,14 @@ def pattern_ops(kind, p):
         n = max(1, int(p["count"]))
         if n > PATTERN_MAX:
             raise CadError(f"Zbyt wiele kopii (maksymalnie {PATTERN_MAX}).")
+        start = float(np.clip(p.get("start", 0.0), 0.0, length))
+        end = float(np.clip(p.get("end", length), start, length))
         if p.get("fit", True):
-            dist = np.linspace(0.0, length, n) if n > 1 else np.zeros(1)
+            dist = np.linspace(start, end, n) if n > 1 else np.array([start])
         else:
             step = max(float(p.get("spacing", 10.0)), 1e-6)
-            dist = np.arange(n) * step
-            dist = dist[dist <= length + 1e-9]
+            dist = start + np.arange(n) * step
+            dist = dist[dist <= end + 1e-9]
         at = lambda d: np.array([np.interp(d, cum, pts[:, k]) for k in range(3)])
         base = at(0.0)
         for d in dist[1:]:

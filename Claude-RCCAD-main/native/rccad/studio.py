@@ -325,7 +325,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                            ('gizmo', self._place_gizmo), ('ply_joints', self.update_ply_joints_preview)):
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.setInterval(16 if name in ('extrude', 'mod') else (300 if name == 'ply_joints' else 40))
+            timer.setInterval(16 if name in ('extrude', 'mod', 'pattern') else (300 if name == 'ply_joints' else 40))
             timer.timeout.connect(slot)
             self._timers[name] = timer
         for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
@@ -1485,6 +1485,10 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         # --- szyk (prostokątny / kołowy / wzdłuż linii) ---
         self.pat_id, self.pat_path = None, None
         self.pat_picking = False
+        self._pat_range_frame = None
+        self._pat_range_points = []
+        self._pat_range_axes = None
+        self._pat_path_limits = None
         self.pat_panel, lay = self._panel(312, 'Szyk', 'x_pattern', 'Prostokątny · kołowy · wzdłuż linii', plain=True, scroll=True)
         self.pat_step1 = ui.StepRow(1, 'x_object', 'Obiekt do szyku', plain=True)
         self.pat_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia lub krawędź)', plain=True)
@@ -1537,6 +1541,11 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.pat_dirs.append(pair)
             grid.addLayout(box, i + 1, 3)
         grid.setColumnStretch(2, 1)
+        self.pat_range_button = QCheckBox('Zakres kopii z 3 punktów')
+        self.pat_range_button.toggled.connect(self._pattern_range_toggled)
+        grid.addWidget(self.pat_range_button, 4, 0, 1, 4)
+        self.pat_range_status = _label('', 'status')
+        grid.addWidget(self.pat_range_status, 5, 0, 1, 4)
         lay.addWidget(self.pat_rect)
         self.pat_circ = QWidget()
         cl = QVBoxLayout(self.pat_circ)
@@ -1958,6 +1967,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if hasattr(self, 'mt_angle'):
             self.mt_angle.setText('0°')
         self.pat_id, self.pat_path = None, None
+        self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None;self._pat_path_limits = None
+        self.pat_range_button.blockSignals(True);self.pat_range_button.setChecked(False);self.pat_range_button.blockSignals(False)
+        self._pattern_range_controls(False)
         self.mod_vertices = {}
         self.t_target = None
         self.t_group = []
@@ -3300,6 +3312,13 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 target = self._pattern_target(x, y)
                 self.view.hover_vertex = target
                 self.view.overlay.update()
+            elif self.mode == 'pattern' and self.pat_id and self.pat_range_button.isChecked():
+                if self._pat_range_frame is None:
+                    self._hover_face_only(x,y)
+                else:
+                    hit=self.view._plane_hit(self._pat_range_frame,x,y)
+                    self.view.hover_vertex=None if hit is None else hit[1]
+                    self.view.overlay.update()
             elif self.mode == 'pattern' and self.pat_id and self.pat_kind.currentData() == 'path':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
             elif self.mode == 'mod':
@@ -6916,6 +6935,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
     # =====================================================================
     def reset_pattern(self):
         self.pat_id, self.pat_path = None, None
+        self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None;self._pat_path_limits = None
+        self.pat_range_button.setChecked(False)
         self.view.tints = {}
         self.view.set_preview_mesh(None)
         self.view.set_selection_meshes(None)
@@ -6923,12 +6944,80 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def _pattern_kind_changed(self):
         kind = self.pat_kind.currentData()
+        if kind != 'rect' and self.pat_range_button.isChecked():
+            self.pat_range_button.setChecked(False)
         self.pat_rect.setVisible(kind == 'rect')
         self.pat_circ.setVisible(kind == 'circ')
         self.pat_line.setVisible(kind == 'path')
         self.pat_step2.setVisible(kind == 'path')
         self.pat_panel.adjustSize()
         self.update_pattern_status()
+
+    def _pattern_range_controls(self, enabled):
+        for widget in (*self.pat_gaps, *(b for pair in self.pat_dirs for b in pair)):
+            widget.setEnabled(not enabled)
+        for count in self.pat_counts[:2]:count.setMinimum(2 if enabled else 1)
+        self.pat_counts[2].setEnabled(not enabled)
+
+    def _pattern_range_toggled(self, enabled):
+        self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None
+        self._pattern_range_controls(enabled)
+        if enabled:
+            self.pat_counts[2].setValue(1)
+            self.pat_range_status.setText('Wskaż płaszczyznę na modelu; pierwszy punkt będzie środkiem obiektu.')
+        else:
+            self.pat_range_status.setText('')
+        self.view.sel_vertices=[];self.view.overlay.update()
+        self._place_pattern_handles()
+        self._timers['pattern'].start()
+
+    def _pattern_range_click(self, x, y):
+        body=self.document.get(self.pat_id)
+        if body is None:return
+        if self._pat_range_frame is None:
+            hit=self.view.pick_face(x,y)
+            if hit is not None:
+                if hit[1].geomType()!='PLANE':
+                    self.toast('Wskaż płaską ścianę lub płaszczyznę.');return
+                normal=hit[1].normalAt()
+                frame=kernel.face_frame(hit[2],normal.toTuple())
+            else:
+                name=self.view.plane_at(x,y)
+                if name is None:
+                    self.toast('Kliknij płaską ścianę lub płaszczyznę dla zakresu szyku.');return
+                frame=kernel.frame_of(name)
+            normal=np.asarray(frame.normal,float);normal/=np.linalg.norm(normal)
+            axes=self._pattern_axes(body)
+            candidates=sorted((np.asarray(axes[a],float) for a in 'XYZ'),key=lambda a:abs(a@normal))
+            first=candidates[0]-normal*(candidates[0]@normal);first/=np.linalg.norm(first)
+            second=candidates[1]-normal*(candidates[1]@normal)-first*(candidates[1]@first)
+            second/=np.linalg.norm(second)
+            center=np.asarray(body.mesh.center,float);origin=np.asarray(frame.origin,float)
+            self._pat_range_frame=frame;self._pat_range_axes=(first,second,normal)
+            self._pat_range_points=[center-normal*((center-origin)@normal)]
+            self.view.sel_vertices=list(self._pat_range_points);self.view.overlay.update()
+            self.pat_range_status.setText('Punkt 1: środek. Kliknij środek ostatniej kopii w lewo lub prawo.')
+            return
+        hit=self.view._plane_hit(self._pat_range_frame,x,y)
+        if hit is None:return
+        index=0 if len(self._pat_range_points)==1 else 1
+        distance=float((np.asarray(hit[1],float)-self._pat_range_points[0])@self._pat_range_axes[index])
+        if abs(distance)<.01:
+            self.toast('Wskaż punkt dalej od środka obiektu.');return
+        if self.pat_counts[index].value()<2:self.pat_counts[index].setValue(2)
+        point=self._pat_range_points[0]+distance*self._pat_range_axes[index]
+        if len(self._pat_range_points)<3:self._pat_range_points.append(point)
+        else:self._pat_range_points[2]=point
+        self.view.sel_vertices=list(self._pat_range_points);self.view.overlay.update()
+        self._pattern_range_update()
+        self.pat_range_status.setText('Kliknij środek ostatniej kopii w górę lub dół.' if len(self._pat_range_points)==2 else 'Zakres gotowy. Zmieniaj ilości lub przeciągaj strzałki.')
+        self._place_pattern_handles();self._timers['pattern'].start()
+
+    def _pattern_range_update(self):
+        for index in range(min(2,len(self._pat_range_points)-1)):
+            distance=float((self._pat_range_points[index+1]-self._pat_range_points[0])@self._pat_range_axes[index])
+            self.pat_gaps[index].setValue(round(abs(distance)/max(1,int(self.pat_counts[index].value())-1),2))
+            for button in self.pat_dirs[index]:button.setChecked(button.sign==(1 if distance>=0 else -1))
 
     @staticmethod
     def _mesh_bounds(mesh):
@@ -6992,6 +7081,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if self.pat_picking:
             self._pattern_pick_point(x, y)
             return
+        if self.pat_kind.currentData()=='rect' and self.pat_range_button.isChecked():
+            self._pattern_range_click(x,y)
+            return
         if self.pat_kind.currentData() == 'path':
             hit = self.view.nearest_edge(x, y)
             if hit is None:
@@ -7002,6 +7094,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             if points is None or len(points) < 2:
                 return
             self.pat_path = np.asarray(points, float)
+            self._pat_path_limits=(0.,float(np.linalg.norm(np.diff(self.pat_path,axis=0),axis=1).sum()))
             ends = self.pat_path[[0, -1]]
             mesh = kernel.DisplayMesh(np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint32), {0: self.pat_path.astype(np.float32)}, tuple(ends[0]), 1.0)
             self.view.set_selection_meshes([mesh], color=(.3, .8, .5, .5), line_color=(.1, .6, .3, 1))
@@ -7128,13 +7221,17 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def _pattern_spacing(self):
         """Odstępy szyku prostokątnego ze znakiem kierunku (strzałki w panelu)."""
+        if self.pat_range_button.isChecked() and len(self._pat_range_points)==3:
+            self._pattern_range_update()
+            return [float((self._pat_range_points[i+1]-self._pat_range_points[0])@self._pat_range_axes[i])/
+                    max(1,int(self.pat_counts[i].value())-1) for i in range(2)]+[0.]
         return [g.value() * next(b.sign for b in pair if b.isChecked()) for g, pair in zip(self.pat_gaps, self.pat_dirs)]
 
     def _pattern_ops(self, body):
         """(kopie, operacja przesunięcia oryginału na zadaną odległość albo None)."""
         kind = self.pat_kind.currentData()
         if kind == 'rect':
-            axes = self._pattern_axes(body)
+            axes = dict(zip('XYZ',self._pat_range_axes)) if self.pat_range_button.isChecked() and self._pat_range_axes is not None else self._pattern_axes(body)
             return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing(),
                                                    axes=[axes[a] for a in 'XYZ'])), None
         if kind == 'circ':
@@ -7144,8 +7241,12 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             ops = kernel.pattern_ops('circ', dict(axis=self._pattern_axes(body)[self.pat_axis.currentData()], pivot=pivot, count=int(round(self.pat_ccount.value())),
                                                   angle=self.pat_angle.value(), offset=offset))
             return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
-        return kernel.pattern_ops('path', dict(points=self.pat_path if self.pat_path is not None else [], count=int(round(self.pat_lcount.value())),
-                                               fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())), None
+        params=dict(points=self.pat_path if self.pat_path is not None else [],count=int(round(self.pat_lcount.value())),
+                    fit=self.pat_fit.isChecked(),spacing=self.pat_lgap.value())
+        if self._pat_path_limits is not None:params.update(start=self._pat_path_limits[0],end=self._pat_path_limits[1])
+        ops=kernel.pattern_ops('path',params)
+        offset=kernel.path_position(params['points'],params.get('start',0.))-np.asarray(params['points'][0],float)
+        return ops, ('t',tuple(float(c) for c in offset)) if np.linalg.norm(offset)>1e-9 else None
 
     # ---------- gwint ----------
     def _th_standard_changed(self):
@@ -7429,8 +7530,35 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         """Szyk prostokątny: strzałki X, Y, Z na obiekcie - przeciągnięcie zmienia odstęp w tym kierunku (przez zero:
         kopie przechodzą na drugą stronę). Koniec strzałki stoi na pierwszej kopii."""
         body = self.document.get(self.pat_id) if self.pat_id else None
-        if self.mode != 'pattern' or body is None or body.mesh is None or self.pat_kind.currentData() != 'rect':
+        if self.mode != 'pattern' or body is None or body.mesh is None:
             self.view.set_handles([])
+            return
+        if self.pat_kind.currentData()=='path':
+            if self.pat_path is None or self._pat_path_limits is None:
+                self.view.set_handles([]);return
+            start,end=self._pat_path_limits
+            base=max(float(body.mesh.size)*.45,4.)
+            handles=[]
+            for side,distance,sign,color in (('S',start,1,self.PAT_COLORS['X']),('E',end,-1,self.PAT_COLORS['Y'])):
+                point=kernel.path_position(self.pat_path,distance)
+                before=kernel.path_position(self.pat_path,max(0.,distance-.1))
+                after=kernel.path_position(self.pat_path,min(self._pat_path_limits[1],distance+.1))
+                tangent=after-before
+                if np.linalg.norm(tangent)<1e-8:tangent=self.pat_path[-1]-self.pat_path[0]
+                tangent=tangent/max(np.linalg.norm(tangent),1e-9)*sign
+                handles.append(dict(id='pat'+side,start=point,tip=point+tangent*base,dir=tangent,color=color,
+                                    label='Początek' if side=='S' else 'Koniec'))
+            self.view.set_handles(handles);return
+        if self.pat_kind.currentData()!='rect':
+            self.view.set_handles([]);return
+        if self.pat_range_button.isChecked():
+            if len(self._pat_range_points)<3:
+                self.view.set_handles([]);return
+            origin=self._pat_range_points[0]
+            self.view.set_handles([dict(id='pat'+axis,start=origin,tip=self._pat_range_points[i+1],
+                                        dir=self._pat_range_axes[i] * (1 if (self._pat_range_points[i+1]-origin)@self._pat_range_axes[i]>=0 else -1),
+                                        color=self.PAT_COLORS[axis],label=axis)
+                                   for i,axis in enumerate('XY')])
             return
         center, size = self._pattern_center(body)
         base = max(float(np.max(size)) * .45, 4.0)
@@ -7448,6 +7576,14 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def _pattern_drag(self, axis, delta):
         i = 'XYZ'.index(axis)
+        if self.pat_range_button.isChecked() and len(self._pat_range_points)==3 and i<2:
+            distance=float((self._pat_range_points[i+1]-self._pat_range_points[0])@self._pat_range_axes[i])
+            if self._hv is None or self._hv[0]!='range'+axis:
+                self._hv=('range'+axis,distance,1 if distance>=0 else -1)
+            signed=self._hv[1]+delta*self._hv[2]
+            self._pat_range_points[i+1]=self._pat_range_points[0]+signed*self._pat_range_axes[i]
+            self._pattern_range_update();self.view.sel_vertices=list(self._pat_range_points)
+            self._place_pattern_handles();self._timers['pattern'].start();return
         pair = self.pat_dirs[i]
         if self._hv is None or self._hv[0] != axis:
             sign = next(b.sign for b in pair if b.isChecked())
@@ -7462,15 +7598,32 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self._place_pattern_handles()
         self._timers['pattern'].start()
 
+    def _pattern_path_drag(self, side, delta):
+        if self.pat_path is None or self._pat_path_limits is None:return
+        start,end=self._pat_path_limits
+        length=float(np.linalg.norm(np.diff(self.pat_path,axis=0),axis=1).sum())
+        if self._hv is None or self._hv[0]!='path'+side:
+            self._hv=('path'+side,start if side=='S' else end)
+        value=self._hv[1]+delta*(1 if side=='S' else -1)
+        self._pat_path_limits=(float(np.clip(value,0.,max(0.,end-.01))),end) if side=='S' else \
+                              (start,float(np.clip(value,min(length,start+.01),length)))
+        self._place_pattern_handles();self._timers['pattern'].start()
+
     def update_pattern_preview(self):
         """Podgląd na żywo: kopie siatki obiektu przekształcone macierzami (bez OCC), więc zmiana parametru jest natychmiastowa."""
         if self.mode != 'pattern':
             return
         body = self.document.get(self.pat_id) if self.pat_id else None
-        self.view.sel_vertices = [np.array([s.value() for s in self.pat_pivot], float)] if body is not None and self.pat_kind.currentData() == 'circ' else []
+        if body is not None and self.pat_kind.currentData()=='circ':
+            self.view.sel_vertices=[np.array([s.value() for s in self.pat_pivot],float)]
+        elif self.pat_range_button.isChecked():
+            self.view.sel_vertices=list(self._pat_range_points)
+        else:
+            self.view.sel_vertices=[]
         if self._hv is None:
             self._place_pattern_handles()
-        if body is None or body.mesh is None or (self.pat_kind.currentData() == 'path' and self.pat_path is None):
+        if body is None or body.mesh is None or (self.pat_kind.currentData() == 'path' and self.pat_path is None) or \
+                (self.pat_kind.currentData()=='rect' and self.pat_range_button.isChecked() and len(self._pat_range_points)<3):
             self.view.set_preview_mesh(None)
             return
         try:
@@ -7482,7 +7635,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.pat_status.setText(str(exc))
             return
         self.pat_status.setText(f'Kopie: {len(ops)} (razem z oryginałem {len(ops) + 1}).' if ops else 'Brak kopii - zwiększ ilość.')
-        self.view.set_preview_mesh(mesh, color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
+        self.view.set_pattern_preview_mesh(mesh)
 
     def apply_pattern(self):
         if self.busy:
@@ -7502,7 +7655,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         join = self.pat_join.isChecked() and body.kind == 'solid'
         kind = self.pat_kind.currentData()
         if kind == 'rect':
-            axes = self._pattern_axes(body)
+            if self.pat_range_button.isChecked() and len(self._pat_range_points)<3:
+                self.toast('Wskaż płaszczyznę i oba punkty końcowe zakresu.');return
+            axes = dict(zip('XYZ',self._pat_range_axes)) if self.pat_range_button.isChecked() else self._pattern_axes(body)
             params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=self._pattern_spacing(), axes=[list(axes[a]) for a in 'XYZ'])
         elif kind == 'circ':
             params = dict(axis=list(self._pattern_axes(body)[self.pat_axis.currentData()]), pivot=[s.value() for s in self.pat_pivot], count=int(round(self.pat_ccount.value())),
@@ -7510,6 +7665,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         else:
             params = dict(points=[[float(c) for c in q] for q in np.asarray(self.pat_path, float)], count=int(round(self.pat_lcount.value())),
                           fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())
+            if self._pat_path_limits is not None:params.update(start=self._pat_path_limits[0],end=self._pat_path_limits[1])
         recipe = dict(type='pattern', id=body.id, kind=kind, params=params, join=join, out=[uuid.uuid4().hex for _ in ops])
         if not join and self.pat_result.currentData() == 'group':
             recipe['group'] = uuid.uuid4().hex             # „jako jeden element”: oryginał i kopie w jednej grupie
@@ -7664,6 +7820,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self.mod_size.setValue(max(.1, round(self._hv + delta, 1)))
         elif hid in ('patX', 'patY', 'patZ'):
             self._pattern_drag(hid[3], delta)
+        elif hid in ('patS','patE'):
+            self._pattern_path_drag(hid[3],delta)
         elif hid in ('thS', 'thE', 'thD'):
             self._th_drag(hid, delta)
         elif hid in ('plyH', 'plyP'):

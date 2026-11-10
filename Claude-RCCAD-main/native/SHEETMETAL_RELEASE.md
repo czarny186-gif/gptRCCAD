@@ -1,3 +1,13 @@
+# RCCAD Desktop 0.4.86 — zakres szyku punktami i uchwytami na ścieżce
+
+- W prostokątnym szyku opcja „Zakres kopii z 3 punktów” pozwala wskazać płaszczyznę, po czym pierwszy punkt powstaje w rzucie środka wybranego obiektu. Dwa kliknięcia wyznaczają środki ostatnich kopii w obu kierunkach. Liczba kopii pozostaje edytowalna; odstępy są liczone dokładnie z końców zakresu. Dwie strzałki pozwalają później przesuwać te końce.
+- W szyku wzdłuż linii dwie strzałki na ścieżce sterują początkiem i końcem rozmieszczenia. Gdy początek się przesuwa, oryginał i kopie zachowują poprawne położenie także po zapisaniu kroku historii.
+- Podczas przeciągania szyku podgląd aktualizuje dane istniejących obiektów OpenGL, zamiast za każdym razem tworzyć je od nowa. Uchwyty odpowiadają od razu, a podgląd odświeża się co 16 ms, jeśli komputer nadąża z rysowaniem.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.85 — płynniejszy szyk brył i szkiców
 
 - Przeciąganie strzałki szyku od razu przesuwa uchwyt i ustawia odstęp z dokładnością 0,01 mm.
