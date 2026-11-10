@@ -1,4 +1,4 @@
-# RCCAD Desktop 0.4.87 — szkic na powierzchni bryły
+# RCCAD Desktop 0.4.88 — szkic na powierzchni bryły
 
 - W zakładce **Szkic** są nowe narzędzia „Szkic na powierzchni” i „Szkic na narożniku”. Wskaż walec, ostrą krawędź albo wypukłe lub wklęsłe zaokrąglenie i narysuj zamknięty kształt lub tekst.
 - Obrys szkicu jest wyświetlany na powierzchni bryły. Wyciągnięcie dopasowuje grubość do bryły i może dodawać albo wycinać materiał na powierzchni walcowej, ostrym narożniku oraz wypukłym i wklęsłym zaokrągleniu.

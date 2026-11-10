@@ -2234,8 +2234,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if body is not None and body.kind == 'solid':
             try:
                 face, normal = self.view.face_at(body,hit, curved=True)
-                if self.wrap_sketch:
-                    if self.wrap_corner and kernel.is_planar_face(face):
+                if getattr(self, 'wrap_sketch', False):
+                    if getattr(self, 'wrap_corner', False) and kernel.is_planar_face(face):
                         self.surface_target = None
                         return None, None
                     self.surface_target = {'target': body.id, 'normal': list(map(float, normal))}
@@ -3491,7 +3491,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if self.mode == 'plane':
             plane, _ = self.pick_surface(x, y, True)
             if plane is None:
-                self.toast('Kliknij ścianę lub krawędź bryły.' if self.wrap_sketch else 'Kliknij płaszczyznę lub płaską ścianę bryły.')
+                self.toast('Kliknij ścianę lub krawędź bryły.' if getattr(self, 'wrap_sketch', False) else 'Kliknij płaszczyznę lub płaską ścianę bryły.')
                 return
             self.enter_sketch(plane)
         elif self.mode == 'extrude':
