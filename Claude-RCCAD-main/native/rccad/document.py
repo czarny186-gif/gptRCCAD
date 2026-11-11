@@ -25,6 +25,17 @@ def _mesh(shape):
     return display_mesh(shape, coarse=(workers.ready() or workers.IN_WORKER) and heavy(shape))
 
 
+def parse_color(value):
+    """Kolor (R, G, B) w zakresie 0..1 albo None (brak / nieprawidłowy zapis)."""
+    try:
+        if value is None or len(value) != 3:
+            return None
+        rgb = tuple(min(1.0, max(0.0, float(c))) for c in value)
+        return rgb
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class Body:
     name: str
@@ -38,6 +49,7 @@ class Body:
     group: str = field(default='', compare=False)       # wspólna grupa (np. szyk „jako jeden element”): zaznaczanie, wyciąganie i przenoszenie razem
     folder: str = field(default='', compare=False)      # grupa (folder) na liście obiektów - tylko porządek na liście, nie zmienia geometrii
     threads: tuple = field(default=(), compare=False)   # gwinty kosmetyczne (opisy z rccad.threads) - przesuwają się razem z bryłą
+    color: tuple | None = field(default=None, compare=False)   # własny kolor bryły (R, G, B 0..1); None - kolor domyślny projektu
 
     def prepared(self):
         return replace(self, mesh=_mesh(self.shape))
@@ -102,6 +114,16 @@ class Document:
         self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
         self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
         self.dropped = 0           # ile najstarszych kroków wypadło z historii (limit MAX_UNDO)
+        self.default_color = None  # kolor brył bez własnego koloru (R, G, B 0..1); None - jasnoszary programu
+
+    def set_default_color(self, color):
+        """Kolor domyślny projektu (nie jest krokiem historii, ale zmienia projekt - trzeba go zapisać)."""
+        color = parse_color(color)
+        if color == self.default_color:
+            return
+        self.default_color = color
+        self._revision = self._next_revision
+        self._next_revision += 1
 
     MAX_UNDO = 999          # tyle kroków wstecz pamięta historia
     WARN_UNDO = 950         # od tylu kroków okno ostrzega, że najstarsze kroki zaczną znikać
@@ -349,6 +371,8 @@ class Document:
             entry['folder'] = body.folder
         if body.threads:
             entry['threads'] = [dict(t) for t in body.threads]
+        if body.color:
+            entry['color'] = [round(float(c), 4) for c in body.color]
         if body.meta:
             entry['meta'] = body.meta
         if isinstance(body.plane, Frame):
@@ -407,6 +431,8 @@ class Document:
         metas, meta_index, entries, entry_index = [], {}, [], {}
         manifest = {"app": "RCCAD_DESKTOP", "version": 3, "units": "mm", "pack": "shapes.pack", "shapes": [], "metas": metas,
                     "entries": entries, "states": [], "current": current, "constraints": self.constraints, "variables": self.variables}
+        if self.default_color:
+            manifest["default_color"] = [round(float(c), 4) for c in self.default_color]
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
@@ -490,7 +516,8 @@ class Document:
         folder = folder.strip()[:60] if isinstance(folder, str) else ''
         threads = tuple(t for t in item.get('threads', ()) if isinstance(t, dict) and {'origin', 'axis', 'radius', 'start', 'end', 'pitch'} <= set(t))
         return Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)), mesh=mesh,
-                    meta=meta if isinstance(meta, dict) else None, group=group, folder=folder, threads=threads)
+                    meta=meta if isinstance(meta, dict) else None, group=group, folder=folder, threads=threads,
+                    color=parse_color(item.get('color')))
 
     @classmethod
     def load(cls, path):
@@ -651,6 +678,7 @@ class Document:
                 result._undo = [(b, revisions[i], inf) for i, (b, inf) in enumerate(built[:current])]
                 result.bodies, result.info = built[current]
                 result.bodies = result.meshed(result.bodies)
+                result.default_color = parse_color(manifest.get('default_color'))
                 result._revision = result._saved_revision = revisions[current]
                 result._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(built))[current + 1:])]
                 result.path = Path(path)

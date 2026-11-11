@@ -174,8 +174,10 @@ def load_bodies(kind, path):
         return [b if b.mesh is not None else b.prepared() for b in bodies]
     if suffix == '.svg':
         return [Body(f'{path.stem} {i + 1}' if i else path.stem, w, 'sketch', 'XY').prepared() for i, w in enumerate(kernel.svg_profiles(str(path), 'XY'))]
+    from .colors import imported
     shapes = kernel.import_shapes(path)
-    return [Body(path.stem if i == 0 else f'{path.stem} {i + 1}', s, k).prepared() for i, (s, k) in enumerate(shapes)]
+    return [b.prepared() for b in imported((Body(path.stem if i == 0 else f'{path.stem} {i + 1}', s, k)
+                                            for i, (s, k) in enumerate(shapes)), path.stem)]
 
 
 def export_item(kind, path, folder):

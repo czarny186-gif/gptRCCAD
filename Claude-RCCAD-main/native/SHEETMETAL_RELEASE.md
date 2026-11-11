@@ -1,3 +1,15 @@
+# RCCAD Desktop 0.4.93 — kolory brył
+
+- Nowe narzędzie **Kolor** w zakładce Edycja. Okno ma 16 kolorów i „Własny kolor…” (dowolny z palety barw). Dopóki okno jest otwarte i kolor jest wybrany, każda kliknięta bryła od razu zmienia kolor; szyk „jako jeden element” koloruje się cały.
+- Kolory trafiają do projektu dopiero po **Zapisz** (krok historii - można cofnąć) i zostają po zapisaniu i ponownym otwarciu projektu. Zamknięcie okna bez Zapisz przywraca poprzednie kolory i kończy kolorowanie.
+- Pole **Domyślny**: kolor nowych brył i brył bez własnego koloru (16 kolorów, własny albo jasnoszary programu). Bryły pokolorowane ręcznie zachowują swój kolor.
+- Kolor zostaje przy operacjach na bryle (wyciągnięcie, Boolean, zaokrąglenie, przesunięcie, lustro, szyk, cięcie).
+- Import modelu albo szkicu z wieloma elementami (STEP, STL, BREP, DXF, SVG) trafia na liście Obiekty do jednego folderu z nazwą pliku zamiast osobno na głównej liście. Bryły dostają różne kolory z palety (przy więcej niż 16 kolory się powtarzają).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.92 — szkic na walcu tylko po jednej stronie, płynny przekrój
 
 - Wyciągnięcie i wycięcie szkicu albo napisu na walcu powstaje tylko w miejscu szkicu. Wcześniej ten sam kształt pojawiał się także po przeciwnej stronie walca (lustrzanie odwrócony).

@@ -278,6 +278,13 @@ def _draw_split(p, kind, pen):
         p.drawText(QRectF(26, 34, 22, 14), Qt.AlignCenter, kind[3:].upper())
 
 
+def _draw_color(p, ink, acc, pen):
+    """Ikona koloru: siatka 2 x 2 kolorowych kwadracików, jeden (pomarańczowy) wybrany."""
+    for (x, y), c in zip(((6, 6), (25, 6), (6, 25), (25, 25)), ('#e5484d', '#3b6fe0', '#2fa56d', acc)):
+        p.setBrush(QColor(c)); p.setPen(pen(ink, 2.0)); p.drawRoundedRect(QRectF(x, y, 17, 17), 3.5, 3.5)
+    p.setBrush(Qt.NoBrush); p.setPen(pen(ink, 3.0)); p.drawRoundedRect(QRectF(22.5, 22.5, 22, 22), 5, 5)
+
+
 def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     S = 48.0
     pm = QPixmap(size * scale, size * scale)
@@ -381,6 +388,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_ply_tool(p, PLY_HEADERS[kind], BLUE, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in PLY_ICONS:
         _draw_ply_icon(p, kind, pen)
+    elif kind == 'x_color':
+        _draw_color(p, INK, ORANGE, pen)
     elif kind=='x_section':
         _draw_section(p,INK,ORANGE,QColor(BLUE_SOFT),pen)
     elif kind in ('x_scale', 'sc_center', 'sc_bottom', 'sc_origin'):
@@ -906,6 +915,9 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_mate(p, name, ink, acc, soft, pen, '#7be0a8' if white else None)
         elif name in ('mdist', 'mangle', 'mrad', 'mprops'):
             _draw_measure(p, name, ink, acc, soft, pen)
+        elif name == 'color':
+            # kolor: cztery kwadraciki palety, pomarańczowy wybrany (gruba ramka)
+            _draw_color(p, ink, acc, pen)
         elif name == 'bool':
             a2, b2 = _rounded(6, 9, 25, 25, 4), _rounded(17, 15, 25, 25, 4)
             fl(a2, soft); fl(b2, QColor(0, 0, 0, 0))

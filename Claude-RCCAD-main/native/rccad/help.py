@@ -59,6 +59,11 @@ TOPICS = [
     ('t_mate', 'Dopasowanie', 'Ściana jednej bryły do ściany drugiej', [
         'Zakładka Edycja → Dopasowanie. Kliknij płaską ścianę bryły, która ma się przesunąć, potem płaską ścianę drugiej bryły. Pierwsza bryła obraca się i przesuwa tak, że jej ściana przylega do ściany drugiej bryły (patrzą na siebie), a środki obu ścian się spotykają.',
         'Zielony podgląd pokazuje nowe położenie. Kliknięcie innej ściany przesuwanej bryły zmienia jej ścianę, kliknięcie ściany innej bryły - ścianę docelową. Strzałki „w lewo 45°” i „w prawo 45°” obracają przesuwaną bryłę wokół osi prostopadłej do ścian, przez ich wspólny środek (ściany dalej przylegają); kąt widać między strzałkami. Zastosuj albo Enter zatwierdza; krok trafia do historii i przelicza się po zmianie wcześniejszych kroków.']),
+    ('t_color', 'Kolor', 'Kolory brył i kolor domyślny', [
+        'Zakładka Edycja → Kolor. W oknie wybierz jeden z 16 kolorów albo „Własny kolor…” (dowolny z palety barw), a potem klikaj bryły na polu roboczym - zmieniają kolor od razu. Dopóki okno jest otwarte i kolor jest wybrany, każda kliknięta bryła dostaje ten kolor; szyk „jako jeden element” koloruje się cały.',
+        'Kolory trafiają do projektu dopiero po „Zapisz” (krok historii - można go cofnąć) i zostają po zapisaniu i ponownym otwarciu projektu. Zamknięcie okna bez „Zapisz” przywraca poprzednie kolory.',
+        'Pole „Domyślny” ustawia kolor nowych brył i brył, którym nie nadano własnego koloru (16 kolorów, własny albo jasnoszary programu). Bryły pokolorowane ręcznie zachowują swój kolor.',
+        'Import modelu z wieloma elementami (STEP, STL, DXF, SVG) trafia na liście obiektów do jednego folderu, a bryły dostają różne kolory z palety (przy więcej niż 16 kolory się powtarzają).']),
     ('t_align', 'Wyrównanie', 'Ściany dwóch brył na jednej wysokości', [
         'Zakładka Edycja → Wyrównanie. Kliknij ścianę bryły, która ma się przesunąć, potem ścianę wzorcową innej bryły. Cała pierwsza bryła przesuwa się bez obracania wzdłuż kierunku ściany wzorcowej, aż obie ściany leżą na tej samej wysokości.',
         'Działa w każdej płaszczyźnie: góra / dół, przód / tył, lewo / prawo - kierunek wyznacza ściana wzorcowa.']),

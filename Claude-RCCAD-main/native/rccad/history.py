@@ -22,7 +22,7 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
 FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
@@ -696,7 +696,7 @@ def split_parts(bodies, only=None):
             out.append(b)
             continue
         for n, part in enumerate(sorted(solids, key=lambda s: -s.Volume())):
-            out.append(b.changed(part) if n == 0 else Body(f'{b.name} — część {n + 1}', part, 'solid', b.plane, id=stable_id(f'{b.id}:part', n)).prepared())
+            out.append(b.changed(part) if n == 0 else Body(f'{b.name} — część {n + 1}', part, 'solid', b.plane, id=stable_id(f'{b.id}:part', n), color=b.color).prepared())
     return out
 
 
@@ -787,7 +787,7 @@ def _remote_bodies(module, name, bodies, args, kwargs):
     for b in result:
         source = sources.get(id(b.shape))
         if source is not None:
-            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder, threads=b.threads)))
+            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder, threads=b.threads, color=b.color)))
         else:
             packed.append(('body', b))
     return packed, extra
@@ -1207,7 +1207,7 @@ def run_pattern(bodies, recipe):
     group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
     # osobne elementy: oryginał i kopie trafiają do wspólnej grupy (folderu) na liście obiektów
     folder = body.folder or ('' if group else (recipe.get('folder') or f'{body.name} — szyk'))
-    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder,
+    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder, color=body.color,
                  threads=_moved_threads(body.threads, kernel.op_matrix(ops[i])),
                  mesh=kernel.transformed_display_mesh(body.mesh, ops[i]) if body.mesh is not None else None)
             for i, sh in enumerate(copies)]
@@ -1459,7 +1459,7 @@ def run_mirror(bodies, recipe):
     shape = kernel.mirror_plane(body.shape, recipe['normal'], recipe['origin'])
     if recipe.get('join') and body.kind == 'solid':
         return _replace(bodies, body.changed(kernel.boolean('union', body.shape, [shape])))
-    mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane, id=recipe.get('out') or uuid.uuid4().hex,
+    mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane, id=recipe.get('out') or uuid.uuid4().hex, color=body.color,
                     threads=_moved_threads(body.threads, _mirror_matrix(recipe['normal'], recipe['origin']))).prepared()
     if recipe.get('keep'):
         return [*bodies, mirrored]
@@ -1498,7 +1498,7 @@ def run_split(bodies, recipe):
         raise kernel.CadError('Po tej stronie cięcia nie ma żadnej części bryły.')
     parts.sort(key=lambda s: -s.Volume())
     seed = recipe.get('out') or body.id
-    new = [body.changed(part) if n == 0 else Body(f'{body.name} — część {n + 1}', part, 'solid', body.plane, id=stable_id(f'{seed}:split', n)).prepared()
+    new = [body.changed(part) if n == 0 else Body(f'{body.name} — część {n + 1}', part, 'solid', body.plane, id=stable_id(f'{seed}:split', n), color=body.color).prepared()
            for n, part in enumerate(parts)]
     out = []
     for b in bodies:
@@ -1955,6 +1955,13 @@ def text_folder(text):
 def run_delete(bodies, recipe):
     gone = set(recipe['ids'])
     return [b for b in bodies if b.id not in gone]
+
+
+def run_color(bodies, recipe):
+    """Kolory brył (okno Kolor → Zapisz): id -> [R, G, B] albo None (kolor domyślny projektu)."""
+    from .document import parse_color
+    colors = recipe.get('colors') or {}
+    return [replace(b, color=parse_color(colors[b.id])) if b.id in colors else b for b in bodies]
 
 
 def run_rename(bodies, recipe):
@@ -2771,7 +2778,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -2856,7 +2863,8 @@ def changed_ids(before, current):
     """Identyfikatory obiektów, które różnią się między dwoma stanami (inny kształt, widoczność, nazwa albo brak po jednej stronie)."""
     bm, cm = {b.id: b for b in before}, {b.id: b for b in current}
     return {i for i in bm.keys() | cm.keys()
-            if i not in bm or i not in cm or bm[i].shape is not cm[i].shape or bm[i].visible != cm[i].visible or bm[i].name != cm[i].name}
+            if i not in bm or i not in cm or bm[i].shape is not cm[i].shape or bm[i].visible != cm[i].visible or bm[i].name != cm[i].name
+            or bm[i].color != cm[i].color}
 
 
 def reads(recipe, current):
@@ -2895,6 +2903,8 @@ def reads(recipe, current):
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
     if kind in ('delete', 'folder', 'ply_fold', 'scale'):
         return set(recipe['ids'])
+    if kind == 'color':
+        return set(recipe.get('colors') or ())
     if kind == 'sheet_tabwall':
         return None
     if kind == 'thread':
@@ -2945,7 +2955,7 @@ def diff_apply(old_prev, old_cur, new_prev):
             else:
                 ok = False          # ten obiekt zmienił się na wcześniejszym kroku, a ten krok nie ma przepisu
             continue
-        changes = {f: getattr(b, f) for f in ('name', 'visible', 'plane') if getattr(b, f) != getattr(ob, f)}
+        changes = {f: getattr(b, f) for f in ('name', 'visible', 'plane', 'color') if getattr(b, f) != getattr(ob, f)}
         if changes:
             merged[i] = replace(nb, **changes)
     order = [i for i in cur if i in merged] + [i for i in merged if i not in cur]

@@ -614,7 +614,8 @@ class CadView(gl.GLViewWidget):
         self.plane_items = {}
         self._build_planes()
         self.click_mode = False       # True: studio (klik-klik), False: klasyczne okno (przeciąganie)
-        self.tints = {}               # id bryły -> kolor RGBA (np. baza / narzędzia Boolean)
+        self.tints = {}               # id bryły -> kolor RGBA (np. baza / narzędzia Boolean, podgląd okna Kolor)
+        self.default_color = None     # kolor domyślny projektu (R, G, B) dla brył bez własnego koloru
         self.preview_items = []
         self.handles = []             # uchwyty-strzałki: dict(id, tip, dir, color, ring=(środek, oś, promień)|None)
         self.handle_items = []
@@ -810,7 +811,8 @@ class CadView(gl.GLViewWidget):
                 if (key and body.kind=='solid' and body.visible and body.mesh is not None
                         and body.id not in self._body_m and not self.selected_edges.get(body.id)
                         and body.id not in self.tints):
-                    batch_key=(key,'picked') if body.id in self.selected_bodies else key
+                    rgba=self.solid_rgba(body)          # bryły różnych kolorów w osobnych paczkach rysowania
+                    batch_key=(key,'picked') if body.id in self.selected_bodies else (key if body.color is None else (key,'color',rgba))
                     groups.setdefault(batch_key,[]).append(body)
         groups={key:members for key,members in groups.items() if len(members)>=24}
         old=self._solid_batches
@@ -818,7 +820,11 @@ class CadView(gl.GLViewWidget):
         for key,members in groups.items():
             signature=tuple((b.id,id(b.mesh)) for b in members)
             previous=old.pop(key,None)
+            picked=isinstance(key,tuple) and key[1]=='picked'
+            rgba=PICKED_FILL if picked else self.solid_rgba(members[0])
             if previous is not None and previous[0]==signature:
+                if getattr(previous[1],'rccad_color',None)!=rgba:      # zmieniony kolor domyślny - sam kolor, bez przebudowy
+                    previous[1].setColor(rgba);previous[1].rccad_color=rgba
                 fresh[key]=previous;continue
             if previous is not None:
                 for item in previous[1:]:self.removeItem(item)
@@ -827,8 +833,7 @@ class CadView(gl.GLViewWidget):
             triangles=np.concatenate([b.mesh.triangles+offset for b,offset in zip(members,offsets)])
             edges={i:pts for i,pts in enumerate(pts for b in members for pts in b.mesh.edges.values())}
             combined=kernel.DisplayMesh(vertices,triangles,edges,(0.,0.,0.),1.)
-            picked=isinstance(key,tuple) and key[1]=='picked'
-            fill=OffsetMesh(meshdata=_meshdata(combined),smooth=True,color=PICKED_FILL if picked else SOLID_COLOR,shader='rccad',drawEdges=False)
+            fill=OffsetMesh(meshdata=_meshdata(combined),smooth=True,color=rgba,shader='rccad',drawEdges=False);fill.rccad_color=rgba
             fill.setGLOptions('opaque');self.addItem(fill)
             items=[fill];segments=_segments(edges.values())
             if segments is not None:
@@ -839,6 +844,13 @@ class CadView(gl.GLViewWidget):
             for item in previous[1:]:self.removeItem(item)
         self._solid_batches=fresh
         return {bid for signature,*_ in fresh.values() for bid,_ in signature}
+
+    def solid_rgba(self, body):
+        """Kolor wypełnienia bryły: własny, domyślny projektu albo jasnoszary programu (szkice bez zmian)."""
+        if body.kind == 'sketch':
+            return SOLID_COLOR
+        rgb = getattr(body, 'color', None) or self.default_color
+        return (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0) if rgb else SOLID_COLOR
 
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
@@ -860,7 +872,7 @@ class CadView(gl.GLViewWidget):
             live.add(body.id)
             mesh = body.mesh
             picked = body.id in self.selected_bodies
-            color = PICKED_FILL if picked and body.kind != 'sketch' else (self.tints.get(body.id) or SOLID_COLOR)
+            color = PICKED_FILL if picked and body.kind != 'sketch' else (self.tints.get(body.id) or self.solid_rgba(body))
             sel = frozenset(self.selected_edges.get(body.id, ()))
             # obraz bryły (wypełnienie w pamięci karty graficznej) zostaje, dopóki nie zmieni się siatka - zaznaczenie i kolory
             # zmieniają tylko kolor; od nowa budują się wyłącznie linie krawędzi (lekkie)
