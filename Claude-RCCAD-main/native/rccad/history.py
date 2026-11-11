@@ -22,7 +22,7 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt'}
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
@@ -1626,6 +1626,74 @@ def run_featmove(bodies, recipe):
     return _replace(bodies, body.changed(kernel.valid(filled.cut(moved))))
 
 
+def tilt_frame(shape, face):
+    """Układ pochylanej ściany: (środek, oś U, oś V, normalna na zewnątrz, umin, umax, vmin, vmax) - wyznaczany tak samo
+    przy każdym przeliczeniu (oś U pozioma, jak przy szkicu na ścianie)."""
+    n = outward_normal(shape, face)
+    frame = kernel.face_frame(face.Center().toTuple(), n)
+    o, x, y = (np.array(c, float) for c in (frame.origin, frame.xdir, frame.ydir))
+    pts = np.array([v.toTuple() for v in face.Vertices()] + [e.positionAt(t).toTuple() for e in face.Edges() for t in (.25, .5, .75)], float)
+    us, vs = (pts - o) @ x, (pts - o) @ y
+    return o, x, y, n, float(us.min()), float(us.max()), float(vs.min()), float(vs.max())
+
+
+def tilt_points(frame, heights):
+    """Trzy punkty nowej płaszczyzny ściany. heights: podniesienie krawędzi [U-, U+, V-, V+] (mm, + na zewnątrz bryły);
+    przeciwległa krawędź zostaje na miejscu (oś obrotu), dwa kierunki się sumują."""
+    o, x, y, n, u0, u1, v0, v1 = frame
+    a, b, c, d = (float(h) for h in heights)
+    w, h = max(u1 - u0, 1e-9), max(v1 - v0, 1e-9)
+
+    def z(u, v):
+        return a * (u1 - u) / w + b * (u - u0) / w + c * (v1 - v) / h + d * (v - v0) / h
+
+    return [o + x * u + y * v + n * z(u, v) for u, v in ((u0, v0), (u1, v0), (u0, v1))]
+
+
+def tilt_face(shape, face, heights):
+    """Pochylenie płaskiej ściany: nowa płaszczyzna ściany, a bryła rozciąga się do niej (ściany boczne idą wzdłuż
+    normalnej ściany - przybywa materiału po jednej stronie, ubywa po drugiej)."""
+    frame = tilt_frame(shape, face)
+    o, x, y, n = frame[:4]
+    p0, p1, p2 = tilt_points(frame, heights)
+    m = np.cross(p1 - p0, p2 - p0)
+    m = m / max(np.linalg.norm(m), 1e-12)
+    if float(m @ n) < 0:
+        m = -m
+    box = kernel.bounds(shape)
+    big = max(box.xlen, box.ylen, box.zlen) * 4 + abs(sum(abs(float(h)) for h in heights)) * 4 + 10
+    if float(m @ n) < .05:
+        raise kernel.CadError('Ściana pochylona prawie do pionu - zmniejsz pochylenie.')
+    out_prism = cq.Solid.extrudeLinear(face, cq.Vector(*(n * big)))
+    in_prism = cq.Solid.extrudeLinear(face, cq.Vector(*(-n * big)))
+    plane = cq.Plane(origin=cq.Vector(*p0), xDir=cq.Vector(*_unit(p1 - p0)), normal=cq.Vector(*m))
+    sheet = cq.Face.makePlane(4 * big, 4 * big, basePnt=cq.Vector(*p0), dir=cq.Vector(*m))
+    inside = cq.Solid.extrudeLinear(sheet, cq.Vector(*(-m * 2 * big)))
+    outside = cq.Solid.extrudeLinear(sheet, cq.Vector(*(m * 2 * big)))
+    add = out_prism.intersect(inside)
+    remove = in_prism.intersect(outside)
+    result = shape
+    if add.Volume() > 1e-9:
+        result = result.fuse(add)
+    if remove.Volume() > 1e-9:
+        result = result.cut(remove)
+    try:
+        result = result.clean()
+    except Exception:
+        pass
+    solids = result.Solids()
+    if len(solids) == 1:
+        result = solids[0]
+    return kernel.valid(result)
+
+
+def run_tilt(bodies, recipe):
+    """Pochylenie ściany bryły (narzędzie Pochylenie ścianki)."""
+    body = _body(bodies, recipe['id'])
+    face = match_face(body.shape, recipe['face'])[0]
+    return _replace(bodies, body.changed(tilt_face(body.shape, face, recipe['heights'])))
+
+
 def outward_normal(shape, face, normal=None):
     """Normalna płaskiej ściany skierowana na zewnątrz bryły."""
     n = _unit(normal if normal is not None else face.normalAt(face.Center()).toTuple())
@@ -3052,7 +3120,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -3172,7 +3240,7 @@ def reads(recipe, current):
         return set(recipe.get('ids') or [recipe['id']])
     if kind == 'mod' and recipe.get('items'):
         return {item['id'] for item in recipe['items']}
-    if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode', 'featmove'):
+    if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode', 'featmove', 'tilt'):
         return {recipe['id']}
     if kind == 'bool':
         return {recipe['base'], *recipe['tools']}

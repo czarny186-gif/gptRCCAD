@@ -294,6 +294,17 @@ def _draw_matchsize(p, ink, acc, soft, pen):
     p.setPen(pen(acc, 2.6)); p.drawLine(QPointF(17, 7), QPointF(31, 7)); p.drawLine(QPointF(17, 11), QPointF(31, 11))
 
 
+def _draw_tilt(p, ink, acc, soft, pen):
+    """Pochylenie ścianki: bryła z pochyloną górną ścianą i strzałka podnosząca jej bok."""
+    body = QPolygonF([QPointF(6, 40), QPointF(34, 40), QPointF(34, 14), QPointF(6, 24)])
+    p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawPolygon(body)
+    dash = pen(ink, 1.6); dash.setStyle(Qt.DashLine)
+    p.setPen(dash); p.drawLine(QPointF(6, 24), QPointF(34, 24))
+    p.setPen(pen(acc, 3.2)); p.drawLine(QPointF(6, 24), QPointF(34, 14))
+    p.drawLine(QPointF(41, 26), QPointF(41, 8))
+    p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(41, 4), QPointF(36, 11), QPointF(46, 11)]))
+
+
 def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     S = 48.0
     pm = QPixmap(size * scale, size * scale)
@@ -401,6 +412,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_color(p, INK, ORANGE, pen)
     elif kind == 'x_matchsize':
         _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind == 'x_tilt':
+        _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind=='x_section':
         _draw_section(p,INK,ORANGE,QColor(BLUE_SOFT),pen)
     elif kind in ('x_scale', 'sc_center', 'sc_bottom', 'sc_origin'):
@@ -928,6 +941,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_measure(p, name, ink, acc, soft, pen)
         elif name == 'matchsize':
             _draw_matchsize(p, ink, acc, soft, pen)
+        elif name == 'tilt':
+            _draw_tilt(p, ink, acc, soft, pen)
         elif name == 'color':
             # kolor: cztery kwadraciki palety, pomarańczowy wybrany (gruba ramka)
             _draw_color(p, ink, acc, pen)

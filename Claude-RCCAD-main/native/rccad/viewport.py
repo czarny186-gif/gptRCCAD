@@ -655,6 +655,7 @@ class CadView(gl.GLViewWidget):
         dist = max(float(self.opts['distance']), 1e-6)
         ppm = (self.height() / 2) / (dist * math.tan(math.radians(float(self.opts['fov']) / 2)))
         step = next((g for g in GRID_LEVELS if g * ppm >= GRID_PX), GRID_LEVELS[-1])
+        self.grid_spacing = step          # odstęp cienkich linii siatki - przyciąganie używa dokładnie tej samej kratki
         want = next((z for z in PLANE_SIZES if z >= dist * .035), PLANE_SIZES[-1])
         if want != self._plane_half and hasattr(self, '_plane_corners'):
             self._plane_half = float(want)

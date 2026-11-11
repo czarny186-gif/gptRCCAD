@@ -1,12 +1,19 @@
-# RCCAD Desktop 0.4.97 — historia bez duplikatów
+# RCCAD Desktop 0.4.98 — pochylenie ścianki, przyciąganie do siatki i kątów
 
-- **Zmiana zamiast nowego kroku**: zmiana rozmiaru szkicu (uchwyty, Tab, Wyrównaj rozmiar) oraz przesunięcie / obrót szkicu zapisują się w kroku, który ten szkic narysował. Historia nie dostaje nowego kroku ani duplikatu, a wyciągnięcia, wycięcia i zaokrąglenia zrobione z tego szkicu przeliczają się od razu (np. większy prostokąt - większa bryła z tymi samymi zaokrągleniami, przesunięty okrąg - otwór w nowym miejscu).
-- **Mniejsze / większe zaokrąglenie**: w narzędziu Zaokrąglenie kliknięcie w istniejące zaokrąglenie albo fazę otwiera krok, który je zrobił, z jego krawędziami i wartością - Zastosuj poprawia ten krok.
-- Kolejne przesunięcia tej samej bryły, kolejne kolorowania oraz zmiany nazwy tego samego obiektu łączą się w jeden krok.
+- Nowe narzędzie **Pochylenie ścianki** w zakładce Edycja: kliknij płaską ścianę bryły, pociągnij jedną z czterech strzałek przy jej bokach - ten bok podnosi się albo opuszcza, przeciwległy zostaje, a reszta bryły rozciąga się do nowej płaszczyzny. Zielony podgląd na żywo, Zastosuj zapisuje, Zamknij - bez zmian.
+- **Przyciąganie do siatki przy każdej gęstości** (także kratka 5 x 5 mm): kursor klei się dokładnie do narożników widocznej kratki i do środka każdej kratki. Uchwyty szkicu przy przeciąganiu też się przyciągają.
+- **Linia prostuje się sama**: rysowana linia w pobliżu poziomu, pionu albo 45° ustawia się dokładnie pod tym kątem i robi się czerwona. To tylko pomoc jak przyciąganie - odsunięcie kursora pozwala narysować dowolny kąt.
+- **Przesuń / Obróć**: otwór albo kieszeń pod kursorem podświetla się na pomarańczowo, zanim się ją kliknie.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.4.97 — historia bez duplikatów
+
+- **Zmiana zamiast nowego kroku**: zmiana rozmiaru szkicu (uchwyty, Tab, Wyrównaj rozmiar) oraz przesunięcie / obrót szkicu zapisują się w kroku, który ten szkic narysował. Historia nie dostaje nowego kroku ani duplikatu, a wyciągnięcia, wycięcia i zaokrąglenia zrobione z tego szkicu przeliczają się od razu (np. większy prostokąt - większa bryła z tymi samymi zaokrągleniami, przesunięty okrąg - otwór w nowym miejscu).
+- **Mniejsze / większe zaokrąglenie**: w narzędziu Zaokrąglenie kliknięcie w istniejące zaokrąglenie albo fazę otwiera krok, który je zrobił, z jego krawędziami i wartością - Zastosuj poprawia ten krok.
+- Kolejne przesunięcia tej samej bryły, kolejne kolorowania oraz zmiany nazwy tego samego obiektu łączą się w jeden krok.
 
 ### 0.4.96 — otwory, zaokrąglenia, tekst na wklęsłym zaokrągleniu
 

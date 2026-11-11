@@ -21,6 +21,7 @@ from rccad import kernel as k
 from rccad import history as hist
 from rccad import sheetmetal as shm
 from rccad.document import Body, Document
+from rccad.studio import TABS
 from rccad.studio import StudioWindow
 
 
@@ -1977,7 +1978,14 @@ class StudioTests(unittest.TestCase):
         def click(point,normal):
             with patch.object(w,'pick_object',return_value=a.id),patch.object(w.view,'pick_face',return_value=(a.id,np.array(normal),np.array(point))):
                 w.view_clicked(5,5,False,False)
-        w.set_mode('move');click((0,-3,3),(0,1,0))                                      # jedna ściana kieszeni
+        w.set_mode('move')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,1,0)),np.array((4,0,3)))):
+            w.view_hover(5,5)                                                          # przed kliknięciem otwór się podświetla
+        self.assertTrue(w.view.preview_items)
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1)),np.array((15,10,5)))):
+            w.view_hover(6,6)
+        self.assertFalse(w.view.preview_items)                                         # ściana zewnętrzna - bez podświetlenia
+        click((0,-3,3),(0,1,0))                                                        # jedna ściana kieszeni
         self.assertIsNotNone(w.t_feature);self.assertIn('ściany: 5',w.t_status.text())
         w.t_spins[0].setValue(8);w.update_transform_preview();self.assertTrue(w.view.preview_items)
         w.apply_transform();self.wait()
@@ -2033,6 +2041,31 @@ class StudioTests(unittest.TestCase):
             w.set_mode('move');w.select_transform_target(w.document.get(a.id));w.t_spins[2].setValue(dz);w.apply_transform();self.wait()
         infos=w.document.infos()[0]
         self.assertEqual(len(infos),7);self.assertEqual(infos[-1]['op']['v'],[0.0,0.0,12.0])
+
+    def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
+        w=self.w
+        a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()
+        self.assertIn('tilt',TABS['Edycja']);w.tools['tilt'].click();self.assertEqual(w.mode,'tilt');self.assertTrue(w.tilt_panel.isVisible())
+        top=(10.0,5.0,10.0)
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array(top))):
+            w.view_clicked(5,5,False,False)
+        self.assertIsNotNone(w.tl_face);self.assertEqual(len([h for h in w.view.handles if h['id'].startswith('tl')]),4)
+        w.handle_dragged('tl1',5.0);w.handle_released('tl1')                            # prawy bok w górę o 5 mm
+        self.assertAlmostEqual(w.tl_spins[1].value(),5.0);self.assertIn('+14.0°',w.tl_angles.text())
+        w._tl_timer.stop();w._tl_preview();self.preview();self.assertTrue(w.view.preview_items)
+        steps=w.document.history_length
+        w.set_mode(None)                                                                # Zamknij: bez zmian
+        self.assertEqual(w.document.history_length,steps);self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),2000,3)
+        w.set_mode('tilt')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array(top))):
+            w.view_clicked(5,5,False,False)
+        w.tl_spins[1].setValue(5);w.apply_tilt();self.wait()
+        body=w.document.get(a.id)
+        self.assertAlmostEqual(body.shape.Volume(),2500,3);self.assertAlmostEqual(k.bounds(body.shape).zmax,15,4)
+        self.assertEqual(w.document.info['op']['type'],'tilt');self.assertEqual(w.document.history_length,steps+1)
+        w.history_edit(len(w.document.infos()[0])-1)                                    # dwuklik w krok: narzędzie z wartościami
+        self.assertEqual(w.mode,'tilt');self.assertAlmostEqual(w.tl_spins[1].value(),5.0)
+        w.set_mode(None);self.app.processEvents();self.wait()
 
     def test_operation_after_history_jump_is_inserted_and_later_steps_recomputed(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
@@ -2467,6 +2500,36 @@ class StudioTests(unittest.TestCase):
         step=snapping.grid_step(w.view,geo);gx,gy=w.view.project_one(k.to_world(w.sketch_plane,-3*step,-2*step))
         c=snapping.candidate(w.view,geo,gx+1,gy+1,(-3*step+.01*step,-2*step+.01*step))
         self.assertEqual(c[2],'Siatka');self.assertAlmostEqual(c[0],-3*step,6);self.assertAlmostEqual(c[1],-2*step,6)
+
+    def test_grid_snap_uses_visible_grid_corners_and_centers_at_5mm(self):
+        from rccad import snap as snapping
+        w=self.w;w.enter_sketch('XY');w.choose_tool('line')
+        for distance in (40,120,400):                     # różne powiększenia, w tym kratka 5 x 5 mm
+            w.view.setCameraPosition(distance=distance);w.view.update();self.app.processEvents()
+            geo=snapping.SketchGeometry(w.document.bodies,w.sketch_plane)
+            step=snapping.grid_step(w.view,geo);self.assertEqual(step,w.view.grid_spacing)      # dokładnie kratka z widoku
+            for target,label in (((3*step,2*step),'Siatka'),((3.5*step,2.5*step),'Środek kratki')):
+                gx,gy=w.view.project_one(k.to_world('XY',*target))
+                c=snapping.candidate(w.view,geo,gx+1,gy+1,(target[0]+.03*step,target[1]+.03*step))
+                self.assertIsNotNone(c,(distance,step,label));self.assertEqual(c[2],label)
+                self.assertAlmostEqual(c[0],target[0],6);self.assertAlmostEqual(c[1],target[1],6)
+        w.view.setCameraPosition(distance=250);w.view.update();self.app.processEvents()
+        self.assertEqual(w.view.grid_spacing,5)
+
+    def test_line_straightens_to_horizontal_vertical_and_45_and_turns_red(self):
+        w=self.w;w.enter_sketch('XY');w.choose_tool('line')
+        w.sketch_clicked('XY',0.0,0.0)
+        far=lambda raw:w._snapper(-500,-500,raw)                       # kursor daleko od siatki i punktów
+        u,v,label=far((20.0,0.9));self.assertEqual((round(u,6),round(v,6),label),(20.0,0.0,'Poziomo'))
+        u,v,label=far((-0.8,15.0));self.assertEqual((round(u,6),round(v,6),label),(0.0,15.0,'Pionowo'))
+        u,v,label=far((10.5,10.0));self.assertEqual(label,'45°');self.assertAlmostEqual(u,v,6)
+        self.assertEqual(w._line_aligned,'45°')                           # podgląd linii czerwony
+        with patch.object(w.view,'set_preview_mesh') as shown:
+            w.sketch_moved('XY',u,v);self.assertEqual(shown.call_args.kwargs['line_color'][:3],(.92,.12,.12))
+        u,v,label=far((20.0,5.0));self.assertIsNone(label);self.assertEqual((u,v),(20.0,5.0))        # dalej od kąta: swobodnie
+        self.assertIsNone(w._line_aligned)
+        end=far((20.0,0.7))[:2];w.sketch_clicked('XY',*end);w.sketch_clicked('XY',*end);self.wait()
+        line=w.document.bodies[-1];bb=k.bounds(line.shape);self.assertAlmostEqual(bb.ylen,0,6);self.assertAlmostEqual(bb.xlen,20,6)
 
     def test_overlapping_shapes_make_regions_and_extrude_overlap(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));self.sketch('rect',(5,0),(15,10))

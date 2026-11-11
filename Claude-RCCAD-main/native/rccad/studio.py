@@ -35,6 +35,7 @@ from .scale_ui import ScaleTools
 from .color_ui import ColorTools
 from .matchsize_ui import MatchSizeTools
 from .stepedit_ui import StepEditTools
+from .tilt_ui import TiltTools
 from .sectionview import SectionTools
 from PySide6.QtWidgets import QSizePolicy
 from . import measurement
@@ -223,7 +224,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'thread', 'bool', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -236,7 +237,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -490,6 +491,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                  ('mate', ui.style_icon('mate', 38), 'Dopasowanie — ściana jednej bryły przylega do ściany drugiej, środkami ścian'),
                  ('align', ui.style_icon('align', 38), 'Wyrównanie — ściana jednej bryły na tej samej wysokości co ściana drugiej'),
                  ('color', ui.style_icon('color', 38), 'Kolor — pokoloruj bryły i ustaw kolor domyślny nowych brył'),
+                 ('tilt', ui.style_icon('tilt', 38), 'Pochylenie ścianki — pochyl płaską ścianę strzałkami, bryła się dopasuje'),
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
                  ('wrapsketch', ui.style_icon('wrapsketch', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
                  ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
@@ -1702,8 +1704,9 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         self._build_scale_panel()
         self._build_color_panel()
         self._build_matchsize_panel()
+        self._build_tilt_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1752,7 +1755,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1790,7 +1793,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'tilt': self.apply_tilt,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -2076,6 +2079,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             self._color_enter()
         elif mode == 'matchsize':
             self._matchsize_enter()
+        elif mode == 'tilt':
+            self._tilt_enter()
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
@@ -2327,7 +2332,35 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         point, wait = self._dwell.update(c, x, y)
         if wait:
             self._dwell_timer.start(int(self._dwell.delay_for(c) * 1000) + 15)
-        return point if point is not None else (float(raw[0]), float(raw[1]), None)
+        result = point if point is not None else (float(raw[0]), float(raw[1]), None)
+        return self._line_align(result, raw)
+
+    ALIGN_DEG = 5.0          # linia prostuje się do poziomu / pionu / 45°, gdy jest od nich bliżej niż tyle stopni
+
+    def _line_align(self, result, raw):
+        """Rysowanie linii: w pobliżu poziomu, pionu albo 45° linia sama się prostuje (i robi się czerwona) - jak przyciąganie do
+        siatki: wystarczy odsunąć kursor dalej, żeby narysować pod innym kątem. Punkty szkicu i krawędzi mają pierwszeństwo."""
+        self._line_aligned = None
+        if self.tool != 'line' or not self.points or result[2] not in (None, *snapping.GRID_LABELS):
+            return result
+        a = np.asarray(self.points[-1], float)
+        d = np.asarray(raw[:2], float) - a
+        length = float(np.hypot(*d))
+        if length < 1e-6:
+            return result
+        angle = math.degrees(math.atan2(d[1], d[0]))
+        target = round(angle / 45.0) * 45.0
+        if abs(angle - target) > self.ALIGN_DEG:
+            return result
+        direction = np.array([math.cos(math.radians(target)), math.sin(math.radians(target))])
+        label = 'Poziomo' if target % 180 == 0 else 'Pionowo' if target % 90 == 0 else '45°'
+        self._line_aligned = label
+        if result[2] in snapping.GRID_LABELS:          # punkt siatki leżący dokładnie na prostej: oba naraz
+            g = np.asarray(result[:2], float) - a
+            if abs(g[0] * direction[1] - g[1] * direction[0]) < 1e-9 * max(1.0, float(np.hypot(*g))):
+                return (float(result[0]), float(result[1]), f'{result[2]} · {label}')
+        p = a + direction * float(d @ direction)
+        return (float(p[0]), float(p[1]), label)
 
     def _dwell_refresh(self):
         """Kursor stoi przy punkcie: ponowne wyliczenie podglądu (bez ruchu myszy), żeby przyciąganie się pokazało."""
@@ -2382,7 +2415,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             mesh = kernel.display_mesh(shape) if shape is not None else None
         except Exception:
             mesh = None
-        self.view.set_preview_mesh(mesh, line_color=SKETCH_ORANGE, width=2, dashed=True)
+        aligned = self.tool == 'line' and getattr(self, '_line_aligned', None)
+        self.view.set_preview_mesh(mesh, line_color=(.92, .12, .12, 1) if aligned else SKETCH_ORANGE, width=2.6 if aligned else 2, dashed=not aligned)
 
     # ---------- tekst: kreator (powierzchnia -> obszar -> treść, uchwyty skalowania i obrotu) ----------
     def _text_begin(self):
@@ -3317,6 +3351,12 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             uv = self.view.plane_point(body.plane, x, y)
             if uv is None:
                 return True
+            if self.sketch_plane is not None and body.plane == self.sketch_plane:      # uchwyt też klei się do siatki i punktów
+                try:
+                    snapped = self._snapper(x, y, uv)
+                    uv = (snapped[0], snapped[1])
+                except Exception:
+                    pass
             meta2 = sm.grab_apply(drag['meta'], drag['grab'], uv)
             if meta2 is None:
                 return True
@@ -3447,6 +3487,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                 self._hover_shell_solid(x, y)
             elif self.mode == 'matchsize':
                 self._mz_hover(x, y)
+            elif self.mode in ('move', 'rotate') and getattr(self, 't_feature', None) is None and self._hv is None:
+                self._hover_transform_feature(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
                     self.view._set_hover_edge(self.view.nearest_edge(x, y))
@@ -3610,6 +3652,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             self.pick_color(x, y)
         elif self.mode == 'matchsize':
             self.pick_matchsize(x, y)
+        elif self.mode == 'tilt':
+            self.pick_tilt(x, y)
         elif self.mode in DRAWING_MODES:
             self.pick_drawing(x, y)
         elif self.mode == 'bool':
@@ -8009,22 +8053,67 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             return          # zachowaj parametry; uchwyt podąża za ostatnio klikniętym obiektem
         self.select_transform_target(body)
 
+    def _feature_under(self, x, y):
+        """Otwór / kieszeń pod kursorem: (bryła, ściana kliknięta, ściany otworu, bryła otworu, jej siatka) albo None (z pamięcią)."""
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid':
+            return None
+        hint = getattr(self.view, '_face_hint', None)
+        ids = getattr(body.mesh, 'face_ids', None) if body.mesh is not None else None
+        if hint is not None and hint[0] == body.id and ids is not None and hint[1] < len(ids) and tuple(hint[2]) == tuple(np.asarray(hit[2], float)) \
+                and hint[3] == id(body.mesh):
+            seed = int(ids[hint[1]])
+        else:
+            seed = hist.face_at_point(body.shape, hit[2])
+        if seed is None:
+            return None
+        cache = self.__dict__.setdefault('_feature_cache', {})
+        key = (body.id, id(body.shape), seed)
+        if key not in cache:
+            if len(cache) > 64:
+                cache.clear()
+            found = None
+            try:
+                faces = hist.feature_faces(body.shape, seed)
+                if faces:
+                    filled, hole = hist.feature_split(body.shape, faces)
+                    found = (faces, hole, kernel.display_mesh(hole))
+            except Exception:
+                found = None
+            for other in (found[0] if found else ()):        # ta sama odpowiedź dla każdej ściany tego otworu
+                cache[(body.id, id(body.shape), other)] = found
+            cache[key] = found
+        found = cache[key]
+        return None if found is None else (body, seed, *found)
+
+    def _hover_transform_feature(self, x, y):
+        """Przesuń / Obróć: otwór pod kursorem podświetla się na pomarańczowo, zanim się go kliknie."""
+        try:
+            found = self._feature_under(x, y)
+        except Exception:
+            found = None
+        key = None if found is None else (found[0].id, frozenset(found[2]))
+        if key == getattr(self, '_feature_hover_key', None):
+            return
+        self._feature_hover_key = key
+        if found is None:
+            self.view.set_preview_mesh(None)
+            return
+        self.view.set_preview_mesh(found[4], color=(.98, .62, .2, .4), line_color=(.9, .45, .05, 1), width=2.4, on_top=True)
+
     def _pick_transform_feature(self, body, x, y):
         """Kliknięta ściana otworu albo kieszeni (okrągłej, kwadratowej, wielokątnej): zaznacza się cały otwór - wszystkie
         jego ściany - i przesuwa / obraca razem wewnątrz bryły. True - zaznaczono otwór."""
-        hit = self.view.pick_face(x, y)
-        if hit is None or hit[0] != body.id:
-            return False
         try:
-            seed = hist.face_at_point(body.shape, hit[2])
-            ids = hist.feature_faces(body.shape, seed) if seed is not None else None
-            if not ids:
+            found = self._feature_under(x, y)
+            if found is None or found[0].id != body.id:
                 return False
-            filled, hole = hist.feature_split(body.shape, ids)
+            _, seed, ids, hole, mesh = found
             point = kernel._face_point(body.shape.Faces()[seed])
-            mesh = kernel.display_mesh(hole)
         except Exception:
             return False
+        self._feature_hover_key = None
         box = kernel.bounds(hole)
         self.select_transform_target(body)
         self.t_feature = dict(id=body.id, point=[float(c) for c in point], hole=hole, mesh=mesh)
@@ -8156,6 +8245,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             self.ply_handle_dragged(hid, delta)
         elif hid in ('scA', 'scX', 'scY', 'scZ'):
             self.scale_handle_dragged(hid, delta)
+        elif hid.startswith('tl') and self.mode == 'tilt':
+            self.tilt_handle_dragged(hid, delta)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -8197,6 +8288,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             self._ply_update()
         elif hid.startswith('sc'):
             self._sc_update()
+        elif hid.startswith('tl'):
+            self._tl_handles()
         else:
             self._place_gizmo()
 

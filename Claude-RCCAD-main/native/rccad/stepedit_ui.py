@@ -18,7 +18,7 @@ from . import history as hist
 from . import kernel
 from . import sketchmeta as sm
 
-TOOL_OF = {'extrude': 'extrude', 'revolve': 'revolve', 'mod': 'mod', 'shell': 'shell', 'bool': 'bool', 'color': 'color'}
+TOOL_OF = {'extrude': 'extrude', 'revolve': 'revolve', 'mod': 'mod', 'shell': 'shell', 'bool': 'bool', 'color': 'color', 'tilt': 'tilt'}
 PREVIEW_TOL = .2
 
 
@@ -172,6 +172,16 @@ class StepEditTools:
         self.bool_keep.setChecked(bool(recipe.get('keep')))
         self.bool_ids = [i for i in (recipe['base'], *recipe['tools']) if self.document.get(i) is not None]
         self.update_bool_status()
+
+    def _step_fill_tilt(self, recipe):
+        body = self.document.get(recipe['id'])
+        if body is None:
+            raise kernel.CadError('brak bryły')
+        face = hist.match_face(body.shape, recipe['face'])[0]
+        frame = hist.tilt_frame(body.shape, face)
+        self.tl_face = dict(id=body.id, face=face, frame=frame, ref=recipe['face'], mesh=kernel.display_mesh(face))
+        self.view.set_selection_meshes([self.tl_face['mesh']], color=(1, .55, .1, .35), line_color=(.95, .42, .02, 1))
+        self._tl_set(recipe['heights'])
 
     def _step_fill_color(self, recipe):
         self.co_pending = {i: tuple(c) for i, c in (recipe.get('colors') or {}).items() if self.document.get(i) is not None}
