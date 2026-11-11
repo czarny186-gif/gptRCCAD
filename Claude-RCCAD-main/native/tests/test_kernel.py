@@ -453,6 +453,16 @@ class DocumentTests(unittest.TestCase):
         self.assertAlmostEqual(moved.plane.origin[2],15,6);self.assertAlmostEqual(k.bounds(moved.shape).zmax,15,6)
         self.assertEqual(moved.meta,sk.meta)
         self.assertEqual(h.reads(dict(type='extrude',profiles=[{'k':'surfacetext','group':'abc'}]),out[-1][0]),set())     # napis na powierzchni: bez błędu
+        plain=dict(tool='circle',points=[[0,0],[2,0]])         # starszy projekt: szkic na płaskiej ścianie bez zapisanej ściany
+        sk2=Body('S2',h.meta_shape(frame,plain),'sketch',frame,meta=plain).prepared()
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'}),((a,sk2),{'label':'S','icon':'sketch'})]
+        out,failed=h.recompute(states,1,(taller,),());self.assertEqual(failed,0)
+        self.assertAlmostEqual(next(b for b in out[-1][0] if b.id==sk2.id).plane.origin[2],15,6)
+        frame_in=k.Frame((5.0,5.0,10.0),(1.0,0.0,0.0),(0.0,0.0,-1.0))                      # normalna w głąb bryły
+        sk3=Body('S3',h.meta_shape(frame_in,plain),'sketch',frame_in,meta=plain).prepared()
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'}),((a,sk3),{'label':'S','icon':'sketch'})]
+        out,failed=h.recompute(states,1,(taller,),())
+        self.assertAlmostEqual(next(b for b in out[-1][0] if b.id==sk3.id).plane.origin[2],15,6)
 
     def test_hidden_surface_sketch_is_projected_only_when_shown(self):
         a=Body('A',k.box(10,10,10)).prepared()

@@ -147,30 +147,6 @@ def profile_face(wire):
         return None
 
 
-class _ExprBox(QLineEdit):
-    """Pole liczby (można wpisać proste działanie, np. 20 / 2)."""
-
-    def __init__(self, value=0.0, values=None):
-        super().__init__()
-        self.values = values or {}
-        self.setValue(value)
-
-    def setValue(self, value):
-        self.setText(value['expr'] if isinstance(value, dict) else f'{float(value):g}')
-
-    def raw(self):
-        """Liczba z pola (dozwolone proste wyrażenie, np. 20/2 albo 3*4,5)."""
-        text = self.text().strip()
-        try:
-            return float(text.replace(',', '.'))
-        except ValueError:
-            return hist.evaluate(text, {})
-
-    def value(self):
-        raw = self.raw()
-        return hist.evaluate(raw['expr'], self.values) if isinstance(raw, dict) else raw
-
-
 class _HistChip(QToolButton):
     """Symbol kroku historii: klik = przeskok, dwuklik = edycja parametrów kroku."""
     editRequested = Signal()
@@ -749,17 +725,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.hist_ghost.toggled.connect(lambda *_: self.refresh())
         hl.addWidget(self.hist_ghost)
         self.hist_bar.hide()
-        self.hist_edit = QFrame(v)
-        self.hist_edit.setObjectName('panel')
-        self.hist_edit_layout = QVBoxLayout(self.hist_edit)
-        self.hist_edit_layout.setContentsMargins(14, 12, 14, 12)
-        self.hist_edit_layout.setSpacing(6)
-        self.hist_edit.setFixedWidth(330)
-        self.hist_edit.hide()
-        self._repick = None
         self._lib_action = None        # biblioteka: wskazywanie obiektu na polu albo wybór miejsca wstawienia
         self.libraries = {}
-        ui.shadow(self.hist_edit, 19, 5, 43)
         self._hist_sig = None
         ui.shadow(self.hist_bar, 19, 5, 43)
         self.pad.adjustSize()
@@ -1766,7 +1733,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170 + TOOLS_TOP - 18)
-        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.section_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit,
+        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.section_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -2243,7 +2210,10 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
                     self.surface_target = {'target': body.id, 'normal': list(map(float, normal))}
                     return kernel.face_frame(hit[2], normal), face
                 if kernel.is_planar_face(face):
-                    return kernel.face_frame(face.Center().toTuple(), normal), face
+                    frame = kernel.face_frame(face.Center().toTuple(), normal)
+                    # ściana, na której leży szkic: po zmianie bryły we wcześniejszym kroku szkic idzie za tą ścianą
+                    self.support_target = dict(target=body.id, normal=[float(c) for c in normal], frame=frame)
+                    return frame, face
                 origin, fit = kernel.supporting_plane(face, hit[2], normal)
                 if announce:
                     self.toast('Ściana jest skręcona (nie płaska): szkic leży na płaszczyźnie przylegającej do niej od zewnątrz, a głębokość wycięcia liczy się od tej płaszczyzny.', 7000)
@@ -2253,6 +2223,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if getattr(self, 'wrap_sketch', False):
             self.surface_target = None
             return None, None
+        self.support_target = None
         section=self.view.section_reference(x,y)
         if section is not None:return section,None
         return self.view.plane_at(x, y), None
@@ -2865,8 +2836,11 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
     def create_sketch(self, shapes, label=None, meta=None, select=False, op=None):
         plane = self.sketch_plane
         surface = self.surface_target if getattr(self, 'wrap_sketch', False) else None
+        support = getattr(self, 'support_target', None)
         if surface:
             meta = dict(meta or {}, surface=surface)
+        elif support and support['frame'] == plane and self.document.get(support['target']) is not None:
+            meta = dict(meta or {}, support=dict(target=support['target'], normal=support['normal']))
         name = f'{label or "Szkic"} {self._plane_label()}'
         ids = (hist.text_ids(hist.new_text_group(), len(shapes)) if op.get('type') == 'text' else [uuid.uuid4().hex for _ in shapes]) if op else None
         if op:
@@ -3583,9 +3557,6 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             return
         if self.section_picking:
             self.section_pick(x,y);return
-        if self._repick is not None:
-            self._repick_click(x, y)
-            return
         if self._lib_action is not None:
             self._library_click(x, y)
             return
@@ -6204,6 +6175,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.run_preview('sweep', compute, show)
 
     def apply_sweep(self):
+        if self.apply_step_recipe():
+            return
         if self.busy or not self.sw_profiles or self.sw_path is None:
             self.toast('Wybierz profil i ścieżkę.')
             return
@@ -6331,6 +6304,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.run_preview('loft', compute, show)
 
     def apply_loft(self):
+        if self.apply_step_recipe():
+            return
         if self.busy or not self._lf_ready():
             self.toast('Wybierz co najmniej dwa profile albo profil i punkt.')
             return
@@ -7217,7 +7192,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         normal, origin = self.mirror_frame
         keep, join = self.mir_keep.isChecked(), self.mir_join.isChecked() and body.kind == 'solid'
 
-        recipe = dict(type='mirror', id=body.id, normal=[float(c) for c in normal], origin=[float(c) for c in origin], keep=keep, join=join, out=uuid.uuid4().hex)
+        recipe = dict(type='mirror', id=body.id, normal=[float(c) for c in normal], origin=[float(c) for c in origin], keep=keep, join=join, out=uuid.uuid4().hex,
+                      same_id=True)
         targets = self._multi_targets(body.id, ('solid', 'sketch'))
         if len(targets) > 1:          # kilka zaznaczonych: każdy odbity względem tej samej płaszczyzny
             steps = [dict(recipe, id=i, join=join and self.document.get(i).kind == 'solid', out=uuid.uuid4().hex) for i in targets]
@@ -8574,11 +8550,6 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
     def _hist_ctx(self):
         return hist.Context(self.document.constraints)
 
-    def _hist_edit_close(self):
-        self.hist_edit.hide()
-        self.cancel_previews()
-        self.view.set_preview_mesh(None)
-
     def _hist_toggled(self, on):
         self.hist_bar.setVisible(on)
         self._hist_sig = None
@@ -8697,7 +8668,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if not 0 < index < len(states) or self.busy:
             return
         menu = QMenu(self)
-        edit = menu.addAction('Edytuj parametry…')
+        edit = menu.addAction('Edytuj w narzędziu…')
         off = menu.addAction('Włącz krok' if states[index][1].get('off') else 'Wyłącz krok')
         menu.addSeparator()
         left = menu.addAction('Przesuń wcześniej')
@@ -8830,391 +8801,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         work_item.signals.failed.connect(lambda message: None)
         self.pool.start(work_item)
 
-    def history_edit_form(self, index):
-        """Edycja parametrów kroku (wymiary szkicu albo wyciągnięcie / wycięcie) i przeliczenie wszystkich następnych kroków."""
-        if self.busy:
-            return
-        states = self.document.states()
-        if not 0 < index < len(states):
-            return
-        bodies, info = states[index]
-        recipe = info.get('op')
-        if self.hist_edit.isVisible():
-            self._hist_edit_close()
-        lay = self.hist_edit_layout
-        while lay.count():
-            item = lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        title = QLabel(f"Edycja kroku {index}: {info.get('note') or hist.step_label(info)}")
-        title.setObjectName('ptitle')
-        lay.addWidget(title)
-        if info.get('why'):
-            why = _label('Powód błędu: ' + info['why'], 'status')
-            why.setStyleSheet('color:#c0262b; background:transparent;')
-            lay.addWidget(why)
-        if recipe and recipe.get('type') in hist.RUNNERS:
-            try:
-                fields = dict(kind='recipe', collect=self._recipe_form(recipe, lay))
-            except kernel.CadError as exc:
-                self.toast(f'{exc} Krok można wyłączyć, usunąć albo przesunąć (prawy przycisk na kroku).', 5000)
-                return
-        else:
-            known = {x.id for x in states[index - 1][0]}
-            new_bodies = [b for b in bodies if b.id not in known]
-            if not new_bodies:
-                self.toast('Ten krok nie dodaje obiektów ani nie ma przepisu - nie ma czego edytować.')
-                return
-            added = [b for b in new_bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE]
-            edits, links, factors, target = [], [], [], (added[0] if added else None)
-            if target is not None:
-                labels = sm.LABELS.get(target.meta['tool'], ())
-                drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE
-                           for i, cap in enumerate(sm.LABELS.get(b.meta['tool'], ()))]
-                for n, (caption, value) in enumerate(zip(labels, sm.values(target.meta))):
-                    formula = next((c['expr'] for c in self.document.constraints if c['b'] == target.id and c['bi'] == n and 'expr' in c), None)
-                    box = QLineEdit(formula or value)
-                    lay.addWidget(_label(caption, 'psub'))
-                    lay.addWidget(box)
-                    edits.append(box)
-                    link = QComboBox()       # więz: ten wymiar zawsze równy wymiarowi innego szkicu
-                    link.addItem('Wymiar niezależny', None)
-                    current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n and 'a' in c), None)
-                    for b, i, text in drivers:
-                        if b.id == target.id and i == n:      # wymiar nie może zależeć od samego siebie
-                            continue
-                        link.addItem(('= (ten szkic) ' if b.id == target.id else '= ') + text, (b.id, i))
-                        if current and current['a'] == b.id and current['ai'] == i:
-                            link.setCurrentIndex(link.count() - 1)
-                    factor = QLineEdit(f"{float(current.get('k', 1.0)):g}" if current else '1')
-                    factor.setPlaceholderText('współczynnik ×')
-                    factor.setToolTip('Wymiar = współczynnik × wymiar wskazany powyżej (np. 0,5 = połowa, 2 = podwójny)')
-                    lay.addWidget(link)
-                    lay.addWidget(factor)
-                    links.append(link)
-                    factors.append(factor)
-            lay.addWidget(_label('Położenie dodanych obiektów: przesunięcie (mm) i obrót (°) względem stanu z tego kroku', 'psub'))
-            place = []
-            for caption in ('Przesuń X', 'Przesuń Y', 'Przesuń Z', 'Obrót wokół X', 'Obrót wokół Y', 'Obrót wokół Z'):
-                spin = _spin(0.0, -1e6, 1e6, 3, 1)
-                lay.addWidget(_label(caption, 'psub'))
-                lay.addWidget(spin)
-                place.append(spin)
-            fields = dict(kind='sketch', target=target, edits=edits, links=links, factors=factors, place=place, added=[b.id for b in new_bodies])
-        self._hist_fields = fields
-        if recipe and recipe.get('type') in ('extrude', 'revolve', 'mod') and (info.get('stale') or recipe.get('type') == 'mod' or any(p.get('k') == 'face' for p in recipe.get('profiles', ()))):
-            pick = QPushButton('Wskaż ponownie w modelu…')
-            pick.setObjectName('chip')
-            pick.setToolTip('Model wraca do stanu sprzed kroku - kliknij ścianę, krawędź lub narożnik, których ma dotyczyć krok')
-            pick.clicked.connect(lambda _=False: self.history_repick(index, recipe))
-            lay.addWidget(pick)
-        row = QHBoxLayout()
-        for text, cb in (('Zastosuj', lambda: self._history_edit_apply(index, fields)), ('Anuluj', self._hist_edit_close)):
-            b = QPushButton(text)
-            b.setObjectName('primary' if text == 'Zastosuj' else 'chip')
-            b.clicked.connect(lambda _=False, f=cb: f())
-            row.addWidget(b)
-        lay.addLayout(row)
-        self.hist_edit.adjustSize()
-        self.hist_edit.move(max(10, (self.view.width() - self.hist_edit.width()) // 2), self.hist_bar.y() - self.hist_edit.height() - 10)
-        self.hist_edit.show()
-        self.hist_edit.raise_()
-        self._hist_hook_preview(index, fields)
-
-    def _recipe_form(self, recipe, lay):
-        """Pola edycji parametrów kroku dla danego typu operacji; zwraca funkcję zbierającą nowy przepis."""
-        def field(caption, widget):
-            lay.addWidget(_label(caption, 'psub'))
-            lay.addWidget(widget)
-            return widget
-
-        kind = recipe['type']
-        vals = {}
-        if kind == 'extrude':
-            op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
-            op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
-            direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two'), ('Oba końce', 'ends', 'ends')], 28)
-            direction.setCurrentIndex(['one', 'symmetric', 'two', 'ends'].index(recipe.get('dir', 'one')))
-            d1, d2 = _ExprBox(recipe['d1'], vals), _ExprBox(recipe.get('d2', 0), vals)
-            for caption, widget in (('Operacja', op), ('Kierunek', direction), ('Odległość (mm)', d1), ('Druga strona (mm)', d2)):
-                field(caption, widget)
-            self._hist_fields_extrude = dict(d1=d1, d2=d2, op=op, dir=direction)
-            return lambda: dict(recipe, mode=op.currentData(), dir=direction.currentData(), d1=d1.raw(), d2=d2.raw())
-        if kind in ('sweep', 'loft'):
-            op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
-            op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
-            field('Operacja', op)
-            if kind == 'sweep':
-                return lambda: dict(recipe, mode=op.currentData())
-            ruled = ui.Segmented([('Gładko', 'smooth', 'lf_smooth'), ('Prosto', 'ruled', 'lf_ruled')], 28)
-            ruled.setCurrentIndex(1 if recipe.get('ruled') else 0)
-            field('Przejście między profilami', ruled)
-            return lambda: dict(recipe, mode=op.currentData(), ruled=ruled.currentData() == 'ruled')
-        if kind == 'shell':
-            thick = _ExprBox(recipe['thickness'], vals)
-            direction = ui.Segmented([('Do wewnątrz', 'in', 'sh_in'), ('Na zewnątrz', 'out', 'sh_out')], 28)
-            direction.setCurrentIndex(0 if recipe.get('inward', True) else 1)
-            field('Grubość ścianki (mm)', thick)
-            field('Kierunek', direction)
-            return lambda: dict(recipe, thickness=thick.raw(), inward=direction.currentData() == 'in')
-        if kind == 'revolve':
-            op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
-            op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
-            angle = _ExprBox(recipe.get('angle', 360), vals)
-            axis_spec = recipe['axis']
-            axis = ui.Segmented([('Pozioma', 'u', 'ax_u'), ('Pionowa', 'v', 'ax_v')] + ([('Wskazana', 'line', 'ax_line')] if axis_spec['k'] == 'line' else []), 28)
-            axis.setCurrentIndex(['u', 'v', 'line'].index(axis_spec['k']))
-            for caption, widget in (('Operacja', op), ('Oś obrotu', axis), ('Kąt obrotu (°)', angle)):
-                field(caption, widget)
-            return lambda: dict(recipe, mode=op.currentData(), axis=axis_spec if axis.currentData() == 'line' else dict(k=axis.currentData()), angle=angle.raw())
-        if kind == 'text':
-            q = recipe['params']
-            text = QLineEdit(q['text'])
-            font = QFontComboBox()
-            font.setFontFilters(QFontComboBox.ScalableFonts)
-            font.setCurrentFont(QFont(q['font']))
-            size, angle = _spin(float(q['size']), .1, 1e4, 2, 1), _spin(float(q['angle']), -360, 360, 1, 5)
-            bold, italic = QCheckBox('Pogrubienie'), QCheckBox('Pochylenie')
-            bold.setChecked(bool(q['bold']))
-            italic.setChecked(bool(q['italic']))
-            field('Treść', text)
-            field('Czcionka', font)
-            field('Wysokość liter (mm)', size)
-            field('Kąt (°)', angle)
-            lay.addWidget(bold)
-            lay.addWidget(italic)
-            self._hist_text = dict(text=text, size=size)
-            return lambda: dict(recipe, params=dict(q, text=text.text(), font=font.currentFont().family(), size=size.value(), angle=angle.value(),
-                                                    bold=bold.isChecked(), italic=italic.isChecked()))
-        if kind == 'sketchmeta':
-            meta = recipe['meta']
-            boxes = []
-            for caption, value in zip(sm.LABELS.get(meta['tool'], ()), sm.values(meta)):
-                boxes.append(field(caption, QLineEdit(value)))
-            return lambda: dict(recipe, meta=sm.apply_values(meta, [float(b.text().replace(',', '.')) for b in boxes]))
-        if kind in ('transform', 'featmove'):
-            spins = [_ExprBox(c, vals) for c in recipe['v']]
-            for caption, spin in zip(('X' if recipe['mode'] == 'move' else 'Obrót wokół X (°)', 'Y' if recipe['mode'] == 'move' else 'Obrót wokół Y (°)',
-                                      'Z' if recipe['mode'] == 'move' else 'Obrót wokół Z (°)'), spins):
-                field(caption + (' (mm)' if recipe['mode'] == 'move' else ''), spin)
-            self._hist_spins = spins
-            return lambda: dict(recipe, v=[x.raw() for x in spins])
-        if kind == 'mod':
-            mk = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 28)
-            mk.setCurrentIndex(['fillet', 'chamfer'].index(recipe['kind']))
-            size = _ExprBox(recipe['size'], vals)
-            field('Operacja', mk)
-            field('Promień / odległość (mm)', size)
-            self._hist_spins = [size]
-            if recipe.get('groups'):        # zaokrąglenia liczone razem: nowa wartość dla wszystkich o tej samej wartości i rodzaju
-                old = (recipe['kind'], float(recipe['size']))
-                return lambda: dict(recipe, kind=mk.currentData(), size=size.raw(), groups=[
-                    dict(g, kind=mk.currentData(), size=size.raw()) if (g['kind'], float(g['size'])) == old else g for g in recipe['groups']])
-            return lambda: dict(recipe, kind=mk.currentData(), size=size.raw())
-        if kind == 'mirror':
-            keep, join = QCheckBox('Zachowaj oryginał'), QCheckBox('Połącz z oryginałem (bryły)')
-            keep.setChecked(bool(recipe.get('keep')))
-            join.setChecked(bool(recipe.get('join')))
-            lay.addWidget(keep)
-            lay.addWidget(join)
-            return lambda: dict(recipe, keep=keep.isChecked(), join=join.isChecked())
-        if kind == 'bool':
-            op = ui.Segmented([('Suma', 'union', 'union'), ('Różnica', 'subtract', 'subtract'), ('Część wspólna', 'intersect', 'common')], 28)
-            op.setCurrentIndex(['union', 'subtract', 'intersect'].index(recipe['op']))
-            keep = QCheckBox('Zachowaj bryły-narzędzia')
-            keep.setChecked(bool(recipe.get('keep')))
-            field('Operacja', op)
-            lay.addWidget(keep)
-            return lambda: dict(recipe, op=op.currentData(), keep=keep.isChecked())
-        if kind == 'pattern':
-            p, sp = dict(recipe['params']), []
-            if recipe['kind'] == 'rect':
-                counts = [_spin(float(c), 1, 200, 0, 1) for c in p['counts']]
-                gaps = [_ExprBox(c, vals) for c in p['spacing']]
-                for axis, c, g in zip('XYZ', counts, gaps):
-                    field(f'Ilość {axis}', c)
-                    field(f'Odstęp {axis} (mm)', g)
-                sp = counts + gaps
-                params = lambda: dict(p, counts=[int(round(c.value())) for c in counts], spacing=[g.raw() for g in gaps])
-            elif recipe['kind'] == 'circ':
-                count, angle, radius = _spin(float(p['count']), 1, 400, 0, 1), _ExprBox(p['angle'], vals), _ExprBox(p['radius'], vals)
-                pivot = [_spin(float(c), -1e6, 1e6, 2, 1) for c in p['pivot']]
-                field('Ilość kopii', count)
-                field('Kąt łączny (°)', angle)
-                field('Odległość od środka (mm)', radius)
-                for axis, c in zip('XYZ', pivot):
-                    field(f'Środek {axis} (mm)', c)
-                sp = [count, angle, radius, *pivot]
-                params = lambda: dict(p, count=int(round(count.value())), angle=angle.raw(), radius=radius.raw(), pivot=[c.value() for c in pivot])
-            else:
-                count, spacing = _spin(float(p['count']), 1, 400, 0, 1), _ExprBox(p['spacing'], vals)
-                fit = QCheckBox('Rozłóż równo na całej ścieżce')
-                fit.setChecked(bool(p.get('fit', True)))
-                field('Ilość kopii', count)
-                lay.addWidget(fit)
-                field('Odstęp (mm)', spacing)
-                sp = [count, spacing]
-                params = lambda: dict(p, count=int(round(count.value())), fit=fit.isChecked(), spacing=spacing.raw())
-            join = QCheckBox('Połącz kopie w jedną bryłę')
-            join.setChecked(bool(recipe.get('join')))
-            lay.addWidget(join)
-            self._hist_spins = sp
-            return lambda: dict(recipe, params=params(), join=join.isChecked())
-        raise kernel.CadError('Ten krok nie ma parametrów do edycji.')
-
-    def _history_edit_apply(self, index, fields):
-        states = self.document.states()
-        bodies, info = states[index]
-        constraints = list(self.document.constraints)
-        values_now = {}
-        try:
-            if fields['kind'] == 'recipe':
-                recipe = fields['collect']()
-                new_info = dict(info, op=recipe)
-
-                def first():
-                    return hist.run_recipe(states[index - 1][0], recipe, values_now)
-            else:
-                target, new_info = fields['target'], info
-                shift = [x.value() for x in fields['place']]
-                meta = shape = None
-                if target is not None:
-                    numbers, formulas = [], {}
-                    for n, box in enumerate(fields['edits']):
-                        text = box.text().strip()
-                        try:
-                            numbers.append(float(text.replace(',', '.')))
-                        except ValueError:      # wyrażenie ze zmiennych projektu: wymiar zostaje z nim powiązany
-                            numbers.append(hist.evaluate(text, values_now))
-                            formulas[n] = text
-                    meta = sm.apply_values(target.meta, numbers)
-                    shape = self._meta_shape(target.plane, meta)
-                    constraints = [c for c in constraints if c['b'] != target.id]
-                    for n, text in formulas.items():
-                        constraints.append(dict(b=target.id, bi=n, expr=text))
-                    for n, link in enumerate(fields['links']):
-                        if link.currentData() and n not in formulas:
-                            try:
-                                k = float(fields['factors'][n].text().strip().replace(',', '.') or '1')
-                            except ValueError:
-                                raise ValueError('Współczynnik więzu musi być liczbą (np. 0,5).')
-                            constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=k))
-                    if hist.constraint_cycle(constraints):
-                        raise ValueError('Te więzy tworzą pętlę (wymiar zależałby sam od siebie).')
-
-                def first():
-                    result = tuple(replace(b, shape=shape, mesh=kernel.display_mesh(shape), meta=meta) if (target is not None and b.id == target.id) else b for b in bodies)
-                    if any(abs(x) > 1e-12 for x in shift):
-                        result = hist.place_bodies(result, fields['added'], shift[:3], shift[3:])
-                    return result
-        except (ValueError, kernel.CadError) as exc:
-            self.toast(str(exc) or 'Wpisz poprawne liczby.')
-            return
-        self._hist_edit_close()
-
-        def build(job):
-            edited = first()
-            patched = list(states)
-            patched[index] = (bodies, new_info)
-            return hist.recompute(patched, index, edited, hist.Context(constraints, values_now), job)
-
-        def apply(result):
-            new_states, failed = result
-            self.document.rewrite(new_states, len(new_states) - 1, constraints)
-            self.selected, self.edges = [], {}
-            if failed:
-                self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono, powód w dymku) - popraw je albo cofnij edycję.', 7000)
-
-        self.run_history(build, apply)
-
     # ---------- podgląd na żywo parametrów kroku, ponowne wskazanie elementu, zmienne projektu ----------
-    def _hist_hook_preview(self, index, fields):
-        if fields['kind'] != 'recipe':
-            return
-        timer = getattr(self, '_hist_preview_timer', None)
-        if timer is None:
-            timer = self._hist_preview_timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.setInterval(220)
-        try:
-            timer.timeout.disconnect()
-        except Exception:
-            pass
-        timer.timeout.connect(lambda: self._hist_edit_preview(index, fields))
-        poke = lambda *_: timer.start()
-        for w in self.hist_edit.findChildren(QDoubleSpinBox):
-            w.valueChanged.connect(poke)
-        for w in self.hist_edit.findChildren(QLineEdit):
-            w.textChanged.connect(poke)
-        for w in self.hist_edit.findChildren(QCheckBox):
-            w.toggled.connect(poke)
-        for w in self.hist_edit.findChildren(ui.Segmented):
-            w.currentIndexChanged.connect(poke)
-        timer.start()
-
-    def _hist_edit_preview(self, index, fields):
-        if not self.hist_edit.isVisible() or self.busy:
-            return
-        try:
-            recipe = fields['collect']()
-        except Exception:
-            return
-        base, values = self.document.states()[index - 1][0], {}
-
-        def compute():          # przeliczenie kroku liczy proces roboczy, okno pokazuje wynik, gdy jest gotowy
-            solids = hist.background(hist.history_preview, hist.light(base), recipe, values, PREVIEW_TOL)
-            return _merge_meshes(solids) if solids else None
-
-        def show(mesh, error):
-            if not self.hist_edit.isVisible():
-                return
-            if error or mesh is None:
-                self.view.set_preview_mesh(None)
-                return
-            self.view.set_preview_mesh(mesh, color=(.95, .55, .2, .32), line_color=(.55, .3, .05, 1), width=2)
-
-        self.run_preview('histedit', compute, show)
-
-    def history_repick(self, index, recipe):
-        """Naprawa czerwonego kroku: model wraca do stanu sprzed kroku, a użytkownik wskazuje ponownie ścianę / krawędź / narożnik."""
-        self._hist_edit_close()
-        self.history_goto(index - 1)
-        self._repick = dict(index=index, recipe=recipe)
-        self.toast('Kliknij ścianę (wyciągnięcie) albo krawędź / narożnik (faza, zaokrąglenie) w modelu sprzed tego kroku. Esc - anuluj.', 7000)
-
-    def _repick_click(self, x, y):
-        info = self._repick
-        recipe = info['recipe']
-        bodies = self.document.bodies
-        try:
-            if recipe['type'] in ('extrude', 'revolve'):
-                hit = self.view.pick_face(x, y)
-                body = self.document.get(hit[0]) if hit else None
-                if body is None or body.kind != 'solid':
-                    self.toast('Kliknij płaską ścianę bryły.')
-                    return
-                face, normal = self.view.face_at(body,hit)
-                src = dict(kind='face', id=body.id, face=face, normal=tuple(float(c) for c in normal), center=face.Center().toTuple(), hit=tuple(float(c) for c in hit[2]))
-                new = dict(recipe, profiles=hist.describe_profiles([src], bodies))
-            else:
-                vertex = self.view.nearest_vertex(x, y)
-                if vertex is not None:
-                    body = self.document.get(vertex[0])
-                    point = np.asarray(vertex[1], float)
-                    new = dict(recipe, id=body.id, verts=[[float(c) for c in point]], vrefs=hist.vertex_refs(body.shape, [point]), edges=[])
-                else:
-                    edge = self.view.nearest_edge(x, y, True)
-                    if edge is None:
-                        self.toast('Kliknij krawędź lub narożnik bryły.')
-                        return
-                    body = self.document.get(edge[0])
-                    new = dict(recipe, id=body.id, verts=[], vrefs=[], edges=hist.edge_refs(body.shape, [edge[1]]))
-        except kernel.CadError as exc:
-            self.toast(str(exc))
-            return
-        self._repick = None
-        self._history_edit_apply(info['index'], dict(kind='recipe', collect=lambda: new))
-
     def run_history(self, build, apply):
         """Przeliczanie historii w tle z paskiem postępu; Esc przerywa (model zostaje bez zmian)."""
         job = {'cancel': False, 'i': 0, 'n': 0}
@@ -9457,8 +9044,6 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.revealed_ids = set()
         self.edges = {}
         self.override = {}
-        self._repick = None
-        self._hist_edit_close()
         self._hist_sig = None
         self.view.clear_body_matrices()
         self.refresh()
@@ -9831,18 +9416,28 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             return
         path, _ = QFileDialog.getOpenFileName(self, 'Otwórz projekt', '', 'RCCAD (*.rccadx)')
         if path:
-            self.set_mode(None)
+            self.open_path(path)
 
-            def loaded(doc):
-                self.toggle_section(False,cancel_tool=False)
-                self.section_origin=self.section_normal=None
-                self.document = doc
-                self.selected = []
-                self.hidden_ids, self.locked_ids = set(), set()
-                self.revealed_ids = set()
+    def open_path(self, path):
+        """Otwiera projekt z pliku (menu Plik, dwuklik w plik .rccadx w Eksploratorze, przeciągnięcie pliku na program)."""
+        path = Path(path)
+        if not path.exists():
+            self.toast(f'Nie znaleziono pliku: {path}', 6000)
+            return
+        if self.busy:
+            QTimer.singleShot(300, lambda: self.open_path(path))
+            return
+        self.set_mode(None)
+
+        def loaded(doc):
+            self.toggle_section(False,cancel_tool=False)
+            self.section_origin=self.section_normal=None
+            self.document = doc
+            self.selected = []
+            self.hidden_ids, self.locked_ids = set(), set()
             self.revealed_ids = set()
 
-            self.run_operation('Otwieranie projektu', lambda: Document.load(path), loaded, True)
+        self.run_operation('Otwieranie projektu', lambda: Document.load(path), loaded, True)
 
     def save_project(self, save_as=False, compact=False):
         """compact: zapis kompaktowy - pełna geometria tylko co kilka kroków historii (oraz bieżący krok); pozostałe kroki
@@ -10193,12 +9788,6 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self.section_cancel_pick();event.accept();return
         if key == Qt.Key_Escape and self._lib_action is not None:
             self.library_cancel()
-            event.accept()
-            return
-        if key == Qt.Key_Escape and self._repick is not None and not self.busy:
-            self._repick = None
-            self.history_goto(len(self.document.infos()[0]) - 1)
-            self.toast('Anulowano ponowne wskazywanie.', 2500)
             event.accept()
             return
         if self.busy:

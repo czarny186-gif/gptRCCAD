@@ -13,7 +13,8 @@ def main():
     parser.add_argument('--report')
     parser.add_argument('--demo',action='store_true')
     parser.add_argument('--classic',action='store_true',help='stare okno z panelem bocznym')
-    args=parser.parse_args()
+    parser.add_argument('project',nargs='?',help='plik projektu .rccadx (dwuklik w plik w Eksploratorze)')
+    args,_unknown=parser.parse_known_args()
     # Application caches must be writable in a portable install as well.
     cache=Path(os.environ.get('LOCALAPPDATA') or os.environ.get('XDG_CACHE_HOME') or Path.home()/'.cache')/'RCCAD'
     try:
@@ -68,6 +69,14 @@ def main():
         window.refresh(True)
     window.show()
     if splash is not None:splash.close()
+    if args.project and Path(args.project).suffix.lower()=='.rccadx' and hasattr(window,'open_path'):
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0,lambda:window.open_path(Path(args.project)))      # projekt kliknięty w Eksploratorze
+    try:
+        from rccad.fileassoc import register
+        register()          # Windows: pliki .rccadx otwierają się w RCCAD dwuklikiem (dla bieżącego użytkownika)
+    except Exception:
+        pass
     return app.exec()
 
 

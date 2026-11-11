@@ -1785,6 +1785,8 @@ def run_mirror(bodies, recipe):
                     threads=_moved_threads(body.threads, _mirror_matrix(recipe['normal'], recipe['origin']))).prepared()
     if recipe.get('keep'):
         return [*bodies, mirrored]
+    if recipe.get('same_id'):          # odbicie bez kopii: obiekt zostaje tym samym obiektem (dalsze kroki go znajdują)
+        mirrored = replace(mirrored, id=body.id, name=body.name, folder=body.folder, group=body.group)
     return [mirrored if b.id == body.id else b for b in bodies]
 
 
@@ -3339,11 +3341,33 @@ def surface_offset(shape, origin, normal, reach=None):
     return best
 
 
+def _resting_on(body, original):
+    """Bryła, na której ścianie leży początek płaszczyzny szkicu (szkic narysowany na ścianie): {target, normal} albo None."""
+    origin = cq.Vertex.makeVertex(*[float(c) for c in body.plane.origin])
+    for other in original.values():
+        if other.kind != 'solid':
+            continue
+        try:
+            if other.shape.distance(origin) >= 1e-5:
+                continue
+            for face in other.shape.Faces():
+                if face.distance(origin) < 1e-5:
+                    n = np.array(face.normalAt(cq.Vector(*body.plane.origin)).toTuple(), float)     # na zewnątrz bryły
+                    if abs(float(n @ np.asarray(body.plane.normal, float))) > .999:
+                        return dict(target=other.id, normal=[float(c) for c in n])
+        except Exception:
+            continue
+    return None
+
+
 def follow_surface(body, original, current):
     """Szkic na ścianie bryły (meta surface) po zmianie tej bryły we wcześniejszym kroku: przesuwa się wzdłuż normalnej
     na nowe położenie ściany (np. wyższa bryła - szkic na górze idzie w górę, większy promień - szkic na walcu na zewnątrz).
     None - nic do zmiany."""
-    surface = (body.meta or {}).get('surface') if body.kind == 'sketch' else None
+    meta = body.meta or {}
+    surface = (meta.get('surface') or meta.get('support')) if body.kind == 'sketch' else None
+    if not surface and body.kind == 'sketch' and isinstance(body.plane, kernel.Frame):
+        surface = _resting_on(body, original)        # starsze projekty: szkic leżący na płaskiej ścianie bryły
     if not surface or not isinstance(body.plane, kernel.Frame):
         return None
     old_target, new_target = original.get(surface.get('target')), current.get(surface.get('target'))

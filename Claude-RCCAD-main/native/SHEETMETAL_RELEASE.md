@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.4.98 — pochylenie ścianki, przyciąganie do siatki i kątów
+# RCCAD Desktop 0.4.99 — otwieranie plików, edycja kroków w oryginalnych narzędziach
+
+- **Dwuklik w plik projektu**: program uruchomiony z plikiem .rccadx (dwuklik w Eksploratorze, „Otwórz za pomocą”) otwiera ten projekt - wcześniej nie uruchamiał się wcale. Przy pierwszym uruchomieniu RCCAD sam kojarzy pliki .rccadx ze sobą (dla bieżącego użytkownika).
+- **Zmiana wysokości wyciągnięcia nie psuje historii**: szkic narysowany na ścianie bryły zapamiętuje tę ścianę i po zmianie bryły idzie za nią - otwory, wycięcia i zaokrąglenia zrobione później dopasowują się do nowej wysokości (działa też dla szkiców ze starszych projektów).
+- **Edycja kroku zawsze w oryginalnym narzędziu**: usunięto zastępcze okienka edycji historii. Dwuklik w krok otwiera okno narzędzia, którym krok powstał - teraz także Szyk, Lustro, Przetnij, Przeciągnięcie, Loft, Przesuń / Obróć (także otworu) z wartościami i wyborem z kroku; Gwint, Skalowanie, Dopasowanie, Tekst, blachy i sklejka otwierają swoje narzędzie do ponownego wskazania. Zastosuj zastępuje krok, Zamknij - bez zmian.
+- Lustro bez kopii zostawia obiekt tym samym obiektem - dalsze kroki go znajdują.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.4.98 — pochylenie ścianki, przyciąganie do siatki i kątów
 
 - Nowe narzędzie **Pochylenie ścianki** w zakładce Edycja: kliknij płaską ścianę bryły, pociągnij jedną z czterech strzałek przy jej bokach - ten bok podnosi się albo opuszcza, przeciwległy zostaje, a reszta bryły rozciąga się do nowej płaszczyzny. Zielony podgląd na żywo, Zastosuj zapisuje, Zamknij - bez zmian.
 - **Przyciąganie do siatki przy każdej gęstości** (także kratka 5 x 5 mm): kursor klei się dokładnie do narożników widocznej kratki i do środka każdej kratki. Uchwyty szkicu przy przeciąganiu też się przyciągają.
 - **Linia prostuje się sama**: rysowana linia w pobliżu poziomu, pionu albo 45° ustawia się dokładnie pod tym kątem i robi się czerwona. To tylko pomoc jak przyciąganie - odsunięcie kursora pozwala narysować dowolny kąt.
 - **Przesuń / Obróć**: otwór albo kieszeń pod kursorem podświetla się na pomarańczowo, zanim się ją kliknie.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.4.97 — historia bez duplikatów
 

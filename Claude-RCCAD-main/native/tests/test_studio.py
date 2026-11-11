@@ -1938,14 +1938,78 @@ class StudioTests(unittest.TestCase):
         for i in range(1,len(infos)):
             kind=(infos[i].get('op') or {}).get('type')
             w.history_edit(i);self.app.processEvents()
-            opened=w.mode is not None or w.hist_edit.isVisible()
-            self.assertEqual(opened,kind!='rename',f'krok {i} ({kind}) - okno edycji')
-            if w.hist_edit.isVisible():w._hist_edit_close()
+            opened=w.mode is not None
+            self.assertEqual(opened,kind!='rename',f'krok {i} ({kind}) - okno narzędzia')
+            self.assertFalse(hasattr(w,'hist_edit'))                                    # bez zastępczych okien edycji
             w.set_mode(None);self.app.processEvents();self.wait()
             if w.document.infos()[1]!=last:w.history_goto(last);self.wait()
             self.assertEqual(w.document.infos()[1],last,f'krok {i} ({kind})')
             self.assertEqual([(x.id,x.shape) for x in w.document.bodies],final,f'krok {i} ({kind}) zmienił model')
             self.assertFalse(w.document.replace_next or w.document.merging)
+
+    def test_pattern_mirror_split_move_steps_reopen_their_own_tools_prefilled(self):
+        w=self.w
+        a=Body('A',k.box(10,10,10)).prepared();c=Body('C',k.box(4,4,4).translate(cq.Vector(30,0,0))).prepared()
+        w.document.commit([a,c]);w.refresh();doc=w.document
+        def step(op,label):
+            doc.commit(list(hist.run_recipe(doc.bodies,op)),label,op=op)
+        step(dict(type='pattern',id=c.id,kind='rect',params=dict(counts=[3,1,1],spacing=[8.0,10.0,10.0],axes=[[1,0,0],[0,1,0],[0,0,1]]),join=False,out=['p1','p2']),'Szyk')
+        step(dict(type='mirror',id=a.id,normal=[1.0,0,0],origin=[-10.0,0,0],keep=True,join=False,out='m1',same_id=True),'Lustro')
+        step(dict(type='split',id=a.id,method='plane',plane='XY',normal=[0,0,1.0],origin=[0,0,0],offset=2.0,keep='both',out='s1'),'Przecięcie')
+        step(dict(type='transform',id=c.id,mode='move',v=[0.0,5.0,0.0]),'Przesunięcie')
+        w.refresh();count=len(doc.infos()[0])
+        def edit(i,mode):
+            w.history_edit(i);self.app.processEvents()
+            self.assertEqual(w.mode,mode,f'krok {i}');self.assertEqual(doc.infos()[1],i-1)
+        edit(2,'pattern')
+        self.assertEqual(w.pat_id,c.id);self.assertEqual(int(w.pat_counts[0].value()),3);self.assertAlmostEqual(w.pat_gaps[0].value(),8)
+        w.pat_counts[0].setValue(4);w.apply_pattern();self.wait();self.wait()
+        self.assertEqual(len(doc.infos()[0]),count);self.assertEqual(doc.infos()[0][2]['op']['params']['counts'][0],4)
+        edit(3,'mirror')
+        self.assertEqual(w.mirror_id,a.id);self.assertTrue(w.mir_keep.isChecked())
+        w.mir_keep.setChecked(False);w.apply_mirror();self.wait();self.wait()
+        self.assertEqual(len(doc.infos()[0]),count);self.assertFalse(doc.infos()[0][3]['op']['keep'])
+        edit(4,'split')
+        self.assertEqual(w.sp_id,a.id);self.assertAlmostEqual(w.sp_offset.value(),2.0)
+        w.sp_offset.setValue(-1.0);w.apply_split();self.wait();self.wait()
+        self.assertEqual(len(doc.infos()[0]),count);self.assertAlmostEqual(doc.infos()[0][4]['op']['offset'],-1.0)
+        edit(5,'move')
+        self.assertEqual(w.t_target.id,c.id);self.assertAlmostEqual(w.t_spins[1].value(),5.0)
+        w.t_spins[1].setValue(9.0);w.apply_transform();self.wait();self.wait()
+        infos=doc.infos()[0];self.assertEqual(len(infos),count);self.assertEqual(infos[5]['op']['v'],[0.0,9.0,0.0])
+        self.assertFalse(any(i.get('stale') for i in infos))
+
+    def test_taller_extrusion_keeps_hole_from_sketch_on_its_top_face(self):
+        w=self.w
+        self.sketch('rect',(0,0),(40,20));rect=w.document.bodies[-1];w.set_mode('extrude');self.pick_sketch_profile(rect)
+        w.ex_value.setValue(10);w.apply_extrude();self.wait();w.set_mode(None)
+        a=next(b for b in w.document.bodies if b.kind=='solid')
+        w.set_mode('plane')
+        with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array((20,10,10.0)))):
+            w.view_clicked(5,5,False,False)                                           # szkic na górnej ścianie
+        uv=lambda x,y:k.uv_of(w.sketch_plane,(x,y,10))
+        w.choose_tool('circle');w.sketch_clicked(w.sketch_plane,*uv(10,10));w.sketch_clicked(w.sketch_plane,*uv(13,10));self.wait()
+        circ=w.document.bodies[-1];self.assertEqual(circ.meta['support']['target'],a.id);w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(circ);w.ex_value.setValue(-5);w.ex_op.setCurrentIndex(2);w.apply_extrude();self.wait();w.set_mode(None)
+        E=w.document.get(a.id).shape.Edges();ids={i for i,e in enumerate(E) if abs(e.tangentAt(.5).y)>.9 and e.Center().z>9.9 and abs(e.Center().x-40)<1e-6}
+        w.set_mode('mod');w.edges={a.id:ids};w.mod_size.setValue(2);w.apply_mod();self.wait();w.set_mode(None)
+        count=len(w.document.infos()[0])
+        w.history_edit(2);self.assertEqual(w.mode,'extrude');self.assertAlmostEqual(w.ex_value.value(),10)
+        w.ex_value.setValue(20);w.apply_extrude();self.wait();self.wait()
+        infos=w.document.infos()[0];self.assertEqual(len(infos),count);self.assertFalse(any(i.get('stale') for i in infos))
+        shape=w.document.get(a.id).shape
+        self.assertAlmostEqual(k.bounds(shape).zmax,20,4)
+        self.assertEqual(k.point_state(shape,(10,10,18)),'out');self.assertEqual(k.point_state(shape,(10,10,8)),'in')    # otwór na nowej górze
+
+    def test_project_file_given_at_start_opens(self):
+        import tempfile
+        w=self.w;a=Body('A',k.box(5,5,5)).prepared();d=Document();d.commit([a])
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'Dwuklik.rccadx';d.save(path)
+            w.open_path(path);self.wait()
+            self.assertEqual(w.document.path,path);self.assertEqual([b.id for b in w.document.bodies],[a.id])
+        import main
+        self.assertTrue(callable(main.main))
 
     def test_fillet_meeting_earlier_fillets_is_computed_together_and_chamfer_still_works(self):
         w=self.w
@@ -2432,8 +2496,12 @@ class StudioTests(unittest.TestCase):
         infos,cur=w.document.infos();self.assertEqual((infos[-1]['icon'],infos[-1]['op']['type']),('text','text'))
         letters=[b for b in w.document.bodies if b.name.startswith('Tekst')]
         self.assertTrue(letters);self.assertEqual({b.folder for b in letters},{'Tekst „Tekst”'})   # napis od razu jako grupa
-        w.history_edit(cur);w._hist_text['text'].setText('Xy');w._hist_text['size'].setValue(7);w._history_edit_apply(cur,w._hist_fields);self.wait()
-        self.assertEqual(w.document.infos()[0][-1]['op']['params']['text'],'Xy');self.assertEqual(w.document.infos()[0][-1]['op']['params']['size'],7)
+        count=len(infos)
+        w.set_mode(None);w.history_edit(cur)                                             # dwuklik w krok: narzędzie Tekst z treścią kroku
+        self.assertEqual((w.mode,w.tool),('sketch','text'));self.assertEqual(w.text_edit.text(),'Tekst');self.assertEqual(w.txt['stage'],'edit')
+        w.text_edit.setText('Xy');w.txt['size']=7.0;w.apply_text();self.wait();self.wait()
+        infos=w.document.infos()[0];self.assertEqual(len(infos),count)                   # krok zastąpiony, nie dodany
+        self.assertEqual(infos[-1]['op']['params']['text'],'Xy');self.assertEqual(infos[-1]['op']['params']['size'],7)
 
     def test_typed_dimensions_are_live(self):
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');w.sketch_clicked('XY',0,0)
