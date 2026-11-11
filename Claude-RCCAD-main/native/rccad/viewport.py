@@ -1236,6 +1236,24 @@ class CadView(gl.GLViewWidget):
                 self.preview_items.append(item)
         self.update()
 
+    def set_hover_mesh(self, mesh, color=(.35, .65, .94, .45), line_color=(.1, .3, .6, 1), width=2.4):
+        """Podświetlenie elementu pod kursorem - osobna warstwa, więc nie zastępuje podglądu operacji ani wyboru."""
+        for item in getattr(self, 'hover_items', []):
+            self.removeItem(item)
+        self.hover_items = []
+        if mesh is not None:
+            if len(mesh.triangles):
+                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
+                item.setGLOptions('translucent')
+                self.addItem(item)
+                self.hover_items.append(item)
+            seg = _segments(mesh.edges.values())
+            if seg is not None:
+                line = SectionLine(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
+                self.addItem(line)
+                self.hover_items.append(line)
+        self.update()
+
     def set_selection_meshes(self, meshes, color=(1, .55, .1, .55), line_color=(.95, .42, .02, 1)):
         """Trwałe podświetlenie wybranych ścian / profili (świeci się, dopóki operacja trwa)."""
         for item in getattr(self, 'selection_items', []):

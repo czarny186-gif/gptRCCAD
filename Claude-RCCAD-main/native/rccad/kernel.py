@@ -213,6 +213,14 @@ def wp(plane):
     return cq.Workplane(cq.Plane(origin=f.origin, xDir=f.xdir, normal=f.normal))
 
 
+def plane_origin(plane):
+    """Początek płaszczyzny szkicu (punkt styku z bryłą dla szkicu na powierzchni) albo None."""
+    try:
+        return tuple(float(c) for c in frame_of(plane).origin) if plane is not None else None
+    except CadError:
+        return None
+
+
 def face_frame(origin, normal):
     """Płaszczyzna szkicu na ścianie: U poziomo (wzdłuż osi Z × normalna), a dla ścian poziomych wzdłuż X."""
     n = np.array(normal, float)
@@ -1978,7 +1986,7 @@ def _surface_arc_mapper(shape, normal, center, samples):
     offsets = np.linspace(-extent, extent, 97)
     probes = np.asarray([c + tangent * offset for offset in offsets], np.float32)
     probe_mesh = DisplayMesh(probes, np.empty((0,3),np.uint32), {}, tuple(c), extent)
-    projected = project_surface_mesh(probe_mesh, shape, n, conformal=False).vertices.astype(float)
+    projected = _project_surface_mesh(probe_mesh, shape, n, conformal=False).vertices.astype(float)
     distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(projected, axis=0), axis=1))]
     distance -= distance[len(distance)//2]
     if distance[0] > -extent + 1e-3 or distance[-1] < extent - 1e-3:
@@ -2042,7 +2050,31 @@ def _surface_component(shape, normal, point):
         component = adjacent
 
 
-def surface_stamp_tool(shape, face, normal, height, operation='join'):
+def surface_stamp_tool(shape, face, normal, height, operation='join', origin=None):
+    """Wyciągnięcie / wycięcie szkicu owiniętego na bryle (walec, otwór, narożnik ostry i zaokrąglony).
+
+    Z początkiem płaszczyzny szkicu (origin) szkic jest rozwijany dokładnie na pas ścian pod nim (surfacewrap). Bez niego
+    albo dla kształtu, którego nie da się rozwinąć (stożek, kula, łukowa krawędź) - przybliżony rzut na ściany.
+    """
+    if origin is not None:
+        from . import surfacewrap
+        depth = abs(float(height))
+        if not isfinite(depth) or depth < 1e-5:
+            raise CadError('Wysokość na powierzchni musi być większa od zera.')
+        try:
+            tool = surfacewrap.wrap_tool(shape, face, normal, depth, operation, origin)
+        except surfacewrap.WrapError as exc:
+            if len(str(exc)) > 20:
+                raise CadError(str(exc)) from exc
+            tool = None
+        except Exception:
+            tool = None
+        if tool is not None:
+            return valid(tool)
+    return _surface_stamp_projected(shape, face, normal, height, operation)
+
+
+def _surface_stamp_projected(shape, face, normal, height, operation='join'):
     """A profile-limited offset layer following planar, cylindrical and filleted faces.
 
     The planar profile is a projected footprint.  The offset layer supplies
@@ -2076,7 +2108,8 @@ def surface_stamp_tool(shape, face, normal, height, operation='join'):
         prism=cq.Shape.cast(BRepPrimAPI_MakePrism(base.wrapped,gp_Vec(*vec.multiply(2*reach).toTuple()),False,True).Shape())
         # Offsetting a cut-heavy polyhedron can spend minutes in OCC, then
         # return a null shape. Its local walls offset reliably and quickly.
-        local_first=len(shape.Faces())>=15 and not any(f.geomType()=='CYLINDER' for f in shape.Faces())
+        # Odsunięcie całej bryły potrafi trwać minutami (i zawiesić program) - tylko dla prostych brył.
+        local_first=len(shape.Faces())>=8
         if not local_first:
             try:
                 layer=shape.Solids()[0].shell([],sign*depth,kind='intersection')
@@ -2114,7 +2147,25 @@ def surface_stamp_tool(shape, face, normal, height, operation='join'):
         raise CadError('Nie udało się dopasować wyciągnięcia do powierzchni. Zmniejsz wysokość lub obszar szkicu.') from exc
 
 
-def project_surface_mesh(mesh, shape, normal, conformal=True):
+def project_surface_mesh(mesh, shape, normal, conformal=True, origin=None, lift=None):
+    """Szkic (siatka) na bryle - tak samo jak narzędzie wyciągnięcia (surfacewrap), a bez początku płaszczyzny / dla
+    nierozwijalnych kształtów - rzut na najbliższą część bryły."""
+    if origin is not None and conformal:
+        from . import surfacewrap
+        try:
+            wrapped = surfacewrap.wrap_mesh(mesh, shape, normal, origin, lift)
+        except surfacewrap.WrapError as exc:
+            if len(str(exc)) > 20:
+                raise CadError(str(exc)) from exc
+            wrapped = None
+        except Exception:
+            wrapped = None
+        if wrapped is not None:
+            return wrapped
+    return _project_surface_mesh(mesh, shape, normal, conformal)
+
+
+def _project_surface_mesh(mesh, shape, normal, conformal=True):
     """Project a sketch onto the nearest outward-facing part of the solid."""
     from OCP.IntCurvesFace import IntCurvesFace_Intersector
     from OCP.gp import gp_Lin,gp_Pnt,gp_Dir

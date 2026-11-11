@@ -169,3 +169,150 @@ class SurfaceSketchTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def _precise_volume(shape):
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape.wrapped, props, 1e-7, True)
+    return props.Mass()
+
+
+def _profile(origin, normal, make):
+    frame = kernel.face_frame(origin, normal)
+    plane = cq.Plane(origin=tuple(map(float, origin)), xDir=tuple(map(float, frame.xdir)), normal=tuple(map(float, normal)))
+    return cq.Face.makeFromWires(make(cq.Workplane(plane)).val())
+
+
+class ExactWrapTests(unittest.TestCase):
+    """Szkic rozwijany dokładnie na pas ścian (walec, otwór, narożniki ostre i zaokrąglone)."""
+
+    def stamp(self, shape, origin, normal, face, height, operation):
+        tool = kernel.surface_stamp_tool(shape, face, normal, height, operation, origin=origin)
+        result = kernel.boolean('union' if operation == 'join' else 'subtract', shape, [tool])
+        self.assertTrue(result.isValid())
+        self.assertEqual(len(result.Solids()), 1)
+        return _precise_volume(result) - _precise_volume(shape)
+
+    def test_rectangle_on_cylinder_and_hole_is_an_exact_annular_sector(self):
+        h, r = .8, 10.0
+        cylinder = cq.Workplane().cylinder(30, r).val()
+        hole = cq.Workplane().box(40, 40, 30).faces('>Z').workplane().hole(2 * r).val()
+        for shape, origin, normal, outer in ((cylinder, (r, 0, 0), (1, 0, 0), True), (hole, (r, 0, 0), (-1, 0, 0), False)):
+            face = _profile(origin, normal, lambda wp: wp.rect(8, 5))
+            for operation in ('join', 'cut'):
+                with self.subTest(outer=outer, operation=operation):
+                    grows = (operation == 'join') == outer
+                    r2 = r + h if grows else r - h
+                    sector = 8 / r / 2 * abs(r2 ** 2 - r ** 2) * 5
+                    self.assertAlmostEqual(abs(self.stamp(shape, origin, normal, face, h, operation)), sector, 3)
+
+    def test_sharp_corners_get_a_mitred_wedge_where_pieces_diverge(self):
+        n = 1 / math.sqrt(2)
+        box = cq.Workplane().box(30, 30, 20).val()
+        pocket = cq.Workplane().box(40, 40, 20).faces('>Z').workplane().rect(20, 20).cutBlind(-15).val()
+        h, area, wedge = .8, 8 * 5, .8 * .8 * 5
+        cases = ((box, (15, 15, 0), (n, n, 0), area * h + wedge, -(area * h - wedge)),          # wypukły: klin przy dodaniu
+                 (pocket, (10, 10, 2), (-n, -n, 0), area * h - wedge, -(area * h + wedge)))     # wklęsły: klin przy wycięciu
+        for shape, origin, normal, join, cut in cases:
+            face = _profile(origin, normal, lambda wp: wp.rect(8, 5))
+            self.assertAlmostEqual(self.stamp(shape, origin, normal, face, h, 'join'), join, 3)
+            self.assertAlmostEqual(self.stamp(shape, origin, normal, face, h, 'cut'), cut, 3)
+
+    def test_horizontal_edge_is_not_stretched(self):
+        n = 1 / math.sqrt(2)
+        box = cq.Workplane().box(30, 30, 20).val()
+        origin, normal = (15, 0, 10), (n, 0, n)
+        face = _profile(origin, normal, lambda wp: wp.rect(8, 5))
+        # dawniej rzut prostopadły rozciągał szkic o √2 na krawędzi poziomej
+        across = 5 if abs(kernel.face_frame(origin, normal).xdir[1]) > .9 else 8
+        along = 13 - across
+        self.assertAlmostEqual(self.stamp(box, origin, normal, face, .8, 'join'), 40 * .8 + .64 * along, 3)
+
+    def test_wide_sketch_runs_over_fillet_onto_both_walls(self):
+        n = 1 / math.sqrt(2)
+        h, r, width, height = .8, 4.0, 24.0, 5.0
+        shape = cq.Workplane().box(30, 30, 20).edges('|Z').fillet(r).val()
+        origin = (11 + r * n, 11 + r * n, 0)
+        face = _profile(origin, (n, n, 0), lambda wp: wp.rect(width, height))
+        arc = math.pi / 2 * r
+        join = arc * height * h * (1 + h / (2 * r)) + (width - arc) * height * h
+        cut = arc * height * h * (1 - h / (2 * r)) + (width - arc) * height * h
+        self.assertAlmostEqual(self.stamp(shape, origin, (n, n, 0), face, h, 'join'), join, 2)
+        self.assertAlmostEqual(self.stamp(shape, origin, (n, n, 0), face, h, 'cut'), -cut, 2)
+
+    def test_letters_with_holes_on_cylinder_and_corner(self):
+        n = 1 / math.sqrt(2)
+        from rccad.document import Body as B
+        cases = ((cq.Workplane().cylinder(30, 5).val(), (5, 0, 0), (1, 0, 0)),
+                 (cq.Workplane().box(30, 30, 20).val(), (15, 15, 0), (n, n, 0)),
+                 (cq.Workplane().box(40, 40, 20).faces('>Z').workplane().rect(20, 20).cutBlind(-15).val(), (10, 10, 2), (-n, -n, 0)))
+        for shape, origin, normal in cases:
+            frame = kernel.face_frame(origin, normal)
+            wires = kernel.text_shape(frame, 'ROB', 0, 0, size=5, font='Arial', bold=False, italic=False, angle=0)
+            faces = history.material_faces([B('t', w, 'sketch', frame) for w in wires])
+            self.assertTrue(any(f.innerWires() for f in faces))
+            for operation in ('join', 'cut'):
+                with self.subTest(origin=origin, operation=operation):
+                    tools = [kernel.surface_stamp_tool(shape, f, normal, .5, operation, origin=origin) for f in faces]
+                    self.assertTrue(all(t.isValid() for t in tools))
+                    result = kernel.boolean('union' if operation == 'join' else 'subtract', shape, tools)
+                    self.assertTrue(result.isValid())
+                    delta = result.Volume() - shape.Volume()
+                    # wypełnione otwory liter dałyby wyraźnie więcej niż pole liter × wysokość
+                    self.assertLess(abs(delta), sum(f.Area() for f in faces) * .5 * 1.25)
+                    self.assertGreater(abs(delta), sum(f.Area() for f in faces) * .5 * .7)
+
+    def test_height_above_fillet_radius_reports_the_radius(self):
+        shape = cq.Workplane().box(40, 40, 20).faces('>Z').workplane().rect(20, 20).cutBlind(-15).edges('|Z').fillet(3).val()
+        corner = next(f for f in shape.Faces() if f.geomType() == 'CYLINDER' and 5 < f.Center().x < 12 and 5 < f.Center().y < 12)
+        p = corner.positionAt(.5, .5)
+        origin = (p.x, p.y, 2.5)
+        normal = corner.normalAt(cq.Vector(*origin)).toTuple()
+        face = _profile(origin, normal, lambda wp: wp.circle(1.5))
+        with self.assertRaises(kernel.CadError) as raised:
+            kernel.surface_stamp_tool(shape, face, normal, 4, 'join', origin=origin)
+        self.assertIn('3 mm', str(raised.exception))
+
+    def test_display_mesh_lies_just_above_the_surface(self):
+        n = 1 / math.sqrt(2)
+        cases = ((cq.Workplane().cylinder(30, 10).val(), (10, 0, 0), (1, 0, 0)),
+                 (cq.Workplane().box(40, 40, 30).faces('>Z').workplane().hole(20).val(), (10, 0, 0), (-1, 0, 0)),
+                 (cq.Workplane().box(40, 40, 20).faces('>Z').workplane().rect(20, 20).cutBlind(-15).val(), (10, 10, 2), (-n, -n, 0)),
+                 (cq.Workplane().box(30, 30, 20).val(), (15, 15, 0), (n, n, 0)))
+        for shape, origin, normal in cases:
+            with self.subTest(origin=origin):
+                face = _profile(origin, normal, lambda wp: wp.circle(3))
+                mesh = kernel.project_surface_mesh(kernel.display_mesh(face), shape, normal, origin=origin)
+                self.assertGreater(len(mesh.triangles), 0)
+                centres = mesh.vertices[mesh.triangles].mean(axis=1)
+                for c in centres[::max(1, len(centres) // 25)]:
+                    self.assertEqual(kernel.point_state(shape, c), 'out')
+                    self.assertLess(shape.distance(cq.Vertex.makeVertex(*map(float, c))), .1)
+
+    def test_many_faced_solid_is_fast(self):
+        import time
+        shape = (cq.Workplane().box(120, 80, 30).edges('|Z').fillet(6).faces('>Z').workplane().rarray(8, 8, 12, 8).hole(3, 10)
+                 .faces('>Z').workplane().rect(60, 40).cutBlind(-12).val())
+        self.assertGreater(len(shape.Faces()), 100)
+        n = 1 / math.sqrt(2)
+        origin, normal = (60 - 6 + 6 * n, 40 - 6 + 6 * n, 0), (n, n, 0)
+        face = _profile(origin, normal, lambda wp: wp.rect(10, 5))
+        start = time.monotonic()
+        for operation in ('join', 'cut'):
+            kernel.surface_stamp_tool(shape, face, normal, .8, operation, origin=origin)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_second_shape_of_the_same_sketch_after_first_extrusion(self):
+        # początek szkicu leży już pod pierwszym wyciągniętym kształtem - drugi i tak trafia na pierwotną powierzchnię
+        n = 1 / math.sqrt(2)
+        for shape, origin, normal, extra in ((cq.Workplane().box(30, 30, 20).val(), (15, 15, 0), (n, n, 0), .8 * .8 * 3),
+                                             (cq.Workplane().cylinder(30, 10).val(), (10, 0, 0), (1, 0, 0), None)):
+            with self.subTest(origin=origin):
+                first = _profile(origin, normal, lambda wp: wp.rect(8, 5))
+                second = _profile(origin, normal, lambda wp: wp.center(0, 7).circle(1.5))
+                changed = kernel.boolean('union', shape, [kernel.surface_stamp_tool(shape, first, normal, .8, 'join', origin=origin)])
+                delta = self.stamp(changed, origin, normal, second, .8, 'join')
+                expected = second.Area() * .8 + extra if extra else second.Area() * .8 * (1 + .8 / 20)
+                self.assertAlmostEqual(delta, expected, 3)

@@ -103,6 +103,47 @@ class StudioTests(unittest.TestCase):
         w.set_mode('extrude')
         self.assertEqual(w._profile_at(*xy[:2])['kind'], 'surface')
 
+    def test_corner_sketch_hover_highlight_and_exact_extrude(self):
+        w = self.w
+        box = Body('Box', k.box(30, 30, 20), 'solid').prepared()
+        w.document.commit([box]); w.refresh()
+        w.begin_surface_sketch(corner=True)
+        edge = min((i for i, e in enumerate(box.shape.Edges()) if abs(e.tangentAt(.5).z) > .99),
+                   key=lambda i: np.linalg.norm(np.array(box.shape.Edges()[i].positionAt(.5).toTuple()) - (30, 30, 10)))
+        with patch.object(w.view, 'nearest_edge', return_value=(box.id, edge)), patch.object(w.view, 'pick_face', return_value=None):
+            frame, _ = w.pick_surface(100, 100, True)
+        self.assertIsNotNone(frame)
+        w.enter_sketch(frame)
+        f = k.frame_of(frame)
+        plane = cq.Plane(origin=f.origin, xDir=f.xdir, normal=f.normal)
+        w.create_sketch([cq.Workplane(plane).rect(8, 5).val(), cq.Workplane(plane).center(0, 7).circle(1.5).val()])
+        self.wait()
+        sketches = [b for b in w.document.bodies if b.kind == 'sketch']
+        self.assertEqual(len(sketches), 2)
+        # szkic leży na bryle (tuż nad nią), a nie na płaszczyźnie stycznej
+        points = np.concatenate(list(sketches[0].mesh.edges.values()))
+        self.assertLess(max(box.shape.distance(cq.Vertex.makeVertex(*map(float, p))) for p in points[::7]), .05)
+        w.set_mode('extrude')
+        first = w._sketch_profile(sketches[0])
+        with patch.object(w, '_profile_at', return_value=first):
+            w.view_hover(100, 100)
+        self.assertTrue(w.view.preview_items)                     # podświetlenie przed kliknięciem (wypełnione)
+        w._accept_profile(first)
+        self.assertEqual(len(w.ex_profiles), 1)
+        with patch.object(w, '_profile_at', return_value=w._sketch_profile(sketches[1])):
+            w.view_hover(100, 100)
+        self.assertTrue(w.view.hover_items)                       # także po wybraniu pierwszego profilu
+        with patch.object(w, '_profile_at', return_value=None):
+            w.view_hover(100, 100)
+        self.assertFalse(w.view.hover_items)
+        w.ex_value.setValue(.8)
+        self.preview()
+        w.apply_extrude()
+        self.wait()
+        solid = next(b for b in w.document.bodies if b.kind == 'solid')
+        self.assertTrue(solid.shape.isValid())
+        self.assertAlmostEqual(solid.shape.Volume() - box.shape.Volume(), 8 * 5 * .8 + .8 * .8 * 5, 2)
+
     def test_surface_tool_buttons_are_distinct_and_next_to_new_sketch(self):
         w=self.w;w.set_tab('Szkic');w._layout_overlays()
         keys=('sketch','wrapsketch','wrapcorner','surface')

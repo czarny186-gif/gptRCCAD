@@ -620,7 +620,7 @@ def resolve_profiles(bodies, spec):
 
 def make_tool(src, d1, d2, mode, operation='join'):
     if src.get('surface'):
-        return kernel.surface_stamp_tool(src['target_shape'], src['face'], src['normal'], d1, operation)
+        return kernel.surface_stamp_tool(src['target_shape'], src['face'], src['normal'], d1, operation, origin=kernel.plane_origin(src.get('plane')))
     if src.get('cyl') is not None:          # ściana walcowa: pierścień zmieniający promień (kierunek obustronny nie ma sensu)
         return kernel.cylinder_offset_tool(src['cyl'], d1)
     face, wire, normal, plane = src['face'], src['wire'], src['normal'], src['plane']
@@ -1942,7 +1942,7 @@ def run_text(bodies, recipe):
     for i, sh in enumerate(shapes):
         body = Body(recipe['name'], sh, 'sketch', plane, id=ids[i], folder=folder, meta={'surface': surface} if surface else None).prepared()
         if target is not None and body.mesh is not None:
-            body = replace(body, mesh=kernel.project_surface_mesh(body.mesh, target.shape, surface['normal']))
+            body = replace(body, mesh=kernel.project_surface_mesh(body.mesh, target.shape, surface['normal'], origin=kernel.plane_origin(plane)))
         made.append(body)
     return [*bodies, *made]
 

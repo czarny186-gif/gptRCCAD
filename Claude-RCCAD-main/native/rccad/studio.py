@@ -1941,6 +1941,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self.dim_panel.hide()
         self.view.set_preview_mesh(None)
         self.view.set_selection_meshes(None)
+        self.view.set_hover_mesh(None)
         self.view.drag_hook = None
         self.view.sketch_grips = []
         self.view.set_handles([])
@@ -2849,7 +2850,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         def prepare(sh, ident=None):
             body = Body(name, sh, 'sketch', plane, id=ident or uuid.uuid4().hex).prepared()
             if target is not None:
-                body = replace(body, mesh=kernel.project_surface_mesh(body.mesh, target.shape, surface['normal']))
+                body = replace(body, mesh=kernel.project_surface_mesh(body.mesh, target.shape, surface['normal'], origin=kernel.plane_origin(plane)))
             return replace(body, meta=meta)
         made = [prepare(sh, ids[i] if ids else None) for i, sh in enumerate(shapes)] if select else None
 
@@ -3406,6 +3407,8 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 self._hover_extrude(x, y)
             elif self.mode == 'extrude' and self.ex_extent.currentData() == 'upto':
                 self._hover_extent_target(x, y)
+            elif self.mode == 'extrude':
+                self._hover_extrude(x, y, layer=True)      # kolejny profil: kliknięcie go doda (Shift - odznaczy)
             elif self.mode in MEASURE_MODES:
                 self._measure_hover(x,y)
             elif self.mode in ('sheetpick', 'plyfoldpick', 'scale') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
@@ -3456,8 +3459,10 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             self._hover_key = key
             self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, color=(1, .55, .1, .35), line_color=SKETCH_ORANGE, width=2)
 
-    def _hover_extrude(self, x, y):
+    def _hover_extrude(self, x, y, layer=False):
+        """Podświetlenie profilu pod kursorem. layer=True: osobna warstwa (podgląd wyciągnięcia już wybranych zostaje)."""
         blue = dict(color=(.35, .65, .94, .45), line_color=(.1, .3, .6, 1), width=2)
+        show = self.view.set_hover_mesh if layer else self.view.set_preview_mesh
         try:
             src = self._profile_at(x, y)
         except kernel.CadError:
@@ -3467,17 +3472,36 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         if src is None:
             if self._hover_key is not None:
                 self._hover_key = None
-                self.view.set_preview_mesh(None)
+                show(None)
             return
         face = src.get('face') or profile_face(src['wire'])
         key = src['cluster'] if src.get('kind') == 'cyl' else (src['kind'], src.get('id'), tuple(round(c, 3) for c in src['center']))
         if key != self._hover_key:
             self._hover_key = key
             if src.get('surface'):
-                sketch = self.document.get(src.get('id'))
-                self.view.set_preview_mesh(sketch.mesh if sketch is not None else None, **blue)
+                show(self._surface_profile_mesh(src), color=(.35, .65, .94, .6), line_color=(.05, .3, .75, 1), width=3)
             else:
-                self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
+                show(kernel.display_mesh(face) if face is not None else None, **blue)
+
+    def _surface_profile_mesh(self, src):
+        """Wypełniony obrys szkicu na powierzchni (z otworami liter), uniesiony nad bryłę - widać go przed kliknięciem."""
+        surface = src.get('surface') or {}
+        target = self.document.get(surface.get('target'))
+        sketch = self.document.get(src.get('id'))
+        face = src.get('face')
+        if target is None or face is None:
+            return sketch.mesh if sketch is not None else None
+        cache = self.__dict__.setdefault('_surface_mesh_cache', {})
+        key = (src.get('kind'), src.get('id'), tuple(round(c, 4) for c in src['center']), id(target.shape))
+        if key not in cache:
+            if len(cache) > 64:
+                cache.clear()
+            try:
+                cache[key] = kernel.project_surface_mesh(kernel.display_mesh(face), target.shape, surface['normal'],
+                                                         origin=kernel.plane_origin(src.get('plane')))
+            except kernel.CadError:
+                cache[key] = sketch.mesh if sketch is not None else None
+        return cache[key]
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
             return
@@ -4028,6 +4052,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
 
     def _ex_profiles_changed(self, shift=False):
         self._hover_key = None
+        self.view.set_hover_mesh(None)
         if not shift:
             self._ex_op_manual = False
             for spin in (self.ex_value, self.ex_second):
@@ -4073,12 +4098,11 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
             for src in profiles:
                 face=src.get('face') or profile_face(src['wire'])
                 if face is not None:
-                    mesh = kernel.display_mesh(face)
-                    surface = src.get('surface')
-                    target = self.document.get(surface['target']) if surface else None
-                    if target is not None:
-                        mesh = kernel.project_surface_mesh(mesh, target.shape, surface['normal'])
-                    meshes.append(mesh)
+                    if src.get('surface'):
+                        mesh=self._surface_profile_mesh(src)
+                        if mesh is not None:meshes.append(mesh)
+                        continue
+                    meshes.append(kernel.display_mesh(face))
             return _merge_meshes(meshes) if meshes else None
         if len(profiles)<12:
             mesh=compute();self.view.set_selection_meshes([mesh] if mesh is not None else None)
@@ -4438,7 +4462,7 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 target = self.document.get(src['surface']['target'])
                 if target is None:
                     raise kernel.CadError('Bryła pod szkicem powierzchniowym nie istnieje.')
-                out.append(partial(kernel.surface_stamp_tool, target.shape, face, normal, d1, self.ex_op.currentData()))
+                out.append(partial(kernel.surface_stamp_tool, target.shape, face, normal, d1, self.ex_op.currentData(), origin=kernel.plane_origin(plane)))
                 continue
             if src.get('kind') == 'cyl':          # ściana walcowa: zmiana promienia o d1 (+ dodaje, - wycina materiał)
                 out.append(partial(kernel.cylinder_offset_tool, src['cyl'], d1))

@@ -1,3 +1,16 @@
+# RCCAD Desktop 0.4.91 — dokładne szkice na walcu i narożnikach
+
+- Szkic na powierzchni i na narożniku jest owijany na bryle bez rozciągania (rozwinięcie pasa ścian): na walcu, ściance otworu, ostrym narożniku wypukłym i wklęsłym, zaokrągleniu wypukłym i wklęsłym oraz na krawędzi poziomej (wcześniej rozciągało ją o ok. 40%). Wyciągnięty kształt ma dokładnie wymiary szkicu mierzone po powierzchni, boki prostopadłe do powierzchni i stałą grubość.
+- W ostrym narożniku dodana albo wycięta warstwa jest zamknięta na ostro (klin w narożniku), na zaokrągleniu biegnie łukiem. Szeroki szkic przechodzi przez zaokrąglenie na obie ściany i przez kolejne równoległe krawędzie.
+- Litery z otworami (O, A, R, B…) na walcu i w narożnikach wyciągają się i wycinają poprawnie.
+- Wyciąganie i wycinanie na powierzchni trwa ułamek sekundy także na bryłach z wieloma ścianami. Usunięte odsuwanie całej bryły, które potrafiło zawiesić program.
+- Najechany szkic na powierzchni świeci się na niebiesko (wypełnienie uniesione nad powierzchnię, z otworami liter) - przed kliknięciem i także po wybraniu pierwszego profilu. Szkic na wklęsłej powierzchni nie chowa się już pod bryłą.
+- Za duża wysokość na zaokrągleniu daje komunikat z jego promieniem.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.90 — poprawione wyciąganie na narożnikach i przyciąganie szyku
 
 - Szkic na ostrym narożniku rysuje linie po powierzchni ścian. Punkty na granicy ściany nie przeskakują na dalszą ścianę bryły.

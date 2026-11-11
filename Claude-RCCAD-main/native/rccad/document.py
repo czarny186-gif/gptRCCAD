@@ -159,7 +159,7 @@ class Document:
             if target is not None and (body.mesh is None or (old is not None and old.shape is not body.shape)
                                        or (old_target is not None and old_target.shape is not target.shape)):
                 planar = display_mesh(body.shape)
-                body = replace(body, mesh=kernel.project_surface_mesh(planar, target.shape, surface['normal']))
+                body = replace(body, mesh=kernel.project_surface_mesh(planar, target.shape, surface['normal'], origin=kernel.plane_origin(body.plane)))
             projected.append(body)
         bodies = tuple(projected)
         auto_label, auto_icon = self._auto_label(self.bodies, bodies)
@@ -209,7 +209,7 @@ class Document:
                 surface = (b.meta or {}).get('surface') if b.kind == 'sketch' else None
                 target = by_id.get(surface['target']) if surface else None
                 if target is not None:
-                    b = replace(b, mesh=kernel.project_surface_mesh(b.mesh, target.shape, surface['normal']))
+                    b = replace(b, mesh=kernel.project_surface_mesh(b.mesh, target.shape, surface['normal'], origin=kernel.plane_origin(b.plane)))
             out.append(b)
         return tuple(out)
 
