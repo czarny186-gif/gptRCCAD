@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication,QMessageBox,QCheckBox,QLabel,QToolBut
 from rccad import kernel as k
 from rccad import history as hist
 from rccad import sheetmetal as shm
-from rccad.document import Body
+from rccad.document import Body, Document
 from rccad.studio import StudioWindow
 
 
@@ -1945,6 +1945,53 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(w.document.infos()[1],last,f'krok {i} ({kind})')
             self.assertEqual([(x.id,x.shape) for x in w.document.bodies],final,f'krok {i} ({kind}) zmienił model')
             self.assertFalse(w.document.replace_next or w.document.merging)
+
+    def test_fillet_meeting_earlier_fillets_is_computed_together_and_chamfer_still_works(self):
+        w=self.w
+        w.document=Document.load(Path(__file__).parent/'data'/'zaokraglenie.rccadx');w.refresh()      # projekt użytkownika: 3 kroki zaokrągleń r 2
+        a=next(b for b in w.document.bodies if b.kind=='solid')
+        def blend(at,size,kind):
+            body=w.document.get(a.id);E=body.shape.Edges()
+            ids={i for i,e in enumerate(E) if e.geomType()=='LINE' and np.allclose(e.Center().toTuple(),at,atol=1e-3)}
+            self.assertTrue(ids)
+            w.set_mode('mod');w.mod_kind.setCurrentIndex(['fillet','chamfer'].index(kind));w.edges={a.id:ids};w.mod_size.setValue(size)
+            w.apply_mod();self.wait();self.wait();w.set_mode(None)
+        steps=len(w.document.infos()[0])
+        blend((36,-3,0),2.0,'fillet')               # krawędź między zaokrągleniami o tym samym promieniu: osobno się nie da
+        infos,cur=w.document.infos()
+        self.assertEqual(len(infos),steps-2,[i['label'] for i in infos])         # trzy zaokrąglenia + nowe -> jeden połączony krok na końcu
+        self.assertIn('połączone',infos[-1]['label']);self.assertTrue(infos[-1]['op']['groups'])
+        body=w.document.get(a.id);self.assertTrue(body.shape.isValid())
+        again=hist.run_recipe(w.document.states()[-2][0],infos[-1]['op'])        # krok odtwarza się z przepisu
+        self.assertAlmostEqual(next(b for b in again if b.id==a.id).shape.Volume(),body.shape.Volume(),3)
+        before=body.shape.Volume()
+        blend((-24,-3,28.1),1.0,'chamfer')          # faza krawędzi kończącej się na zaokrągleniach
+        self.assertLess(w.document.get(a.id).shape.Volume(),before-1)
+        self.assertEqual(w.document.infos()[0][-1]['op']['kind'],'chamfer')
+
+    def test_move_and_rotate_a_whole_square_pocket_by_clicking_one_wall(self):
+        w=self.w
+        shape=cq.Workplane().box(40,30,10).faces('>Z').workplane().rect(8,6).cutBlind(-4).val()
+        a=Body('P',shape).prepared();w.document.commit([a]);w.refresh()
+        volume=shape.Volume()
+        def click(point,normal):
+            with patch.object(w,'pick_object',return_value=a.id),patch.object(w.view,'pick_face',return_value=(a.id,np.array(normal),np.array(point))):
+                w.view_clicked(5,5,False,False)
+        w.set_mode('move');click((0,-3,3),(0,1,0))                                      # jedna ściana kieszeni
+        self.assertIsNotNone(w.t_feature);self.assertIn('ściany: 5',w.t_status.text())
+        w.t_spins[0].setValue(8);w.update_transform_preview();self.assertTrue(w.view.preview_items)
+        w.apply_transform();self.wait()
+        body=w.document.get(a.id)
+        self.assertAlmostEqual(body.shape.Volume(),volume,3)
+        self.assertEqual(k.point_state(body.shape,(8,0,3)),'out');self.assertEqual(k.point_state(body.shape,(0,0,3)),'in')   # cała kieszeń przesunięta
+        self.assertEqual(w.document.info['op']['type'],'featmove')
+        w.set_mode('rotate');click((8,-3,3),(0,1,0))
+        w.t_spins[2].setValue(90);w.apply_transform();self.wait()
+        body=w.document.get(a.id)
+        self.assertAlmostEqual(body.shape.Volume(),volume,3)
+        self.assertEqual(k.point_state(body.shape,(8,3.5,3)),'out');self.assertEqual(k.point_state(body.shape,(11.5,0,3)),'in')   # 8 x 6 obrócone o 90°
+        w.set_mode('move');click((20,0,0),(1,0,0))                                      # ściana zewnętrzna: cała bryła jak dotąd
+        self.assertIsNone(w.t_feature);self.assertEqual(w.t_target.id,a.id)
 
     def test_operation_after_history_jump_is_inserted_and_later_steps_recomputed(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)

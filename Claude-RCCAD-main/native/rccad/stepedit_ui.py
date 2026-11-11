@@ -38,7 +38,7 @@ class StepEditTools:
         kind = recipe.get('type')
         if self.hist_edit.isVisible():
             self._hist_edit_close()
-        if kind in TOOL_OF and not (kind == 'shell' and recipe.get('steps')):
+        if kind in TOOL_OF and not (kind == 'mod' and recipe.get('groups')):
             return self._edit_with_tool(index, recipe)
         sketch = self._step_sketch(states, index)
         if sketch is not None and (kind is None or kind == 'sketchmeta'):

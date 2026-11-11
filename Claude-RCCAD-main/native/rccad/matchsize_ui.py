@@ -64,6 +64,31 @@ class MatchSizeTools:
             body = self.document.get(bid) if bid else None
         return body if body is not None and body.kind == 'sketch' else None
 
+    def _mz_hover(self, x, y):
+        """Kształt pod kursorem podświetla się przed kliknięciem: niebiesko (wzorzec do wyboru), zielono (pasuje do
+        wzorca), czerwono (inny rodzaj kształtu - nie zmieni rozmiaru)."""
+        body = self._mz_pick_sketch(x, y)
+        body = self.override.get(body.id, body) if body is not None else None
+        key = None if body is None else (body.id, id(body.mesh), self.mz_ref)
+        if key == getattr(self, '_mz_hover_key', None):
+            return
+        self._mz_hover_key = key
+        if body is None or body.mesh is None:
+            self.view.set_preview_mesh(None)
+            self.mz_hover_label = ''
+            return
+        ref = self.document.get(self.mz_ref) if self.mz_ref else None
+        if ref is None:
+            color, line, text = (.35, .65, .94, .35), (.1, .45, .95, 1), 'wzorzec'
+        elif body.id == ref.id:
+            color, line, text = (.96, .62, .18, .3), (.9, .45, .05, 1), 'wzorzec'
+        elif sm.family(body.meta) is not None and sm.family(body.meta) == sm.family(ref.meta):
+            color, line, text = (.3, .78, .5, .35), (.1, .6, .3, 1), 'pasuje'
+        else:
+            color, line, text = (.9, .25, .25, .25), (.85, .15, .15, 1), 'inny kształt'
+        self.mz_hover_label = text
+        self.view.set_preview_mesh(body.mesh, color=color, line_color=line, width=4, on_top=True)
+
     def pick_matchsize(self, x, y):
         body = self._mz_pick_sketch(x, y)
         if body is None:
@@ -99,6 +124,8 @@ class MatchSizeTools:
     def _mz_refresh(self):
         if not hasattr(self, 'mz_status'):
             return
+        self._mz_hover_key = None
+        self.view.set_preview_mesh(None)
         live = {b.id: b for b in self.document.bodies}
         if self.mz_ref not in live:
             self.mz_ref = None

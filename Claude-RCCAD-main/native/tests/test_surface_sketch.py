@@ -374,3 +374,20 @@ class ExactWrapTests(unittest.TestCase):
                 self.assertLess(kernel.boolean('intersect', block, [join]).Volume(), join.Volume() * .1)    # w powietrzu
                 self.assertLess(self.stamp(block, origin, normal, face, h, 'cut'), 0)
                 self.assertGreater(self.stamp(block, origin, normal, face, h, 'join'), 0)
+
+
+class ConcaveTextTests(unittest.TestCase):
+    def test_text_with_holed_letters_on_concave_fillet_extrudes_and_cuts(self):
+        """Projekt użytkownika: napis „Tekst” na wklęsłym zaokrągleniu - litera e (z otworem) dawała błędną geometrię."""
+        doc = Document.load(Path(__file__).parent / 'data' / 'zaokraglenie.rccadx')
+        bodies = doc.states()[5][0]
+        letters = [b for b in bodies if b.name == 'Tekst ściana']
+        group = history.text_group_of(letters[0].id)
+        solid = next(b for b in bodies if b.kind == 'solid')
+        for mode, depth in (('join', 1.0), ('cut', -0.6)):
+            out = history.run_recipe(bodies, dict(type='extrude', mode=mode, dir='one', d1=depth, d2=0,
+                                                  profiles=[{'k': 'surfacetext', 'group': group}], spent=[], out=[]))
+            result = next(b for b in out if b.id == solid.id).shape
+            self.assertTrue(result.isValid())
+            change = result.Volume() - solid.shape.Volume()
+            self.assertGreater(change, 20) if mode == 'join' else self.assertLess(change, -10)

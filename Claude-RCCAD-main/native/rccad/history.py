@@ -1302,7 +1302,152 @@ def mod_preview_many(jobs, size, kind, margin):
     return kernel.display_mesh(kernel.compound(made), .3)
 
 
+def map_edges(source, indices, base, tol=1e-4):
+    """Krawędzie bryły `base` (bez późniejszych zaokrągleń / faz), na których leżą wskazane krawędzie bryły `source`
+    (krawędź po zaokrągleniu sąsiedniej jest tylko krótsza). Krawędzie powstałe dopiero z zaokrąglenia są pomijane."""
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from OCP.gp import gp_Pnt
+    src, dst, out = source.Edges(), base.Edges(), set()
+    for i in indices:
+        points = [src[i].positionAt(t) for t in (.2, .5, .8)]
+        for j, edge in enumerate(dst):
+            ok = True
+            for p in points:
+                dist = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(p.x, p.y, p.z)).Vertex(), edge.wrapped)
+                if not dist.IsDone() or dist.Value() > tol:
+                    ok = False
+                    break
+            if ok:
+                out.add(j)
+                break
+    return out
+
+
+def blend_groups(shape, groups):
+    """Kilka zaokrągleń i faz naraz na jednej bryle: najpierw fazy, potem wszystkie zaokrąglenia w jednym przebiegu
+    (każda krawędź ze swoim promieniem). Naroża, w których schodzą się zaokrąglenia o tym samym promieniu, OpenCascade
+    liczy wtedy poprawnie - po kolei często się to nie udaje. groups: [dict(kind, size, edges={indeksy})]."""
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopoDS import TopoDS
+    fillets = [(g, i) for g in groups if g['kind'] == 'fillet' for i in g['edges']]
+    chamfers = [(g, i) for g in groups if g['kind'] != 'fillet' for i in g['edges']]
+    current = shape
+    try:
+        if chamfers:
+            edges = current.Edges()
+            ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+            TopExp.MapShapesAndAncestors_s(current.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
+            maker = BRepFilletAPI_MakeChamfer(current.wrapped)
+            for g, i in chamfers:
+                face = TopoDS.Face_s(ancestors.FindFromKey(edges[i].wrapped).First())
+                maker.Add(float(g['size']), float(g['size']), edges[i].wrapped, face)
+            maker.Build()
+            if not maker.IsDone():
+                raise kernel.CadError('faza')
+            chamfered = cq.Shape.cast(maker.Shape())
+            if fillets:          # zaokrąglane krawędzie na bryle po fazach (mogą być krótsze)
+                moved = {}
+                for g, i in fillets:
+                    for j in map_edges_from(shape, i, chamfered):
+                        moved[j] = g
+                fillets = [(g, j) for j, g in moved.items()]
+            current = chamfered
+        if fillets:
+            edges = current.Edges()
+            maker = BRepFilletAPI_MakeFillet(current.wrapped)
+            for g, i in fillets:
+                maker.Add(float(g['size']), edges[i].wrapped)
+            maker.Build()
+            if not maker.IsDone():
+                raise kernel.CadError('zaokrąglenie')
+            current = cq.Shape.cast(maker.Shape())
+        return kernel.valid(current)
+    except Exception as exc:
+        raise kernel.CadError('Ten promień / faza nie mieści się w geometrii. Zmniejsz wartość lub wybierz mniej krawędzi.') from exc
+
+
+def map_edges_from(base, index, shape, tol=1e-4):
+    """Krawędzie bryły `shape` leżące na krawędzi `index` bryły `base` (odwrotność map_edges)."""
+    edge = base.Edges()[index]
+    found = []
+    for j, other in enumerate(shape.Edges()):
+        if map_edges(shape, [j], cq.Compound.makeCompound([edge]), tol):
+            found.append(j)
+    return found
+
+
+def joint_blend(states, body_id, ids, size, kind):
+    """Zaokrąglenie / faza, które nie wychodzi na bryle po wcześniejszych zaokrągleniach (naroża o tym samym promieniu):
+    wcześniejsze zaokrąglenia i fazy tej bryły (stojące w historii po kolei, bez innych zmian bryły) liczone są od nowa
+    razem z nowymi krawędziami, w jednym przebiegu na bryle sprzed nich. Zwraca nową oś czasu (stany) albo None.
+    Wcześniejsze kroki zaokrągleń tej bryły zastępuje jeden krok „połączony” na końcu historii."""
+    states = list(states)
+    last = len(states) - 1
+    current = _body(states[last][0], body_id)
+    folded = []
+    for j in range(last, 0, -1):
+        before = next((b for b in states[j - 1][0] if b.id == body_id), None)
+        after = next((b for b in states[j][0] if b.id == body_id), None)
+        if before is None or after is None:
+            break
+        if before.shape is after.shape and before.kind == after.kind:
+            continue
+        op = states[j][1].get('op') or {}
+        if op.get('type') == 'mod' and op.get('id') == body_id and not op.get('items') and not op.get('verts') and not states[j][1].get('off'):
+            folded.append(j)
+            continue
+        break
+    if not folded:
+        return None
+    first = min(folded)
+    base_bodies = states[first - 1][0]
+    base = _body(base_bodies, body_id).shape
+    groups = []
+    for j in sorted(folded):
+        op = states[j][1]['op']
+        before = _body(states[j - 1][0], body_id).shape
+        for g in (op.get('groups') or [dict(kind=op['kind'], size=op['size'], edges=op['edges'])]):
+            mapped = map_edges(before, edge_indices(before, g['edges']), base)
+            if not mapped:
+                return None
+            groups.append(dict(kind=g['kind'], size=float(g['size']), edges=mapped))
+    mapped = map_edges(current.shape, ids, base)
+    if not mapped:
+        return None
+    groups.append(dict(kind=kind, size=float(size), edges=mapped))
+    merged = {}
+    for g in groups:          # ta sama krawędź wybrana dwa razy: liczy się ostatni wybór
+        for i in g['edges']:
+            merged[i] = (g['kind'], g['size'])
+    by = {}
+    for i, key in merged.items():
+        by.setdefault(key, set()).add(i)
+    groups = [dict(kind=k, size=v, edges=e) for (k, v), e in by.items()]
+    blend_groups(base, groups)          # sprawdzenie, zanim zmieni się historia
+    recipe = dict(type='mod', id=body_id, kind=kind, size=float(size), verts=[], vrefs=[], edges=[],
+                  groups=[dict(kind=g['kind'], size=g['size'], edges=edge_refs(base, g['edges'])) for g in groups])
+    rest = [j for j in range(first, last + 1) if j not in folded]
+    tail, failed = rebuild(base_bodies, _steps(states, rest)) if rest else ([], 0)
+    if failed:
+        return None
+    timeline = list(states[:first]) + tail
+    with kernel.deferred_mesh():
+        result = run_recipe(timeline[-1][0], recipe)
+    count = len(folded) + 1
+    label = ('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie') + f' (połączone z {count - 1} wcześniejszymi)'
+    timeline.append((tuple(result), {'label': label, 'icon': 'mod', 'op': recipe}))
+    return timeline
+
+
 def run_mod(bodies, recipe):
+    if recipe.get('groups'):             # kilka zaokrągleń / faz tej bryły liczonych razem
+        body = _body(bodies, recipe['id'])
+        groups = [dict(kind=g['kind'], size=float(g['size']), edges=set(edge_indices(body.shape, g['edges']))) for g in recipe['groups']]
+        return _replace(bodies, body.changed(blend_groups(body.shape, groups)))
     if recipe.get('items'):              # kilka brył albo krawędzie razem z narożnikami
         out = list(bodies)
         for item in recipe['items']:
@@ -1357,6 +1502,128 @@ def run_transform(bodies, recipe):
         shape = kernel.transform(body.shape, tr, rot, center)
         out = _replace(out, body.placed(shape, kernel.transform_matrix(body.shape, tr, rot, center)))
     return out
+
+
+def _edge_kind(faces, edge, f1, f2):
+    """Rodzaj krawędzi między ścianami f1 i f2 (od strony materiału): 'convex', 'concave' albo 'tangent'."""
+    p = edge.positionAt(.5)
+    n1 = np.array(faces[f1].normalAt(p).toTuple(), float)
+    n2 = np.array(faces[f2].normalAt(p).toTuple(), float)
+    t = np.array(edge.tangentAt(.5).toTuple(), float)
+    d1 = np.cross(n1, t)
+    d1 = d1 / max(np.linalg.norm(d1), 1e-12)
+    step = 1e-3 * max(1.0, _scale(faces[f1]))
+    if faces[f1].distance(cq.Vertex.makeVertex(*(np.array(p.toTuple(), float) + d1 * step))) > step * .1:
+        d1 = -d1
+    s = float(n2 @ d1)
+    return 'tangent' if abs(s) < 2e-3 else ('concave' if s > 0 else 'convex')
+
+
+def feature_faces(shape, seed):
+    """Ściany otworu / kieszeni, do której należy ściana `seed` (indeks): ściany połączone krawędziami wklęsłymi albo
+    stycznymi, otoczone wyłącznie krawędziami wypukłymi (brzeg otworu). None - to nie jest zamknięty otwór w bryle."""
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    faces = shape.Faces()
+    if len(shape.Solids()) != 1 or not 0 <= seed < len(faces):
+        return None
+    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
+    index = {}
+    for i, f in enumerate(faces):
+        index.setdefault(hash(f.wrapped), []).append(i)
+
+    def number(face):
+        return next((i for i in index.get(hash(face), ()) if faces[i].wrapped.IsSame(face)), None) if index.get(hash(face)) else next(i for i, x in enumerate(faces) if x.wrapped.IsSame(face))
+
+    group, todo = {seed}, [seed]
+    while todo:
+        f = todo.pop()
+        for edge in faces[f].Edges():
+            if not ancestors.Contains(edge.wrapped):
+                continue
+            others = [number(x) for x in ancestors.FindFromKey(edge.wrapped)]
+            others = [o for o in others if o != f]
+            if not others or others[0] in group:
+                continue
+            try:
+                kind = _edge_kind(faces, edge, f, others[0])
+            except Exception:
+                return None
+            if kind != 'convex':
+                group.add(others[0])
+                todo.append(others[0])
+                if len(group) > max(2, len(faces) * .6):
+                    return None
+    if len(group) >= len(faces) or not any(_faces_inward(shape, faces[i]) for i in group):
+        return None
+    return group
+
+
+def _faces_inward(shape, face):
+    """Czy ściana patrzy w głąb bryły (ściana otworu): prosta wychodząca z niej na zewnątrz materiału trafia z powrotem w bryłę."""
+    from OCP.BRepIntCurveSurface import BRepIntCurveSurface_Inter
+    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
+    p = kernel._face_point(face)
+    n = np.array(face.normalAt(cq.Vector(*p)).toTuple(), float)
+    eps = 1e-4 * max(1.0, _scale(shape))
+    start = p + n * eps
+    inter = BRepIntCurveSurface_Inter()
+    inter.Init(shape.wrapped, gp_Lin(gp_Pnt(*[float(c) for c in start]), gp_Dir(*[float(c) for c in n])), 1e-7)
+    while inter.More():
+        if inter.W() > eps:
+            return True
+        inter.Next()
+    return False
+
+
+def feature_split(shape, ids):
+    """(bryła bez otworu, bryła otworu): otwór zapełniony (usunięte jego ściany) i materiał, którego brakuje."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Defeaturing
+    from OCP.TopTools import TopTools_ListOfShape
+    faces = shape.Faces()
+    remove = TopTools_ListOfShape()
+    for i in ids:
+        remove.Append(faces[i].wrapped)
+    maker = BRepAlgoAPI_Defeaturing()
+    maker.SetShape(shape.wrapped)
+    maker.AddFacesToRemove(remove)
+    maker.SetRunParallel(False)
+    maker.Build()
+    if not maker.IsDone():
+        raise kernel.CadError('Tego otworu nie da się wyodrębnić z bryły.')
+    filled = cq.Shape.cast(maker.Shape())
+    hole = filled.cut(shape)
+    if hole.Volume() < 1e-9:
+        raise kernel.CadError('Tego otworu nie da się wyodrębnić z bryły.')
+    return filled, hole
+
+
+def face_at_point(shape, point, tol=None):
+    """Indeks ściany, na której leży punkt (najbliższa ściana; None - punkt nie leży na bryle)."""
+    vertex = cq.Vertex.makeVertex(*[float(c) for c in point])
+    tol = tol or 1e-3 * max(1.0, _scale(shape))
+    best = None
+    for i, f in enumerate(shape.Faces()):
+        d = f.distance(vertex)
+        if d <= tol and (best is None or d < best[0]):
+            best = (d, i)
+    return None if best is None else best[1]
+
+
+def run_featmove(bodies, recipe):
+    """Przesunięcie / obrót otworu albo kieszeni wewnątrz bryły: otwór wskazany punktem na jednej z jego ścian."""
+    body = _body(bodies, recipe['id'])
+    seed = face_at_point(body.shape, recipe['point'])
+    ids = feature_faces(body.shape, seed) if seed is not None else None
+    if not ids:
+        raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
+    filled, hole = feature_split(body.shape, ids)
+    v = tuple(float(c) for c in recipe['v'])
+    tr, rot = (v, (0, 0, 0)) if recipe['mode'] == 'move' else ((0, 0, 0), v)
+    moved = kernel.transform(hole, tr, rot, recipe.get('center'))
+    return _replace(bodies, body.changed(kernel.valid(filled.cut(moved))))
 
 
 def outward_normal(shape, face, normal=None):
@@ -2785,7 +3052,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -2905,7 +3172,7 @@ def reads(recipe, current):
         return set(recipe.get('ids') or [recipe['id']])
     if kind == 'mod' and recipe.get('items'):
         return {item['id'] for item in recipe['items']}
-    if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode'):
+    if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode', 'featmove'):
         return {recipe['id']}
     if kind == 'bool':
         return {recipe['base'], *recipe['tools']}

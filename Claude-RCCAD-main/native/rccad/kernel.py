@@ -664,10 +664,68 @@ def blend(shape, indices, size, kind="fillet"):
         # OpenCascade solves all selected edges and their common corners together.
         result = shape.fillet(size, selected) if kind == "fillet" else shape.chamfer(size, None, selected)
         return valid(result)
-    except CadError:
-        raise
     except Exception as exc:
+        if kind != "fillet":
+            try:          # faza krawędzi, której końce schodzą się z zaokrągleniami: ścięcie klinem wzdłuż krawędzi
+                return chamfer_cut(shape, ids, size)
+            except Exception:
+                pass
+        if isinstance(exc, CadError):
+            raise
         raise CadError("Ten promień / faza nie mieści się w geometrii. Zmniejsz wartość lub wybierz mniej krawędzi.") from exc
+
+
+def chamfer_cut(shape, indices, size):
+    """Faza prostych krawędzi między dwiema płaskimi ścianami jako wycięcie klina (trójkąt o bokach `size` przesunięty
+    wzdłuż krawędzi na całej długości tych ścian). Działa także tam, gdzie krawędź kończy się na zaokrągleniach - zwykła
+    faza OpenCascade wtedy się nie udaje."""
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopoDS import TopoDS
+    edges = shape.Edges()
+    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
+    tools = []
+    for i in indices:
+        edge = edges[i]
+        if edge.geomType() != 'LINE':
+            raise CadError('Faza klinem: tylko proste krawędzie.')
+        faces = [cq.Face(TopoDS.Face_s(f)) for f in ancestors.FindFromKey(edge.wrapped)]
+        if len(faces) != 2 or any(f.geomType() != 'PLANE' for f in faces):
+            raise CadError('Faza klinem: krawędź musi łączyć dwie płaskie ściany.')
+        a, b = np.array(edge.positionAt(0).toTuple(), float), np.array(edge.positionAt(1).toTuple(), float)
+        d = (b - a) / max(np.linalg.norm(b - a), 1e-12)
+        mid = (a + b) / 2
+        sides = []
+        for face in faces:
+            n = np.array(face.normalAt(cq.Vector(*mid)).toTuple(), float)
+            t = np.cross(n, d)
+            t = t / max(np.linalg.norm(t), 1e-12)
+            probe = mid + t * min(size, 1e-2)
+            if np.linalg.norm(np.array(face.Center().toTuple()) - (mid + t)) > np.linalg.norm(np.array(face.Center().toTuple()) - (mid - t)):
+                t = -t
+            if face.distance(cq.Vertex.makeVertex(*(mid + t * min(size * .5, 1e-2)))) > 1e-5:
+                t = -t
+            sides.append(t)
+        lo, hi = 0.0, float(np.linalg.norm(b - a))
+        for face in faces:        # klin na całej długości obu ścian wzdłuż krawędzi
+            for v in face.Vertices():
+                q = float((np.array(v.toTuple(), float) - a) @ d)
+                lo, hi = min(lo, q), max(hi, q)
+        start = a + d * (lo - 1e-3)
+        length = hi - lo + 2e-3
+        outside = -(sides[0] + sides[1])
+        outside = outside / max(np.linalg.norm(outside), 1e-12)
+        p0 = start + outside * size          # trójkąt trochę wystaje poza bryłę (czyste cięcie)
+        p1 = start + sides[0] * size
+        p2 = start + sides[1] * size
+        wire = cq.Wire.makePolygon([cq.Vector(*p) for p in (p0, p1, p2)], close=True)
+        tools.append(cq.Solid.extrudeLinear(cq.Face.makeFromWires(wire), cq.Vector(*(d * length))))
+    result = shape
+    for tool in tools:
+        result = result.cut(tool)
+    return valid(result.clean() if hasattr(result, 'clean') else result)
 
 
 def _face_point(face):

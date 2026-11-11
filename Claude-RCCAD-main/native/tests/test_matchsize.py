@@ -114,6 +114,24 @@ class MatchSizeToolTests(unittest.TestCase):
         replayed = hist.run_recipe([self.ref, self.a, self.b, self.r], w.document.info['op'])
         self.assertAlmostEqual(float(sm.size_of(next(x for x in replayed if x.id == self.b.id).meta)[0]), 6.0)
 
+    def test_shape_under_cursor_is_highlighted_before_click(self):
+        w = self.w
+        w.set_mode('matchsize')
+        def hover(body):
+            with patch.object(w.view, 'nearest_edge', return_value=(body.id, 0) if body else None), \
+                 patch.object(w.view, 'pick_body', return_value=None):
+                w.view_hover(10, 10)
+        hover(self.a)
+        self.assertTrue(w.view.preview_items)
+        self.assertEqual(w.mz_hover_label, 'wzorzec')
+        self.click(self.ref)
+        hover(self.a)
+        self.assertEqual(w.mz_hover_label, 'pasuje')
+        hover(self.r)
+        self.assertEqual(w.mz_hover_label, 'inny kształt')
+        hover(None)
+        self.assertFalse(w.view.preview_items)
+
     def test_close_discards_and_second_click_restores(self):
         w = self.w
         w.set_mode('matchsize')

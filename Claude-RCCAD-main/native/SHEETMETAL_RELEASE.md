@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.4.95 — szybsza i pewniejsza historia
+# RCCAD Desktop 0.4.96 — otwory, zaokrąglenia, tekst na wklęsłym zaokrągleniu
+
+- **Przesuń / Obróć otwór albo kieszeń**: kliknięcie jednej ściany otworu (okrągłego, kwadratowego, wielokątnego) zaznacza cały otwór - wszystkie jego ściany - i przesuwa go / obraca w całości wewnątrz bryły. Podgląd pokazuje otwór w nowym miejscu na pomarańczowo. Ściany nie przechylają się już pojedynczo. Kliknięcie ściany zewnętrznej działa jak dotąd (cała bryła).
+- **Zaokrąglenia przy wcześniejszych zaokrągleniach**: krawędź, która kończy się na zaokrągleniach o tym samym promieniu, nie dawała się zaokrąglić. Teraz program liczy wszystkie zaokrąglenia tej bryły od nowa razem (jeden krok historii „połączone”).
+- **Faza krawędzi przy zaokrągleniach**: działa (ścięcie klinem wzdłuż krawędzi) zamiast komunikatu o błędzie.
+- **Tekst na wklęsłym zaokrągleniu**: litery z otworem (e, o, a, d...) dawały „nie udało się utworzyć poprawnej geometrii” - wyciągnięcie i wycięcie napisu działa.
+- **Wyrównaj rozmiar**: kształt pod kursorem podświetla się przed kliknięciem - niebiesko (wzorzec), zielono (pasuje), czerwono (inny kształt).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.4.95 — szybsza i pewniejsza historia
 
 - **Edycja kroku tym samym narzędziem**: dwuklik w krok historii cofa model do stanu sprzed kroku i otwiera narzędzie, którym krok powstał (Wyciągnięcie / Wycięcie, Obrót, Zaokrąglenie / faza, Skorupa, Boolean, Kolor), z wartościami i wyborem z tego kroku. Zastosuj zastępuje krok, Zamknij przywraca model bez zmian. Krok szkicu otwiera szkic z zaznaczonym kształtem - uchwyty i Tab zmieniają wymiary, wyjście ze szkicu zapisuje zmianę.
 - Po edycji kroku przeliczają się tylko dalsze kroki, które dotyczą zmienionych obiektów; reszta jest przenoszona bez liczenia. Szkic narysowany na ścianie bryły idzie za tą ścianą (np. wyższa bryła - szkic na jej górze przesuwa się w górę), więc dalsze wyciągnięcia nie „rozjeżdżają się”.
@@ -6,10 +18,6 @@
 - Szkice wygaszone po wyciągnięciu nie są przeliczane przy każdej zmianie bryły pod nimi (wcześniej nawet kilka sekund na krok przy wielu szkicach na walcu) - ich obraz liczy się dopiero, gdy się pokażą.
 - Naprawiony błąd, przez który edycja kroku przerywała się przy napisie na powierzchni (walcu).
 - Z paska historii usunięto przyciski Cofnij (edycję), Zmienne, Warianty i Porównaj razem z ich funkcjami. Autozapis otwiera się teraz z menu Plik → Otwórz autozapis. Starsze projekty ze zmiennymi otwierają się normalnie (wartości wpisane w kroki).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.4.94 — wyrównaj rozmiar, grupy, Boolean na grupie
 

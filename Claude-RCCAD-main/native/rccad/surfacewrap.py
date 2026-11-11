@@ -873,11 +873,21 @@ def wrap_tool(shape, face, normal, height, operation, origin):
                 raise WrapError(f'Wysokość ({mm(h)} mm) musi być mniejsza niż promień zaokrąglenia lub walca w tym miejscu '
                                 f'({mm(g.r)} mm). Zmniejsz wysokość.')
             for r2 in region:
-                f = _arc_face(strip, g, r2, start)
+                holes = r2.innerWires()
+                outer = cq.Face.makeFromWires(r2.outerWire()) if holes else r2
                 mid_s = strip.st(r2.Center().toTuple())[0]
                 phi = (mid_s - g.s_ref) / g.r
                 radial = math.cos(phi) * g.e + math.sin(phi) * g.w
-                pieces.append((g, _thicken(f, radial * (1 if end > start else -1), abs(end - start))))
+                way = radial * (1 if end > start else -1)
+                piece = _thicken(_arc_face(strip, g, outer, start), way, abs(end - start))
+                if holes:       # ściana z otworem (litery e, o, a...) pogrubiona w całości bywa błędna: obrys pełny, otwory wycięte osobno
+                    margin = max(EPS * 4, abs(end - start) * .05)
+                    step = margin if end > start else -margin
+                    for w in holes:
+                        cutter = _thicken(_arc_face(strip, g, cq.Face.makeFromWires(w), start - step), way, abs(end - start) + 2 * margin)
+                        piece = piece.cut(cutter)
+                    piece = piece.Solids()[0] if len(piece.Solids()) == 1 else piece
+                pieces.append((g, piece))
     pieces += _wedges(strip, face, h, operation)
     pieces = [p if not isinstance(p, tuple) else p[1] for p in pieces]
     if not pieces:

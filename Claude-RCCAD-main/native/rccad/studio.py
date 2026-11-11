@@ -295,6 +295,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         self.mirror_frame = None
         self.override: dict[str, Body] = {}
         self.t_target = None
+        self.t_feature = None
         self.t_center = np.zeros(3)
         self.t_mass = np.zeros(3)
         self.t_radius = 10.0
@@ -1969,6 +1970,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         self._pattern_range_controls(False)
         self.mod_vertices = {}
         self.t_target = None
+        self.t_feature = None
         self.t_group = []
         self.edges = {}
         self._hover_key = None
@@ -2151,7 +2153,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                 spin.setValue(0)
                 spin.blockSignals(False)
             self.view.setCursor(Qt.PointingHandCursor)
-            self.hint('Kliknij bryłę lub szkic, który chcesz ' + ('przesunąć.' if mode == 'move' else 'obrócić.'))
+            self.hint('Kliknij bryłę lub szkic, który chcesz ' + ('przesunąć' if mode == 'move' else 'obrócić') +
+                      ' - albo ścianę otworu / kieszeni w bryle: zaznaczy się cały otwór.')
             if self.selected:
                 body = self.document.get(self.selected[-1])
                 if body is not None:
@@ -3403,6 +3406,8 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                 self._measure_hover(x,y)
             elif self.mode in ('sheetpick', 'plyfoldpick', 'scale', 'color') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
+            elif self.mode == 'matchsize':
+                self._mz_hover(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
                     self.view._set_hover_edge(self.view.nearest_edge(x, y))
@@ -6587,7 +6592,11 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                 return
             if error or value is None:
                 self.view.set_preview_mesh(None)
-                self.mod_status.setText(f'Zaznaczone {label}: {count}\n' + (str(error) if verts and error else 'Ta wartość jest za duża dla wybranych elementów.'))
+                earlier = kind == 'fillet' and not verts and any((i.get('op') or {}).get('type') == 'mod' and (i.get('op') or {}).get('id') == bid
+                                                                for i in self.document.infos()[0])
+                self.mod_status.setText(f'Zaznaczone {label}: {count}\n' + (str(error) if verts and error else
+                                        'Podglądu nie da się policzyć osobno. Zastosuj policzy to zaokrąglenie razem z wcześniejszymi zaokrągleniami tej bryły.'
+                                        if earlier else 'Ta wartość jest za duża dla wybranych elementów.'))
                 return
             # tylko tworzona powierzchnia, ciepły fiolet, widoczna także przez jeszcze ostry narożnik bryły
             self.view.set_preview_mesh(value, color=MOD_PREVIEW, line_color=MOD_PREVIEW_LINE, width=2.2, on_top=True)
@@ -6642,6 +6651,13 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
                         edges=[] if verts else hist.edge_refs(body.shape, ids))
 
         def apply(result):
+            if result[0] == 'joint':        # razem z wcześniejszymi zaokrągleniami tej bryły (jeden połączony krok)
+                timeline = result[1]
+                self.document.rewrite(timeline, len(timeline) - 1)
+                self.toast('Naroża z wcześniejszymi zaokrągleniami nie dały się policzyć osobno - zaokrąglenia tej bryły '
+                           'policzono od nowa razem, jako jeden krok historii.', 7000)
+                self._tool_select([body.id])
+                return
             new, recipe = result
             self.document.pending_op = recipe
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
@@ -6649,9 +6665,23 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
+        states = None if (verts or self.document.can_redo or self.step_editing) else self.document.states()
+
+        def plain():
+            return body.changed(*hist.offloaded_shape(kernel.blend, body.shape, ids, size, kind)), recipe_of()
+
+        def work():
+            try:
+                return plain()
+            except kernel.CadError:
+                timeline = hist.joint_blend(states, body.id, ids, size, kind) if states is not None else None
+                if timeline is None:
+                    raise
+                return 'joint', timeline
+
         # zaokrąglenie / faza liczy proces liczący - okno w tym czasie działa (obracanie, oglądanie modelu)
-        work = (lambda: (body.changed(*hist.offloaded_shape(kernel.blend_vertices, body.shape, points, size, kind)), recipe_of())) if verts else \
-            (lambda: (body.changed(*hist.offloaded_shape(kernel.blend, body.shape, ids, size, kind)), recipe_of()))
+        if verts:
+            work = lambda: (body.changed(*hist.offloaded_shape(kernel.blend_vertices, body.shape, points, size, kind)), recipe_of())
         self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
 
     def _apply_mod_many(self, items):
@@ -7916,13 +7946,45 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         if body is None:
             self.toast('Kliknij bryłę lub szkic.')
             return
+        if body.kind == 'solid' and self._pick_transform_feature(body, x, y):
+            return
         if self.t_target is not None and bid in (getattr(self, 't_group', None) or [self.t_target.id]):
             self.t_target=body;self._place_gizmo()
             return          # zachowaj parametry; uchwyt podąża za ostatnio klikniętym obiektem
         self.select_transform_target(body)
 
+    def _pick_transform_feature(self, body, x, y):
+        """Kliknięta ściana otworu albo kieszeni (okrągłej, kwadratowej, wielokątnej): zaznacza się cały otwór - wszystkie
+        jego ściany - i przesuwa / obraca razem wewnątrz bryły. True - zaznaczono otwór."""
+        hit = self.view.pick_face(x, y)
+        if hit is None or hit[0] != body.id:
+            return False
+        try:
+            seed = hist.face_at_point(body.shape, hit[2])
+            ids = hist.feature_faces(body.shape, seed) if seed is not None else None
+            if not ids:
+                return False
+            filled, hole = hist.feature_split(body.shape, ids)
+            point = kernel._face_point(body.shape.Faces()[seed])
+            mesh = kernel.display_mesh(hole)
+        except Exception:
+            return False
+        box = kernel.bounds(hole)
+        self.select_transform_target(body)
+        self.t_feature = dict(id=body.id, point=[float(c) for c in point], hole=hole, mesh=mesh)
+        self.t_center = self.t_mass = np.array(box.center.toTuple(), float)
+        self.t_radius = max(6.0, max(box.xlen, box.ylen, box.zlen) * 1.2)
+        self.view.free_drag = None
+        self.selected = []
+        self.t_status.setText(f'Zaznaczono: otwór w bryle {body.name} (ściany: {len(ids)})')
+        self.refresh()
+        self.update_transform_preview()
+        self._place_gizmo()
+        return True
+
     def select_transform_target(self, body):
         self.override = {}
+        self.t_feature = None
         self.t_target = body
         self.t_group = self._group_ids(body.id)
         if body.id in self.selected and len(self.selected) > 1:
@@ -7957,7 +8019,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             self.view.set_handles([])
             return
         c, r = self.t_center, self.t_radius
-        if self.mode=='move' and self.t_target is not None and self.t_target.mesh is not None:c=np.asarray(self.t_target.mesh.center,float)
+        if self.mode=='move' and self.t_target is not None and self.t_target.mesh is not None and not getattr(self,'t_feature',None):c=np.asarray(self.t_target.mesh.center,float)
         axes = [np.array(a) for a in AXES]
         handles = []
         if self.mode == 'move':
@@ -8087,6 +8149,17 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         if self.mode not in ('move', 'rotate') or self.t_target is None:
             return
         v = [s.value() for s in self.t_spins]
+        feature = getattr(self, 't_feature', None)
+        if feature is not None:        # otwór: podgląd jego bryły w nowym miejscu (bryła sama się nie rusza)
+            tr, rot = (v, (0, 0, 0)) if self.mode == 'move' else ((0, 0, 0), v)
+            m = kernel.transform_matrix(feature['hole'], tr, rot, self.t_mass)
+            rotation, shift = np.asarray(m, float)[:3, :3], np.asarray(m, float)[:3, 3]
+            mesh = feature['mesh']
+            moved = kernel.DisplayMesh((mesh.vertices @ rotation.T + shift).astype(np.float32), mesh.triangles,
+                                       {k: (p @ rotation.T + shift).astype(np.float32) for k, p in mesh.edges.items()},
+                                       tuple(np.asarray(mesh.center) @ rotation.T + shift), mesh.size, mesh.fine, mesh.face_ids)
+            self.view.set_preview_mesh(moved, color=(.96, .55, .15, .45), line_color=(.85, .4, .05, 1), width=2.4, on_top=True)
+            return
         m = QMatrix4x4()
         if self.mode == 'move':
             m.translate(*v)
@@ -8106,6 +8179,25 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         v = tuple(s.value() for s in self.t_spins)
         target, mode = self.t_target, self.mode
         self.override = {}
+        feature = getattr(self, 't_feature', None)
+        if feature is not None:
+            recipe = dict(type='featmove', id=target.id, point=feature['point'], mode=mode, v=[float(c) for c in v],
+                          center=[float(c) for c in self.t_mass])
+            existing = list(self.document.bodies)
+
+            def build():
+                return hist.offloaded(hist.run_featmove, existing, recipe)
+
+            def apply(bodies):
+                self.document.pending_op = recipe
+                self.document.pending_label = 'Przesunięcie otworu' if mode == 'move' else 'Obrót otworu'
+                self.document.pending_icon = 'move' if mode == 'move' else 'rotate'
+                self.document.commit(bodies)
+
+            self.view.set_handles([])
+            self.view.set_preview_mesh(None)
+            self.run_operation('Przesunięcie otworu' if mode == 'move' else 'Obrót otworu', build, apply, after=lambda: self.set_mode(None))
+            return
         ids = [i for i in (getattr(self, 't_group', None) or [target.id]) if self.document.get(i) is not None] or [target.id]
         recipe = dict(type='transform', id=target.id, mode=mode, v=[float(c) for c in v])
         if len(ids) > 1:          # grupa przesuwa się / obraca razem, wokół wspólnego środka
@@ -8709,7 +8801,7 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             for caption, value in zip(sm.LABELS.get(meta['tool'], ()), sm.values(meta)):
                 boxes.append(field(caption, QLineEdit(value)))
             return lambda: dict(recipe, meta=sm.apply_values(meta, [float(b.text().replace(',', '.')) for b in boxes]))
-        if kind == 'transform':
+        if kind in ('transform', 'featmove'):
             spins = [_ExprBox(c, vals) for c in recipe['v']]
             for caption, spin in zip(('X' if recipe['mode'] == 'move' else 'Obrót wokół X (°)', 'Y' if recipe['mode'] == 'move' else 'Obrót wokół Y (°)',
                                       'Z' if recipe['mode'] == 'move' else 'Obrót wokół Z (°)'), spins):
@@ -8723,6 +8815,10 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             field('Operacja', mk)
             field('Promień / odległość (mm)', size)
             self._hist_spins = [size]
+            if recipe.get('groups'):        # zaokrąglenia liczone razem: nowa wartość dla wszystkich o tej samej wartości i rodzaju
+                old = (recipe['kind'], float(recipe['size']))
+                return lambda: dict(recipe, kind=mk.currentData(), size=size.raw(), groups=[
+                    dict(g, kind=mk.currentData(), size=size.raw()) if (g['kind'], float(g['size'])) == old else g for g in recipe['groups']])
             return lambda: dict(recipe, kind=mk.currentData(), size=size.raw())
         if kind == 'mirror':
             keep, join = QCheckBox('Zachowaj oryginał'), QCheckBox('Połącz z oryginałem (bryły)')
