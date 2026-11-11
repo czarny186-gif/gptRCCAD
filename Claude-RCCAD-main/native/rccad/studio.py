@@ -3212,7 +3212,46 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             return
         self._commit_sketch_edit(target['body'], result[0], result[1])
 
+    def amend_objects(self, changes, label, select=None):
+        """Zmiana istniejących obiektów (wymiary szkicu, przesunięcie szkicu, Wyrównaj rozmiar) zapisuje się w kroku, który je
+        utworzył - historia nie dostaje nowego kroku ani duplikatu, a dalsze kroki (wyciągnięcia, wycięcia, zaokrąglenia)
+        przeliczają się na zmienionych obiektach. False - tej zmiany nie da się tak zapisać (wtedy zwykły nowy krok)."""
+        doc = self.document
+        if not changes or doc.can_redo or doc.merging or self.step_editing or self.busy:
+            return False
+        states = doc.states()
+        if any(hist.change_step(states, i) is None for i in changes):
+            return False
+        constraints = self._hist_ctx()
+        later = len(states) - 1 - min(hist.change_step(states, i) for i in changes)
+
+        def apply(result):
+            new_states, failed = result
+            doc.rewrite(new_states, len(new_states) - 1)
+            self.override = {}
+            if select is not None:
+                self.selected = [i for i in select if doc.get(i) is not None]
+            if failed:
+                self.toast(f'{label}: {failed} dalszych kroków wymaga poprawy (czerwone, powód w dymku).', 6000)
+            elif later:
+                self.toast(f'{label} - zapisano w kroku, który utworzył obiekt; dalsze kroki przeliczone.', 3000)
+
+        if later == 0:            # obiekt z ostatniego kroku: zmiana od razu w tym kroku
+            result = hist.amend(states, changes, constraints)
+            apply(result)
+            self.refresh()
+            return True
+        self.run_history(lambda job: hist.amend(states, changes, constraints, job), apply)
+        return True
+
     def _commit_sketch_edit(self, old, shape, meta):
+        if not self.document.merging:
+            new = replace(old, shape=shape, mesh=kernel.display_mesh(shape), meta=meta)
+            if self.amend_objects({old.id: new}, 'Zmiana wymiarów szkicu', select=[old.id]):
+                self._last_sketch_id = old.id
+                self._update_grips()
+                return
+
         def build():
             return replace(old, shape=shape, mesh=kernel.display_mesh(shape), meta=meta)
 
@@ -6396,13 +6435,30 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             return
         hit = self.view.nearest_edge(x, y, True)
         if hit is None:
-            self.update_mod_status()          # kliknięcie obok nie kasuje wybranych krawędzi i narożników
+            if not self._mod_edit_existing(x, y):
+                self.update_mod_status()          # kliknięcie obok nie kasuje wybranych krawędzi i narożników
             return
         bid, index = hit[0], hit[1]
         body = self.document.get(bid)
         if body is None or body.kind != 'solid':
             return
         self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl, mark=index)
+
+    def _mod_edit_existing(self, x, y):
+        """Kliknięcie w istniejące zaokrąglenie albo fazę (nie w krawędź): otwiera krok, który je zrobił - zmiana promienia
+        zastępuje ten krok (bez nowego kroku i bez duplikatu), dalsze kroki się przeliczają. True - otwarto krok."""
+        if any(self.edges.values()) or any(self.mod_vertices.values()) or self.step_editing or self.document.can_redo:
+            return False
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid':
+            return False
+        step = hist.blend_step(self.document.states(), body.id, hit[2])
+        if step is None:
+            return False
+        self.history_edit(step)
+        self.toast(f'Zmieniasz zaokrąglenie / fazę z kroku {step}: ustaw nową wartość i kliknij Zastosuj - krok zostanie poprawiony.', 6000)
+        return True
 
     def _mod_reset_size(self):
         if not any(self.mod_vertices.values()) and not any(self.edges.values()):
@@ -8203,18 +8259,60 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         if len(ids) > 1:          # grupa przesuwa się / obraca razem, wokół wspólnego środka
             recipe.update(ids=ids, center=[float(c) for c in self.t_mass])
         existing = list(self.document.bodies)
+        if all(self.document.get(i).kind == 'sketch' for i in ids):
+            # szkic przesunięty / obrócony: nowe położenie zapisuje się w kroku, który go narysował (bez nowego kroku),
+            # a wyciągnięcia i wycięcia z tego szkicu przeliczają się w nowym miejscu
+            try:
+                moved = {b.id: b for b in hist.run_transform(existing, recipe) if b.id in ids}
+            except kernel.CadError as exc:
+                self.toast(str(exc))
+                return
+            self.view.clear_body_matrices()
+            self.view.set_handles([])
+            if self.amend_objects(moved, 'Przesunięcie szkicu' if mode == 'move' else 'Obrót szkicu', select=ids):
+                self.set_mode(None)
+                return
+            self._place_gizmo()
+        previous = self._merged_transform(recipe, ids)
+        if previous is not None:        # kolejne przesunięcie tego samego obiektu: poprawia poprzedni krok zamiast dodawać nowy
+            recipe, existing = previous
 
         def build():
             return hist.offloaded(hist.run_transform, existing, recipe)
 
         def apply(bodies):
             self.view.clear_body_matrices()
+            if previous is not None:
+                self.document.undo(mesh=False)          # poprzedni krok przesunięcia zastępuje krok z łącznym przesunięciem
             self.document.pending_op = recipe
+            self.document.pending_label = 'Przesunięcie' if recipe['mode'] == 'move' else 'Obrót'
+            self.document.pending_icon = 'move' if recipe['mode'] == 'move' else 'rotate'
             self.document.commit(bodies)
+            self.document._redo.clear()
             self.selected = list(ids)
 
         self.view.set_handles([])
         self.run_operation('Przekształcenie', build, apply, after=lambda: self.set_mode(None))
+
+    def _merged_transform(self, recipe, ids):
+        """Ostatni krok historii to przesunięcie tych samych obiektów (albo obrót wokół tej samej osi i środka): (łączny przepis,
+        stan sprzed tamtego kroku) - nowy krok go zastąpi. None - zwykły nowy krok."""
+        doc = self.document
+        last = doc.info.get('op') or {}
+        if doc.can_redo or doc.merging or self.step_editing or last.get('type') != 'transform' or last.get('mode') != recipe['mode']:
+            return None
+        if sorted(last.get('ids') or [last['id']]) != sorted(ids) or not doc.can_undo:
+            return None
+        a, b = np.array(last['v'], float), np.array(recipe['v'], float)
+        if recipe['mode'] == 'rotate':
+            axes = {int(i) for i in np.nonzero(np.abs(a) > 1e-9)[0]} | {int(i) for i in np.nonzero(np.abs(b) > 1e-9)[0]}
+            same_center = np.allclose(last['center'], recipe['center'], atol=1e-6) if len(ids) > 1 else True     # jedna bryła: obrót wokół własnego środka
+            if len(axes) > 1 or not same_center:
+                return None
+        merged = dict(recipe, v=[float(c) for c in a + b])
+        if 'center' in last:
+            merged['center'] = last['center']
+        return merged, list(doc._undo[-1][0])
 
     # =====================================================================
     # model, odświeżanie
@@ -9477,6 +9575,11 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
         name = name.strip()
         if body is None or not name or name == body.name or not self._objects_ready():
             return
+        doc = self.document
+        last = doc.info.get('op') or {}
+        if last.get('type') == 'rename' and last.get('id') == oid and doc.can_undo and not doc.can_redo and not self.step_editing:
+            doc.undo(mesh=False)          # kolejna zmiana nazwy tego samego obiektu poprawia poprzedni krok
+            doc._redo.clear()
         self.document.pending_op = dict(type='rename', id=oid, name=name)
         self.document.pending_label, self.document.pending_icon = f'Zmiana nazwy: {body.name} → {name}', 'text'
         self.document.commit([replace(b, name=name) if b.id == oid else b for b in self.document.bodies])

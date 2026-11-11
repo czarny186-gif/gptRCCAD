@@ -1993,6 +1993,47 @@ class StudioTests(unittest.TestCase):
         w.set_mode('move');click((20,0,0),(1,0,0))                                      # ściana zewnętrzna: cała bryła jak dotąd
         self.assertIsNone(w.t_feature);self.assertEqual(w.t_target.id,a.id)
 
+    def test_changing_existing_things_updates_their_steps_instead_of_adding_duplicates(self):
+        """Prostokąt -> wyciągnięcie -> zaokrąglenie krótkich krawędzi -> okrąg -> wycięcie; potem zmiana rozmiaru prostokąta,
+        przesunięcie okręgu i mniejsze zaokrąglenie: historia ma dalej te same kroki (bez duplikatów), model jest przeliczony."""
+        w=self.w
+        self.sketch('rect',(0,0),(40,20));rect=w.document.bodies[-1];w.set_mode('extrude');self.pick_sketch_profile(rect)
+        w.ex_value.setValue(10);w.apply_extrude();self.wait();w.set_mode(None)
+        a=next(b for b in w.document.bodies if b.kind=='solid')
+        E=a.shape.Edges();ids={i for i,e in enumerate(E) if abs(e.tangentAt(.5).y)>.9 and e.Center().z>9.9}
+        w.set_mode('mod');w.edges={a.id:ids};w.mod_size.setValue(3);w.apply_mod();self.wait();w.set_mode(None)
+        self.sketch('circle',(20,10),(24,10));circ=w.document.bodies[-1];w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(circ);w.ex_value.setValue(30);w.ex_op.setCurrentIndex(2);w.apply_extrude();self.wait();w.set_mode(None)
+        labels=[i['label'] for i in w.document.infos()[0]]
+        self.assertEqual(len(labels),6);self.assertEqual(k.point_state(w.document.get(a.id).shape,(20,10,5)),'out')
+        solid=lambda:w.document.get(a.id).shape
+        # 1. rozmiar prostokąta (uchwyty / Tab): bryła rośnie, kroków tyle samo
+        body=w.document.get(rect.id);meta=sm.apply_values(body.meta,[50,20])
+        w._commit_sketch_edit(body,w._meta_shape(body.plane,meta),meta);self.wait();self.wait()
+        self.assertEqual([i['label'] for i in w.document.infos()[0]],labels)
+        self.assertAlmostEqual(k.bounds(solid()).xlen,50,4)
+        self.assertFalse(any(i.get('stale') for i in w.document.infos()[0]))
+        # 2. przesunięcie okręgu: otwór idzie za nim, kroków tyle samo
+        w.set_mode('move');w.select_transform_target(w.document.get(circ.id));w.t_spins[0].setValue(10);w.apply_transform();self.wait();self.wait()
+        self.assertEqual([i['label'] for i in w.document.infos()[0]],labels)
+        self.assertEqual(k.point_state(solid(),(30,10,5)),'out');self.assertEqual(k.point_state(solid(),(20,10,5)),'in')
+        # 3. mniejsze zaokrąglenie: kliknięcie w zaokrąglenie otwiera jego krok, Zastosuj go poprawia
+        face=next(f for f in solid().Faces() if f.geomType()=='CYLINDER' and f.Center().z>5 and (f.Center().x<5 or f.Center().x>45))
+        w.set_mode('mod')
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),\
+             patch.object(w.view,'pick_face',return_value=(a.id,None,k._face_point(face))):
+            w.view_clicked(5,5,False,False)
+        self.assertEqual(w.document.infos()[1],2);self.assertAlmostEqual(w.mod_size.value(),3)
+        w.mod_size.setValue(1.5);w.apply_mod();self.wait();self.wait()
+        infos=w.document.infos()[0]
+        self.assertEqual([i['label'] for i in infos],labels);self.assertEqual(infos[3]['op']['size'],1.5)
+        self.assertEqual(k.point_state(solid(),(30,10,5)),'out')                       # przesunięty otwór został
+        # 4. dwa przesunięcia bryły po kolei = jeden krok
+        for dz in (5,7):
+            w.set_mode('move');w.select_transform_target(w.document.get(a.id));w.t_spins[2].setValue(dz);w.apply_transform();self.wait()
+        infos=w.document.infos()[0]
+        self.assertEqual(len(infos),7);self.assertEqual(infos[-1]['op']['v'],[0.0,0.0,12.0])
+
     def test_operation_after_history_jump_is_inserted_and_later_steps_recomputed(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
         w.ex_value.setValue(5);w.apply_extrude();self.wait();before=len(w.document.infos()[0])

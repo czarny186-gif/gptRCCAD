@@ -240,6 +240,14 @@ class ColorTools:
                    if (b := self.document.get(i)) is not None and (b.color is None or pal.to_hex(b.color) != pal.to_hex(c))}
         if self.co_default_new is not None:
             self.document.set_default_color(self.co_default_new)
+        doc = self.document
+        last = doc.info.get('op') or {}
+        merged = {}
+        if changed and last.get('type') == 'color' and doc.can_undo and not doc.can_redo and not self.step_editing:
+            merged = dict(last.get('colors') or {})       # kolejne kolorowanie zaraz po poprzednim: jeden krok zamiast kilku
+            doc.undo(mesh=False)
+            doc._redo.clear()
+            changed = {**{i: tuple(c) for i, c in merged.items() if doc.get(i) is not None}, **changed}
         if changed:
             colors = {i: [round(float(v), 4) for v in c] for i, c in changed.items()}
             n = len(colors)

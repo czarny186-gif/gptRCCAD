@@ -3432,6 +3432,91 @@ def recompute(states, k, edited_bodies, constraints=(), job=None):
     return head + tail, failed
 
 
+def blend_step(states, body_id, point, tol=1e-3):
+    """Krok zaokrąglenia / fazy, który utworzył ścianę bryły w punkcie `point` (kliknięte zaokrąglenie) albo None."""
+    point = np.asarray(point, float)
+    for j in range(len(states) - 1, 0, -1):
+        op = states[j][1].get('op') or {}
+        if op.get('type') == 'transform' and body_id in (op.get('ids') or [op.get('id')]) and not states[j][1].get('off'):
+            before = next((b for b in states[j - 1][0] if b.id == body_id), None)
+            if before is None:
+                return None
+            v = tuple(float(c) for c in op['v'])
+            tr, rot = (v, (0, 0, 0)) if op['mode'] == 'move' else ((0, 0, 0), v)
+            m = np.asarray(kernel.transform_matrix(before.shape, tr, rot, op.get('center')), float)
+            point = np.linalg.solve(m[:3, :3], point - m[:3, 3])      # punkt w położeniu bryły sprzed przesunięcia
+            continue
+        if op.get('type') != 'mod' or states[j][1].get('off'):
+            continue
+        vertex = cq.Vertex.makeVertex(*[float(c) for c in point])
+        ids = {op.get('id')} | {item['id'] for item in op.get('items') or ()}
+        if body_id not in ids:
+            continue
+        before = next((b for b in states[j - 1][0] if b.id == body_id), None)
+        after = next((b for b in states[j][0] if b.id == body_id), None)
+        if before is None or after is None:
+            continue
+        try:
+            if any(f.distance(vertex) < tol for f in kernel.new_faces(before.shape, after.shape)):
+                return j
+        except Exception:
+            continue
+    return None
+
+
+def change_step(states, body_id):
+    """Krok, który ostatnio zmienił kształt obiektu (narysowanie szkicu albo zmiana jego wymiarów), jeśli zmianę obiektu
+    można w nim zapisać: krok bez przepisu (rysowanie) albo zmiana wymiarów tego szkicu. None - nie można."""
+    for j in range(len(states) - 1, 0, -1):
+        before = next((b for b in states[j - 1][0] if b.id == body_id), None)
+        after = next((b for b in states[j][0] if b.id == body_id), None)
+        if after is None:
+            return None
+        if before is None or before.shape is not after.shape or before.plane != after.plane:
+            op = states[j][1].get('op')
+            if op is None or (op.get('type') == 'sketchmeta' and op.get('id') == body_id):
+                return j
+            return None
+    return None
+
+
+def amend(states, changes, constraints=(), job=None):
+    """Zmiana istniejących obiektów zapisana w krokach, które je utworzyły (zamiast nowego kroku): changes {id: nowa wersja}.
+    Dalsze kroki przeliczają się na zmienionych obiektach. Zwraca (nowe stany, liczba nieprzeliczonych) albo None."""
+    targets = {}
+    for body_id in changes:
+        j = change_step(states, body_id)
+        if j is None:
+            return None
+        targets.setdefault(j, []).append(body_id)
+    ctx = _ctx(constraints)
+    first = min(targets)
+    out, failed, current = list(states[:first]), 0, tuple(states[first - 1][0])
+    with kernel.deferred_mesh():
+        for j in range(first, len(states)):
+            if job is not None:
+                if job.get('cancel'):
+                    raise kernel.CadError('Przeliczanie przerwane.')
+                job['i'], job['n'] = j - first, len(states) - first
+            tail, bad = _rebuild(current, [(states[j - 1][0], states[j][0], states[j][1])], ctx, None)
+            bodies, info = tail[0]
+            failed += bad
+            if j in targets:
+                info = dict(info)
+                patched = []
+                for b in bodies:
+                    new = changes.get(b.id) if b.id in targets[j] else None
+                    if new is not None:
+                        b = replace(b, shape=new.shape, mesh=new.mesh, meta=new.meta, plane=new.plane)
+                        if (info.get('op') or {}).get('type') == 'sketchmeta':
+                            info['op'] = dict(info['op'], meta=new.meta)
+                    patched.append(b)
+                bodies = apply_constraints(tuple(patched), ctx)
+            out.append((tuple(bodies), info))
+            current = tuple(bodies)
+    return out, failed
+
+
 def toggle_step(states, j, constraints=(), job=None):
     """Wyłącza / włącza krok j (stan go pomija) i przelicza resztę."""
     info = dict(states[j][1])

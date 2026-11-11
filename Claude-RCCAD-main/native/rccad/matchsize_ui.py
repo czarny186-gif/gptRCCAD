@@ -160,6 +160,13 @@ class MatchSizeTools:
             self.toast('Brak zmian - kliknij kształty, które mają przyjąć rozmiar wzorca.')
             return
         changed = dict(self.mz_pending)
+        self.mz_pending = {}
+        self.override = {}
+        if self.amend_objects(changed, 'Wyrównaj rozmiar'):      # rozmiar zapisany w krokach, które narysowały kształty
+            self._mz_refresh()
+            self.refresh()
+            self.toast('Zapisano nowe wymiary.', 2000)
+            return
         steps = [dict(type='sketchmeta', id=i, meta=b.meta) for i, b in changed.items()]
         n = len(steps)
         self.document.pending_op = steps[0] if n == 1 else dict(type='multi', steps=steps)

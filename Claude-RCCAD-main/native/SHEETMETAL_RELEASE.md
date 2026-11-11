@@ -1,14 +1,20 @@
-# RCCAD Desktop 0.4.96 — otwory, zaokrąglenia, tekst na wklęsłym zaokrągleniu
+# RCCAD Desktop 0.4.97 — historia bez duplikatów
+
+- **Zmiana zamiast nowego kroku**: zmiana rozmiaru szkicu (uchwyty, Tab, Wyrównaj rozmiar) oraz przesunięcie / obrót szkicu zapisują się w kroku, który ten szkic narysował. Historia nie dostaje nowego kroku ani duplikatu, a wyciągnięcia, wycięcia i zaokrąglenia zrobione z tego szkicu przeliczają się od razu (np. większy prostokąt - większa bryła z tymi samymi zaokrągleniami, przesunięty okrąg - otwór w nowym miejscu).
+- **Mniejsze / większe zaokrąglenie**: w narzędziu Zaokrąglenie kliknięcie w istniejące zaokrąglenie albo fazę otwiera krok, który je zrobił, z jego krawędziami i wartością - Zastosuj poprawia ten krok.
+- Kolejne przesunięcia tej samej bryły, kolejne kolorowania oraz zmiany nazwy tego samego obiektu łączą się w jeden krok.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.4.96 — otwory, zaokrąglenia, tekst na wklęsłym zaokrągleniu
 
 - **Przesuń / Obróć otwór albo kieszeń**: kliknięcie jednej ściany otworu (okrągłego, kwadratowego, wielokątnego) zaznacza cały otwór - wszystkie jego ściany - i przesuwa go / obraca w całości wewnątrz bryły. Podgląd pokazuje otwór w nowym miejscu na pomarańczowo. Ściany nie przechylają się już pojedynczo. Kliknięcie ściany zewnętrznej działa jak dotąd (cała bryła).
 - **Zaokrąglenia przy wcześniejszych zaokrągleniach**: krawędź, która kończy się na zaokrągleniach o tym samym promieniu, nie dawała się zaokrąglić. Teraz program liczy wszystkie zaokrąglenia tej bryły od nowa razem (jeden krok historii „połączone”).
 - **Faza krawędzi przy zaokrągleniach**: działa (ścięcie klinem wzdłuż krawędzi) zamiast komunikatu o błędzie.
 - **Tekst na wklęsłym zaokrągleniu**: litery z otworem (e, o, a, d...) dawały „nie udało się utworzyć poprawnej geometrii” - wyciągnięcie i wycięcie napisu działa.
 - **Wyrównaj rozmiar**: kształt pod kursorem podświetla się przed kliknięciem - niebiesko (wzorzec), zielono (pasuje), czerwono (inny kształt).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.4.95 — szybsza i pewniejsza historia
 
