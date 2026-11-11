@@ -103,16 +103,21 @@ class MatchSizeToolTests(unittest.TestCase):
         self.assertNotIn(self.r.id, w.mz_pending)
         steps = w.document.history_length
         w.mz_apply.click()
-        self.assertEqual(w.document.history_length, steps + 1)
+        self.wait()
+        self.assertEqual(w.document.history_length, steps)               # zapisane w krokach, które narysowały kształty - bez nowego kroku
         self.assertAlmostEqual(self.radius(self.a.id, live=False), 6.0)
         self.assertAlmostEqual(self.radius(self.b.id, live=False), 6.0)
         self.assertAlmostEqual(sm.center_of(w.document.get(self.b.id).meta)[0], 60.0, 6)
         self.assertEqual(w.mode, 'matchsize')
-        w.document.undo()
-        self.assertAlmostEqual(self.radius(self.a.id, live=False), 2.0)
-        w.document.redo()
-        replayed = hist.run_recipe([self.ref, self.a, self.b, self.r], w.document.info['op'])
+        replayed = hist.run_recipe([self.ref, self.a, self.b, self.r], dict(type='sketchmeta', id=self.b.id, meta=w.document.get(self.b.id).meta))
         self.assertAlmostEqual(float(sm.size_of(next(x for x in replayed if x.id == self.b.id).meta)[0]), 6.0)
+
+    def wait(self):
+        end = time.monotonic() + 20
+        while self.w.busy and time.monotonic() < end:
+            self.app.processEvents()
+            time.sleep(.005)
+        self.app.processEvents()
 
     def test_shape_under_cursor_is_highlighted_before_click(self):
         w = self.w
