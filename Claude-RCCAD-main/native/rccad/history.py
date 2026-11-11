@@ -23,21 +23,6 @@ import weakref
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
          'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize'}
-# filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
-FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text', 'matchsize'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
-           'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
-
-
-def passes_filter(info, name):
-    """Czy krok pokazuje się przy danym filtrze paska historii."""
-    allowed = FILTERS.get(name)
-    if allowed is None:
-        return True
-    if allowed == 'stale':
-        return bool(info.get('stale'))
-    return info.get('icon') in allowed
-
-
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
@@ -2908,8 +2893,13 @@ def reads(recipe, current):
         for spec in recipe['profiles']:
             if spec['k'] in ('region', 'textgroup'):
                 ids |= sketches
-            else:
+            elif spec['k'] == 'surfacetext':          # napis na powierzchni: jego litery i bryła pod nim
+                members = [b for b in current if b.kind == 'sketch' and text_group_of(b.id) == spec['group']]
+                ids |= {b.id for b in members} | {(b.meta or {}).get('surface', {}).get('target') for b in members} - {None}
+            elif 'id' in spec:
                 ids.add(spec['id'])
+            else:
+                return None
         return ids
     if kind == 'transform':
         return set(recipe.get('ids') or [recipe['id']])
@@ -2980,8 +2970,61 @@ def diff_apply(old_prev, old_cur, new_prev):
         changes = {f: getattr(b, f) for f in ('name', 'visible', 'plane', 'color') if getattr(b, f) != getattr(ob, f)}
         if changes:
             merged[i] = replace(nb, **changes)
+    for i, b in cur.items():         # szkic dodany w tym kroku na ścianie bryły, która wcześniej się zmieniła: idzie za ścianą
+        if i not in prev and merged.get(i) is b:
+            moved = follow_surface(b, cur, merged)
+            if moved is not None:
+                merged[i] = moved
     order = [i for i in cur if i in merged] + [i for i in merged if i not in cur]
     return [merged[i] for i in order], ok
+
+
+def surface_offset(shape, origin, normal, reach=None):
+    """Przesunięcie wzdłuż normalnej od punktu origin do najbliższej ściany bryły zwróconej w tę samą stronę (None - brak)."""
+    from OCP.IntCurvesFace import IntCurvesFace_Intersector
+    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
+    n = np.asarray(normal, float)
+    n = n / max(np.linalg.norm(n), 1e-12)
+    box = kernel.bounds(shape)
+    span = reach or max(box.xlen, box.ylen, box.zlen) * 1.5 + 1.0
+    ray = gp_Lin(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in n]))
+    best = None
+    for face in shape.Faces():
+        inter = IntCurvesFace_Intersector(face.wrapped, 1e-6)
+        inter.Perform(ray, -span, span)
+        for j in range(1, inter.NbPnt() + 1):
+            hit = inter.Pnt(j)
+            try:
+                facing = float(np.dot(np.asarray(face.normalAt(cq.Vector(hit.X(), hit.Y(), hit.Z())).toTuple(), float), n))
+            except Exception:
+                continue
+            t = float(inter.WParameter(j))
+            if facing > .5 and (best is None or abs(t) < abs(best)):
+                best = t
+    return best
+
+
+def follow_surface(body, original, current):
+    """Szkic na ścianie bryły (meta surface) po zmianie tej bryły we wcześniejszym kroku: przesuwa się wzdłuż normalnej
+    na nowe położenie ściany (np. wyższa bryła - szkic na górze idzie w górę, większy promień - szkic na walcu na zewnątrz).
+    None - nic do zmiany."""
+    surface = (body.meta or {}).get('surface') if body.kind == 'sketch' else None
+    if not surface or not isinstance(body.plane, kernel.Frame):
+        return None
+    old_target, new_target = original.get(surface.get('target')), current.get(surface.get('target'))
+    if old_target is None or new_target is None or old_target.shape is new_target.shape:
+        return None
+    try:
+        t = surface_offset(new_target.shape, body.plane.origin, surface.get('normal') or body.plane.normal)
+    except Exception:
+        return None
+    if t is None or abs(t) < 1e-6:
+        return None
+    n = np.asarray(surface.get('normal') or body.plane.normal, float)
+    n = n / max(np.linalg.norm(n), 1e-12)
+    move = tuple(float(c) for c in n * t)
+    plane = kernel.Frame(tuple(float(a + b) for a, b in zip(body.plane.origin, move)), tuple(body.plane.xdir), tuple(body.plane.normal))
+    return replace(body, shape=body.shape.translate(cq.Vector(*move)), plane=plane, mesh=None)
 
 
 def meta_shape(plane, meta):
@@ -3171,13 +3214,6 @@ def move_step(states, j, constraints=(), job=None):
     tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
     return list(states[:j]) + tail, failed
 
-
-def recompute_all(states, constraints=(), job=None):
-    """Pełne przeliczenie od pierwszego kroku (np. po zmianie zmiennej projektu): kroki z wyrażeniami liczone od nowa."""
-    ctx = _ctx(constraints)
-    ctx.force = True
-    tail, failed = rebuild(states[0][0], _steps(states, range(1, len(states))), ctx, job)
-    return [states[0], *tail], failed
 
 
 _MOD_CACHE = {}          # w procesie roboczym: bryła i wycięty fragment ostatnio podglądanego zaokrąglenia

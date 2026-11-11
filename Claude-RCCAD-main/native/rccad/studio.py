@@ -34,6 +34,7 @@ from .plywood_ui import PlywoodTools, PLY_MODES
 from .scale_ui import ScaleTools
 from .color_ui import ColorTools
 from .matchsize_ui import MatchSizeTools
+from .stepedit_ui import StepEditTools
 from .sectionview import SectionTools
 from PySide6.QtWidgets import QSizePolicy
 from . import measurement
@@ -146,7 +147,7 @@ def profile_face(wire):
 
 
 class _ExprBox(QLineEdit):
-    """Pole liczby albo wyrażenia (np. szerokość / 2). raw() zwraca liczbę albo {'expr': tekst}; value() - policzoną liczbę."""
+    """Pole liczby (można wpisać proste działanie, np. 20 / 2)."""
 
     def __init__(self, value=0.0, values=None):
         super().__init__()
@@ -157,11 +158,12 @@ class _ExprBox(QLineEdit):
         self.setText(value['expr'] if isinstance(value, dict) else f'{float(value):g}')
 
     def raw(self):
+        """Liczba z pola (dozwolone proste wyrażenie, np. 20/2 albo 3*4,5)."""
         text = self.text().strip()
         try:
             return float(text.replace(',', '.'))
         except ValueError:
-            return {'expr': text}
+            return hist.evaluate(text, {})
 
     def value(self):
         raw = self.raw()
@@ -234,7 +236,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -253,6 +255,10 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self._warm_timer.setSingleShot(True)
         self._warm_timer.setInterval(400)
         self._warm_timer.timeout.connect(lambda: self._warm_sheets())
+        self._history_timer = QTimer(self)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.setInterval(1500)
+        self._history_timer.timeout.connect(lambda: self._warm_history())
         self.busy = False
         self._cancel_op = None
         self.selected: list[str] = []
@@ -718,14 +724,6 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self.hist_row.setSpacing(6)
         self.hist_scroll.setWidget(self.hist_inner)
         hl.addWidget(self.hist_scroll, 1)
-        self.hist_revert = QToolButton()
-        self.hist_revert.setObjectName('padTool')
-        self.hist_revert.setIcon(ui.style_icon('undo', 22))
-        self.hist_revert.setIconSize(QSize(22, 22))
-        self.hist_revert.setFixedSize(40, 36)
-        self.hist_revert.setToolTip('Cofnij ostatnią edycję kroku (przywraca poprzednią historię)')
-        self.hist_revert.clicked.connect(self.history_revert)
-        hl.addWidget(self.hist_revert)
         self.hist_status = QLabel('')
         self.hist_status.setStyleSheet('color:#187ac1; font-size:12px; font-weight:700; background:transparent;')
         hl.addWidget(self.hist_status)
@@ -734,30 +732,13 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self._hist_trim = False      # po „Cofnij” cofnięte kroki znikają z paska historii (wracają po „Ponów”)
         self._hist_widgets = {}
         self._hist_stretch = False
-        self._hist_filter = 'Wszystkie kroki'
         self._hist_tick = QTimer(self)
         self._hist_tick.setInterval(120)
         self._hist_tick.timeout.connect(self._hist_progress)
-        self.hist_varbtn = QPushButton('Zmienne')
-        self.hist_varbtn.setObjectName('chip')
-        self.hist_varbtn.setToolTip('Zmienne projektu i wyrażenia w polach kroków (np. szerokość / 2)')
-        self.hist_varbtn.clicked.connect(self.history_variables)
-        hl.addWidget(self.hist_varbtn)
-        self.hist_menu_button = QPushButton('Warianty')
-        self.hist_menu_button.setObjectName('chip')
-        self.hist_menu_button.setToolTip('Warianty historii zapisane w projekcie, eksport listy kroków, autozapis')
-        self.hist_menu_button.clicked.connect(self.history_menu)
-        hl.addWidget(self.hist_menu_button)
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setInterval(150000)
         self._autosave_timer.timeout.connect(self._autosave)
         self._autosave_timer.start()
-        self.hist_compare = QPushButton('Porównaj')
-        self.hist_compare.setObjectName('chip')
-        self.hist_compare.setCheckable(True)
-        self.hist_compare.setToolTip('Po edycji kroku: pokazuje czerwonym obrysem, jak wyglądał model przed zmianą')
-        self.hist_compare.toggled.connect(lambda *_: self._hist_compare_update())
-        hl.addWidget(self.hist_compare)
         self.hist_ghost = QPushButton('Pokaż wygaszone')
         self.hist_ghost.setObjectName('chip')
         self.hist_ghost.setCheckable(True)
@@ -772,17 +753,9 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self.hist_edit_layout.setSpacing(6)
         self.hist_edit.setFixedWidth(330)
         self.hist_edit.hide()
-        self.hist_vars = QFrame(v)
-        self.hist_vars.setObjectName('panel')
-        self.hist_vars_layout = QVBoxLayout(self.hist_vars)
-        self.hist_vars_layout.setContentsMargins(14, 12, 14, 12)
-        self.hist_vars_layout.setSpacing(6)
-        self.hist_vars.setFixedWidth(360)
-        self.hist_vars.hide()
         self._repick = None
         self._lib_action = None        # biblioteka: wskazywanie obiektu na polu albo wybór miejsca wstawienia
         self.libraries = {}
-        ui.shadow(self.hist_vars, 19, 5, 43)
         ui.shadow(self.hist_edit, 19, 5, 43)
         self._hist_sig = None
         ui.shadow(self.hist_bar, 19, 5, 43)
@@ -1789,7 +1762,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170 + TOOLS_TOP - 18)
-        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.section_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit, self.hist_vars,
+        for w in (*self.tools.values(), *self.tab_buttons.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.section_button, self.scale_button, self.layers, self.xray, self.home, self.cube, self.objects, self.pad, self.hist_bar, self.hist_edit,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -1921,6 +1894,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         """Przełącza narzędzie; None = zwykłe zaznaczanie."""
         if self.busy:
             return
+        self._step_leaving(self.mode, mode)
         if self.mode == 'color' and mode != 'color' and (getattr(self, 'co_pending', None) or getattr(self, 'co_default_new', None) is not None):
             self.co_pending, self.co_default_new = {}, None          # okno Kolor zamknięte bez Zapisz
             self.toast('Niezapisane kolory nie zostały zachowane.', 2500)
@@ -4556,6 +4530,8 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         return ids
 
     def apply_extrude(self):
+        if self.apply_step_recipe():
+            return
         if self.busy or not self.ex_profiles:
             return
         op = self.ex_op.currentData()
@@ -4755,6 +4731,8 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self.run_preview('revolve', compute, show)
 
     def apply_revolve(self):
+        if self.apply_step_recipe():
+            return
         if self.busy or not self.rev_profiles:
             return
         try:
@@ -8236,11 +8214,14 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         shown = {*self.selected, self._obj_hover} if self._obj_hover else set(self.selected)
         if shown:      # obiekt wskazany na liście jest widoczny i podświetlony, także gdy był ukryty albo wygaszony (np. szkic użyty w wyciągnięciu)
             bodies = [replace(b, visible=True) if (b.id in shown and not b.visible) else b for b in bodies]
+        stale = {b.id for b in bodies if b.visible and b.id in self.document.reproject}
+        if stale and self.document.reprojected(stale):     # wygaszony szkic na powierzchni pokazuje się: dopiero teraz jego obraz na bryle
+            fresh = {b.id: b for b in self.document.bodies}
+            bodies = [replace(b, mesh=fresh[b.id].mesh) if b.id in stale and b.id in fresh else b for b in bodies]
         self.view.locked = frozenset(self.locked_ids)
         self._prefetch_sketch_regions()
         self.objects_update()
         self._hist_update()
-        self._hist_compare_update()
         if self.document.deferred and not self.busy:
             self._replay_deferred()
         highlighted = [] if self.mode in ('sheet', 'flange', 'hem', 'tabwall') else self.selected
@@ -8259,6 +8240,8 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
                     self.view.set_thread_preview(None)
         if fit:
             self.view.fit_all()
+        if hasattr(self, '_history_timer') and not self.busy:
+            self._history_timer.start()
         if hasattr(self, '_refine_timer') and any(b.mesh is not None and not b.mesh.fine for b in self.document.bodies):
             self._refine_timer.start()     # duże bryły pokazane zgrubnie: dokładne siatki liczą się w tle
         self.undo_button.setEnabled(self.document.can_undo and not self.busy)
@@ -8305,16 +8288,8 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self.pool.start(work)
 
     # ---------- historia ----------
-    def _hist_values(self):
-        """Wartości zmiennych projektu (nazwa -> liczba); błędne wyrażenia dają pusty słownik i komunikat."""
-        try:
-            return hist.variable_values(self.document.variables)
-        except kernel.CadError as exc:
-            self.toast(str(exc))
-            return {}
-
     def _hist_ctx(self):
-        return hist.Context(self.document.constraints, self._hist_values())
+        return hist.Context(self.document.constraints)
 
     def _hist_edit_close(self):
         self.hist_edit.hide()
@@ -8326,20 +8301,6 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self._hist_sig = None
         self._hist_update()
         self._layout_overlays()
-
-    def _hist_compare_update(self):
-        """Porównanie przed / po: bryły z poprzedniej wersji historii (sprzed ostatniej edycji) jako czerwona nakładka."""
-        if self.mode is not None:
-            return
-        if not (self.hist_compare.isChecked() and self.document.backup):
-            if getattr(self, '_compare_on', False):
-                self._compare_on = False
-                self.view.set_selection_meshes(None)
-            return
-        states, current, _ = self.document.backup
-        meshes = [b.mesh for b in self.document.meshed([x for x in states[current][0] if x.kind == 'solid' and x.visible]) if b.mesh is not None]
-        self._compare_on = bool(meshes)
-        self.view.set_selection_meshes(meshes or None, color=(.9, .2, .2, .22), line_color=(.8, .1, .1, 1))
 
     def _hist_icon(self, key):
         cache = self.__dict__.setdefault('_hist_icons', {})
@@ -8370,13 +8331,12 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
             self._hist_trim = False
         if self._hist_trim:
             infos = infos[:current + 1]
-        self.hist_revert.setEnabled(bool(self.document.backup))
         keyed = [(hist.step_label(i), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos]
-        mode = (tuple(sorted(self._hist_folded)), self._hist_filter)
+        mode = tuple(sorted(self._hist_folded))
         old = self._hist_sig
         if old is not None and old == (keyed, current, mode):
             return
-        full = old is None or old[2] != mode or (old[1] != current and (self._hist_folded or self._hist_filter != 'Wszystkie kroki'))
+        full = old is None or old[2] != mode or (old[1] != current and bool(self._hist_folded))
         prefix = 0
         if not full:
             old_keyed = old[0]
@@ -8398,7 +8358,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
             group = info.get('group')
             folded = bool(group) and group in self._hist_folded and not (infos[current].get('group') == group)
             starts = bool(group) and (i == 0 or infos[i - 1].get('group') != group)
-            if (folded and not starts) or (not folded and i != current and i != 0 and not hist.passes_filter(info, self._hist_filter)):
+            if folded and not starts:
                 continue
             made = []
             if group and (i == 0 or infos[i - 1].get('group') != group):
@@ -8517,11 +8477,17 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
             steps.append((before, bodies, info))
             before = bodies
 
+        edited = getattr(self, '_step_replayed', False) or self._step_edit is not None
+        self._step_edit, self._step_replayed = None, False
+
         def apply(result):
             tail, failed = result
             self.document.append_states(tail)
             self.selected, self.edges = [], {}
-            self.toast(f'Wstawiono krok w środek historii, {failed} kroków wymaga poprawy (czerwone).' if failed else 'Wstawiono krok w środek historii, następne kroki przeliczone.', 4500)
+            what = 'Krok zmieniony' if edited else 'Wstawiono krok w środek historii'
+            self.toast(f'{what}, {failed} kroków wymaga poprawy (czerwone, powód w dymku).' if failed else f'{what}, dalsze kroki przeliczone.', 4500)
+            if edited and self.mode is not None:
+                QTimer.singleShot(0, lambda: self.set_mode(None))
 
         constraints = self._hist_ctx()
         self.run_history(lambda job: hist.rebuild(current, steps, constraints, job), apply)
@@ -8538,87 +8504,6 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         count, current = len(self.document.infos()[0]), self.document.infos()[1]
         self.history_goto(max(0, min(count - 1, delta if absolute else current + delta)))
 
-    def history_menu(self):
-        from PySide6.QtWidgets import QInputDialog, QMenu
-        if self.busy:
-            return
-        menu = QMenu(self)
-        save = menu.addAction('Zapisz bieżącą historię jako wariant…')
-        names = list(self.document.snapshots)
-        loaders, removers = {}, {}
-        if names:
-            menu.addSeparator()
-        for name in names:
-            sub = menu.addMenu('Wariant: ' + name)
-            loaders[sub.addAction('Wczytaj (można cofnąć strzałką)')] = name
-            removers[sub.addAction('Usuń wariant')] = name
-        menu.addSeparator()
-        filters = {}
-        filter_menu = menu.addMenu('Filtr kroków: ' + self._hist_filter)
-        for name in hist.FILTERS:
-            act = filter_menu.addAction(name)
-            act.setCheckable(True)
-            act.setChecked(name == self._hist_filter)
-            filters[act] = name
-        export = menu.addAction('Eksportuj listę kroków do pliku tekstowego…')
-        auto = self._autosave_path()
-        recover = menu.addAction('Otwórz autozapis') if auto.exists() else None
-        chosen = menu.exec(self.hist_menu_button.mapToGlobal(self.hist_menu_button.rect().topLeft()))
-        if chosen is None:
-            return
-        if chosen is save:
-            text, ok = QInputDialog.getText(self, 'Wariant', 'Nazwa wariantu:', text=f'Wariant {len(names) + 1}')
-            if ok and text.strip():
-                self.document.snapshot(text.strip()[:60])
-                self.toast('Wariant zapisany w projekcie (pamiętaj o zapisie pliku).', 3500)
-                self.refresh()
-        elif chosen in loaders:
-            self.set_mode(None) if self.mode is not None else None
-            self.document.restore_snapshot(loaders[chosen])
-            self.selected, self.edges = [], {}
-            self.refresh()
-        elif chosen in removers:
-            self.document.delete_snapshot(removers[chosen])
-            self.refresh()
-        elif chosen in filters:
-            self._hist_filter = filters[chosen]
-            self._hist_sig = None
-            self._hist_update()
-        elif chosen is export:
-            self.history_export_text()
-        elif recover is not None and chosen is recover:
-            def loaded(doc):
-                self.toggle_section(False,cancel_tool=False)
-                self.section_origin=self.section_normal=None
-                self.document = doc
-                self.selected = []
-            self.run_operation('Otwieranie autozapisu', lambda: Document.load(auto), loaded, True)
-
-    def history_export_text(self):
-        path, _ = QFileDialog.getSaveFileName(self, 'Eksportuj listę kroków', 'Historia.txt', 'Tekst (*.txt)')
-        if not path:
-            return
-        infos, current = self.document.infos()
-        lines = [f"Historia projektu{' - ' + self.document.path.stem if self.document.path else ''}", '']
-        for i, info in enumerate(infos):
-            line = f"{i:3d}. {info.get('note') or hist.step_label(info)}"
-            if info.get('note'):
-                line += f" ({hist.step_label(info)})"
-            if info.get('group'):
-                line += f" [{info['group']}]"
-            if info.get('off'):
-                line += ' (wyłączony)'
-            if info.get('stale'):
-                line += ' BŁĄD: ' + info.get('why', 'nie dało się przeliczyć')
-            lines.append(line + ('   <- bieżący' if i == current else ''))
-        if self.document.variables:
-            lines += ['', 'Zmienne:', *[f'  {k} = {v}' for k, v in self.document.variables.items()]]
-        try:
-            Path(path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
-            self.toast('Lista kroków zapisana.', 2500)
-        except OSError as exc:
-            self.toast(f'Nie można zapisać pliku: {exc}')
-
     @staticmethod
     def _autosave_path_for(document):
         if document.path is not None:
@@ -8627,6 +8512,20 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
 
     def _autosave_path(self):
         return self._autosave_path_for(self.document)
+
+    def open_autosave(self):
+        auto = self._autosave_path()
+        if not auto.exists() or not self.confirm_discard():
+            return
+
+        def loaded(doc):
+            self.toggle_section(False, cancel_tool=False)
+            self.section_origin = self.section_normal = None
+            self.set_mode(None)
+            self.document = doc
+            self.selected = []
+
+        self.run_operation('Otwieranie autozapisu', lambda: Document.load(auto), loaded, True)
 
     def _autosave(self):
         """Co kilka minut zapisuje kopię projektu obok pliku (albo w ~/.rccad) w tle; nie zmienia stanu „zapisany”."""
@@ -8648,14 +8547,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         work_item.signals.failed.connect(lambda message: None)
         self.pool.start(work_item)
 
-    def history_revert(self):
-        if self.busy or not self.document.backup:
-            return
-        self.document.restore_backup()
-        self.selected, self.edges = [], {}
-        self.refresh()
-
-    def history_edit(self, index):
+    def history_edit_form(self, index):
         """Edycja parametrów kroku (wymiary szkicu albo wyciągnięcie / wycięcie) i przeliczenie wszystkich następnych kroków."""
         if self.busy:
             return
@@ -8750,7 +8642,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
             return widget
 
         kind = recipe['type']
-        vals = self._hist_values()
+        vals = {}
         if kind == 'extrude':
             op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
             op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
@@ -8883,7 +8775,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         states = self.document.states()
         bodies, info = states[index]
         constraints = list(self.document.constraints)
-        values_now = self._hist_values()
+        values_now = {}
         try:
             if fields['kind'] == 'recipe':
                 recipe = fields['collect']()
@@ -8976,7 +8868,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
             recipe = fields['collect']()
         except Exception:
             return
-        base, values = self.document.states()[index - 1][0], self._hist_values()
+        base, values = self.document.states()[index - 1][0], {}
 
         def compute():          # przeliczenie kroku liczy proces roboczy, okno pokazuje wynik, gdy jest gotowy
             solids = hist.background(hist.history_preview, hist.light(base), recipe, values, PREVIEW_TOL)
@@ -9032,99 +8924,6 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self._repick = None
         self._history_edit_apply(info['index'], dict(kind='recipe', collect=lambda: new))
 
-    def history_variables(self):
-        """Panel zmiennych projektu (nazwa = wyrażenie); zmiana przelicza całą historię."""
-        panel = self.hist_vars
-        lay = self.hist_vars_layout
-        while lay.count():
-            item = lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                while item.layout().count():
-                    w = item.layout().takeAt(0).widget()
-                    if w:
-                        w.deleteLater()
-        title = QLabel('Zmienne projektu')
-        title.setObjectName('ptitle')
-        lay.addWidget(title)
-        lay.addWidget(_label('Użyj nazwy w polach kroków (np. szerokość / 2). Późniejsze zmienne mogą korzystać z wcześniejszych.', 'psub'))
-        self._var_rows = []
-        rows = QVBoxLayout()
-        lay.addLayout(rows)
-
-        def add_row(name='', expr=''):
-            row = QHBoxLayout()
-            n, e = QLineEdit(name), QLineEdit(expr)
-            n.setPlaceholderText('nazwa')
-            e.setPlaceholderText('wartość lub wyrażenie')
-            drop = QToolButton()
-            drop.setText('✕')
-            row.addWidget(n, 1)
-            row.addWidget(e, 2)
-            row.addWidget(drop)
-            rows.addLayout(row)
-            entry = (n, e)
-            self._var_rows.append(entry)
-
-            def remove():
-                self._var_rows.remove(entry)
-                for w in (n, e, drop):
-                    w.hide()
-                    w.deleteLater()
-            drop.clicked.connect(remove)
-
-        for name, expr in self.document.variables.items():
-            add_row(name, expr)
-        if not self.document.variables:
-            add_row()
-        more = QPushButton('Dodaj zmienną')
-        more.setObjectName('chip')
-        more.clicked.connect(lambda: (add_row(), panel.adjustSize()))
-        lay.addWidget(more)
-        row = QHBoxLayout()
-        for text, cb in (('Zastosuj', self._history_variables_apply), ('Zamknij', panel.hide)):
-            b = QPushButton(text)
-            b.setObjectName('primary' if text == 'Zastosuj' else 'chip')
-            b.clicked.connect(lambda _=False, f=cb: f())
-            row.addWidget(b)
-        lay.addLayout(row)
-        panel.adjustSize()
-        panel.move(max(10, (self.view.width() - panel.width()) // 2), max(10, self.hist_bar.y() - panel.height() - 10))
-        panel.show()
-        panel.raise_()
-
-    def _history_variables_apply(self):
-        variables = {}
-        for n, e in self._var_rows:
-            name, expr = n.text().strip(), e.text().strip()
-            if not name and not expr:
-                continue
-            if not name.isidentifier() or name in hist._FUNCTIONS or name == 'pi':
-                self.toast(f'Nazwa zmiennej „{name}” jest nieprawidłowa (litery, cyfry i _; bez spacji, nie zaczyna się od cyfry).')
-                return
-            if name in variables:
-                self.toast(f'Zmienna „{name}” jest zdefiniowana dwa razy.')
-                return
-            variables[name] = expr
-        try:
-            values = hist.variable_values(variables)
-        except kernel.CadError as exc:
-            self.toast(str(exc))
-            return
-        if self.busy:
-            return
-        self.hist_vars.hide()
-        states, constraints = self.document.states(), list(self.document.constraints)
-
-        def apply(result):
-            new_states, failed = result
-            self.document.rewrite(new_states, len(new_states) - 1, constraints, variables)
-            self.selected, self.edges = [], {}
-            self.toast(f'Zmienne zastosowane, {failed} kroków wymaga poprawy.' if failed else 'Zmienne zastosowane, historia przeliczona.', 4000)
-
-        self.run_history(lambda job: hist.recompute_all(states, hist.Context(constraints, values), job), apply)
-
     def run_history(self, build, apply):
         """Przeliczanie historii w tle z paskiem postępu; Esc przerywa (model zostaje bez zmian)."""
         job = {'cancel': False, 'i': 0, 'n': 0}
@@ -9161,12 +8960,67 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
     def history_goto(self, index):
         if self.busy:
             return
+        if self._step_edit is not None:
+            if self._step_edit['mode'] == 'sketch':      # edycja szkicu z kroku: wyjście zapisuje zmianę i przelicza dalsze kroki
+                self.set_mode(None)
+                return
+            self._step_edit = None                        # edycja narzędziem przerwana kliknięciem w pasek: bez zmian
+            self.document.replace_next = False
         if self.mode is not None:
             self.set_mode(None)
-        self.document.goto(index)
+        self.document.goto(index, mesh=False)
         self._hist_trim = False      # przeskok przez pasek historii zostawia kolejne kroki widoczne (przerywany obrys)
         self.selected, self.edges = [], {}
+        self._show_state()
+
+    def _show_state(self):
+        """Pokazuje stan po przeskoku w historii bez zatrzymywania okna: siatki z pamięci od razu, brakujące liczą się w tle
+        (kolejne kliknięcia w pasek działają dalej - pokaże się stan ostatnio wybrany)."""
+        doc = self.document
+        bodies = doc.bodies
+        if doc.unmeshed(bodies):
+            self.hist_status.setText('Wczytywanie kroku…')
+            work = _Work(lambda: doc.meshed(bodies))
+
+            def done(result, doc=doc, bodies=bodies):
+                if self.document is doc and doc.bodies is bodies:
+                    doc.bodies = result
+                    self.hist_status.setText('')
+                    self.refresh()
+
+            work.signals.done.connect(done)
+            work.signals.failed.connect(lambda message: (self.hist_status.setText(''), self.toast(message)))
+            self._state_work = work
+            self.pool.start(work)
+            self._hist_update()
+            return
+        doc.bodies = doc.meshed(bodies)
         self.refresh()
+
+    def _warm_history(self):
+        """Gdy nic się nie dzieje: siatki brył z pozostałych kroków historii liczą się w tle (przeskok potem bez czekania)."""
+        if getattr(self, '_warming_history', False):
+            return
+        from . import workers
+        doc = self.document
+        if self.busy or len(doc.infos()[0]) < 3 or not workers.ready():      # siatki liczą procesy liczące, okno tylko czeka
+            return
+        self._warming_history = True
+        alive = lambda: self.document is doc and not self.busy
+
+        def work():
+            while doc.warm_meshes(24, alive):
+                pass
+            return None
+
+        def finished(*_):
+            self._warming_history = False
+
+        job = _Work(work)
+        job.signals.done.connect(finished)
+        job.signals.failed.connect(finished)
+        self._warm_history_work = job
+        self.warm_pool.start(job, -2)
 
     def run_operation(self, label, function, apply, fit=False, after=None):
         if self.busy:
@@ -9314,23 +9168,28 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
         self.override = {}
         self._repick = None
         self._hist_edit_close()
-        self.hist_vars.hide()
         self._hist_sig = None
         self.view.clear_body_matrices()
         self.refresh()
 
     def undo(self):
+        if self.step_editing:
+            self.toast('Trwa edycja kroku - zakończ ją (Zastosuj albo Zamknij).')
+            return
         if not self.busy:
-            self.document.undo()
+            self.document.undo(mesh=False)
             self._hist_trim = True
             self.edges = {}
-            self.refresh()
+            self._show_state()
 
     def redo(self):
+        if self.step_editing:
+            self.toast('Trwa edycja kroku - zakończ ją (Zastosuj albo Zamknij).')
+            return
         if not self.busy:
-            self.document.redo()
+            self.document.redo(mesh=False)
             self.edges = {}
-            self.refresh()
+            self._show_state()
 
     # ---------- panel Obiekty ----------
     def _objects_numbers(self):
@@ -9630,6 +9489,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, Plywood
                    (px('f_save'), 'Zapisz projekt', 'Zapis w bieżącym pliku  ·  Ctrl+S', self.save_project),
                    (px('f_saveas'), 'Zapisz jako…', 'Zapis pod nową nazwą', lambda: self.save_project(True)),
                    (px('f_saveas'), 'Zapisz kompaktowo…', 'Mniejszy plik: część historii odtwarzana z przepisów przy otwieraniu', lambda: self.save_project(True, compact=True)),
+                   *([(px('f_open'), 'Otwórz autozapis', 'Kopia zapisywana automatycznie co kilka minut', self.open_autosave)] if self._autosave_path().exists() else []),
                    None,
                    (px('f_import'), 'Importuj…', 'STEP · STL · BREP · DXF · SVG', self.import_model),
                    (px('f_export'), 'Eksportuj…', 'STEP · STL · BREP · DXF', self.export_model),

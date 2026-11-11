@@ -99,9 +99,6 @@ class Document:
         self._redo = []
         self.info = {'label': 'Początek', 'icon': 'start'}
         self.constraints = []   # więzy wymiarów między szkicami: {a, ai, b, bi, k} - wymiar bi szkicu b = k * wymiar ai szkicu a
-        self.variables = {}     # zmienne projektu: nazwa -> wyrażenie (liczone po kolei), używane w polach {'expr': ...}
-        self.snapshots = {}   # warianty: nazwa -> dict(states, current, constraints, variables) - pełne osie czasu zapisane w projekcie
-        self.backup = None   # poprzednia oś czasu sprzed edycji kroku historii (do cofnięcia edycji)
         self.path: Path | None = None
         self._revision = 0
         self._saved_revision = 0
@@ -113,6 +110,9 @@ class Document:
         self._mesh_cache = {}      # id(kształt) -> (kształt, siatka): siatki wyświetlania liczone leniwie, tylko dla bieżącego stanu
         self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
         self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
+        self.reproject = set()      # szkice na powierzchni z nieaktualnym obrazem (wygaszone - liczone dopiero przy pokazaniu)
+        self.replace_next = False  # edycja kroku narzędziem: następne zatwierdzenie zastępuje krok stojący za bieżącym stanem
+        self._merge = None         # edycja szkicu z kroku: zmiany wchodzą do bieżącego kroku (bez nowych kroków), potem przeliczenie dalszych
         self.dropped = 0           # ile najstarszych kroków wypadło z historii (limit MAX_UNDO)
         self.default_color = None  # kolor brył bez własnego koloru (R, G, B 0..1); None - jasnoszary programu
 
@@ -167,6 +167,8 @@ class Document:
         return 'Zmiana', 'move'
 
     def commit(self, bodies, label=None, icon=None, op=None):
+        if self._merge is not None:
+            return self._merge_commit(bodies, op or self.pending_op)
         bodies = tuple(bodies)
         if len({b.id for b in bodies}) != len(bodies):
             raise CadError("Powtórzony identyfikator obiektu.")
@@ -180,8 +182,11 @@ class Document:
             old_target = previous.get(surface['target']) if surface else None
             if target is not None and (body.mesh is None or (old is not None and old.shape is not body.shape)
                                        or (old_target is not None and old_target.shape is not target.shape)):
-                planar = display_mesh(body.shape)
-                body = replace(body, mesh=kernel.project_surface_mesh(planar, target.shape, surface['normal'], origin=kernel.plane_origin(body.plane)))
+                if body.visible or body.mesh is None:
+                    body = self._projected(body, target)
+                    self.reproject.discard(body.id)
+                else:          # szkic wygaszony (np. po wyciągnięciu): obraz na powierzchni liczy się dopiero, gdy będzie widoczny
+                    self.reproject.add(body.id)
             projected.append(body)
         bodies = tuple(projected)
         auto_label, auto_icon = self._auto_label(self.bodies, bodies)
@@ -189,12 +194,19 @@ class Document:
         op = op or self.pending_op
         if op:
             info['op'] = op
+        replaced = None
+        if self.replace_next and self.keep_future and self._redo:      # edycja kroku: nowy wynik zastępuje stary krok
+            replaced = self._redo.pop()
+            for key in ('note', 'group'):
+                if replaced[2].get(key):
+                    info[key] = replaced[2][key]
+        self.replace_next = False
         self._undo.append((self.bodies, self._revision, self.info))
         if len(self._undo) > self.MAX_UNDO:
             self.dropped += len(self._undo) - self.MAX_UNDO      # najstarsze kroki wypadają z historii (okno informuje o tym)
         self._undo = self._undo[-self.MAX_UNDO:]
         if self.keep_future and self._redo:
-            self.deferred = (self.bodies, [(e[0], e[2]) for e in reversed(self._redo)])
+            self.deferred = (replaced[0] if replaced is not None else self.bodies, [(e[0], e[2]) for e in reversed(self._redo)])
         self.keep_future = False
         self._redo.clear()
         self.info = info
@@ -202,6 +214,68 @@ class Document:
         self.bodies = bodies
         self._revision = self._next_revision
         self._next_revision += 1
+
+    # ---------- edycja szkicu z kroku historii (zmiany wchodzą do tego kroku) ----------
+    def begin_merge(self):
+        """Zmiany szkicu (wymiary, uchwyty, nowe kształty) trafiają do bieżącego kroku zamiast tworzyć nowe kroki."""
+        self._merge = dict(old=self.bodies, future=[(e[0], e[2]) for e in reversed(self._redo)], changed=False)
+
+    def _merge_commit(self, bodies, op):
+        bodies = self.meshed(tuple(bodies)) if any(b.mesh is None for b in bodies) else tuple(bodies)
+        info = dict(self.info)
+        old_op = info.get('op')
+        if old_op is not None and op is not None and old_op.get('type') == op.get('type') == 'sketchmeta' and old_op.get('id') == op.get('id'):
+            info['op'] = op          # krok zmiany wymiarów: nowy przepis
+        elif old_op is not None:
+            info.pop('op', None)     # inny rodzaj zmiany: krok zapamiętuje sam wynik (bez przepisu)
+        info.pop('stale', None)
+        info.pop('why', None)
+        self.info = info
+        self.bodies = bodies
+        self._merge['changed'] = True
+        self.pending_label = self.pending_icon = self.pending_op = None
+        self._revision = self._next_revision
+        self._next_revision += 1
+
+    def finish_merge(self):
+        """Koniec edycji szkicu z kroku: dalsze kroki przeliczają się na zmienionym szkicu (True - jest co przeliczać)."""
+        merge, self._merge = self._merge, None
+        if merge is None or not merge['changed']:
+            return False
+        self._redo.clear()
+        self.keep_future = False
+        if merge['future']:
+            self.deferred = (merge['old'], merge['future'])
+        return True
+
+    @property
+    def merging(self):
+        return self._merge is not None
+
+    @staticmethod
+    def _projected(body, target):
+        planar = display_mesh(body.shape)
+        return replace(body, mesh=kernel.project_surface_mesh(planar, target.shape, body.meta['surface']['normal'], origin=kernel.plane_origin(body.plane)))
+
+    def reprojected(self, ids):
+        """Szkice na powierzchni, które właśnie się pokazują, a ich obraz na bryle jest nieaktualny: liczony teraz (bez kroku historii)."""
+        ids = set(ids) & self.reproject
+        if not ids:
+            return False
+        current = {b.id: b for b in self.bodies}
+        out = []
+        for b in self.bodies:
+            if b.id in ids:
+                target = current.get(b.meta['surface']['target'])
+                if target is not None:
+                    try:
+                        b = self._projected(b, target)
+                    except Exception:
+                        pass
+                self.reproject.discard(b.id)
+            out.append(b)
+        self.bodies = tuple(out)
+        return True
 
     def meshed(self, bodies):
         """Bryły z uzupełnionymi siatkami (stany historii wczytane z pliku nie mają siatek, dopóki nie zostaną pokazane)."""
@@ -216,24 +290,66 @@ class Document:
         if todo:
             # kilka brył naraz liczy się w procesach liczących (każda na innym rdzeniu), pojedyncza - tutaj
             from . import workers
-            if len(self._mesh_cache) + len(todo) > 600:
+            if len(self._mesh_cache) + len(todo) > 2000:
                 self._mesh_cache.clear()
             items = list(todo.values())
             for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items], coarse=True)):
-                if error is not None:
-                    raise CadError(error)
+                if error is not None:       # kształt z drobnym błędem: i tak się pokazuje (przeskok w historii nie może się zatrzymać)
+                    try:
+                        mesh = display_mesh(b.shape)
+                    except Exception:
+                        mesh = None
                 self._mesh_cache[id(b.shape)] = (b.shape, mesh)
         out = []
         by_id = {b.id: b for b in bodies}
         for b in bodies:
             if b.mesh is None:
-                b = replace(b, mesh=self._mesh_cache[id(b.shape)][1])
+                hit = self._mesh_cache.get(id(b.shape))
+                if hit is None or hit[0] is not b.shape or hit[1] is None:
+                    out.append(b)
+                    continue
+                b = replace(b, mesh=hit[1])
                 surface = (b.meta or {}).get('surface') if b.kind == 'sketch' else None
                 target = by_id.get(surface['target']) if surface else None
-                if target is not None:
+                if target is not None and not b.visible:
+                    self.reproject.add(b.id)          # wygaszony: obraz na powierzchni dopiero przy pokazaniu
+                elif target is not None:
                     b = replace(b, mesh=kernel.project_surface_mesh(b.mesh, target.shape, surface['normal'], origin=kernel.plane_origin(b.plane)))
             out.append(b)
         return tuple(out)
+
+    def unmeshed(self, bodies):
+        """Czy któraś bryła nie ma siatki ani gotowej w pamięci (trzeba ją policzyć, zanim stan się pokaże)."""
+        for b in bodies:
+            if b.mesh is None:
+                hit = self._mesh_cache.get(id(b.shape))
+                if hit is None or hit[0] is not b.shape:
+                    return True
+        return False
+
+    def warm_meshes(self, budget=40, alive=lambda: True):
+        """W tle: siatki brył z innych kroków historii (najbliższe bieżącemu najpierw), żeby przeskok był natychmiastowy.
+        Zwraca True, gdy zostało jeszcze coś do policzenia."""
+        states = self.states()
+        current = len(self._undo)
+        order = sorted(range(len(states)), key=lambda i: abs(i - current))
+        todo = {}
+        for i in order:
+            for b in states[i][0]:
+                if b.mesh is None and id(b.shape) not in todo:
+                    hit = self._mesh_cache.get(id(b.shape))
+                    if hit is None or hit[0] is not b.shape:
+                        todo[id(b.shape)] = b
+            if len(todo) >= budget:
+                break
+        if not todo or not alive():
+            return False
+        from . import workers
+        items = list(todo.values())
+        for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items], coarse=True)):
+            if error is None and len(self._mesh_cache) < 2000:
+                self._mesh_cache[id(b.shape)] = (b.shape, mesh)
+        return True
 
     def refined(self, shape, mesh):
         """Dokładna siatka policzona w tle zastępuje zgrubną: w bieżącym stanie i w pamięci siatek (bez nowego kroku historii)."""
@@ -283,13 +399,10 @@ class Document:
         """Pełna oś czasu: lista (bryły, info) od pierwszego kroku."""
         return [(e[0], e[2]) for e in self._undo] + [(self.bodies, self.info)] + [(e[0], e[2]) for e in reversed(self._redo)]
 
-    def rewrite(self, states, current, constraints=None, variables=None):
-        """Podmienia całą oś czasu (po edycji kroku i przeliczeniu następnych); poprzednią (z więzami) zachowuje do cofnięcia edycji."""
-        self.backup = (self.states(), len(self._undo), list(self.constraints), dict(self.variables))
+    def rewrite(self, states, current, constraints=None):
+        """Podmienia całą oś czasu (po edycji kroku i przeliczeniu następnych)."""
         if constraints is not None:
             self.constraints = list(constraints)
-        if variables is not None:
-            self.variables = dict(variables)
         self._set_states(states, current)
 
     def set_info(self, index, **values):
@@ -310,37 +423,14 @@ class Document:
         self.bodies = ()
         self._undo, self._redo = [], []
         self.info = {'label': 'Początek', 'icon': 'start'}
-        self.constraints, self.variables, self.snapshots = [], {}, {}
-        self.backup = None
+        self.constraints = []
         self.pending_label = self.pending_icon = self.pending_op = None
         self.keep_future, self.deferred = False, None
+        self.replace_next, self._merge = False, None
         self._mesh_cache.clear()
         self._revision = self._next_revision
         self._next_revision += 1
 
-    def snapshot(self, name):
-        """Zapamiętuje całą historię pod nazwą (wariant); bryły są niezmienne, więc kopia nic nie kosztuje."""
-        self.snapshots[name] = dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints), variables=dict(self.variables))
-        self._revision = self._next_revision
-        self._next_revision += 1
-
-    def restore_snapshot(self, name):
-        snap = self.snapshots[name]
-        self.backup = (self.states(), len(self._undo), list(self.constraints), dict(self.variables))
-        self.constraints, self.variables = list(snap['constraints']), dict(snap['variables'])
-        self._set_states(list(snap['states']), snap['current'])
-
-    def delete_snapshot(self, name):
-        if self.snapshots.pop(name, None) is not None:
-            self._revision = self._next_revision
-            self._next_revision += 1
-
-    def restore_backup(self):
-        if self.backup:
-            states, current, constraints, variables = self.backup
-            self.backup = None
-            self.constraints, self.variables = constraints, variables
-            self._set_states(states, current)
 
     def _set_states(self, states, current):
         revisions = list(range(self._next_revision, self._next_revision + len(states)))
@@ -352,14 +442,15 @@ class Document:
         self._revision = revisions[current]
         self.keep_future, self.deferred = False, None
 
-    def goto(self, index):
+    def goto(self, index, mesh=True):
         labels, current = self.timeline()
         index = max(0, min(index, len(labels) - 1))
         while current > index:
             self.undo(False); current -= 1      # stany pośrednie nie są siatkowane: tylko docelowy
         while current < index:
             self.redo(False); current += 1
-        self.bodies = self.meshed(self.bodies)
+        if mesh:
+            self.bodies = self.meshed(self.bodies)
         self.keep_future = index < len(labels) - 1
 
     @staticmethod
@@ -430,7 +521,7 @@ class Document:
         shapes, index, vindex = [], {}, {}
         metas, meta_index, entries, entry_index = [], {}, [], {}
         manifest = {"app": "RCCAD_DESKTOP", "version": 3, "units": "mm", "pack": "shapes.pack", "shapes": [], "metas": metas,
-                    "entries": entries, "states": [], "current": current, "constraints": self.constraints, "variables": self.variables}
+                    "entries": entries, "states": [], "current": current, "constraints": self.constraints}
         if self.default_color:
             manifest["default_color"] = [round(float(c), 4) for c in self.default_color]
         temp_path = None
@@ -483,12 +574,10 @@ class Document:
                             out.append(state)
                         return out
                     manifest['states'] = emit(states, True)
-                    manifest['snapshots'] = [dict(name=name, current=snap['current'], constraints=snap['constraints'], variables=snap['variables'], states=emit(snap['states'], False))
-                                             for name, snap in self.snapshots.items()]
                     manifest['virtual'] = len(vindex)
                 text = json.dumps(manifest, ensure_ascii=False)
                 if len(text.encode('utf-8')) > self.MAX_MANIFEST or len(shapes) > self.MAX_SHAPES or offset > self.MAX_TOTAL:
-                    raise CadError("Projekt przekracza dopuszczalny rozmiar (za długa historia). Zapisz wariant albo usuń stare kroki.")
+                    raise CadError("Projekt przekracza dopuszczalny rozmiar (za długa historia). Usuń stare kroki historii.")
                 archive.writestr("manifest.json", text)
             os.replace(temp_path, path)
             if mark:      # autozapis (mark=False) nie zmienia ścieżki projektu ani stanu „zapisany”
@@ -659,19 +748,15 @@ class Document:
                     return [dict(b=str(c['b']), bi=int(c['bi']), expr=str(c['expr'])) if 'expr' in c else
                             dict(a=str(c['a']), ai=int(c['ai']), b=str(c['b']), bi=int(c['bi']), k=float(c.get('k', 1.0))) for c in cons if isinstance(c, dict)] if isinstance(cons, list) else []
 
-                def parse_variables(variables):
-                    return {str(k)[:40]: str(v)[:200] for k, v in variables.items()} if isinstance(variables, dict) else {}
-
                 result.constraints = parse_constraints(manifest.get('constraints', []))
-                result.variables = parse_variables(manifest.get('variables', {}))
-                for snap in (manifest.get('snapshots') or [])[:30]:
-                    if not isinstance(snap, dict) or not isinstance(snap.get('states'), list) or not 0 < len(snap['states']) <= cls.MAX_STATES:
-                        continue
-                    timeline = parse(snap['states'])
-                    at = snap.get('current')
-                    result.snapshots[str(snap.get('name', 'Wariant'))[:60]] = dict(
-                        states=timeline, current=at if isinstance(at, int) and 0 <= at < len(timeline) else len(timeline) - 1,
-                        constraints=parse_constraints(snap.get('constraints', [])), variables=parse_variables(snap.get('variables', {})))
+                variables = manifest.get('variables')
+                if isinstance(variables, dict) and variables:       # starsze projekty ze zmiennymi: wyrażenia w krokach zamieniane na liczby
+                    from .history import has_expr, resolve, variable_values
+                    try:
+                        values = variable_values({str(k): str(v) for k, v in variables.items()})
+                        built = [(b, dict(inf, op=resolve(inf['op'], values)) if has_expr(inf.get('op')) else inf) for b, inf in built]
+                    except Exception:
+                        pass
                 result._next_revision = 1
                 revisions = list(range(1, len(built) + 1))
                 result._next_revision = len(built) + 1

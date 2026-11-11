@@ -10,6 +10,7 @@ os.environ.setdefault('RCCAD_WORKERS','0')        # testy okna liczą w jednym p
 from pathlib import Path
 import numpy as np
 import cadquery as cq
+from rccad import sketchmeta as sm
 import unittest
 from dataclasses import replace
 from unittest.mock import patch
@@ -1865,18 +1866,56 @@ class StudioTests(unittest.TestCase):
         w.history_goto(cur);self.assertEqual(len(w._hist_widgets),len(labels));self.assertTrue(w._hist_widgets[cur][-1].isChecked())
         self.sketch('rect',(40,0),(50,10));self.assertEqual(len(w._hist_widgets),len(labels)+1);self.assertEqual(list(w._hist_widgets.values())[:len(chips)],chips)    # nowy krok dodaje jeden symbol
 
-    def test_history_edit_recomputes_following_steps_and_can_be_reverted(self):
+    def test_history_edit_reopens_the_tool_and_replaces_the_step(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
         w.ex_value.setValue(5);w.apply_extrude();self.wait()
-        infos,cur=w.document.infos();last=len(infos)-1
-        self.assertEqual((infos[last]['icon'],infos[last]['op']['type']),('extrude','extrude'));self.assertEqual(infos[1]['icon'],'sketch')
-        vol=lambda:[b for b in w.document.bodies if b.kind=='solid'][0].shape.Volume()
+        self.sketch('rect',(30,0),(40,10));w.set_mode(None)           # krok niezależny od wyciągnięcia
+        infos,cur=w.document.infos();ext=2
+        self.assertEqual(infos[ext]['op']['type'],'extrude')
+        vol=lambda:sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid')
         self.assertAlmostEqual(vol(),1000,2)
-        w.history_edit(last);w._hist_fields_extrude['d1'].setValue(8);w._history_edit_apply(last,w._hist_fields);self.wait();self.assertAlmostEqual(vol(),1600,2)
-        w.history_edit(1);w._hist_fields['edits'][0].setText('30');w._history_edit_apply(1,w._hist_fields);self.wait()
-        self.assertAlmostEqual(vol(),2400,2);self.assertEqual(w.document.timeline()[1],last)       # krok sketch zmieniony, wyciągnięcie przeliczone
-        w.history_revert();self.assertAlmostEqual(vol(),1600,2)
-        w.hist_button.setChecked(True);self.app.processEvents();self.assertGreaterEqual(w.hist_row.count(),last+1)
+        # dwuklik w krok: model wraca przed krok, otwiera się Wyciągnięcie z wartościami kroku
+        w.history_edit(ext)
+        self.assertEqual(w.mode,'extrude');self.assertEqual(w.document.infos()[1],ext-1)
+        self.assertAlmostEqual(w.ex_value.value(),5);self.assertEqual(w.ex_op.currentData(),'new')
+        w.ex_value.setValue(8);w.apply_extrude();self.wait();self.wait()
+        infos,cur=w.document.infos()
+        self.assertEqual((len(infos),cur),(4,3))                        # ta sama liczba kroków, krok zastąpiony
+        self.assertAlmostEqual(vol(),1600,2);self.assertEqual(infos[ext]['op']['d1'],8.0)
+        self.assertEqual(len([b for b in w.document.bodies if b.kind=='sketch' and b.visible]),1)    # późniejszy szkic przeniesiony
+        self.assertIsNone(w.mode)
+        # Zamknij bez Zastosuj: nic się nie zmienia, model wraca na koniec historii
+        w.history_edit(ext);w.ex_value.setValue(30);w.set_mode(None);self.app.processEvents();self.wait()
+        self.assertEqual(w.document.infos()[1],3);self.assertAlmostEqual(vol(),1600,2);self.assertFalse(w.document.replace_next)
+        # krok szkicu: szkic otwiera się z zaznaczonym kształtem, zmiana wymiarów wchodzi do tego kroku
+        w.history_edit(1)
+        self.assertEqual(w.mode,'sketch');self.assertEqual(w.selected,[sk.id]);self.assertTrue(w.document.merging)
+        body=w.document.get(sk.id);meta=sm.apply_values(body.meta,[30,10])
+        w._commit_sketch_edit(body,w._meta_shape(body.plane,meta),meta);self.wait()
+        self.assertEqual(len(w.document.infos()[0]),4)                  # bez nowego kroku
+        w.set_mode(None);self.wait();self.wait()
+        infos,cur=w.document.infos();self.assertEqual((len(infos),cur),(4,3))
+        self.assertAlmostEqual(vol(),2400,2)                           # wyciągnięcie poszło za nowym rozmiarem szkicu
+        self.assertNotIn('op',infos[1])
+        self.assertFalse(hasattr(w,'hist_compare') or hasattr(w,'hist_revert') or hasattr(w,'hist_vars') or hasattr(w,'hist_menu_button'))
+
+    def test_history_edit_fillet_and_boolean_prefill_the_tool(self):
+        w=self.w
+        a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(10,10,40)).prepared()
+        w.document.commit([a,b]);w.refresh()
+        edge=next(i for i,e in enumerate(a.shape.Edges()) if abs(e.Center().z-20)<1e-6)
+        w.set_mode('mod');w.edges={a.id:{edge}};w.mod_size.setValue(2);w.apply_mod();self.wait()
+        w.set_mode('bool');w.bool_ids=[a.id,b.id];w.bool_op.setCurrentIndex(1);w.apply_bool();self.wait();w.set_mode(None);self.wait()
+        infos,cur=w.document.infos();self.assertEqual([i['op']['type'] for i in infos[2:]],['mod','bool'])
+        w.history_edit(2)
+        self.assertEqual(w.mode,'mod');self.assertEqual(w.edges,{a.id:{edge}});self.assertAlmostEqual(w.mod_size.value(),2)
+        w.mod_size.setValue(4);w.apply_mod();self.wait();self.wait()
+        self.assertEqual(w.document.infos()[0][2]['op']['size'],4.0);self.assertEqual(len(w.document.infos()[0]),4)
+        self.assertEqual(len([x for x in w.document.bodies if x.kind=='solid']),1)        # Boolean przeliczony na nowym zaokrągleniu
+        w.history_edit(3)
+        self.assertEqual(w.mode,'bool');self.assertEqual(w.bool_ids,[a.id,b.id]);self.assertEqual(w.bool_op.currentData(),'subtract')
+        w.set_mode(None);self.app.processEvents();self.wait()
+        self.assertEqual(w.document.infos()[1],3)
 
     def test_operation_after_history_jump_is_inserted_and_later_steps_recomputed(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
@@ -2385,7 +2424,7 @@ class StudioTests(unittest.TestCase):
         with patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):w.clear_all()
         self.assertEqual(len(w.document.bodies),0)
         labels,cur=w.document.timeline();self.assertEqual((len(labels),cur),(1,0))       # czyszczenie usuwa też historię
-        self.assertFalse(w.document.can_undo or w.document.can_redo or w.document.constraints or w.document.snapshots)
+        self.assertFalse(w.document.can_undo or w.document.can_redo or w.document.constraints)
         w.undo();w.redo();self.assertEqual(len(w.document.bodies),0)
         self.sketch('rect',(0,0),(5,5));self.assertEqual(len(w.document.timeline()[0]),2)       # po wyczyszczeniu historia zaczyna się od nowa
 

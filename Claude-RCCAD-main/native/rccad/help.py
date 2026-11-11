@@ -198,10 +198,13 @@ TOPICS = [
         'Do zatwierdzenia nic się nie przelicza: bryła tylko przesuwa się / obraca na ekranie, więc ustawianie jest płynne nawet dla dużych brył. Bryłę łapie się tam, gdzie ją widać, a ponowne kliknięcie jej nie kasuje ustawionych wartości - można poprawiać dalej. Geometria liczy się w tle po Zastosuj.']),
     ('f_save', 'Historia i zapis projektu', 'Kroki, autozapis, zapis kompaktowy', [
         'Każda operacja to krok historii na dolnym pasku. Opis kroku podaje wartości, np. „Kołnierz 20 mm, 90°”, „Przesunięcie X +15 mm”, „Wyciągnięcie 10 mm” - widać je w podpowiedzi kroku, na liście kroków i w tytule Edycji kroku.',
-        'Historia pamięta 999 kroków. Przy 950 krokach program ostrzega jeden raz; po przekroczeniu limitu najstarsze kroki są usuwane (też z komunikatem). Aby zachować stan, zapisz wariant w menu historii.',
+        'Kliknięcie kroku pokazuje model z tego momentu od razu - siatki pozostałych kroków program przygotowuje w tle, gdy nic się nie dzieje.',
+        'Dwuklik w krok (albo prawy przycisk → Edytuj parametry…) otwiera to samo narzędzie, którym krok powstał (Wyciągnięcie, Obrót, Zaokrąglenie / faza, Skorupa, Boolean, Kolor), z wartościami i wyborem z tego kroku, na modelu sprzed kroku. Zastosuj zastępuje krok, Zamknij - bez zmian. Krok szkicu otwiera szkic z tym kształtem zaznaczonym: uchwyty i Tab zmieniają wymiary, a wyjście ze szkicu zapisuje zmianę.',
+        'Po edycji kroku przeliczają się tylko te dalsze kroki, które dotyczą zmienionych obiektów; pozostałe są przenoszone bez liczenia. Szkic narysowany na ścianie bryły idzie za tą ścianą (np. bryła stała się wyższa - szkic na jej górze przesuwa się w górę).',
+        'Historia pamięta 999 kroków. Przy 950 krokach program ostrzega jeden raz; po przekroczeniu limitu najstarsze kroki są usuwane (też z komunikatem).',
         'Plik projektu (.rccadx) zawiera całą historię: geometria jest w jednej paczce, a opisy powtarzające się w wielu krokach są zapisane raz, więc nawet bardzo długie historie otwierają się poprawnie. Starsze pliki otwierają się jak dotąd.',
         'Plik → Zapisz kompaktowo… daje mniejszy plik: kroki, które program umie przeliczyć z przepisu (kołnierze, rozłożenie, przesunięcia…), zapisuje bez geometrii i odtwarza przy otwieraniu (otwarcie trwa wtedy chwilę dłużej). Co 10. krok i bieżący stan są zapisane w całości.',
-        'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu historii → Otwórz autozapis.']),
+        'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu Plik → Otwórz autozapis.']),
     ('one', 'Widok', 'Kostka i skróty', [
         'Bryła zaznacza się tylko kliknięciem lewym przyciskiem (ciepły niebieski kolor); ponowne kliknięcie odznacza. Wynik operacji nie zaznacza się sam.',
         'Widok jest domyślnie bez perspektywy (rzut równoległy) - bryły wyglądają jak na rysunku. Przycisk Perspektywa na dolnym pasku włącza widok z perspektywą (wybór zostaje zapamiętany).',

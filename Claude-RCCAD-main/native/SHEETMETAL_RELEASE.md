@@ -1,14 +1,23 @@
-# RCCAD Desktop 0.4.94 — wyrównaj rozmiar, grupy, Boolean na grupie
+# RCCAD Desktop 0.4.95 — szybsza i pewniejsza historia
+
+- **Edycja kroku tym samym narzędziem**: dwuklik w krok historii cofa model do stanu sprzed kroku i otwiera narzędzie, którym krok powstał (Wyciągnięcie / Wycięcie, Obrót, Zaokrąglenie / faza, Skorupa, Boolean, Kolor), z wartościami i wyborem z tego kroku. Zastosuj zastępuje krok, Zamknij przywraca model bez zmian. Krok szkicu otwiera szkic z zaznaczonym kształtem - uchwyty i Tab zmieniają wymiary, wyjście ze szkicu zapisuje zmianę.
+- Po edycji kroku przeliczają się tylko dalsze kroki, które dotyczą zmienionych obiektów; reszta jest przenoszona bez liczenia. Szkic narysowany na ścianie bryły idzie za tą ścianą (np. wyższa bryła - szkic na jej górze przesuwa się w górę), więc dalsze wyciągnięcia nie „rozjeżdżają się”.
+- **Przeskok w historii bez czekania**: okno nie zatrzymuje się przy klikaniu kroków - brakujące siatki liczą się w tle, a siatki pozostałych kroków program przygotowuje sam, gdy nic się nie dzieje. Projekt otwiera się kilka razy szybciej.
+- Szkice wygaszone po wyciągnięciu nie są przeliczane przy każdej zmianie bryły pod nimi (wcześniej nawet kilka sekund na krok przy wielu szkicach na walcu) - ich obraz liczy się dopiero, gdy się pokażą.
+- Naprawiony błąd, przez który edycja kroku przerywała się przy napisie na powierzchni (walcu).
+- Z paska historii usunięto przyciski Cofnij (edycję), Zmienne, Warianty i Porównaj razem z ich funkcjami. Autozapis otwiera się teraz z menu Plik → Otwórz autozapis. Starsze projekty ze zmiennymi otwierają się normalnie (wartości wpisane w kroki).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.4.94 — wyrównaj rozmiar, grupy, Boolean na grupie
 
 - **Szkic na wklęsłym zaokrągleniu**: wyciągnięcia i wycięcia idą w dobrą stronę (program brał wklęsłe zaokrąglenie za wypukły walec, bo źle odczytywał punkt na ścianie).
 - Każdy osobno dodany **tekst** ma na liście Obiekty własną grupę (kolejne teksty o tej samej treści dostają „(2)”, „(3)”...).
 - Każdy nowy **szyk** zapisuje się jako nowa grupa na liście Obiekty (oryginał razem z kopiami).
 - **Boolean**: przy włączonym narzędziu kliknięcie grupy (albo obiektu) na liście Obiekty zaznacza wszystkie jej bryły na polu roboczym. Zastosuj z „Suma” łączy je w jedną bryłę, która na liście Obiekty jest jedną pozycją (już bez grupy).
 - Nowe narzędzie **Wyrównaj rozmiar** w zakładce Szkic (obok „Szkic na narożniku”): kliknij szkic wzorcowy, potem kolejne takie same kształty - od razu przyjmują jego wymiary (środek zostaje w miejscu). Zastosuj zapisuje zmiany jako jeden krok historii, Zamknij je cofa. Działa tylko dla kształtów tego samego rodzaju.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.4.93 — kolory brył
 

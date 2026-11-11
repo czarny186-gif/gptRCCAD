@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import unittest.mock
 from rccad import kernel as k
+from dataclasses import replace as rep
 from rccad.document import Body, Document
 
 
@@ -415,45 +416,61 @@ class DocumentTests(unittest.TestCase):
             path=Path(directory)/'lazy.rccadx';d.save(path);d.undo();o=Document.load(path)
             self.assertTrue(all(b.mesh is not None for b in o.bodies));o.undo();self.assertTrue(all(b.mesh is not None for b in o.bodies))    # siatki liczone leniwie przy przeskoku
 
-    def test_variables_expressions_recompute_all_and_persistence(self):
+    def test_expressions_and_old_projects_with_variables_load_as_numbers(self):
         from rccad import history as h
+        import json, zipfile
         self.assertAlmostEqual(h.evaluate('sqrt(w*w) / 2 + 1,5', {'w': 10}), 6.5)
         self.assertAlmostEqual(h.evaluate('cos(60)'), .5)
         for bad in ('__import__("os")', 'w.real', 'x + 1', '1/0', '[1]'):
             with self.assertRaises(k.CadError):h.evaluate(bad, {'w': 1})
-        self.assertEqual(h.variable_values({'a': '10', 'b': 'a * 2'}), {'a': 10.0, 'b': 20.0})
-        with self.assertRaises(k.CadError):h.variable_values({'b': 'a * 2'})
         a=Body('A',k.box(10,10,10)).prepared()
         face,n=k.face_at(a.shape,(0,0,1),(5,5,10))
         src=dict(kind='face',id=a.id,face=face,normal=tuple(n),center=face.Center().toTuple(),hit=(5,5,10))
         r=dict(type='extrude',mode='join',dir='one',d1={'expr':'h'},d2=0,profiles=h.describe_profiles([src],[a]),spent=[],out=[])
-        self.assertTrue(h.has_expr(r))
-        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'})]
-        states.append((h.run_recipe(states[-1][0],r,{'h':5.0}),{'label':'E','icon':'extrude','op':r}))
-        self.assertAlmostEqual(states[-1][0][0].shape.Volume(),1500,1)
-        out,failed=h.recompute_all(states,h.Context((),{'h':20.0}));self.assertEqual(failed,0)
-        self.assertAlmostEqual(out[-1][0][0].shape.Volume(),3000,1)
-        bad,failed=h.recompute_all(states,h.Context((),{}))
-        self.assertEqual(failed,1);self.assertTrue(bad[-1][1].get('stale'));self.assertTrue(bad[-1][1].get('why'))
-        d=Document();d.commit([a],'A');d.commit(list(out[-1][0]),'E',op=r)
-        d.rewrite(d.states(),len(d.states())-1,None,{'h':'20'})
+        d=Document();d.commit([a],'A');d.commit(list(h.run_recipe(d.bodies,r,{'h':20.0})),'E',op=r)
         with tempfile.TemporaryDirectory() as directory:
-            path=Path(directory)/'vars.rccadx';d.save(path);o=Document.load(path)
-            self.assertEqual(o.variables,{'h':'20'});self.assertEqual(o.states()[-1][1]['op']['d1'],{'expr':'h'})
+            path=Path(directory)/'vars.rccadx';d.save(path)
+            with zipfile.ZipFile(path) as z:items={i.filename:z.read(i.filename) for i in z.infolist()}
+            m=json.loads(items['manifest.json']);self.assertNotIn('variables',m);self.assertNotIn('snapshots',m)
+            m['variables']={'h':'20'};items['manifest.json']=json.dumps(m).encode()      # projekt ze starszej wersji (zmienne projektu)
+            with zipfile.ZipFile(path,'w') as z:
+                for name,data in items.items():z.writestr(name,data)
+            o=Document.load(path)
+        self.assertEqual(o.states()[-1][1]['op']['d1'],20.0)
+        self.assertFalse(hasattr(o,'variables') or hasattr(o,'snapshots') or hasattr(o,'backup'))
 
-    def test_snapshots_persist_share_geometry_and_autosave_does_not_mark_saved(self):
+    def test_sketch_on_face_follows_the_face_when_an_earlier_step_changes(self):
+        from rccad import history as h
+        a=Body('A',k.box(10,10,10)).prepared()
+        frame=k.Frame((5.0,5.0,10.0),(1.0,0.0,0.0),(0.0,0.0,1.0))
+        meta=dict(tool='circle',points=[[0,0],[2,0]],surface=dict(target=a.id,normal=[0,0,1]))
+        sk=Body('S',h.meta_shape(frame,meta),'sketch',frame,meta=meta).prepared()
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'}),((a,sk),{'label':'S','icon':'sketch'})]
+        taller=rep(a,shape=k.box(10,10,15))
+        out,failed=h.recompute(states,1,(taller,),());self.assertEqual(failed,0)
+        moved=next(b for b in out[-1][0] if b.id==sk.id)
+        self.assertAlmostEqual(moved.plane.origin[2],15,6);self.assertAlmostEqual(k.bounds(moved.shape).zmax,15,6)
+        self.assertEqual(moved.meta,sk.meta)
+        self.assertEqual(h.reads(dict(type='extrude',profiles=[{'k':'surfacetext','group':'abc'}]),out[-1][0]),set())     # napis na powierzchni: bez błędu
+
+    def test_hidden_surface_sketch_is_projected_only_when_shown(self):
+        a=Body('A',k.box(10,10,10)).prepared()
+        frame=k.Frame((5.0,5.0,10.0),(1.0,0.0,0.0),(0.0,0.0,1.0))
+        from rccad import history as h
+        meta=dict(tool='circle',points=[[0,0],[2,0]],surface=dict(target=a.id,normal=[0,0,1]))
+        sk=Body('S',h.meta_shape(frame,meta),'sketch',frame,meta=meta,visible=False).prepared()
+        d=Document();d.commit([a,sk])
+        d.commit([rep(a,shape=k.box(10,10,10).translate((0,0,0))),sk])
+        self.assertIn(sk.id,d.reproject)
+        self.assertTrue(d.reprojected({sk.id}));self.assertNotIn(sk.id,d.reproject)
+
+    def test_autosave_does_not_mark_saved(self):
         a=Body('A',k.box(10,10,10)).prepared();b=Body('B',k.box(5,5,5)).prepared()
-        d=Document();d.commit([a],'A');d.snapshot('v1');d.commit([a,b],'B')
-        self.assertEqual(len(d.states()),3)
+        d=Document();d.commit([a],'A');d.commit([a,b],'B')
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'v.rccadx';d.save(path);self.assertFalse(d.dirty)
             d.commit([a],'C');auto=Path(directory)/'v.autosave.rccadx';d.save(auto,mark=False)
             self.assertTrue(d.dirty);self.assertEqual(d.path,path)
-            o=Document.load(path)
-            self.assertEqual(list(o.snapshots),['v1']);self.assertEqual(len(o.snapshots['v1']['states']),2)
-            o.restore_snapshot('v1');self.assertEqual(len(o.states()),2);self.assertTrue(o.backup)
-            o.restore_backup();self.assertEqual(len(o.states()),3)
-            o.delete_snapshot('v1');self.assertFalse(o.snapshots)
             self.assertEqual(len(Document.load(auto).states()),4)
 
     def test_face_reference_prefers_extreme_face_after_resizing(self):
@@ -469,13 +486,6 @@ class DocumentTests(unittest.TestCase):
         new=build(30,22)       # plan: wieża A (x<10) jest teraz wyższa, a niższa wieża B ma wierzch bliżej starej wysokości
         matched,_=h.match_face(new,ref)
         self.assertLess(matched.Center().toTuple()[0],10);self.assertAlmostEqual(matched.Center().toTuple()[2],30,3)
-
-    def test_history_filter(self):
-        from rccad import history as h
-        self.assertTrue(h.passes_filter({'icon':'extrude'},'Wszystkie kroki'))
-        self.assertTrue(h.passes_filter({'icon':'sketch'},'Szkice i tekst'));self.assertFalse(h.passes_filter({'icon':'extrude'},'Szkice i tekst'))
-        self.assertTrue(h.passes_filter({'icon':'cut'},'Operacje na bryłach'));self.assertTrue(h.passes_filter({'icon':'mod'},'Modyfikacje'))
-        self.assertTrue(h.passes_filter({'icon':'mod','stale':True},'Tylko błędy'));self.assertFalse(h.passes_filter({'icon':'mod'},'Tylko błędy'))
 
     def test_constraints_inside_one_sketch_chains_and_cycles(self):
         from dataclasses import replace as rep
