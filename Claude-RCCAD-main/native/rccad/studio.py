@@ -8571,7 +8571,11 @@ class StudioWindow(StepEditTools, SectionTools, ScaleTools, ColorTools, MatchSiz
             why.setStyleSheet('color:#c0262b; background:transparent;')
             lay.addWidget(why)
         if recipe and recipe.get('type') in hist.RUNNERS:
-            fields = dict(kind='recipe', collect=self._recipe_form(recipe, lay))
+            try:
+                fields = dict(kind='recipe', collect=self._recipe_form(recipe, lay))
+            except kernel.CadError as exc:
+                self.toast(f'{exc} Krok można wyłączyć, usunąć albo przesunąć (prawy przycisk na kroku).', 5000)
+                return
         else:
             known = {x.id for x in states[index - 1][0]}
             new_bodies = [b for b in bodies if b.id not in known]

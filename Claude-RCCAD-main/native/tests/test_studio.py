@@ -1917,6 +1917,35 @@ class StudioTests(unittest.TestCase):
         w.set_mode(None);self.app.processEvents();self.wait()
         self.assertEqual(w.document.infos()[1],3)
 
+    def test_history_edit_opens_for_every_kind_of_step_and_close_changes_nothing(self):
+        w=self.w;self.sketch('rect',(0,0),(20,20));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(10);w.apply_extrude();self.wait();w.set_mode(None)
+        a=next(b for b in w.document.bodies if b.kind=='solid')
+        b=Body('B',k.box(5,5,30).translate(cq.Vector(5,5,-5))).prepared();w.document.commit([*w.document.bodies,b]);w.refresh()
+        doc=w.document
+        def step(op,label):
+            doc.commit(list(hist.run_recipe(doc.bodies,op)),label,op=op)
+        edge=next(i for i,e in enumerate(a.shape.Edges()) if abs(e.Center().z-10)<1e-6)
+        step(dict(type='mod',id=a.id,kind='chamfer',size=1.0,verts=[],vrefs=[],edges=hist.edge_refs(a.shape,{edge})),'Faza')
+        step(dict(type='shell',id=a.id,faces=[],thickness=1.0,inward=True),'Skorupa')
+        step(dict(type='color',colors={a.id:[1.0,0.0,0.0]}),'Kolor')
+        step(dict(type='transform',id=b.id,mode='move',v=(1.0,0.0,0.0)),'Przesunięcie')
+        step(dict(type='bool',op='subtract',base=a.id,tools=[b.id]),'Boolean')
+        step(dict(type='rename',id=a.id,name='Korpus'),'Nazwa')
+        w.refresh()
+        infos,last=doc.infos();final=[(x.id,x.shape) for x in doc.bodies]
+        for i in range(1,len(infos)):
+            kind=(infos[i].get('op') or {}).get('type')
+            w.history_edit(i);self.app.processEvents()
+            opened=w.mode is not None or w.hist_edit.isVisible()
+            self.assertEqual(opened,kind!='rename',f'krok {i} ({kind}) - okno edycji')
+            if w.hist_edit.isVisible():w._hist_edit_close()
+            w.set_mode(None);self.app.processEvents();self.wait()
+            if w.document.infos()[1]!=last:w.history_goto(last);self.wait()
+            self.assertEqual(w.document.infos()[1],last,f'krok {i} ({kind})')
+            self.assertEqual([(x.id,x.shape) for x in w.document.bodies],final,f'krok {i} ({kind}) zmienił model')
+            self.assertFalse(w.document.replace_next or w.document.merging)
+
     def test_operation_after_history_jump_is_inserted_and_later_steps_recomputed(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
         w.ex_value.setValue(5);w.apply_extrude();self.wait();before=len(w.document.infos()[0])

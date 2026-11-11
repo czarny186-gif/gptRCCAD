@@ -426,13 +426,14 @@ class DocumentTests(unittest.TestCase):
         a=Body('A',k.box(10,10,10)).prepared()
         face,n=k.face_at(a.shape,(0,0,1),(5,5,10))
         src=dict(kind='face',id=a.id,face=face,normal=tuple(n),center=face.Center().toTuple(),hit=(5,5,10))
-        r=dict(type='extrude',mode='join',dir='one',d1={'expr':'h'},d2=0,profiles=h.describe_profiles([src],[a]),spent=[],out=[])
-        d=Document();d.commit([a],'A');d.commit(list(h.run_recipe(d.bodies,r,{'h':20.0})),'E',op=r)
+        r=dict(type='extrude',mode='join',dir='one',d1=20.0,d2=0,profiles=h.describe_profiles([src],[a]),spent=[],out=[])
+        d=Document();d.commit([a],'A');d.commit(list(h.run_recipe(d.bodies,r)),'E',op=r)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'vars.rccadx';d.save(path)
             with zipfile.ZipFile(path) as z:items={i.filename:z.read(i.filename) for i in z.infolist()}
             m=json.loads(items['manifest.json']);self.assertNotIn('variables',m);self.assertNotIn('snapshots',m)
-            m['variables']={'h':'20'};items['manifest.json']=json.dumps(m).encode()      # projekt ze starszej wersji (zmienne projektu)
+            m['variables']={'h':'20'};m['states'][-1]['op']['d1']={'expr':'h'}      # projekt ze starszej wersji (zmienne projektu)
+            items['manifest.json']=json.dumps(m).encode()
             with zipfile.ZipFile(path,'w') as z:
                 for name,data in items.items():z.writestr(name,data)
             o=Document.load(path)

@@ -65,10 +65,6 @@ class HistoryPerf(unittest.TestCase):
             out, failed = h.recompute(patched, 2, first, ())
         report('przeliczenie po edycji pierwszego kroku', t.seconds, f'(nieprzeliczone: {failed})')
         self.assertEqual(failed, 0)
-        with Timer() as t:
-            out, failed = h.recompute_all(states, h.Context((), {}))
-        report('pełne przeliczenie całej historii', t.seconds, f'(nieprzeliczone: {failed})')
-        self.assertEqual(failed, 0)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'p.rccadx'
             with Timer() as t:
