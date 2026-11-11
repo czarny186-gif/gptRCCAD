@@ -24,6 +24,7 @@ import threading
 _LOCK = threading.Lock()
 EPS = .01                 # narzędzie zachodzi tyle w bryłę (dodanie) albo zaczyna się tyle nad nią (wycięcie)
 TOL = 1e-6
+SNAP = .25                # tyle (mm) może początek szkicu odstawać od powierzchni (punkt wskazany na siatce, cięciwa walca)
 
 
 class WrapError(Exception):
@@ -268,31 +269,45 @@ def _build_strip(shape, origin, normal, extent):
         else:
             return None
     else:
-        # początek szkicu nie leży już na bryle (np. przykrył go wcześniejszy wyciągnięty kształt z tego samego szkicu):
-        # pierwotne ściany, na których go narysowano, nadal przechodzą przez ten punkt poza nowym materiałem
+        # Początek szkicu nie leży dokładnie na bryle:
+        # - punkt wskazano na siatce wyświetlania: na walcu siatka to cięciwy, więc punkt leży setne części milimetra
+        #   pod powierzchnią (wypukły walec) albo nad nią (otwór) - dawniej szkic przechodził wtedy na przybliżony rzut,
+        #   który przebijał bryłę na wylot i dokładał kształt także po drugiej stronie walca;
+        # - albo przykrył go wcześniejszy wyciągnięty kształt z tego samego szkicu.
+        # Pierwotne ściany, na których go narysowano, nadal przechodzą (prawie) przez ten punkt.
         reach = max(abs(extent[0]), abs(extent[1])) + 1
-        through = []
+        snap = max(tol * 10, min(SNAP, size * 2e-3))
+        through = []                 # (odchyłka od powierzchni, ściana)
         for f in solid.Faces():
             kind = f.geomType()
             if kind == 'PLANE':
-                on = abs(float((O - _vec(f.Center())) @ _plane_normal(f))) < tol * 10
+                dev = abs(float((O - _vec(f.Center())) @ _plane_normal(f)))
             elif kind == 'CYLINDER':
                 C0, ax, r = _cyl(f)
                 d = (O - C0) - float((O - C0) @ ax) * ax
-                on = abs(float(np.linalg.norm(d)) - r) < tol * 10
+                dev = abs(float(np.linalg.norm(d)) - r)
             else:
-                on = False
-            if on and f.distance(cq.Vertex.makeVertex(*O)) < reach:
-                through.append(f)
+                continue
+            if dev < snap and f.distance(cq.Vertex.makeVertex(*O)) < reach:
+                through.append((dev, f))
+        best = min((dev for dev, _ in through), default=None)
+        if best is not None:
+            through = [f for dev, f in through if dev <= best + tol * 10]     # tylko powierzchnie najbliższe punktowi
         cyl = [f for f in through if f.geomType() == 'CYLINDER']
         planes = []
         for f in through:
             if f.geomType() == 'PLANE' and not any(abs(abs(float(_plane_normal(f) @ _plane_normal(g))) - 1) < 1e-6 for g in planes):
                 planes.append(f)
+        P = O
         if cyl and len({tuple(np.round(_cyl(f)[0], 6)) for f in cyl}) == 1:
             seed = ('face', max(cyl, key=lambda f: -f.distance(cq.Vertex.makeVertex(*O))))
+            C0, ax, r = _cyl(seed[1])
+            radial = (O - C0) - float((O - C0) @ ax) * ax
+            P = O - radial + _unit(radial) * r                 # punkt na prawdziwej powierzchni walca
         elif len(planes) == 1:
             seed = ('face', planes[0])
+            n0 = _plane_normal(planes[0])
+            P = O - n0 * float((O - _vec(planes[0].Center())) @ n0)
         elif len(planes) == 2:
             line = np.cross(_plane_normal(planes[0]), _plane_normal(planes[1]))
             if np.linalg.norm(line) < 1e-6:
@@ -300,7 +315,6 @@ def _build_strip(shape, origin, normal, extent):
             seed = ('vedge', None, planes[0], planes[1], _unit(line), O)
         else:
             return None
-        P = O
 
     # oś pasa
     if seed[0] == 'edge':
@@ -827,7 +841,7 @@ def wrap_tool(shape, face, normal, height, operation, origin):
         return None
     _check_full(strip, face)
     join = operation != 'cut'
-    pieces = []
+    pieces = []                       # (ściana pasa, bryła)
     for g in strip.segs:
         region = _region(strip, face, g)
         if not region:
@@ -836,9 +850,9 @@ def wrap_tool(shape, face, normal, height, operation, origin):
             mapped, _ = _plane_piece(strip, g, region)
             for f in mapped:
                 if join:
-                    pieces.append(_prism(f.translate(cq.Vector(*(-g.n * EPS))), g.n * (h + EPS)))
+                    pieces.append((g, _prism(f.translate(cq.Vector(*(-g.n * EPS))), g.n * (h + EPS))))
                 else:
-                    pieces.append(_prism(f.translate(cq.Vector(*(g.n * EPS))), -g.n * (h + EPS)))
+                    pieces.append((g, _prism(f.translate(cq.Vector(*(g.n * EPS))), -g.n * (h + EPS))))
         else:
             # promień startowy: zachodzi w bryłę (dodanie) albo zaczyna się nad nią (wycięcie)
             start = g.r - g.out * EPS if join else g.r + g.out * EPS
@@ -852,8 +866,9 @@ def wrap_tool(shape, face, normal, height, operation, origin):
                 mid_s = strip.st(r2.Center().toTuple())[0]
                 phi = (mid_s - g.s_ref) / g.r
                 radial = math.cos(phi) * g.e + math.sin(phi) * g.w
-                pieces.append(_thicken(f, radial * (1 if end > start else -1), abs(end - start)))
+                pieces.append((g, _thicken(f, radial * (1 if end > start else -1), abs(end - start))))
     pieces += _wedges(strip, face, h, operation)
+    pieces = [p if not isinstance(p, tuple) else p[1] for p in pieces]
     if not pieces:
         raise WrapError('Szkic nie leży na powierzchni bryły.')
     if len(pieces) == 1:

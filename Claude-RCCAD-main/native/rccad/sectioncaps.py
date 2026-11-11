@@ -60,15 +60,38 @@ class _CapWork(QRunnable):
         self.signals.done.emit(results)
 
 
+def _follows(old_key,key):
+    """Ten sam model (siatka, położenie, wzór kreskowania) i płaszczyzna równoległa o tym samym zwrocie:
+    gotowy przekrój można przesunąć wzdłuż normalnej zamiast go ukrywać."""
+    if old_key is None or old_key[0]!=key[0] or old_key[2]!=key[2] or old_key[3]!=key[3]:return False
+    a=np.asarray(old_key[1][:3],float);b=np.asarray(key[1][:3],float)
+    return bool(np.allclose(a/np.linalg.norm(a),b/np.linalg.norm(b),atol=1e-9))
+
+
+def _shift(old_plane,plane):
+    """Przesunięcie (wektor) z płaszczyzny old_plane na równoległą plane."""
+    a=np.asarray(old_plane,float);b=np.asarray(plane,float)
+    n=b[:3]/np.linalg.norm(b[:3])
+    return n*(a[3]/np.linalg.norm(a[:3])-b[3]/np.linalg.norm(b[:3]))
+
+
 class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
     def __init__(self):
         super().__init__();self.setDepthValue(9);self.available=True
         self._planes={};self._bounds={};self._solid_patches={};self._pending={};self._running=False
+        self._latest={}        # bryła -> (klucz, siatka źródłowa, przekrój) ostatnio policzony, także już nieaktualny
         self._mesh_tokens=LRU(max_entries=2048);self._material=LRU(96*1024*1024,max_entries=256)
         self.last_error=None
         self._cap_pool=QThreadPool(self);self._cap_pool.setMaxThreadCount(1)
         self._cap_timer=QTimer(self);self._cap_timer.setSingleShot(True);self._cap_timer.setInterval(25)
         self._cap_timer.timeout.connect(self._start_caps)
+
+    def _place(self,patch,key):
+        """Pokazuje gotowy przekrój przesunięty na bieżącą (równoległą) płaszczyznę."""
+        from pyqtgraph import Transform3D
+        t=Transform3D();t.translate(*[float(c) for c in _shift(patch[0][1],key[1])])
+        for item in patch[1:]:
+            item.setTransform(t);item.setVisible(True)
 
     def _remove_patch(self,bid):
         old=self._solid_patches.pop(bid,None)
@@ -81,6 +104,7 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
         for bid in list(self._solid_patches):
             if bid not in live:self._remove_patch(bid)
         self._pending={bid:value for bid,value in self._pending.items() if bid in live}
+        self._latest={bid:value for bid,value in self._latest.items() if bid in live}
 
     def _request_cap(self,body,key,matrix):
         cached=self._material.get(key)
@@ -105,6 +129,7 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
             if bid in self._pending and self._pending[bid][1]==key:self._pending.pop(bid,None)
             if error:self.last_error=error
             self._material[key]=(source,mesh)
+            if mesh is not None:self._latest[bid]=(key,source,mesh)
         self.update_section()
         if self._pending:self._cap_timer.start()
 
@@ -126,19 +151,30 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
                 if section_quad(bounds[1],bounds[2],view.section_plane,matrix) is None:continue
                 active.add(body.id);old=self._solid_patches.get(body.id)
                 if old is not None and old[0]==key:
-                    for item in old[1:]:item.setVisible(True)
+                    self._place(old,key)
                     continue
-                if old is not None:
-                    for item in old[1:]:item.setVisible(False)
                 cached=self._request_cap(body,key,matrix)
-                if cached is None or cached[1] is None:continue
+                if cached is None or cached[1] is None:
+                    # Przekrój dla nowej głębokości liczy się w tle. Podczas przesuwania płaszczyzny pokazuj ostatni
+                    # gotowy, przesunięty razem z nią (dawniej znikał do chwili zatrzymania przesuwania).
+                    latest=self._latest.get(body.id)
+                    if latest is not None and latest[1] is body.mesh and _follows(latest[0],key) and (old is None or old[0]!=latest[0]):
+                        cached=latest[1:];use=latest[0]
+                    elif old is not None and _follows(old[0],key):
+                        self._place(old,key);continue
+                    else:
+                        if old is not None:
+                            for item in old[1:]:item.setVisible(False)
+                        continue
+                else:use=key
                 mesh=cached[1];self._remove_patch(body.id)
                 opts={GL.GL_DEPTH_TEST:True,GL.GL_BLEND:False,GL.GL_CULL_FACE:False,'glDepthFunc':(GL.GL_LEQUAL,)}
                 surface=_MaterialSurface(parentItem=self,vertexes=mesh.vertices,faces=mesh.triangles,smooth=False,drawEdges=False,shader=None,color=(.96,.75,.91,1))
                 surface.setGLOptions(opts)
                 lines=_MaterialLines(parentItem=self,pos=mesh.hatches[index%2],color=(.15,.12,.15,1),width=1,antialias=True,mode='lines')
                 lines.setGLOptions(opts);lines.setDepthValue(1)
-                self._solid_patches[body.id]=(key,surface,lines)
+                self._solid_patches[body.id]=(use,surface,lines)
+                if use!=key:self._place(self._solid_patches[body.id],key)
         for bid,patch in self._solid_patches.items():
             if bid not in active:
                 for item in patch[1:]:item.setVisible(False)

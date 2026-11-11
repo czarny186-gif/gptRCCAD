@@ -87,6 +87,36 @@ class SectionMaterialTests(unittest.TestCase):
             self.assertEqual(hit is not None,solid)
         xy=v.project_one((40,25,30));self.assertEqual(v.pick_body(*xy),b.id);self.assertIsNone(v.pick_face(*xy))
 
+    def test_hatched_material_follows_the_plane_while_dragging(self):
+        # Podczas przesuwania przekroju w głąb bryły kreskowanie nie znika: ostatni gotowy przekrój przesuwa się
+        # razem z płaszczyzną, a dokładny zastępuje go, gdy policzy się w tle.
+        import time
+        b=self.body(k.box(80,60,60));v=self.view;caps=v.section_caps
+        def settle():
+            end=time.monotonic()+20
+            while caps._running or caps._pending or caps._cap_timer.isActive():
+                self.app.processEvents();time.sleep(.002)
+                self.assertLess(time.monotonic(),end,str(caps.last_error))
+            self.app.processEvents()
+        v.set_section_plane([0,1,0,-20]);settle()
+        patch=caps._solid_patches[b.id];self.assertTrue(all(item.visible() for item in patch[1:]))
+        for depth in (21,22.5,24,26):      # kolejne położenia szybciej, niż przekrój zdąży się policzyć
+            v.set_section_plane([0,1,0,-depth])
+            patch=caps._solid_patches.get(b.id)
+            self.assertIsNotNone(patch)
+            self.assertTrue(all(item.visible() for item in patch[1:]))
+            shown_at=-patch[0][1][3]                                       # głębokość, dla której go policzono
+            offset=np.array(patch[1].transform().data(),float).reshape(4,4).T[:3,3]
+            np.testing.assert_allclose(offset,[0,depth-shown_at,0],atol=1e-6)   # leży w bieżącej płaszczyźnie
+        settle()
+        patch=caps._solid_patches[b.id]
+        self.assertEqual(patch[0][1][3],-26)                              # dokładny przekrój na końcowej głębokości
+        np.testing.assert_allclose(np.array(patch[1].transform().data(),float).reshape(4,4).T[:3,3],0,atol=1e-9)
+        v.set_section_plane([0,-1,0,26])                                   # odwrócenie: inny zwrot - liczony od nowa
+        patch=caps._solid_patches.get(b.id)
+        self.assertTrue(patch is None or not any(item.visible() for item in patch[1:]))
+        v.set_section_plane(None)
+
     def test_quad_handles_oblique_plane_and_outside_extents(self):
         plane=np.array([1.,2.,3.,-60.]);o,u,w=section_frame(plane)
         self.assertAlmostEqual(float(o@plane[:3]+plane[3]),0,8)

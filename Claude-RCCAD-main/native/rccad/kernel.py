@@ -2071,7 +2071,25 @@ def surface_stamp_tool(shape, face, normal, height, operation='join', origin=Non
             tool = None
         if tool is not None:
             return valid(tool)
-    return _surface_stamp_projected(shape, face, normal, height, operation)
+    return _near_side_only(_surface_stamp_projected(shape, face, normal, height, operation), face, height)
+
+
+def _near_side_only(tool, face, height):
+    """Przybliżony rzut przebija bryłę na wylot: na walcu albo cienkiej ściance dokładał kształt także po drugiej
+    stronie. Zostają tylko części leżące przy szkicu."""
+    solids = tool.Solids()
+    if len(solids) < 2:
+        return tool
+    try:
+        dist = [s.distance(face) for s in solids]
+    except Exception:
+        return tool
+    box = bounds(face)
+    limit = min(dist) + max(box.xlen, box.ylen, box.zlen) / 2 + abs(float(height)) * 2 + 1e-3
+    keep = [s for s, d in zip(solids, dist) if d <= limit]
+    if len(keep) == len(solids):
+        return tool
+    return valid(keep[0] if len(keep) == 1 else cq.Compound.makeCompound(keep))
 
 
 def _surface_stamp_projected(shape, face, normal, height, operation='join'):

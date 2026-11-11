@@ -316,3 +316,37 @@ class ExactWrapTests(unittest.TestCase):
                 delta = self.stamp(changed, origin, normal, second, .8, 'join')
                 expected = second.Area() * .8 + extra if extra else second.Area() * .8 * (1 + .8 / 20)
                 self.assertAlmostEqual(delta, expected, 3)
+
+    def test_origin_picked_on_display_mesh_still_wraps_exactly(self):
+        # Początek szkicu wskazany na siatce wyświetlania leży na cięciwie, setne milimetra pod powierzchnią walca
+        # (w otworze - w powietrzu). Dawniej szkic przechodził wtedy na przybliżony rzut przez całą bryłę:
+        # kształt powstawał także po drugiej stronie walca, a liczenie trwało wiele sekund.
+        import time
+        h, r, chord = .8, 10.0, .012
+        cylinder = cq.Workplane().cylinder(30, r).val()
+        hole = cq.Workplane().box(40, 40, 30).faces('>Z').workplane().hole(2 * r).val()
+        for shape, normal, outer in ((cylinder, (1, 0, 0), True), (hole, (-1, 0, 0), False)):
+            origin = (r - chord, 0, 0)
+            face = _profile(origin, normal, lambda wp: wp.rect(8, 5))
+            for operation in ('join', 'cut'):
+                with self.subTest(outer=outer, operation=operation):
+                    start = time.monotonic()
+                    tool = kernel.surface_stamp_tool(shape, face, normal, h, operation, origin=origin)
+                    self.assertLess(time.monotonic() - start, 2)
+                    self.assertEqual(len(tool.Solids()), 1)
+                    self.assertGreater(tool.BoundingBox().xmin, 0)          # nic po drugiej stronie osi
+                    grows = (operation == 'join') == outer
+                    r2 = r + h if grows else r - h
+                    sector = 8 / r / 2 * abs(r2 ** 2 - r ** 2) * 5
+                    self.assertAlmostEqual(abs(self.stamp(shape, origin, normal, face, h, operation)), sector, 3)
+
+    def test_projection_fallback_stays_on_the_near_side(self):
+        # przybliżony rzut (bez początku płaszczyzny szkicu) też nie dokłada kształtu po drugiej stronie walca
+        r = 10.0
+        cylinder = cq.Workplane().cylinder(30, r).val()
+        face = _profile((r, 0, 0), (1, 0, 0), lambda wp: wp.rect(6, 4))
+        for operation in ('join', 'cut'):
+            with self.subTest(operation=operation):
+                tool = kernel.surface_stamp_tool(cylinder, face, (1, 0, 0), .8, operation)
+                self.assertTrue(tool.Solids())
+                self.assertGreater(tool.BoundingBox().xmin, 0)

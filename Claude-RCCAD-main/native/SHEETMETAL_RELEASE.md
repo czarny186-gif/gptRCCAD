@@ -1,3 +1,15 @@
+# RCCAD Desktop 0.4.92 — szkic na walcu tylko po jednej stronie, płynny przekrój
+
+- Wyciągnięcie i wycięcie szkicu albo napisu na walcu powstaje tylko w miejscu szkicu. Wcześniej ten sam kształt pojawiał się także po przeciwnej stronie walca (lustrzanie odwrócony).
+- Przyczyna: punkt, w którym zaczyna się szkic na walcu, był brany z siatki wyświetlania (płaskie trójkąty), więc leżał ok. 0,01 mm pod prawdziwą powierzchnią. Dokładne owijanie go odrzucało i program przechodził na stary przybliżony rzut, który przebijał walec na wylot. Teraz taki punkt jest dosuwany do powierzchni walca (albo płaskiej ściany), także w istniejących projektach.
+- Liczenie na walcu trwa ułamek sekundy zamiast kilku–kilkudziesięciu sekund (napis 5 liter: 0,9 s zamiast 14 s; dwa kształty: 0,5 s zamiast 25 s).
+- Przybliżony rzut (stożek, kula, krawędź łukowa) również nie dokłada już kształtu po drugiej stronie bryły.
+- Widok przekroju: zakreskowany materiał przesuwa się razem z płaszczyzną podczas przeciągania strzałki w głąb bryły, zamiast znikać do chwili zatrzymania. W trakcie ruchu widać ostatni policzony przekrój, a dokładny zastępuje go na bieżąco.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.91 — dokładne szkice na walcu i narożnikach
 
 - Szkic na powierzchni i na narożniku jest owijany na bryle bez rozciągania (rozwinięcie pasa ścian): na walcu, ściance otworu, ostrym narożniku wypukłym i wklęsłym, zaokrągleniu wypukłym i wklęsłym oraz na krawędzi poziomej (wcześniej rozciągało ją o ok. 40%). Wyciągnięty kształt ma dokładnie wymiary szkicu mierzone po powierzchni, boki prostopadłe do powierzchni i stałą grubość.
