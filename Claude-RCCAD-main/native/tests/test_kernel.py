@@ -135,6 +135,33 @@ class KernelTests(unittest.TestCase):
         self.assertLess(outside['face'].Center().x, 25)
         self.assertGreater(outside['face'].Center().x, 20)
 
+    def test_each_text_and_each_pattern_is_its_own_group(self):
+        # każdy osobno dodany napis i każdy nowy szyk to osobna grupa na liście obiektów - także przy tej samej treści
+        from rccad import history as h
+        plane = dict(origin=[0, 0, 0], xdir=[1, 0, 0], normal=[0, 0, 1])
+        text = lambda out: dict(type='text', name='Tekst', plane=plane, out=out,
+                                params=dict(text='Ab', anchor=[0, 0], size=5, font='Arial', bold=False, italic=False, angle=0))
+        first = h.run_text([], text([]))
+        both = h.run_text(first, text([]))
+        folders = [b.folder for b in both]
+        self.assertEqual(len(set(folders)), 2)
+        self.assertEqual(set(folders), {'Tekst „Ab”', 'Tekst „Ab” (2)'})
+        # zajęta jest też nazwa, po której zostały tylko wyciągnięte bryły („— bryły”)
+        solids_left = [Body('W', k.box(1, 1, 1), folder='Tekst „Ab” — bryły')]
+        self.assertEqual({b.folder for b in h.run_text(solids_left, text([])) if b.kind == 'sketch'}, {'Tekst „Ab” (2)'})
+        s = Body('Szkic', k.sketch('rectangle', 'XY', 5, 5), 'sketch', 'XY').prepared()
+        pat = lambda bodies, src: h.run_pattern(bodies, dict(type='pattern', id=src.id, kind='rect',
+                                                             params=dict(counts=[3, 1, 1], spacing=[0, 10, 0]), join=False, out=[]))
+        one = pat([s], s)
+        copy = next(b for b in one if b.id != s.id)
+        two = pat(one, copy)                                  # szyk z kopii poprzedniego szyku - nowa grupa
+        self.assertEqual(sorted({b.folder for b in two}), ['Szkic — szyk', 'Szkic — szyk (2)'])
+        self.assertEqual(next(b for b in two if b.id == copy.id).folder, 'Szkic — szyk')   # źródło zostaje w swojej grupie
+        self.assertEqual(sum(b.folder == 'Szkic — szyk (2)' for b in two), 2)
+        other = Body('Szkic', k.sketch('circle', 'XY', 3), 'sketch', 'XY').prepared()
+        three = pat([*one, other], other)                     # inny obiekt o tej samej nazwie - też osobna grupa
+        self.assertEqual(sum(b.folder == 'Szkic — szyk (2)' for b in three), 3)
+
     def test_pattern_separate_goes_to_folder_and_folder_step(self):
         from rccad import history as h
         s = Body('Szkic', k.sketch('rectangle', 'XY', 5, 5), 'sketch', 'XY').prepared()

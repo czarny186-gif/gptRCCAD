@@ -350,3 +350,27 @@ class ExactWrapTests(unittest.TestCase):
                 tool = kernel.surface_stamp_tool(cylinder, face, (1, 0, 0), .8, operation)
                 self.assertTrue(tool.Solids())
                 self.assertGreater(tool.BoundingBox().xmin, 0)
+
+    def test_concave_fillet_is_not_mistaken_for_a_convex_cylinder(self):
+        # Wklęsłe zaokrąglenie (wewnętrzny narożnik / wyoblenie): materiał leży na zewnątrz promienia. Dawniej punkt próbny
+        # ściany liczony z ułamków 0..1 zamiast z zakresu parametrów ściany trafiał poza nią, gdy kąt ściany nie obejmował
+        # 0..1 rad (tu: pi..1,5 pi), a wtedy walec uznawano za wypukły: wycięcie szło w powietrze, a dodanie w głąb bryły.
+        from OCP.BRepTools import BRepTools
+        h = .6
+        for corner in ((20, 20), (-20, 20), (-20, -20), (20, -20)):
+            with self.subTest(corner=corner):
+                block = cq.Workplane().box(40, 40, 20).val()
+                cove = cq.Solid.makeCylinder(6, 40, cq.Vector(corner[0], corner[1], -20))
+                block = kernel.boolean('subtract', block, [cove])
+                face_c = next(f for f in block.Faces() if f.geomType() == 'CYLINDER')
+                u0, u1, v0, v1 = BRepTools.UVBounds_s(face_c.wrapped)
+                origin = np.array(face_c.positionAt((u0 + u1) / 2, (v0 + v1) / 2).toTuple())
+                normal = np.array(face_c.normalAt(cq.Vector(*origin)).toTuple())     # na zewnątrz bryły - w stronę osi
+                self.assertGreater(float(normal @ (np.array([*corner, 0.]) - origin)), 0)
+                face = _profile(origin, normal, lambda wp: wp.rect(4, 3))
+                cut = kernel.surface_stamp_tool(block, face, normal, h, 'cut', origin=origin)
+                self.assertGreater(kernel.boolean('intersect', block, [cut]).Volume(), cut.Volume() * .9)   # w materiale
+                join = kernel.surface_stamp_tool(block, face, normal, h, 'join', origin=origin)
+                self.assertLess(kernel.boolean('intersect', block, [join]).Volume(), join.Volume() * .1)    # w powietrzu
+                self.assertLess(self.stamp(block, origin, normal, face, h, 'cut'), 0)
+                self.assertGreater(self.stamp(block, origin, normal, face, h, 'join'), 0)

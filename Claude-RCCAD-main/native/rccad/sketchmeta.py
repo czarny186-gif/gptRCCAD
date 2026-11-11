@@ -344,3 +344,73 @@ def text_drag(meta, which, uv0, uv):
         a0, a1 = math.atan2(uv0[1] - anchor[1], uv0[0] - anchor[0]), math.atan2(uv[1] - anchor[1], uv[0] - anchor[0])
         out['angle'] = float(meta.get('angle', 0.0)) + math.degrees(a1 - a0)
     return out
+
+
+# ---------- Wyrównaj rozmiar: ten sam rozmiar dla kształtów tego samego rodzaju ----------
+FAMILY = {'rect': 'rect', 'centerRect': 'rect', 'rect3': 'rect', 'circle': 'circle', 'circle2': 'circle', 'circle3': 'circle',
+          'ellipse': 'ellipse', 'polygon': 'polygon', 'line': 'line', 'arc': 'arc', 'slot': 'slot'}
+FAMILY_NAMES = {'rect': 'prostokąt', 'circle': 'okrąg', 'ellipse': 'elipsa', 'polygon': 'wielokąt', 'line': 'linia', 'arc': 'łuk', 'slot': 'rowek'}
+
+
+def family(meta):
+    """Rodzaj kształtu do wyrównywania rozmiaru (prostokąt z 2 narożników / od środka / z 3 punktów to ten sam rodzaj;
+    wielokąt tylko z tą samą liczbą kątów) albo None."""
+    if not meta or meta.get('tool') not in FAMILY:
+        return None
+    f = FAMILY[meta['tool']]
+    return f'polygon{int(meta.get("sides", 5))}' if f == 'polygon' else f
+
+
+def family_name(meta):
+    f = family(meta) or ''
+    if f.startswith('polygon'):
+        return f'wielokąt ({f[7:]} kąty)' if f[7:] in ('3', '4') else f'wielokąt ({f[7:]} kątów)'
+    return FAMILY_NAMES.get(f, 'kształt')
+
+
+def size_of(meta):
+    """Wymiary kształtu niezależne od sposobu rysowania (okrąg - promień, prostokąt - szerokość i wysokość...)."""
+    v = [float(x) for x in values(meta)]
+    t = meta['tool']
+    if t == 'circle2':
+        return (v[0] / 2,)
+    if t in ('circle', 'circle3', 'line'):
+        return (v[0],)
+    if t == 'polygon':
+        return (v[0],)
+    return tuple(v[:2])
+
+
+def center_of(meta):
+    t, pts = meta['tool'], [tuple(p) for p in meta['points']]
+    mid = lambda a, b: ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+    if t in ('rect', 'circle2', 'line', 'slot'):
+        return mid(pts[0], pts[1])
+    if t == 'rect3':
+        return mid(pts[1], pts[2])
+    if t == 'arc':
+        return mid(pts[0], pts[2])
+    if t == 'circle3':
+        cc = circumcircle(*pts[:3])
+        return cc[0] if cc else pts[0]
+    return pts[0]
+
+
+def match_size(reference, meta):
+    """Kształt meta w rozmiarze wzorca (ten sam środek, kierunek i kąt linii zostają). None - inny rodzaj kształtu."""
+    if family(reference) is None or family(reference) != family(meta):
+        return None
+    dims = size_of(reference)
+    t = meta['tool']
+    if t == 'circle2':
+        v = [dims[0] * 2]
+    elif t == 'line':
+        v = [dims[0], float(values(meta)[1])]
+    elif t == 'polygon':
+        v = [dims[0], int(meta.get('sides', 5))]
+    else:
+        v = list(dims)
+    out = apply_values(meta, v)
+    (cu, cv), (nu, nv) = center_of(meta), center_of(out)
+    out['points'] = [[p[0] + cu - nu, p[1] + cv - nv] for p in out['points']]
+    return out

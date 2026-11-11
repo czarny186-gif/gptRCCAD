@@ -22,9 +22,9 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize'}
 # filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
-FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
+FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text', 'matchsize'}, 'Operacje na bryłach': {'extrude', 'revolve', 'sweep', 'loft', 'cut', 'intersect', 'bool'},
            'Modyfikacje': {'mod', 'shell', 'split', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
 
 
@@ -1205,8 +1205,10 @@ def run_pattern(bodies, recipe):
         return _replace(bodies, body.changed(merged))
     out = pad_ids(recipe.get('out', ()), len(copies), (recipe.get('out') or [body.id])[0])
     group = (body.group or str(recipe['group'])) if recipe.get('group') else ''      # „jako jeden element”: oryginał i kopie w jednej grupie
-    # osobne elementy: oryginał i kopie trafiają do wspólnej grupy (folderu) na liście obiektów
-    folder = body.folder or ('' if group else (recipe.get('folder') or f'{body.name} — szyk'))
+    # osobne elementy: każdy nowy szyk to nowa grupa (folder) na liście obiektów; oryginał spoza grup trafia do niej razem
+    # z kopiami, a oryginał z innej grupy (np. z wcześniejszego szyku albo napisu) zostaje w swojej
+    base = re.sub(r' — szyk \d+$', '', body.name)          # szyk z kopii: „Szkic — szyk (2)”, nie „Szkic — szyk 1 — szyk”
+    folder = '' if group else (recipe.get('folder') or unique_folder(bodies, f'{base} — szyk'))
     made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i], group=group, folder=folder, color=body.color,
                  threads=_moved_threads(body.threads, kernel.op_matrix(ops[i])),
                  mesh=kernel.transformed_display_mesh(body.mesh, ops[i]) if body.mesh is not None else None)
@@ -1216,9 +1218,9 @@ def run_pattern(bodies, recipe):
     source_body = body.changed(source) if moved else body
     if group:
         source_body = replace(source_body, group=group)
-    if folder != body.folder:
+    if folder and not body.folder:
         source_body = replace(source_body, folder=folder)
-    current = _replace(bodies, source_body) if (moved or group or folder != body.folder) else list(bodies)
+    current = _replace(bodies, source_body) if (moved or group or (folder and not body.folder)) else list(bodies)
     return [*current, *made]
 
 
@@ -1521,6 +1523,12 @@ def run_bool(bodies, recipe):
         if made:
             result = replace(result, threads=(*result.threads, *made))
     gone = set(recipe['tools'])
+    if recipe['op'] == 'union' and not recipe.get('keep'):
+        rest = [b for b in bodies if b.id != base.id and b.id not in gone]   # cała grupa scalona -> jedna zwykła bryła
+        if base.folder and not any(b.folder == base.folder for b in rest):
+            result = replace(result, folder='')
+        if base.group and not any(b.group == base.group for b in rest):
+            result = replace(result, group='')
     out = [result if b.id == base.id else b for b in bodies if recipe.get('keep') or b.id not in gone]
     return split_parts(out, {base.id}) if recipe['op'] != 'union' else out
 
@@ -1935,7 +1943,7 @@ def run_text(bodies, recipe):
         ids = text_ids(group, len(shapes))
     else:
         ids = pad_ids(ids, len(shapes), ids[0] if ids else None)
-    folder = text_folder(q['text'])        # napis od razu jako grupa na liście obiektów
+    folder = unique_folder(bodies, text_folder(q['text']))        # napis od razu jako własna grupa na liście obiektów
     surface = recipe.get('surface')
     target = next((b for b in bodies if surface and b.id == surface['target']), None)
     made = []
@@ -1950,6 +1958,20 @@ def run_text(bodies, recipe):
 def text_folder(text):
     text = ' '.join(str(text).split())
     return f'Tekst „{text[:28]}{"…" if len(text) > 28 else ""}”'
+
+
+def unique_folder(bodies, name):
+    """Nazwa nowej grupy na liście obiektów, jeszcze niezajęta: każdy osobno dodany napis i każdy nowy szyk to osobna
+    grupa, także przy tej samej treści / tym samym obiekcie źródłowym („… (2)”, „… (3)”). Zajęta jest też nazwa, od której
+    zaczyna się grupa brył z niej wyciągniętych („… — bryły”)."""
+    taken = {b.folder for b in bodies if b.folder}
+    used = lambda n: any(f == n or f.startswith(n + ' — ') for f in taken)
+    if not used(name):
+        return name
+    k = 2
+    while used(f'{name} ({k})'):
+        k += 1
+    return f'{name} ({k})'
 
 
 def run_delete(bodies, recipe):

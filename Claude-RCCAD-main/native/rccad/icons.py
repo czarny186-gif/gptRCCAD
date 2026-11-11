@@ -285,6 +285,15 @@ def _draw_color(p, ink, acc, pen):
     p.setBrush(Qt.NoBrush); p.setPen(pen(ink, 3.0)); p.drawRoundedRect(QRectF(22.5, 22.5, 22, 22), 5, 5)
 
 
+def _draw_matchsize(p, ink, acc, soft, pen):
+    """Wyrównaj rozmiar: wzorzec (wypełniony) i mniejszy kształt (przerywany) powiększony do tego samego rozmiaru."""
+    p.setBrush(soft); p.setPen(pen(ink, 2.4)); p.drawRoundedRect(QRectF(4, 15, 17, 24), 2.5, 2.5)
+    dash = pen(ink, 1.8); dash.setStyle(Qt.DashLine)
+    p.setBrush(Qt.NoBrush); p.setPen(dash); p.drawRoundedRect(QRectF(30, 23, 10, 12), 2, 2)
+    p.setPen(pen(acc, 3.0)); p.drawRoundedRect(QRectF(27, 15, 17, 24), 2.5, 2.5)
+    p.setPen(pen(acc, 2.6)); p.drawLine(QPointF(17, 7), QPointF(31, 7)); p.drawLine(QPointF(17, 11), QPointF(31, 11))
+
+
 def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     S = 48.0
     pm = QPixmap(size * scale, size * scale)
@@ -390,6 +399,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_ply_icon(p, kind, pen)
     elif kind == 'x_color':
         _draw_color(p, INK, ORANGE, pen)
+    elif kind == 'x_matchsize':
+        _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind=='x_section':
         _draw_section(p,INK,ORANGE,QColor(BLUE_SOFT),pen)
     elif kind in ('x_scale', 'sc_center', 'sc_bottom', 'sc_origin'):
@@ -915,6 +926,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_mate(p, name, ink, acc, soft, pen, '#7be0a8' if white else None)
         elif name in ('mdist', 'mangle', 'mrad', 'mprops'):
             _draw_measure(p, name, ink, acc, soft, pen)
+        elif name == 'matchsize':
+            _draw_matchsize(p, ink, acc, soft, pen)
         elif name == 'color':
             # kolor: cztery kwadraciki palety, pomarańczowy wybrany (gruba ramka)
             _draw_color(p, ink, acc, pen)

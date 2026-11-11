@@ -33,6 +33,7 @@ from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE, pan_arrow
 from .plywood_ui import PlywoodTools, PLY_MODES
 from .scale_ui import ScaleTools
 from .color_ui import ColorTools
+from .matchsize_ui import MatchSizeTools
 from .sectionview import SectionTools
 from PySide6.QtWidgets import QSizePolicy
 from . import measurement
@@ -220,7 +221,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'thread', 'bool', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -233,7 +234,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWindow):
+class StudioWindow(SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -485,6 +486,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
                  ('wrapsketch', ui.style_icon('wrapsketch', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
                  ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
+                 ('matchsize', ui.style_icon('matchsize', 38), 'Wyrównaj rozmiar — takie same kształty przyjmują wymiary wzorca'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
                  ('split', ui.style_icon('split', 38), 'Przetnij bryłę — płaszczyzną, ścianą, szkicem albo inną bryłą'),
@@ -1725,8 +1727,9 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
         self._build_ply_panels()
         self._build_scale_panel()
         self._build_color_panel()
+        self._build_matchsize_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1775,7 +1778,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1813,7 +1816,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -1921,6 +1924,9 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
         if self.mode == 'color' and mode != 'color' and (getattr(self, 'co_pending', None) or getattr(self, 'co_default_new', None) is not None):
             self.co_pending, self.co_default_new = {}, None          # okno Kolor zamknięte bez Zapisz
             self.toast('Niezapisane kolory nie zostały zachowane.', 2500)
+        if self.mode == 'matchsize' and mode != 'matchsize' and getattr(self, 'mz_pending', None):
+            self.toast('Niezastosowane zmiany rozmiaru zostały cofnięte.', 2500)
+        self.mz_pending, self.mz_ref = {}, None
         self.wrap_sketch = False
         self.wrap_corner = False
         self.surface_target = None
@@ -2092,6 +2098,8 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
             self._scale_enter()
         elif mode == 'color':
             self._color_enter()
+        elif mode == 'matchsize':
+            self._matchsize_enter()
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
@@ -2871,7 +2879,7 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
                 self.sk_hint.setText('Tekst: przesuń, skaluj lub obróć uchwytami · Tab – wysokość i kąt')
 
         if op and op.get('type') == 'text':          # napis od razu jako grupa na liście obiektów
-            folder = hist.text_folder(op['params']['text'])
+            folder = hist.unique_folder(self.document.bodies, hist.text_folder(op['params']['text']))
             if made:
                 made = [replace(b, folder=folder) for b in made]
         else:
@@ -3582,6 +3590,8 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
             self.pick_scale(x, y, shift)
         elif self.mode == 'color':
             self.pick_color(x, y)
+        elif self.mode == 'matchsize':
+            self.pick_matchsize(x, y)
         elif self.mode in DRAWING_MODES:
             self.pick_drawing(x, y)
         elif self.mode == 'bool':
@@ -6296,6 +6306,19 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
             self.bool_ids.remove(bid)
         else:
             self.bool_ids.append(bid)
+        self.update_bool_status()
+
+    def _bool_add(self, ids):
+        """Boolean włączony + klik w grupę / obiekt na liście Obiekty: wszystkie jej bryły trafiają do operacji
+        (pierwsza jako baza, gdy nic nie było wybrane); ponowny klik tej samej grupy je odznacza."""
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        if not ids:
+            self.toast('Ta pozycja nie zawiera brył.')
+            return
+        if all(i in self.bool_ids for i in ids):
+            self.bool_ids = [i for i in self.bool_ids if i not in ids]
+        else:
+            self.bool_ids = [*self.bool_ids, *[i for i in ids if i not in self.bool_ids]]
         self.update_bool_status()
 
     def update_bool_status(self):
@@ -9350,6 +9373,9 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
         """Klik w wiersz podświetla obiekt na polu roboczym (także ukryty, wyłączony albo wygaszony); ponowny klik go odznacza."""
         if self.busy or self.document.get(oid) is None:
             return
+        if self.mode == 'bool':
+            self._bool_add(self._group_ids(oid))
+            return
         if self.mode is not None:
             self.set_mode(None)
         members = self._group_ids(oid)
@@ -9462,6 +9488,9 @@ class StudioWindow(SectionTools, ScaleTools, ColorTools, PlywoodTools, QMainWind
 
     def objects_folder_select(self, ids):
         if self.busy:
+            return
+        if self.mode == 'bool':
+            self._bool_add(ids)
             return
         if self.mode is not None:
             self.set_mode(None)

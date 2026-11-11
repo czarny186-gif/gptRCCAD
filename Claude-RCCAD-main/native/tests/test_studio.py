@@ -146,9 +146,9 @@ class StudioTests(unittest.TestCase):
 
     def test_surface_tool_buttons_are_distinct_and_next_to_new_sketch(self):
         w=self.w;w.set_tab('Szkic');w._layout_overlays()
-        keys=('sketch','wrapsketch','wrapcorner','surface')
+        keys=('sketch','wrapsketch','wrapcorner','matchsize','surface')
         self.assertEqual([b for b in keys],[b for b in w._tab_tools('Szkic')])
-        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),4)
+        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),5)
         self.assertEqual([w.tools[key].x() for key in keys],sorted(w.tools[key].x() for key in keys))
 
     def test_surface_hover_shows_point_and_corner_hover_shows_edge(self):
@@ -1748,6 +1748,26 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len(w.document.bodies),1)
         self.assertTrue(w.document.bodies[0].shape.isValid())
         w.set_mode('extrude');self.assertEqual(w.mode,'extrude')
+
+    def test_boolean_whole_group_from_objects_list_becomes_one_solid(self):
+        w=self.w
+        parts=[Body(f'L{i}',k.box(10,10,10).translate(cq.Vector(8*i,0,0)),folder='Napis').prepared() for i in range(3)]
+        other=Body('Inna',k.box(5,5,5).translate(cq.Vector(0,40,0))).prepared()
+        w.document.commit([*parts,other]);w.refresh();w.set_mode('bool')
+        w.objects_folder_select([p.id for p in parts])
+        self.assertEqual(w.mode,'bool')
+        self.assertEqual(w.bool_ids,[p.id for p in parts])
+        self.assertTrue(all(p.id in w.view.tints for p in parts))
+        w.bool_op.setCurrentIndex(0);w.apply_bool();self.wait()
+        solids=[b for b in w.document.bodies if b.kind=='solid']
+        self.assertEqual(len(solids),2)
+        merged=w.document.get(parts[0].id)
+        self.assertEqual(merged.folder,'')                       # na liście Obiekty jedna bryła, bez folderu
+        self.assertAlmostEqual(merged.shape.Volume(),10*10*26,3)
+        w.objects_select(other.id,Qt.NoModifier)                 # klik w pojedynczy obiekt też go dokłada
+        self.assertEqual(w.bool_ids,[parts[0].id,other.id])
+        w.objects_select(other.id,Qt.NoModifier)
+        self.assertEqual(w.bool_ids,[parts[0].id])
 
     def test_extrude_up_to_target_has_one_recipient_and_replays(self):
         w=self.w

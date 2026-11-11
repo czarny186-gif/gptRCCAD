@@ -179,9 +179,20 @@ def _material_out(shape, face, p, n):
 
 
 def _face_point(face):
-    """Punkt leżący na ścianie (nie w jej otworze) - do ustalenia, po której stronie jest materiał."""
-    for u, v in ((.5, .5), (.25, .5), (.75, .5), (.5, .25), (.5, .75), (.2, .2), (.8, .8), (.2, .8), (.8, .2), (.1, .5), (.9, .5)):
-        p = _vec(face.positionAt(u, v))
+    """Punkt leżący na ścianie (nie w jej otworze) - do ustalenia, po której stronie jest materiał.
+
+    Face.positionAt bierze surowe parametry powierzchni, nie ułamki 0..1 - próbki trzeba przeliczyć na zakres UV ściany.
+    (Dawniej punkty (.5, .5) itd. trafiały poza ścianę, gdy jej zakres nie obejmował 0..1 - np. wklęsłe zaokrąglenie
+    o kącie 4,4..6,7 rad - i wklęsły walec był brany za wypukły: wyciągnięcie szło w drugą stronę.)"""
+    from OCP.BRepTools import BRepTools
+    try:
+        u0, u1, v0, v1 = BRepTools.UVBounds_s(face.wrapped)
+    except Exception:
+        return None
+    fractions = [(.5, .5), (.25, .5), (.75, .5), (.5, .25), (.5, .75), (.2, .2), (.8, .8), (.2, .8), (.8, .2), (.1, .5), (.9, .5)]
+    fractions += [(a, b) for a in np.linspace(.05, .95, 10) for b in np.linspace(.05, .95, 10)]
+    for fu, fv in fractions:
+        p = _vec(face.positionAt(u0 + fu * (u1 - u0), v0 + fv * (v1 - v0)))
         if _on_face(face, p):
             return p
     return None
