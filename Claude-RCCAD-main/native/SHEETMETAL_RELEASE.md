@@ -1,3 +1,13 @@
+# RCCAD Desktop 0.4.90 — poprawione wyciąganie na narożnikach i przyciąganie szyku
+
+- Szkic na ostrym narożniku rysuje linie po powierzchni ścian. Punkty na granicy ściany nie przeskakują na dalszą ścianę bryły.
+- Dodawanie i wycinanie okręgów oraz prostokątów działa na złożonych narożnikach skrzynki. Program tworzy narzędzie z miejscowych ścian zamiast próbować pogrubić całą bryłę. Wycinanie przez dwie sąsiednie ściany zachowuje poprawną bryłę.
+- W trzypunktowym zakresie prostokątnego szyku szkiców klikane punkty przyciągają się do siatki, krawędzi i narożników brył oraz środków okręgów. Znacznik pokazuje wybrany punkt.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
 # RCCAD Desktop 0.4.89 — szkic dopasowany do bryły i szyk z trzech punktów
 
 - Dwa przyciski szkicu na powierzchni i narożniku mają różne ikony i stoją tuż za „Nowy szkic”; „Inna powierzchnia” jest na końcu zakładki. Zmiana powierzchni zachowuje wybrany rodzaj szkicu.

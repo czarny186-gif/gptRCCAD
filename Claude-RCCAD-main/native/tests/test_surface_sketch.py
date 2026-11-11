@@ -79,8 +79,12 @@ class SurfaceSketchTests(unittest.TestCase):
         curved = kernel.project_surface_mesh(flat, shape, (1, 0, 0))
         original = next(iter(flat.edges.values()))
         mapped = next(iter(curved.edges.values()))
+        samples=[original[0]]
+        for a,b in zip(original[:-1],original[1:]):
+            count=max(1,int(np.ceil(float(np.linalg.norm(b-a))/.2)))
+            samples.extend(a+(b-a)*j/count for j in range(1,count+1))
         self.assertTrue(np.allclose(np.hypot(mapped[:, 0], mapped[:, 1]), 10, atol=2e-4))
-        self.assertTrue(np.allclose(10*np.arctan2(mapped[:, 1], mapped[:, 0]), original[:, 1], atol=.015))
+        self.assertTrue(np.allclose(10*np.arctan2(mapped[:, 1], mapped[:, 0]), np.asarray(samples)[:, 1], atol=.015))
         face = cq.Face.makeFromWires(wire)
         for operation in ('join', 'cut'):
             tool = kernel.surface_stamp_tool(shape, face, (1, 0, 0), .5, operation)
@@ -118,6 +122,26 @@ class SurfaceSketchTests(unittest.TestCase):
                     result = kernel.boolean('union' if operation == 'join' else 'subtract', shape, [tool])
                     self.assertEqual(len(result.Solids()), 1)
                     self.assertTrue(result.isValid())
+
+    def test_complex_box_corner_joins_and_cuts_without_whole_solid_offset(self):
+        shape = cq.Workplane().box(40, 40, 20).faces('>Z').workplane().rect(20, 20).cutBlind(-15).val()
+        for z in (-4, 3):
+            wall_x = cq.Workplane().box(2, 6, 5).translate((9, 7, z)).val()
+            wall_y = cq.Workplane().box(6, 2, 5).translate((7, 9, z)).val()
+            shape = shape.fuse(wall_x, wall_y).clean()
+        self.assertGreaterEqual(len(shape.Faces()), 15)
+        normal = (-1 / math.sqrt(2), -1 / math.sqrt(2), 0)
+        for profile in ('circle', 'rectangle'):
+            plane = cq.Workplane(cq.Plane(origin=(8, 8, -4), normal=normal))
+            wire = (plane.circle(2) if profile == 'circle' else plane.rect(3, 3)).val()
+            for operation in ('join', 'cut'):
+                with self.subTest(profile=profile, operation=operation):
+                    tool = kernel.surface_stamp_tool(shape, cq.Face.makeFromWires(wire), normal, .5, operation)
+                    changed = kernel.boolean('union' if operation == 'join' else 'subtract', shape, [tool])
+                    self.assertTrue(changed.isValid())
+                    self.assertEqual(len(changed.Solids()), 1)
+                    delta = changed.Volume() - shape.Volume()
+                    self.assertGreater(delta if operation == 'join' else -delta, 2)
 
     def test_saved_sketch_reprojects_on_load(self):
         shape = cq.Workplane().cylinder(20, 10).val()

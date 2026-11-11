@@ -3387,8 +3387,9 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
                 if self._pat_range_frame is None:
                     self._hover_face_only(x,y)
                 else:
-                    hit=self.view._plane_hit(self._pat_range_frame,x,y)
-                    self.view.hover_vertex=None if hit is None else hit[1]
+                    snapped=self._pattern_range_point(x,y)
+                    self.view.hover_vertex=None if snapped is None else snapped[0]
+                    self.view.snap_marker=None if snapped is None else (self.view.project_one(snapped[0]),snapped[1])
                     self.view.overlay.update()
             elif self.mode == 'pattern' and self.pat_id and self.pat_kind.currentData() == 'path':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
@@ -7132,15 +7133,11 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
     def _pattern_range_click(self, x, y):
         body=self.document.get(self.pat_id)
         if body is None or body.kind != 'sketch' or self._pat_range_frame is None:return
-        hit=self.view._plane_hit(self._pat_range_frame,x,y)
-        if hit is None:return
+        target=self._pattern_range_point(x,y)
+        if target is None:return
         index=0 if len(self._pat_range_points)==1 else 1
         axis=self._pat_range_axes[index]
-        origin=np.asarray(self._pat_range_frame.origin,float)
-        step=float(self.view.grid_items[0].spacing()[0])
-        coordinate=float((np.asarray(hit[1],float)-origin)@axis)
-        snapped=round(coordinate/step)*step if step>0 else coordinate
-        distance=snapped-float((self._pat_range_points[0]-origin)@axis)
+        distance=float((np.asarray(target[0],float)-self._pat_range_points[0])@axis)
         if abs(distance)<.01:
             self.toast('Wskaż punkt dalej od środka obiektu.');return
         if self.pat_counts[index].value()<2:self.pat_counts[index].setValue(2)
@@ -7151,6 +7148,44 @@ class StudioWindow(SectionTools, ScaleTools, PlywoodTools, QMainWindow):
         self._pattern_range_update()
         self.pat_range_status.setText('Kliknij środek ostatniej kopii w górę lub dół.' if len(self._pat_range_points)==2 else 'Zakres gotowy. Zmieniaj ilości lub przeciągaj strzałki.')
         self._place_pattern_handles();self._timers['pattern'].start()
+
+    def _pattern_range_point(self, x, y):
+        """Snap on the sketch plane; geometry wins over the displayed grid."""
+        frame=self._pat_range_frame
+        if frame is None:return None
+        hit=self.view._plane_hit(frame,x,y)
+        if hit is None:return None
+        origin=np.asarray(frame.origin,float);normal=np.asarray(frame.normal,float)
+        raw=np.asarray(hit[1],float)
+        step=float(self.view.grid_items[0].spacing()[0])
+        basis=(np.asarray(frame.xdir,float),np.asarray(frame.ydir,float))
+        grid=origin.copy()
+        for axis in basis:
+            value=float((raw-origin)@axis)
+            grid+=axis*(round(value/step)*step if step>0 else value)
+        candidates=[]
+        vertex=self.view.nearest_vertex(x,y,solids_only=False)
+        if vertex is not None:candidates.append((0,np.asarray(vertex[1],float),'Narożnik / punkt'))
+        edge=self.view.nearest_edge(x,y)
+        if edge is not None:
+            body=self.document.get(edge[0])
+            points=body.mesh.edges.get(edge[1]) if body is not None and body.mesh is not None else None
+            if points is not None and len(points)>1:
+                point=self._edge_point_near(self.view,points,x,y)
+                if point is not None:candidates.append((2,np.asarray(point,float),'Krawędź'))
+        for body in self.view._screen_bodies(x,y,14):
+            if not body.visible or body.id in self.view.locked:continue
+            for curve in body.shape.Edges():
+                if curve.geomType()!='CIRCLE':continue
+                center=np.asarray(curve.arcCenter().toTuple(),float)
+                screen=self.view.project_one(center)
+                if screen is not None and np.linalg.norm(np.asarray(screen)-[x,y])<=14:
+                    candidates.append((1,center,'Środek okręgu'))
+        for _,point,label in sorted(candidates,key=lambda item:item[0]):
+            if abs(float((point-origin)@normal))<=max(.5,step*.1):
+                projected=point-normal*float((point-origin)@normal)
+                return projected,label
+        return grid,'Siatka'
 
     def _pattern_range_update(self):
         for index in range(min(2,len(self._pat_range_points)-1)):

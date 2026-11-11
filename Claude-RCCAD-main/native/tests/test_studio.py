@@ -2963,6 +2963,37 @@ class StudioTests(unittest.TestCase):
         w.pat_range_button.setChecked(True)
         self.assertFalse(w.pat_range_button.isChecked())
 
+    def test_three_point_range_snaps_to_vertices_edges_and_circle_centers(self):
+        w=self.w
+        plane=k.face_frame((0,0,0),(0,0,1))
+        sketch=Body('Source',cq.Workplane('XY').rect(2,2).val(),'sketch',plane).prepared()
+        circle=Body('Circle',cq.Workplane('XY').center(23.4,0).circle(3).val(),'sketch',plane).prepared()
+        solid=Body('Block',k.box(30,10,4)).prepared()
+        w.document.commit([sketch,circle,solid]);w.refresh();w.set_mode('pattern')
+        with patch.object(w.view,'pick_body',return_value=sketch.id),patch.object(w.view,'nearest_edge',return_value=None):
+            w.pick_pattern(10,10)
+        w.pat_range_button.setChecked(True)
+        with patch.object(w.view,'_plane_hit',return_value=(1,np.array([23.1,0,0]))), \
+             patch.object(w.view,'nearest_vertex',return_value=(circle.id,np.array([23.4,0,0]))), \
+             patch.object(w.view,'nearest_edge',return_value=None), \
+             patch.object(w.view,'_screen_bodies',return_value=[]):
+            point,label=w._pattern_range_point(10,10)
+        self.assertAlmostEqual(point[0],23.4);self.assertIn('punkt',label)
+        with patch.object(w.view,'_plane_hit',return_value=(1,np.array([23.1,0,0]))), \
+             patch.object(w.view,'nearest_vertex',return_value=None), \
+             patch.object(w.view,'nearest_edge',return_value=None), \
+             patch.object(w.view,'_screen_bodies',return_value=[circle]), \
+             patch.object(w.view,'project_one',return_value=(10,10)):
+            point,label=w._pattern_range_point(10,10)
+        self.assertAlmostEqual(point[0],23.4);self.assertEqual(label,'Środek okręgu')
+        with patch.object(w.view,'_plane_hit',return_value=(1,np.array([23.1,0,0]))), \
+             patch.object(w.view,'nearest_vertex',return_value=None), \
+             patch.object(w.view,'nearest_edge',return_value=(solid.id,0)), \
+             patch.object(w,'_edge_point_near',return_value=np.array([23.6,0,0])), \
+             patch.object(w.view,'_screen_bodies',return_value=[]):
+            point,label=w._pattern_range_point(10,10)
+        self.assertAlmostEqual(point[0],23.6);self.assertEqual(label,'Krawędź')
+
     def test_path_handles_move_both_endpoints_and_actual_pattern(self):
         w=self.w;body=Body('Block',k.box(5,5,5)).prepared();w.document.commit([body]);w.refresh();w.set_mode('pattern')
         with patch.object(w.view,'pick_body',return_value=body.id),patch.object(w.view,'nearest_edge',return_value=None):

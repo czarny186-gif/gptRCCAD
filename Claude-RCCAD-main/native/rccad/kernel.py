@@ -410,7 +410,8 @@ def boolean(operation, base, tools):
         if operation == "union":
             result = base.fuse(*tools)
         elif operation == "subtract":
-            result = base.cut(*tools)
+            cutters = [solid for tool in tools for solid in (tool.Solids() if len(tool.Solids()) > 1 else [tool])]
+            result = base.cut(*cutters)
         elif operation == "intersect":
             result = base.intersect(*tools)
         else:
@@ -2010,6 +2011,37 @@ def _warp_surface_face(face, mapped):
     return cq.Face.makeFromWires(mapped_wire(face.outerWire()), [mapped_wire(w) for w in face.innerWires()])
 
 
+def _surface_component(shape, normal, point):
+    """Faces of the one local wall under the sketch, without nearby background walls."""
+    from OCP.IntCurvesFace import IntCurvesFace_Intersector
+    from OCP.gp import gp_Lin, gp_Pnt, gp_Dir
+    n = _unit(normal)
+    faces = shape.Faces()
+    ray = gp_Lin(gp_Pnt(*[float(v) for v in point]), gp_Dir(*[float(v) for v in n]))
+    span = max(bounds(shape).xlen, bounds(shape).ylen, bounds(shape).zlen) * 1.1
+    hits = []
+    for i, face in enumerate(faces):
+        intersector = IntCurvesFace_Intersector(face.wrapped, 1e-5)
+        intersector.Perform(ray, -span, span)
+        for j in range(1, intersector.NbPnt() + 1):
+            hit = intersector.Pnt(j)
+            location = cq.Vector(hit.X(), hit.Y(), hit.Z())
+            if np.dot(np.asarray(face.normalAt(location).toTuple(), float), n) > .02:
+                hits.append((abs(intersector.WParameter(j)), i))
+    if not hits:
+        raise CadError('Nie znaleziono powierzchni pod środkiem szkicu.')
+    seed = min(hits)[1]
+    facing = {i for i, face in enumerate(faces)
+              if i == seed or np.dot(np.asarray(face.normalAt().toTuple(), float), n) > .02}
+    edge_sets = {i: {edge.hashCode() for edge in faces[i].Edges()} for i in facing}
+    component = {seed}
+    while True:
+        adjacent = component | {i for i in facing if any(edge_sets[i] & edge_sets[j] for j in component)}
+        if adjacent == component:
+            return [faces[i] for i in sorted(component)]
+        component = adjacent
+
+
 def surface_stamp_tool(shape, face, normal, height, operation='join'):
     """A profile-limited offset layer following planar, cylindrical and filleted faces.
 
@@ -2033,19 +2065,49 @@ def surface_stamp_tool(shape, face, normal, height, operation='join'):
         raise CadError('Wysokość jest za duża względem wymiarów bryły.')
     sign=-1 if operation=='cut' else 1
     try:
+        component = _surface_component(shape, n, bounds(face).center.toTuple())
         samples=[vertex.toTuple() for vertex in face.Vertices()]
         samples += [edge.positionAt(t).toTuple() for edge in face.Edges() for t in (.25,.5,.75)]
-        mapped=_surface_arc_mapper(shape,n,face.Center().toTuple(),samples)
+        mapped=_surface_arc_mapper(shape,n,bounds(face).center.toTuple(),samples)
         if mapped is not None:
             face=_warp_surface_face(face,mapped)
-        layer=shape.Solids()[0].shell([],sign*depth,kind='intersection')
         vec=cq.Vector(*[float(c) for c in n])
         base=face.translate(vec.multiply(-reach))
         prism=cq.Shape.cast(BRepPrimAPI_MakePrism(base.wrapped,gp_Vec(*vec.multiply(2*reach).toTuple()),False,True).Shape())
-        common=BRepAlgoAPI_Common(layer.wrapped,prism.wrapped)
-        common.Build()
-        result=cq.Shape.cast(common.Shape())
-        return valid(result)
+        # Offsetting a cut-heavy polyhedron can spend minutes in OCC, then
+        # return a null shape. Its local walls offset reliably and quickly.
+        local_first=len(shape.Faces())>=15 and not any(f.geomType()=='CYLINDER' for f in shape.Faces())
+        if not local_first:
+            try:
+                layer=shape.Solids()[0].shell([],sign*depth,kind='intersection')
+                common=BRepAlgoAPI_Common(layer.wrapped,prism.wrapped)
+                common.Build()
+                return valid(cq.Shape.cast(common.Shape()))
+            except (ValueError, IndexError, RuntimeError, CadError):
+                pass
+        local_reach=max(b.xlen,b.ylen,b.zlen)*1.1
+        local_base=face.translate(vec.multiply(-local_reach))
+        prism=cq.Shape.cast(BRepPrimAPI_MakePrism(local_base.wrapped,gp_Vec(*vec.multiply(2*local_reach).toTuple()),False,True).Shape())
+        parts=[]
+        for wall in component:
+            if operation=='cut' and is_planar_face(wall):
+                # Let the cutter start just outside the wall. A tool exactly
+                # coincident with a curved profile's boundary makes OCC cut
+                # a tangential, invalid sliver at a sharp corner.
+                outward=wall.normalAt().multiply(.02)
+                layer=wall.translate(outward).thicken(-(depth+.02))
+            else:
+                layer=wall.thicken(sign*depth)
+            common=BRepAlgoAPI_Common(layer.wrapped,prism.wrapped)
+            common.Build()
+            piece=cq.Shape.cast(common.Shape())
+            if piece.Volume()>1e-7:
+                parts.append(piece)
+        if not parts:
+            raise CadError('Szkic nie przecina wybranej powierzchni bryły.')
+        if operation=='cut' and len(parts)>1:
+            return valid(cq.Compound.makeCompound(parts))
+        return valid(parts[0].fuse(*parts[1:]) if len(parts)>1 else parts[0])
     except CadError:
         raise
     except Exception as exc:
@@ -2059,31 +2121,90 @@ def project_surface_mesh(mesh, shape, normal, conformal=True):
     n=np.asarray(normal,float);n/=np.linalg.norm(n)
     box=bounds(shape);span=max(box.xlen,box.ylen,box.zlen)*1.1
     faces=shape.Faces()
+    preferred={face.hashCode() for face in _surface_component(shape,n,mesh.center)}
+    local_faces=[face for face in faces if face.hashCode() in preferred]
     intersectors=[IntCurvesFace_Intersector(face.wrapped,1e-5) for face in faces]
     sample_points=[point for edge in mesh.edges.values() for point in edge]
     sample_points.extend(mesh.vertices)
     mapped=_surface_arc_mapper(shape,n,mesh.center,sample_points) if conformal else None
     cache={}
-    def projected(point):
+    def projected_hit(point):
         key=tuple(round(float(c),6) for c in point)
         if key not in cache:
             anchor=mapped(point) if mapped is not None else point
             ray=gp_Lin(gp_Pnt(*[float(c) for c in anchor]),gp_Dir(*[float(c) for c in n]))
             hits=[]
-            for face,item in zip(faces,intersectors):
+            for index,(face,item) in enumerate(zip(faces,intersectors)):
                 item.Perform(ray,-span,span)
                 for i in range(1,item.NbPnt()+1):
                     hit=item.Pnt(i)
                     location=cq.Vector(hit.X(),hit.Y(),hit.Z())
                     if np.dot(np.asarray(face.normalAt(location).toTuple(),float),n) > .02:
-                        hits.append((abs(item.WParameter(i)),hit))
+                        hits.append((0 if face.hashCode() in preferred else 1,abs(item.WParameter(i)),index,hit))
             if hits:
-                _,hit=min(hits,key=lambda pair:pair[0]);cache[key]=(hit.X(),hit.Y(),hit.Z())
+                priority,ray_distance,index,hit=min(hits,key=lambda pair:(pair[0],pair[1]))
+                if priority and ray_distance>max(mesh.size*2,1.):
+                    raise CadError('Szkic wychodzi poza powierzchnię wybranego narożnika.')
+                position=(hit.X(),hit.Y(),hit.Z())
+                if priority:
+                    # A profile point numerically on a wall boundary may miss
+                    # that face by microns and jump to a wall behind it.
+                    for wall in local_faces:
+                        if wall.geomType()!='PLANE':continue
+                        wall_normal=np.asarray(wall.normalAt().toTuple(),float)
+                        denominator=float(n@wall_normal)
+                        if denominator<=.02:continue
+                        distance=float((np.asarray(wall.Center().toTuple())-np.asarray(anchor))@wall_normal)/denominator
+                        candidate=np.asarray(anchor)+n*distance
+                        vertex=cq.Vertex.makeVertex(*[float(c) for c in candidate])
+                        if wall.distance(vertex)>.02:continue
+                        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+                        closest=BRepExtrema_DistShapeShape(wall.wrapped,vertex.wrapped)
+                        closest.Perform()
+                        if closest.IsDone() and closest.NbSolution()>0:
+                            near=closest.PointOnShape1(1)
+                            position=(near.X(),near.Y(),near.Z())
+                            break
+                cache[key]=(position,index)
             else:
                 raise CadError('Część szkicu nie daje się dopasować do powierzchni bryły. Zmniejsz obrys lub wybierz inną powierzchnię.')
         return cache[key]
+    def projected(point):
+        return projected_hit(point)[0]
     vertices=np.asarray([projected(v) for v in mesh.vertices],np.float32).reshape(-1,3)
-    edges={i:np.asarray([projected(v) for v in pts],np.float32).reshape(-1,3) for i,pts in mesh.edges.items()}
+    edges={}
+    for i, pts in mesh.edges.items():
+        # A straight sketch edge crossing a sharp corner needs intermediate
+        # surface points; otherwise its two endpoints draw a chord inside the solid.
+        sampled=[np.asarray(pts[0],float)]
+        for a,b in zip(pts[:-1],pts[1:]):
+            length=float(np.linalg.norm(np.asarray(b)-np.asarray(a)))
+            count=max(1,int(np.ceil(length/.2)))
+            sampled.extend(np.asarray(a,float)+(np.asarray(b,float)-np.asarray(a,float))*j/count for j in range(1,count+1))
+        outline=[];previous=None
+        for j, point in enumerate(sampled):
+            try:
+                position,index=projected_hit(point)
+            except CadError:
+                if j==0 or j==len(sampled)-1:
+                    raise
+                continue
+            if previous is not None and previous[2]!=index:
+                left,right=previous[:2],(np.asarray(point,float),position)
+                left_index=previous[2]
+                for _ in range(11):
+                    middle=(left[0]+right[0])*.5
+                    try:
+                        mid_position,mid_index=projected_hit(middle)
+                    except CadError:
+                        break
+                    if mid_index==left_index:left=(middle,mid_position)
+                    else:right=(middle,mid_position)
+                if np.linalg.norm(np.asarray(left[1])-np.asarray(right[1]))<.2:
+                    outline.extend((left[1],right[1]))
+            outline.append(position)
+            previous=(np.asarray(point,float),position,index)
+        edges[i]=np.asarray(outline,np.float32).reshape(-1,3)
     center=projected(mesh.center)
     return DisplayMesh(vertices,mesh.triangles,edges,center,mesh.size,mesh.fine,mesh.face_ids)
 
