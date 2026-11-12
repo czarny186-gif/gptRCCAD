@@ -567,7 +567,13 @@ class ObjectsPanel(QFrame):
         self._editing = on
         if not on and self._stale is not None:
             args, self._stale = self._stale, None
-            QTimer.singleShot(0, lambda: self.update_items(*args))
+            QTimer.singleShot(0, self, lambda: self._update_later(args))      # z kontekstem: po zamknięciu okna się nie wykona
+
+    def _update_later(self, args):
+        try:
+            self.update_items(*args)
+        except RuntimeError:          # okno już zamknięte (elementy listy usunięte)
+            pass
 
     def _fold(self, cat):
         self._folded.symmetric_difference_update({cat})
