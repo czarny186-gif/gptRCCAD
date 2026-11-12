@@ -1,12 +1,23 @@
-# RCCAD Desktop 0.5.3 — Połącz / Rozłącz, rysunek i biblioteka z kilku brył
+# RCCAD Desktop 0.5.4 — historia sprawdzona na projekcie użytkownika
 
-- **Nowe narzędzie Połącz (zakładka Edycja)**: okno z wyborem Połącz albo Rozłącz. Połącz - wskaż co najmniej dwie bryły (podświetlają się przed kliknięciem, prawy przycisk odznacza, można też klikać pozycje i grupy na liście Obiekty) i Zatwierdź. Bryły nie są scalane - widać miejsca styku - ale zaznaczają się, przesuwają, kolorują i tną inne bryły razem, jak jedna. Na liście Obiekty trafiają do jednej grupy „Połączenie”. Rozłącz - kliknij jedną połączoną bryłę (zaznacza się całe połączenie) i Zatwierdź: bryły wracają do swoich dawnych grup. Zamknij anuluje.
-- **Rysunek techniczny z kilku brył**: przy włączonym Utwórz rysunek albo Rysunek automatyczny zaznacz bryły albo całą grupę na liście Obiekty (albo Shift + klik) - okno już się nie zamyka - i kliknij Zastosuj: rysunek obejmuje wszystkie, jak jedną bryłę.
-- **Biblioteka - kilka obiektów w jednym pliku**: przy Wstaw z pola roboczego zaznacz kilka brył albo całą grupę na liście Obiekty (albo Shift + klik) i kliknij Zapisz w okienku Do biblioteki. Wstawiony później plik daje kilka osobnych, niepołączonych brył - tak jak zostały zapisane.
+- **Edycja wyciągnięcia z historii ze strzałką**: dwuklik w krok Wyciągnięcia otwiera narzędzie z pomarańczową strzałką na profilu z kroku - przeciągnięcie zmienia wysokość jak przy zwykłym wyciąganiu (wcześniej strzałki nie było).
+- **Niższa / wyższa bryła**: otwór wycięty ze szkicu na górnej ścianie, napis wyciągnięty na górze i zaokrąglenie brzegu otworu idą za nową górą (wcześniej Wycięcie świeciło na czerwono, a zaokrąglenie znikało z historii).
+- **Szkic na ścianie idzie za tą ścianą według swojego miejsca**, a nie początku płaszczyzny szkicu - otwór pod gwint obok wyciągniętego prostokąta nie przeskakuje już na inną ścianę.
+- **Zmiana napisu po zmianie bryły**: edycja napisu otwiera się na jego obecnym miejscu, a nowy napis jest dalej wyciągnięty / wycięty.
+- **Gwint idzie za otworem**: po zmianie średnicy albo położenia otworu gwint znajduje ten otwór (wcześniej „Nie znaleziono otworu”).
+- **Przesunięty otwór po zmianie bryły**: krok Przesunięcie otworu odnajduje otwór także wtedy, gdy wcześniejsza zmiana przesunęła go (np. wyższa bryła).
+- Zaokrąglenie nie jest usuwane z historii, gdy przyczyną jest błąd wcześniejszego kroku.
+- Przeliczanie prawdziwego gwintu (zwoje) trwa kilka - kilkanaście sekund przy każdej zmianie wcześniejszych kroków; gwint kosmetyczny przelicza się od razu.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.3 — Połącz / Rozłącz, rysunek i biblioteka z kilku brył
+
+- **Nowe narzędzie Połącz (zakładka Edycja)**: okno z wyborem Połącz albo Rozłącz. Połącz - wskaż co najmniej dwie bryły (podświetlają się przed kliknięciem, prawy przycisk odznacza, można też klikać pozycje i grupy na liście Obiekty) i Zatwierdź. Bryły nie są scalane - widać miejsca styku - ale zaznaczają się, przesuwają, kolorują i tną inne bryły razem, jak jedna. Na liście Obiekty trafiają do jednej grupy „Połączenie”. Rozłącz - kliknij jedną połączoną bryłę (zaznacza się całe połączenie) i Zatwierdź: bryły wracają do swoich dawnych grup. Zamknij anuluje.
+- **Rysunek techniczny z kilku brył**: przy włączonym Utwórz rysunek albo Rysunek automatyczny zaznacz bryły albo całą grupę na liście Obiekty (albo Shift + klik) - okno już się nie zamyka - i kliknij Zastosuj: rysunek obejmuje wszystkie, jak jedną bryłę.
+- **Biblioteka - kilka obiektów w jednym pliku**: przy Wstaw z pola roboczego zaznacz kilka brył albo całą grupę na liście Obiekty (albo Shift + klik) i kliknij Zapisz w okienku Do biblioteki. Wstawiony później plik daje kilka osobnych, niepołączonych brył - tak jak zostały zapisane.
 
 ### 0.5.2 — Cofnij dla zmian historii, bez duplikatów i czerwonych kroków
 
