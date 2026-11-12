@@ -120,6 +120,11 @@ def _same_ids(old_op, bodies, info):
             mapping[b] = a
         elif isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)) and len(a) == len(b):
             mapping.update({y: x for x, y in zip(a, b) if isinstance(x, str) and isinstance(y, str) and x != y})
+    if new_op.get('type') == 'split' and isinstance(old_op.get('out'), str) and isinstance(new_op.get('out'), str):
+        # części przecięcia mają identyfikatory wyliczane z 'out': po podmianie 'out' także one wracają do starych
+        from .history import stable_id
+        a, b = old_op['out'], new_op['out']
+        mapping.update({stable_id(f'{b}:split', n): stable_id(f'{a}:split', n) for n in range(1, 64)})
     if new_op.get('type') == 'text' and old_op.get('out') and new_op.get('out'):
         # napis po zmianie treści ma inną liczbę liter: litery dostają grupę starego napisu, więc wycięcie / wyciągnięcie
         # zrobione z całego napisu dalej go znajduje (identyfikator litery = grupa + numer)

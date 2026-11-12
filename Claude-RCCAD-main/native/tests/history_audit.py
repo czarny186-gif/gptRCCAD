@@ -123,7 +123,11 @@ class _Result(unittest.TextTestResult):
 
 def main():
     Document.commit = audited_commit
-    suite = unittest.defaultTestLoader.discover(sys.argv[1] if len(sys.argv) > 1 else 'tests')
+    if len(sys.argv) > 2:            # wybrane testy: history_audit.py tests test_studio.StudioTests.test_x ...
+        sys.path.insert(0, sys.argv[1])
+        suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[2:])
+    else:
+        suite = unittest.defaultTestLoader.discover(sys.argv[1] if len(sys.argv) > 1 else 'tests')
     result = unittest.TextTestRunner(verbosity=1, resultclass=_Result).run(suite)
     lines = ['Kontrola historii - kroki z przepisem sprawdzone ponownym wykonaniem', '']
     for kind in sorted(set(seen) | set(hist.RUNNERS)):
