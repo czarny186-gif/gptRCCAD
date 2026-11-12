@@ -1961,6 +1961,7 @@ class StudioTests(unittest.TestCase):
             v1=vol();self.assertNotAlmostEqual(v1,v0,0)                      # więcej liter - inna objętość
             self.assertGreater(abs(v1-50*25*10),abs(v0-50*25*10),mode)       # nowy napis nadal wycięty / dodany
 
+    @unittest.skipIf(os.environ.get('RCCAD_AUDIT_LOG'),'audyt historii sam woła hist.rebuild, więc liczenie przeliczeń nie ma sensu')
     def test_history_changes_wait_for_commit_button(self):
         """„Zatwierdź zmianę”: po edycji kroku dalsze kroki czekają (pomarańczowe), można zmienić kolejny krok, a dopiero
         przycisk przelicza wszystko raz i wraca na koniec historii."""
