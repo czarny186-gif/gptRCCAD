@@ -3422,7 +3422,7 @@ class StudioTests(unittest.TestCase):
             w.view_hover(5,5);self.assertTrue(w.view.preview_items)          # podświetlona ściana otworu
             w.view_clicked(5,5,False,False)
         self.assertEqual(w.th_side.currentData(),'in')
-        self.assertEqual(w.th_size.currentData(),name)                       # dopasowanie do otworu Ø8 -> M10 (wiertło 8.5)
+        self.assertEqual(w.th_size.currentData(),'M10')                       # dopasowanie do otworu Ø8 -> M10 (wiertło 8.5)
         self.assertIn('Ø8.50',w.th_status.text())
         self.assertIsNotNone(w.view._thread_preview)                          # podgląd od razu, bez geometrii
         self.assertEqual(w.document.bodies[0].shape.Volume(),plate.Volume())  # nic nie policzone przed Zastosuj
