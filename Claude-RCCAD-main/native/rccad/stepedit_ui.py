@@ -452,7 +452,12 @@ class StepEditTools:
 
     def _step_fill_mate(self, recipe):
         picks = {}
-        for key, bid, ref in (('moving', recipe['id'], recipe['face']), ('target', recipe['target'], recipe['tface'])):
+        pairs = [('moving', recipe['id'], recipe['face'])]
+        if recipe.get('plane'):
+            picks['target'] = dict(plane=recipe['plane'])
+        else:
+            pairs.append(('target', recipe['target'], recipe['tface']))
+        for key, bid, ref in pairs:
             body = self.document.get(bid)
             if body is None:
                 raise kernel.CadError('brak bryły')
@@ -460,6 +465,8 @@ class StepEditTools:
             normal = hist.outward_normal(body.shape, face, normal)
             picks[key] = dict(id=body.id, face=face, normal=tuple(float(c) for c in normal), point=tuple(float(c) for c in ref['point']))
         self.mt_pick = picks
+        if recipe.get('plane') and hasattr(self, 'mt_plane_bar'):
+            self.mt_plane_on.setChecked(True)
         if recipe.get('spin'):
             self.mt_spin = float(recipe['spin'])
             if hasattr(self, 'mt_angle'):

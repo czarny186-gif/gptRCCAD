@@ -62,6 +62,24 @@ class TiltTools:
         self.tl_apply.setEnabled(False)
         self.hint('Pochylenie ścianki: kliknij płaską ścianę bryły, potem pociągnij jedną ze strzałek.')
 
+    def tilt_hover(self, x, y):
+        """Płaska ściana pod kursorem podświetla się przed kliknięciem."""
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        face = None
+        if body is not None and body.kind == 'solid':
+            try:
+                face, _ = self.view.face_at(body, hit)
+                if not kernel.is_planar_face(face):
+                    face = None
+            except kernel.CadError:
+                face = None
+        key = ('tilt', face.hashCode()) if face is not None else None
+        if key != self._hover_key:
+            self._hover_key = key
+            self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None,
+                                       color=(1, .55, .1, .35), line_color=(.95, .42, .02, 1), width=2)
+
     def pick_tilt(self, x, y):
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
@@ -76,6 +94,8 @@ class TiltTools:
         except kernel.CadError as exc:
             self.toast(str(exc))
             return
+        self._hover_key = None
+        self.view.set_preview_mesh(None)
         point = tuple(float(c) for c in hit[2])
         self.tl_face = dict(id=body.id, face=face, frame=frame, ref=hist.face_ref(face, frame[3], point, body.shape),
                             mesh=kernel.display_mesh(face))

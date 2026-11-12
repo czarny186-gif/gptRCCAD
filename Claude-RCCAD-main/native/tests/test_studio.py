@@ -1995,6 +1995,42 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait()
         self.assertIsNotNone(w.document.pending)                                         # Cofnij: zmiany znowu czekają na zatwierdzenie
 
+    def test_mate_and_align_can_put_a_face_on_a_standard_plane(self):
+        """Dopasowanie / Wyrównanie: przycisk płaszczyzny - wybrana ściana ląduje na XY, XZ albo YZ (odległość 0)."""
+        w=self.w
+        a=Body('A',k.box(20,10,30)).prepared()
+        from dataclasses import replace as rep
+        moved=k.transform(a.shape,(5,7,12),(0,0,0));w.document.commit([rep(a,shape=moved,mesh=k.display_mesh(moved))]);w.refresh()
+        body=w.document.get(a.id)
+        for mode,plane,axis,expect in (('mate','XY',2,'min'),('mate','YZ',0,'min'),('align','XZ',1,'min')):
+            body=w.document.get(a.id)
+            if plane=='XY':face=min(body.shape.Faces(),key=lambda f:f.Center().z)
+            elif plane=='YZ':face=min(body.shape.Faces(),key=lambda f:f.Center().x)
+            else:face=min(body.shape.Faces(),key=lambda f:f.Center().y)
+            n=hist.outward_normal(body.shape,face)
+            w.set_mode(mode)
+            w.mt_pick['moving']=dict(id=body.id,face=face,normal=tuple(float(c) for c in n),point=tuple(float(c) for c in face.Center().toTuple()))
+            w.mt_plane_on.setChecked(True);w.mt_plane_bar.setCurrentIndex(['XY','XZ','YZ'].index(plane));self.wait()
+            w.apply_mate();self.wait();self.wait();w.set_mode(None)
+            bb=w.document.get(a.id).shape.BoundingBox()
+            self.assertAlmostEqual((bb.zmin,bb.xmin,bb.ymin)[(2,0,1).index(axis)],0.0,3)
+        self.assertEqual(w.document.infos()[0][-1]['op']['plane'],'XZ')
+
+    def test_repeated_face_extrude_keeps_only_latest_step(self):
+        """Zmiana rozmiaru bryły kolejnym pociągnięciem tej samej ściany: jeden krok z sumą odległości, nie duplikaty."""
+        w=self.w
+        a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh()
+        def top():
+            b=w.document.get(a.id);f=max(b.shape.Faces(),key=lambda f:f.Center().z)
+            return dict(kind='face',id=a.id,face=f,whole=f,holes=True,hole_ids=[],wire=f.outerWire(),plane=None,normal=(0.0,0.0,1.0),
+                        center=f.Center().toTuple(),hit=f.Center().toTuple(),cluster=(a.id,0),sibling=False)
+        for d in (5,3):
+            w.set_mode('extrude');w.ex_profiles=[top()];w.ex_op.setCurrentIndex(1);w.ex_value.setValue(d);w.apply_extrude();self.wait();self.wait();w.set_mode(None)
+        infos,cur=w.document.infos()
+        ex=[i for i in infos if (i.get('op') or {}).get('type')=='extrude']
+        self.assertEqual(len(ex),1);self.assertAlmostEqual(ex[0]['op']['d1'],8.0)
+        self.assertAlmostEqual(sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid'),20*20*28,0)
+
     def test_history_edit_fillet_and_boolean_prefill_the_tool(self):
         w=self.w
         a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(10,10,40)).prepared()

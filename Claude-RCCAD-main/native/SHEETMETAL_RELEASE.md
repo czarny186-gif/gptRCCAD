@@ -1,14 +1,21 @@
-# RCCAD Desktop 0.5.5 — Zatwierdź zmianę, szybsza historia, ukryte obiekty w pliku
+# RCCAD Desktop 0.5.6 — płaszczyzny w Dopasowaniu, podświetlanie, bez duplikatów rozmiaru
+
+- **Dopasowanie / Wyrównanie na płaszczyznę**: przycisk „Połóż na płaszczyźnie” pozwala zamiast ściany drugiej bryły wskazać XY, XZ albo YZ - wybrana ściana przeskakuje na tę płaszczyznę (odległość 0 od powierzchni), bryła zostaje po swojej stronie płaszczyzny.
+- **Pochylenie ścianki i Boolean**: płaska ściana / bryła pod kursorem podświetla się przed wyborem.
+- **Zatwierdź zmianę**: usunięty komunikat po każdej zmianie w historii; przycisk wygląda i reaguje jak „Pokaż wygaszone”, a w czasie przeliczania jest czerwony, potem wraca do normalnego wyglądu.
+- **Zmiana rozmiaru bryły bez duplikatów w historii**: kolejne pociągnięcie tej samej ściany (Wyciągnij - dodaj / wytnij) poprawia wcześniejszy krok (suma odległości) zamiast dodawać nowy.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.5 — Zatwierdź zmianę, szybsza historia, ukryte obiekty w pliku
 
 - **Przycisk „Zatwierdź zmianę” na pasku historii** (obok „Pokaż wygaszone”): po zmianie kroku w historii dalsze kroki czekają (jasnopomarańczowe), a przycisk świeci na pomarańczowo. Można zmienić kilka kroków po kolei; kliknięcie przycisku przelicza wszystko raz, dopasowuje dalsze kroki i wraca na koniec projektu. Cofnij działa także na zatwierdzenie.
 - **Przeliczanie tylko tego, co się zmieniło**: krok leżący w innym miejscu bryły niż zmiana (np. prawdziwy gwint na przedniej ścianie, gdy zmieniasz otwór na górze) nie jest liczony od nowa - jego fragment bryły przechodzi do nowej bryły. W projekcie z gwintem M64 przeliczenie po zmianie otworu trwa ok. 2 razy krócej, a wynik jest identyczny.
 - **Przesuwanie otworu z fazą albo zaokrągleniem brzegu**: faza przesuwa się razem z otworem (wcześniej znikała), a przesunięcie liczy się kilka razy szybciej (ok. 3 s zamiast 8-9 s w dużej bryle). Gdy faza / zaokrąglenie nachodziłoby na inny otwór, zostaje usunięte z bryły i z historii (jedno Cofnij przywraca).
 - **Podświetlenie otworu w Przesuń / Obróć** pojawia się od razu po najechaniu (także na fazę albo zaokrąglenie brzegu) - wcześniej liczyło się kilka sekund.
 - **Ukryte i zablokowane obiekty z listy Obiekty zapisują się w projekcie** - po otwarciu pliku są dalej ukryte / zablokowane.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.4 — historia sprawdzona na projekcie użytkownika
 

@@ -2038,6 +2038,21 @@ def apply_placement(shape, matrix):
 def run_mate(bodies, recipe):
     """Dopasowanie / Wyrównanie: przesuwana bryła ustawiana względem ściany innej bryły (ściany odszukiwane na nowo, więc krok
     przeżywa zmianę wcześniejszych kroków)."""
+    if recipe.get('plane'):          # ściana kładzie się na jednej z trzech płaszczyzn (odległość 0 od jej powierzchni)
+        body = _body(bodies, recipe['id'])
+        face, _ = match_face(body.shape, recipe['face'])
+        frame = kernel.frame_of(recipe['plane'])
+        n, o = _unit(np.array(frame.normal, float)), np.array(frame.origin, float)
+        side = 1.0 if float((np.array(body.shape.Center().toTuple(), float) - o) @ n) >= -1e-9 else -1.0    # bryła zostaje po swojej stronie
+        ca = np.array(face.Center().toTuple(), float)
+        spot = ca - float((ca - o) @ n) * n
+
+        class _Spot:
+            def Center(self):
+                return type('P', (), {'toTuple': lambda _s: tuple(float(c) for c in spot)})()
+
+        matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), _Spot(), side * n, float(recipe.get('spin', 0.0)))
+        return _replace(bodies, body.placed(apply_placement(body.shape, matrix), matrix))
     body, target = _body(bodies, recipe['id']), _body(bodies, recipe['target'])
     if body.id == target.id:
         raise kernel.CadError('Wybierz ściany dwóch różnych brył.')
@@ -3564,7 +3579,7 @@ def reads(recipe, current):
     if kind == 'bool':
         return {recipe['base'], *recipe['tools'], *(recipe.get('bases') or ())}
     if kind == 'mate':
-        return {recipe['id'], recipe['target']}
+        return {recipe['id']} if recipe.get('plane') else {recipe['id'], recipe['target']}
     if kind == 'split':
         return {recipe['id'], *([recipe['tool']] if recipe.get('tool') else [])}
     if kind in ('delete', 'folder', 'ply_fold', 'scale'):
@@ -4263,6 +4278,36 @@ def fold_point(states, ids, match):
             if got is None or got & ids:
                 return None
     return None
+
+
+def extrude_fold(states, recipe):
+    """Kolejne wyciągnięcie (dodaj / wytnij) tej samej płaskiej ściany, która powstała w poprzednim wyciągnięciu (zmiana wymiaru
+    bryły kolejnym pociągnięciem): (indeks kroku, łączny przepis) - to jedno wyciągnięcie o sumie odległości - albo None."""
+    import numpy as np
+    profiles = recipe.get('profiles') or []
+    if recipe.get('mode') not in ('join', 'cut') or recipe.get('dir') != 'one' or len(profiles) != 1 or profiles[0].get('k') != 'face':
+        return None
+    new = profiles[0]
+    n = np.array(new['normal'], float)
+    c = np.array(new['centroid'], float)
+
+    def match(op):
+        if op.get('type') != 'extrude' or op.get('mode') != recipe['mode'] or op.get('dir') != 'one' or op.get('upto'):
+            return False
+        old = op.get('profiles') or []
+        if len(old) != 1 or old[0].get('k') != 'face' or old[0].get('id') != new.get('id') or op.get('skip') != recipe.get('skip'):
+            return False
+        on = np.array(old[0]['normal'], float)
+        if float(np.dot(on, n)) < 1 - 1e-6:
+            return False
+        end = np.array(old[0]['centroid'], float) + on * float(op['d1'])
+        return float(np.linalg.norm(end - c)) < 1e-3 and abs(old[0].get('area', 0) - new.get('area', -1)) < 1e-3 * max(1.0, new.get('area', 1))
+
+    j = fold_point(states, [new.get('id')], match)
+    if j is None:
+        return None
+    old = states[j][1]['op']
+    return j, dict(old, d1=float(old['d1']) + float(recipe['d1']))
 
 
 def replace_step_op(states, j, op, constraints=(), job=None, label=None):

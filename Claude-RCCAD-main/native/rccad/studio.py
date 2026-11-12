@@ -1449,6 +1449,17 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 spin_row.addWidget(self.mt_angle, 1)
                 spin_row.addWidget(self.mt_right)
                 lay.addLayout(spin_row)
+            plane_on = QPushButton('Połóż na płaszczyźnie')
+            plane_on.setCheckable(True)
+            plane_on.setToolTip('Zamiast ściany drugiej bryły wskaż jedną z trzech płaszczyzn (XY, XZ, YZ): wybrana ściana przeskoczy\n'
+                                'na tę płaszczyznę, na odległość 0 od jej powierzchni.')
+            bar = ui.Segmented([('XY', 'XY', 'x_wall'), ('XZ', 'XZ', 'x_wall'), ('YZ', 'YZ', 'x_wall')], 30)
+            bar.setVisible(False)
+            plane_on.toggled.connect(lambda on, k=key: self._mt_plane_toggled(on))
+            bar.currentIndexChanged.connect(lambda *_: self._mt_plane_chosen())
+            lay.addWidget(plane_on)
+            lay.addWidget(bar)
+            self.__dict__.setdefault('mt_plane_btns', {})[key] = (plane_on, bar)
             status = _label('', 'status')
             lay.addWidget(status)
             again = QPushButton('Wskaż ściany od nowa')
@@ -3458,7 +3469,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 self.view.setCursor(Qt.SizeAllCursor if hit else Qt.ArrowCursor)
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
-            elif self.mode in ('mate', 'align') and not ('moving' in self.mt_pick and 'target' in self.mt_pick):
+            elif self.mode in ('mate', 'align') and (not ('moving' in self.mt_pick and 'target' in self.mt_pick) or self.mt_plane_on.isChecked()):
                 self._hover_face_only(x, y)
             elif self.mode == 'pattern' and self.pat_id is None:
                 self._pattern_hover(x, y)
@@ -3499,6 +3510,10 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 self._mz_hover(x, y)
             elif self.mode == 'link':
                 self.link_hover(x, y)
+            elif self.mode == 'tilt' and self.tl_face is None:
+                self.tilt_hover(x, y)
+            elif self.mode == 'bool':
+                self._hover_bool(x, y)
             elif self.mode in ('move', 'rotate') and getattr(self, 't_feature', None) is None and self._hv is None:
                 self._hover_transform_feature(x, y)
             elif self.mode == 'sweep':
@@ -4652,6 +4667,14 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         skip = self._extent_skip() if op == 'join' and scope != 'target' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
         skip = sorted(set(skip) | self._protected())             # ukrytych brył operacja nie zmienia
         folder = self._new_folder(profiles, spent, len(makers), op, 'Wyciągnięcie')
+        folded = self._extrude_fold(op, direction, d1, d2, profiles, existing, spent, target, scope)
+        if folded is not None:          # kolejne pociągnięcie tej samej ściany: poprawia wcześniejsze wyciągnięcie (bez duplikatu w historii)
+            j, merged = folded
+            self.view.set_preview_mesh(None)
+            self.view.set_handles([])
+            self.set_mode(None)
+            self._fold_step(j, merged, 'Wyciągnięcie' if op == 'join' else 'Wycięcie', step_label=None)
+            return
 
         def build():
             receivers=hist.extrusion_receivers(existing,profiles,scope,target.get('body') if target else None) if scope else None
@@ -4675,6 +4698,19 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
         self.run_operation({'cut': 'Wycięcie', 'join': 'Wyciągnięcie (dodaj)', 'intersect': 'Część wspólna'}.get(op, 'Wyciągnięcie'), build, apply, after=lambda: self.set_mode(None))
+
+    def _extrude_fold(self, op, direction, d1, d2, profiles, existing, spent, target, scope):
+        doc = self.document
+        if (op not in ('join', 'cut') or target is not None or scope or spent or doc.can_redo or doc.merging or self.step_editing
+                or not doc.can_undo or any(p.get('kind') not in (None, 'face') and p.get('k') != 'face' for p in profiles)):
+            return None
+        try:
+            recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing),
+                          spent=[], skip=sorted(set(self._extent_skip() if op == 'join' else []) | self._protected()) or None)
+            recipe = {k: v for k, v in recipe.items() if v is not None}
+            return hist.extrude_fold(doc.states(), recipe)
+        except Exception:
+            return None
 
     # =====================================================================
     # obrót profilu wokół osi
@@ -5997,6 +6033,23 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self.sh_faces.append(dict(face=face, normal=tuple(float(c) for c in normal), point=tuple(float(c) for c in hit[2])))
         self._sh_update()
 
+    def _hover_bool(self, x, y):
+        """Boolean: bryła (z jej grupą lub połączeniem) pod kursorem podświetla się przed kliknięciem."""
+        bid = self.view.pick_body(x, y)
+        body = self.document.get(bid) if bid else None
+        if body is None or body.kind != 'solid' or body.mesh is None:
+            ids = []
+        elif hist.link_of(body):
+            ids = [i for i in self._group_ids(bid) if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        else:
+            ids = [bid]
+        key = ('boolhover', tuple(ids)) if ids else None
+        if key == self._hover_key:
+            return
+        self._hover_key = key
+        meshes = [b.mesh for i in ids if (b := self.document.get(i)) is not None and b.mesh is not None]
+        self.view.set_hover_mesh(_merge_meshes(meshes) if meshes else None, color=(.98, .62, .2, .35), line_color=(.9, .45, .05, 1), width=2.4)
+
     def _hover_shell_solid(self, x, y):
         """Przed wyborem bryła pod kursorem podświetla się na niebiesko - widać, którą skorupa obejmie."""
         hit = self.view.pick_face(x, y)
@@ -7154,8 +7207,41 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         else:
             self.mt_status['mate'].setText('Obrót zostanie użyty po wskazaniu obu ścian.')
 
+    @property
+    def mt_plane_on(self):
+        return self.mt_plane_btns[self.mode if self.mode in self.mt_plane_btns else 'mate'][0]
+
+    @property
+    def mt_plane_bar(self):
+        return self.mt_plane_btns[self.mode if self.mode in self.mt_plane_btns else 'mate'][1]
+
+    def _mt_plane_toggled(self, on):
+        """Przycisk „Połóż na płaszczyźnie”: zamiast ściany drugiej bryły cel to jedna z trzech płaszczyzn."""
+        if self.mode not in self.mt_plane_btns:
+            return
+        self.mt_plane_bar.setVisible(on)
+        if on:
+            self.mt_plane_bar.setCurrentIndex(0)
+            self._mt_plane_chosen()
+        else:
+            self.mt_pick.pop('target', None)
+            self.view.set_preview_mesh(None)
+            self._mt_update()
+
+    def _mt_plane_chosen(self):
+        if self.mode not in self.mt_plane_btns or not self.mt_plane_on.isChecked():
+            return
+        self.mt_pick['target'] = dict(plane=self.mt_plane_bar.currentData())
+        self._mt_update()
+
     def _mt_reset(self):
         self.mt_pick = {}
+        if getattr(self, 'mt_plane_btns', None):
+            for btn, bar in self.mt_plane_btns.values():
+                btn.blockSignals(True)
+                btn.setChecked(False)
+                btn.blockSignals(False)
+                bar.setVisible(False)
         self.mt_spin = 0.0
         if hasattr(self, 'mt_angle'):
             self.mt_angle.setText('0°')
@@ -7178,9 +7264,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         normal = hist.outward_normal(body.shape, face, normal)
         pick = dict(id=body.id, face=face, normal=tuple(float(c) for c in normal), point=tuple(float(c) for c in hit[2]))
         moving = self.mt_pick.get('moving')
-        if moving is None or body.id == moving['id']:
+        if moving is None or body.id == moving['id'] or self.mt_plane_on.isChecked():
             self.mt_pick['moving'] = pick
-            if moving is not None and moving['id'] != body.id:
+            if moving is not None and moving['id'] != body.id and not self.mt_plane_on.isChecked():
                 self.mt_pick.pop('target', None)
         else:
             self.mt_pick['target'] = pick
@@ -7191,10 +7277,15 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         mv, tg = self.mt_pick.get('moving'), self.mt_pick.get('target')
         if mv is None or tg is None:
             return None
-        a, b = self.document.get(mv['id']), self.document.get(tg['id'])
-        recipe = dict(type='mate', mode=self.mode, id=a.id, target=b.id,
-                      face=hist.face_ref(mv['face'], mv['normal'], mv['point'], a.shape),
-                      tface=hist.face_ref(tg['face'], tg['normal'], tg['point'], b.shape))
+        a = self.document.get(mv['id'])
+        if tg.get('plane'):
+            recipe = dict(type='mate', mode=self.mode, id=a.id, plane=tg['plane'],
+                          face=hist.face_ref(mv['face'], mv['normal'], mv['point'], a.shape))
+        else:
+            b = self.document.get(tg['id'])
+            recipe = dict(type='mate', mode=self.mode, id=a.id, target=b.id,
+                          face=hist.face_ref(mv['face'], mv['normal'], mv['point'], a.shape),
+                          tface=hist.face_ref(tg['face'], tg['normal'], tg['point'], b.shape))
         if self.mode == 'mate' and getattr(self, 'mt_spin', 0.0):
             recipe['spin'] = float(self.mt_spin)
         return recipe
@@ -7205,13 +7296,16 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         mv, tg = self.mt_pick.get('moving'), self.mt_pick.get('target')
         steps, status = self.mt_steps[self.mode], self.mt_status[self.mode]
         a = self.document.get(mv['id']) if mv else None
-        b = self.document.get(tg['id']) if tg else None
+        plane = tg.get('plane') if tg else None
+        b = self.document.get(tg['id']) if tg and not plane else None
+        done = b is not None or bool(plane)
         steps[0].set_state('done' if a else 'active', a.name if a else 'Kliknij ścianę')
-        steps[1].set_state('done' if b else ('active' if a else 'pending'), b.name if b else ('Ściana innej bryły' if a else 'Najpierw krok 1'))
+        steps[1].set_state('done' if done else ('active' if a else 'pending'),
+                           f'Płaszczyzna {plane}' if plane else (b.name if b else ('Ściana innej bryły albo płaszczyzna' if a else 'Najpierw krok 1')))
         self.view.tints = {**({a.id: TINT_TOOL} if a else {}), **({b.id: TINT_BASE} if b else {})}
-        meshes = [kernel.display_mesh(p['face']) for p in (mv, tg) if p]
+        meshes = [kernel.display_mesh(p['face']) for p in (mv, tg) if p and p.get('face') is not None]
         self.view.set_selection_meshes(meshes)
-        status.setText('Zastosuj (Enter) przesuwa pierwszą bryłę.' if b else ('Teraz kliknij ścianę innej bryły.' if a else 'Kliknij ścianę bryły, która ma się przesunąć.'))
+        status.setText('Zastosuj (Enter) przesuwa pierwszą bryłę.' if done else ('Teraz kliknij ścianę innej bryły.' if a else 'Kliknij ścianę bryły, która ma się przesunąć.'))
         self.refresh()
         self.update_mate_preview()
 
@@ -8666,8 +8760,6 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         if self.document.held:          # zmiana kroku zapisana, dalsze kroki czekają na „Zatwierdź zmianę”
             self.document.held = False
             self._step_edit, self._step_replayed = None, False
-            self.toast('Zmiana zapisana w kroku. Możesz zmieniać kolejne kroki - dalsze kroki przeliczą się po kliknięciu '
-                       '„Zatwierdź zmianę” na pasku historii.', 7000)
         self._hist_update()
         self._hist_commit_update()
         if self.document.deferred and not self.busy:
@@ -8858,8 +8950,12 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         if not hasattr(self, 'hist_commit'):
             return
         waiting = self.document.pending is not None
+        running = getattr(self, '_commit_running', False)
+        if running and not self.busy:
+            running = self._commit_running = False
         self.hist_commit.setEnabled(waiting and not self.busy)
-        sheet = 'QPushButton#chip { background:#f39a21; color:white; border-color:#d97c06; font-weight:700; }' if waiting else ''
+        sheet = ('QPushButton#chip:disabled { background:#d92d20; color:white; border-color:#b42318; font-weight:700; }'
+                 if running else '')        # czerwony tylko w trakcie przeliczania; poza tym wygląda jak „Pokaż wygaszone”
         if self.hist_commit.styleSheet() != sheet:
             self.hist_commit.setStyleSheet(sheet)
         if waiting and not self.hist_bar.isVisible() and hasattr(self, 'hist_button'):
@@ -8886,6 +8982,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             doc.rewrite(list(head) + list(tail), len(head) + len(tail) - 1)
             self.selected, self.edges, self.override = [], {}, {}
             self._hist_sig = None
+            self._commit_running = False
             self.toast(f'Zmiany zatwierdzone, {failed} kroków wymaga poprawy (czerwone, powód w dymku).' if failed else
                        'Zmiany zatwierdzone - dalsze kroki dopasowane.', 4500)
 
@@ -8893,7 +8990,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             doc.pending = None
             self.refresh()
             return
+        self._commit_running = True
         self.run_history(lambda job: hist.rebuild(start, steps, constraints, job), apply)
+        self._hist_commit_update()
 
     def _history_menu(self, index, pos):
         from PySide6.QtWidgets import QMenu
