@@ -1,5 +1,6 @@
 """Pomiar wydajności historii (druk do logu CI: linie „PERF”) oraz szerokie limity, które łapią regresje, nie zakłócając pracy."""
 import os, sys, time, tempfile
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 os.environ.setdefault('RCCAD_WORKERS', '0')      # procesy liczące mają własne testy (test_workers)
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen' if not os.environ.get('DISPLAY') and os.name != 'nt' else '')
 import unittest

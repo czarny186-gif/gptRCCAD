@@ -164,6 +164,11 @@ class Document:
         self._merge = None         # edycja szkicu z kroku: zmiany wchodzą do bieżącego kroku (bez nowych kroków), potem przeliczenie dalszych
         self.dropped = 0           # ile najstarszych kroków wypadło z historii (limit MAX_UNDO)
         self.default_color = None  # kolor brył bez własnego koloru (R, G, B 0..1); None - jasnoszary programu
+        self.hold = False          # zmiany w historii czekają na „Zatwierdź zmianę” (dalsze kroki przeliczane dopiero wtedy)
+        self.pending = None        # {'from': pierwszy nieprzeliczony krok, 'base': stary stan przed nim} albo None
+        self.held = False          # ostatnie zatwierdzenie kroku zostało wstrzymane (okno pokazuje komunikat)
+        self.view_state = {}       # stan listy Obiekty zapisywany z projektem: ukryte, zablokowane, pokazane wygaszone
+        self._view_dirty = False
         self._edits = []           # zmiany historii (edycja / usunięcie / przestawienie kroku): oś czasu sprzed zmiany - Cofnij ją przywraca
         self._edits_redo = []      # cofnięte zmiany historii - Ponów je przywraca
         self._edit_live = None     # trwająca zmiana historii (jej wynik może jeszcze dojść z przeliczenia w tle)
@@ -185,8 +190,25 @@ class Document:
         return len(self._undo)
 
     @property
+    def _saved_revision(self):
+        return self.__dict__.get('_saved_rev', 0)
+
+    @_saved_revision.setter
+    def _saved_revision(self, value):
+        """Projekt oznaczony jako zapisany: także stan listy Obiekty (ukryte / zablokowane) jest zapisany."""
+        self.__dict__['_saved_rev'] = value
+        self.__dict__['_view_dirty'] = False
+
+    @property
     def dirty(self):
-        return self._revision != self._saved_revision
+        return self._revision != self._saved_revision or self._view_dirty
+
+    def set_view_state(self, hidden=(), locked=(), revealed=(), mark=True):
+        """Ukryte / zablokowane obiekty z listy Obiekty - zapisują się z projektem (bez kroku historii)."""
+        state = {k: sorted(v) for k, v in (('hidden', hidden), ('locked', locked), ('revealed', revealed)) if v}
+        if state != self.view_state:
+            self.view_state = state
+            self._view_dirty = self._view_dirty or mark
 
     @property
     def can_undo(self):
@@ -264,10 +286,22 @@ class Document:
         if len(self._undo) > self.MAX_UNDO:
             self.dropped += len(self._undo) - self.MAX_UNDO      # najstarsze kroki wypadają z historii (okno informuje o tym)
         self._undo = self._undo[-self.MAX_UNDO:]
+        held = False
         if self.keep_future and self._redo:
-            self.deferred = (replaced[0] if replaced is not None else self.bodies, [(e[0], e[2]) for e in reversed(self._redo)])
+            base = replaced[0] if replaced is not None else self.bodies
+            if self.hold:            # dalsze kroki zostają (nieprzeliczone) - przeliczą się po „Zatwierdź zmianę”
+                self._mark_pending(len(self._undo) + 1, base, inserted=replaced is None)
+                held = True
+            else:
+                self.deferred = (base, [(e[0], e[2]) for e in reversed(self._redo)])
+        elif self.pending is not None and not self._redo:
+            self._undo.pop()
+            self.replace_next = False
+            raise CadError('Najpierw kliknij „Zatwierdź zmianę” na pasku historii - dalsze kroki czekają na przeliczenie.')
         self.keep_future = False
-        self._redo.clear()
+        if not held:
+            self._redo.clear()
+        self.held = held
         self.info = info
         self.pending_label = self.pending_icon = self.pending_op = None
         self.bodies = bodies
@@ -303,12 +337,40 @@ class Document:
         merge, self._merge = self._merge, None
         if merge is None or not merge['changed']:
             return False
-        self._redo.clear()
         self.keep_future = False
+        if merge['future'] and self.hold:
+            self._mark_pending(len(self._undo) + 1, merge['old'])
+            self.held = True
+            self._edit_touch()
+            return False
+        self._redo.clear()
         if merge['future']:
             self.deferred = (merge['old'], merge['future'])
         self._edit_touch()
         return True
+
+    # ---------- zmiany w historii czekające na „Zatwierdź zmianę” ----------
+    def _mark_pending(self, first, base, inserted=False):
+        """Krok `first` i dalsze nie są przeliczone; `base` - stan, na którym krok `first` był policzony (jego dawne wejście).
+        Kilka zmian przed zatwierdzeniem: każdy krok pamięta swoje dawne wejście (wstawienie kroku przesuwa numery dalszych)."""
+        bases = dict(self.pending['bases']) if self.pending is not None else {}
+        if inserted:
+            bases = {(k + 1 if k >= first - 1 else k): v for k, v in bases.items()}
+        bases.setdefault(first, base)
+        self.pending = {'from': min(bases), 'bases': bases}
+
+    def pending_index(self):
+        return None if self.pending is None else self.pending['from']
+
+    def pending_job(self):
+        """(stany do pierwszego nieprzeliczonego kroku, stan wejściowy, kroki do przeliczenia) dla „Zatwierdź zmianę”."""
+        states = self.states()
+        f = self.pending['from']
+        if f >= len(states):
+            return states, None, []
+        bases = self.pending['bases']
+        steps = [(bases.get(j, states[j - 1][0]), states[j][0], states[j][1]) for j in range(f, len(states))]
+        return states[:f], states[f - 1][0], steps
 
     @property
     def merging(self):
@@ -438,7 +500,7 @@ class Document:
         """Początek zmiany historii: zapamiętuje całą oś czasu (bryły są niezmienne, więc to tylko odwołania).
         `current` - krok, na którym stał użytkownik przed zmianą (tam wraca Cofnij)."""
         snap = dict(states=self.states(), current=len(self._undo) if current is None else current,
-                    constraints=list(self.constraints), after=None)
+                    constraints=list(self.constraints), after=None, pending=self.pending)
         self._edits = [e for e in self._edits if e['after'] is not None][-(self.MAX_EDITS - 1):] + [snap]
         self._edits_redo.clear()
         self._edit_live = snap
@@ -466,12 +528,13 @@ class Document:
         return bool(self._edits_redo) and self._edits_redo[-1]['before'] == self._revision
 
     def _snapshot(self):
-        return dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints))
+        return dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints), pending=self.pending)
 
     def _restore(self, snap):
         self.constraints = list(snap['constraints'])
         states = snap['states']
         self._set_states(states, max(0, min(snap['current'], len(states) - 1)))
+        self.pending = snap.get('pending')
 
     def undo_edit(self):
         """Cofa ostatnią zmianę historii (edycję kroku, usunięcie, przestawienie...), gdy model stoi na jej wyniku."""
@@ -555,6 +618,7 @@ class Document:
         self.pending_label = self.pending_icon = self.pending_op = None
         self.keep_future, self.deferred = False, None
         self.replace_next, self._merge = False, None
+        self.pending = None
         self._edits, self._edits_redo, self._edit_live = [], [], None
         self._mesh_cache.clear()
         self._revision = self._next_revision
@@ -570,6 +634,7 @@ class Document:
         self._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(states))[current + 1:])]
         self._revision = revisions[current]
         self.keep_future, self.deferred = False, None
+        self.pending = None
         self._edit_touch()
 
     def goto(self, index, mesh=True):
@@ -655,6 +720,8 @@ class Document:
                     "entries": entries, "states": [], "current": current, "constraints": self.constraints}
         if self.default_color:
             manifest["default_color"] = [round(float(c), 4) for c in self.default_color]
+        if self.view_state:
+            manifest["objects"] = self.view_state
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
@@ -714,6 +781,7 @@ class Document:
             if mark:      # autozapis (mark=False) nie zmienia ścieżki projektu ani stanu „zapisany”
                 self.path = path
                 self._saved_revision = self._revision
+                self._view_dirty = False
         finally:
             if temp_path and Path(temp_path).exists():
                 Path(temp_path).unlink()
@@ -895,6 +963,9 @@ class Document:
                 result.bodies, result.info = built[current]
                 result.bodies = result.meshed(result.bodies)
                 result.default_color = parse_color(manifest.get('default_color'))
+                objects = manifest.get('objects')
+                if isinstance(objects, dict):
+                    result.view_state = {k: [str(i) for i in objects.get(k) or ()] for k in ('hidden', 'locked', 'revealed') if objects.get(k)}
                 result._revision = result._saved_revision = revisions[current]
                 result._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(built))[current + 1:])]
                 result.path = Path(path)

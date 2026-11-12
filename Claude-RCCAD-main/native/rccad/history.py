@@ -1520,7 +1520,23 @@ def run_transform(bodies, recipe):
 
 
 def _edge_kind(faces, edge, f1, f2):
-    """Rodzaj krawędzi między ścianami f1 i f2 (od strony materiału): 'convex', 'concave' albo 'tangent'."""
+    """Rodzaj krawędzi między ścianami f1 i f2 (od strony materiału): 'convex', 'concave' albo 'tangent'.
+    Kierunek „w głąb ściany f1” wynika z orientacji krawędzi w tej ścianie (ściana leży po lewej stronie krawędzi
+    patrząc wzdłuż jej normalnej) - bez kosztownego mierzenia odległości."""
+    from OCP.TopAbs import TopAbs_REVERSED
+    p = edge.positionAt(.5)
+    n1 = np.array(faces[f1].normalAt(p).toTuple(), float)
+    n2 = np.array(faces[f2].normalAt(p).toTuple(), float)
+    t = np.array(edge.tangentAt(.5).toTuple(), float)
+    if edge.wrapped.Orientation() == TopAbs_REVERSED:
+        t = -t
+    d1 = np.cross(n1, t)
+    d1 = d1 / max(np.linalg.norm(d1), 1e-12)
+    s = float(n2 @ d1)
+    return 'tangent' if abs(s) < 2e-3 else ('concave' if s > 0 else 'convex')
+
+
+def _edge_kind_slow(faces, edge, f1, f2):
     p = edge.positionAt(.5)
     n1 = np.array(faces[f1].normalAt(p).toTuple(), float)
     n2 = np.array(faces[f2].normalAt(p).toTuple(), float)
@@ -1536,7 +1552,23 @@ def _edge_kind(faces, edge, f1, f2):
 
 def feature_faces(shape, seed):
     """Ściany otworu / kieszeni, do której należy ściana `seed` (indeks): ściany połączone krawędziami wklęsłymi albo
-    stycznymi, otoczone wyłącznie krawędziami wypukłymi (brzeg otworu). None - to nie jest zamknięty otwór w bryle."""
+    stycznymi, otoczone wyłącznie krawędziami wypukłymi (brzeg otworu), razem z zaokrągleniami i fazami brzegu.
+    Wskazana faza brzegu też wybiera cały otwór. None - to nie jest zamknięty otwór w bryle."""
+    group = _feature_faces(shape, seed)
+    if group or not 0 <= seed < len(shape.Faces()):
+        return group
+    faces = shape.Faces()
+    for edge in faces[seed].Edges():           # faza brzegu: otwór sąsiada, do którego ta faza należy
+        for j, f in enumerate(faces):
+            if j != seed and any(e.wrapped.IsSame(edge.wrapped) for e in f.Edges()):
+                if _faces_inward(shape, f):
+                    found = _feature_faces(shape, j)
+                    if found and seed in found:
+                        return found
+    return None
+
+
+def _feature_faces(shape, seed):
     from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     from OCP.TopExp import TopExp
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
@@ -1568,6 +1600,8 @@ def feature_faces(shape, seed):
                 return None
             if kind == 'tangent' and not _blend_like(shape, faces, ancestors, number, others[0]):
                 continue          # przez styczną krawędź tylko do zaokrąglenia brzegu / ściany otworu, nie na zewnętrzną ścianę bryły
+            if kind == 'convex' and _faces_inward(shape, faces[f]) and _bevel_like(shape, faces, ancestors, number, others[0], group):
+                kind = 'bevel'    # faza na brzegu otworu: ściana skośna w głąb otworu, między ścianą otworu a ścianą zewnętrzną
             if kind != 'convex':
                 group.add(others[0])
                 todo.append(others[0])
@@ -1576,6 +1610,51 @@ def feature_faces(shape, seed):
     if len(group) >= len(faces) or not any(_faces_inward(shape, faces[i]) for i in group):
         return None
     return group
+
+
+def _ray_hits_again(shape, point, direction, eps):
+    from OCP.BRepIntCurveSurface import BRepIntCurveSurface_Inter
+    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
+    d = np.asarray(direction, float)
+    d = d / max(np.linalg.norm(d), 1e-12)
+    start = np.asarray(point, float) + d * eps
+    inter = BRepIntCurveSurface_Inter()
+    inter.Init(shape.wrapped, gp_Lin(gp_Pnt(*[float(c) for c in start]), gp_Dir(*[float(c) for c in d])), 1e-7)
+    while inter.More():
+        if inter.W() > eps:
+            return True
+        inter.Next()
+    return False
+
+
+def _bevel_like(shape, faces, ancestors, number, i, group):
+    """Ściana za wypukłą krawędzią otworu jest fazą jego brzegu: patrzy skośnie w głąb otworu - promień poprowadzony z niej
+    w kierunku jej normalnej pozbawionej składowej wzdłuż sąsiedniej ściany zewnętrznej trafia w przeciwległą ścianę
+    otworu. Zewnętrzna ściana bryły (promień ucieka w powietrze) - nie."""
+    face = faces[i]
+    outer = []
+    for edge in face.Edges():
+        if not ancestors.Contains(edge.wrapped):
+            continue
+        for o in (number(x) for x in ancestors.FindFromKey(edge.wrapped)):
+            if o != i and o not in group:
+                outer.append(o)
+    if not outer:
+        return False
+    big = max(outer, key=lambda o: faces[o].Area())
+    if faces[big].Area() < face.Area():
+        return False                              # faza jest mała w porównaniu ze ścianą zewnętrzną
+    p = kernel._face_point(face)
+    try:
+        n = np.array(face.normalAt(cq.Vector(*p)).toTuple(), float)
+        m = np.array(faces[big].normalAt(cq.Vector(*kernel._face_point(faces[big]))).toTuple(), float)
+    except Exception:
+        return False
+    m = m / max(np.linalg.norm(m), 1e-12)
+    d = n - m * float(n @ m)
+    if np.linalg.norm(d) < .3:
+        return False                              # ściana prawie równoległa do zewnętrznej - to nie faza otworu
+    return _ray_hits_again(shape, p, d, 1e-4 * max(1.0, _scale(shape)))
 
 
 def _blend_like(shape, faces, ancestors, number, i):
@@ -1630,7 +1709,14 @@ def feature_split(shape, ids):
     if not maker.IsDone():
         raise kernel.CadError('Tego otworu nie da się wyodrębnić z bryły.')
     filled = cq.Shape.cast(maker.Shape())
-    hole = filled.cut(shape)
+    # brakujący materiał liczony tylko w pudełku wokół ścian otworu (dużo szybciej niż różnica całych brył)
+    box = kernel.bounds(cq.Compound.makeCompound([faces[i] for i in ids]))
+    pad = max(1.0, 0.05 * max(box.xlen, box.ylen, box.zlen))
+    cage = cq.Solid.makeBox(box.xlen + 2 * pad, box.ylen + 2 * pad, box.zlen + 2 * pad, cq.Vector(box.xmin - pad, box.ymin - pad, box.zmin - pad))
+    try:
+        hole = cage.intersect(filled).cut(cage.intersect(shape))
+    except Exception:
+        hole = filled.cut(shape)
     if hole.Volume() < 1e-9:
         raise kernel.CadError('Tego otworu nie da się wyodrębnić z bryły.')
     return filled, hole
@@ -1665,17 +1751,25 @@ def hole_blends(shape, group):
     TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
     out = []
     for i in group:
+        tangent_out = convex_out = convex_in = False
         for edge in faces[i].Edges():
             if not ancestors.Contains(edge.wrapped):
                 continue
             others = [next(j for j, x in enumerate(faces) if x.wrapped.IsSame(f)) for f in ancestors.FindFromKey(edge.wrapped)]
-            others = [o for o in others if o != i and o not in group]
+            others = [o for o in others if o != i]
+            if not others:
+                continue
             try:
-                if others and _edge_kind(faces, edge, i, others[0]) == 'tangent':
-                    out.append(i)
-                    break
+                kind = _edge_kind(faces, edge, i, others[0])
             except Exception:
                 continue
+            if others[0] in group:
+                convex_in |= kind == 'convex'
+            else:
+                tangent_out |= kind == 'tangent'
+                convex_out |= kind == 'convex'
+        if tangent_out or (convex_out and convex_in):      # zaokrąglenie brzegu albo faza (skośna ściana między otworem a zewnętrzną)
+            out.append(i)
     return out
 
 
@@ -1723,31 +1817,52 @@ def featmove_shape(shape, recipe, strict=False):
     v = tuple(float(c) for c in recipe['v'])
     tr, rot = (v, (0, 0, 0)) if recipe['mode'] == 'move' else ((0, 0, 0), v)
 
-    def moved_out(base, group):
-        filled, hole = feature_split(base, group)
+    def moved_out(base, group, split=None):
+        filled, hole = split or feature_split(base, group)
         moved = kernel.transform(hole, tr, rot, recipe.get('center'))
-        result = kernel.valid(filled.cut(moved))
-        free = abs(filled.Volume() - moved.Volume() - result.Volume()) <= 1e-6 * max(1.0, filled.Volume()) + 1e-6
-        return result, free
+        return kernel.valid(filled.cut(moved)), filled
 
-    result, free = moved_out(shape, ids)
-    if free:
-        return result
     blends = hole_blends(shape, ids)
-    if not blends:
-        return result                 # zwykły otwór połączony z innym - tak jak chciał użytkownik
     faces = shape.Faces()
-    if strict:
-        raise BlendCollision('Zaokrąglenie brzegu otworu nachodziłoby na inny otwór albo wychodziło poza bryłę.',
-                             [tuple(kernel._face_point(faces[i])) for i in blends])
-    sharp = _remove_faces(shape, blends)
-    seed = face_at_point(sharp, recipe['point'])
-    group = feature_faces(sharp, seed) if seed is not None else _nearest_feature(sharp, recipe['point'])
-    if not group:
-        raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
-    return moved_out(sharp, group)[0]
+    split = feature_split(shape, ids)
+    if blends:
+        filled, hole = split
+        if not _blends_fit(filled, faces, blends, kernel.transform_matrix(hole, tr, rot, recipe.get('center'))):
+            if strict:
+                raise BlendCollision('Zaokrąglenie brzegu otworu nachodziłoby na inny otwór albo wychodziło poza bryłę.',
+                                     [tuple(kernel._face_point(faces[i])) for i in blends])
+            sharp = _remove_faces(shape, blends)
+            seed = face_at_point(sharp, recipe['point'])
+            group = feature_faces(sharp, seed) if seed is not None else _nearest_feature(sharp, recipe['point'])
+            if not group:
+                raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
+            return moved_out(sharp, group)[0]
+    return moved_out(shape, ids, split)[0]
 
 
+def _blends_fit(filled, faces, blends, matrix):
+    """Czy zaokrąglenia brzegu otworu po przesunięciu nadal leżą w materiale bryły z wypełnionym otworem (nie nachodzą na
+    inny otwór ani nie wychodzą poza bryłę): próbki wnętrza każdej ściany zaokrąglenia muszą być wewnątrz bryły."""
+    from OCP.BRepTools import BRepTools
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    matrix = np.asarray(matrix, float)
+    for i in blends:
+        face = faces[i]
+        u0, u1, v0, v1 = BRepTools.UVBounds_s(face.wrapped)
+        surf = BRepAdaptor_Surface(face.wrapped)
+        for a in np.linspace(.1, .9, 7):
+            for b in (.25, .5, .75):
+                try:
+                    pnt = surf.Value(u0 + a * (u1 - u0), v0 + b * (v1 - v0))
+                    p = np.array([pnt.X(), pnt.Y(), pnt.Z()], float)
+                    if face.distance(cq.Vertex.makeVertex(*p)) > 1e-6:
+                        continue            # punkt poza obrysem ściany (ściana przycięta)
+                except Exception:
+                    continue
+                q = matrix[:3, :3] @ p + matrix[:3, 3]
+                if kernel.point_state(filled, tuple(float(c) for c in q)) != 'in':
+                    return False
+    return True
 def run_featmove(bodies, recipe):
     """Przesunięcie / obrót otworu albo kieszeni wewnątrz bryły: otwór wskazany punktem na jednej z jego ścian."""
     body = _body(bodies, recipe['id'])
@@ -3728,6 +3843,117 @@ def _rebase_sheet(recipe, before, current):
     return dict(recipe, flanges=[*new, *flanges[len(old):]])
 
 
+# ---------- przeliczanie lokalne: krok w innym miejscu bryły niż wcześniejsza zmiana ----------
+LOCAL_TYPES = {'thread', 'thread_real', 'mod', 'featmove', 'shell', 'tilt', 'extrude', 'revolve', 'sweep', 'loft', 'pattern', 'mirror'}
+_SIG_CACHE = {}
+
+
+def _face_signatures(shape):
+    """Podpisy ścian bryły (rodzaj powierzchni, liczba krawędzi, pudełko) z pudełkami - do szybkiego porównania dwóch
+    wersji bryły bez operacji logicznych."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+    hit = _SIG_CACHE.get(id(shape))
+    if hit is not None and hit[0]() is shape:
+        return hit[1]
+    out = {}
+    for f in shape.Faces():
+        box = Bnd_Box()
+        BRepBndLib.Add_s(f.wrapped, box, False)
+        if box.IsVoid():
+            continue
+        lo, hi = box.CornerMin(), box.CornerMax()
+        edges = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(f.wrapped, TopAbs_EDGE, edges)
+        key = (f.geomType(), edges.Extent(), *(round(v, 4) for v in (lo.X(), lo.Y(), lo.Z(), hi.X(), hi.Y(), hi.Z())))
+        out.setdefault(key, []).append((lo.X(), lo.Y(), lo.Z(), hi.X(), hi.Y(), hi.Z()))
+    if len(_SIG_CACHE) > 256:
+        _SIG_CACHE.clear()
+    _SIG_CACHE[id(shape)] = (weakref.ref(shape), out)
+    return out
+
+
+_VOL_CACHE = {}
+
+
+def _volume(shape):
+    """Objętość bryły zapamiętana dla kształtu (te same bryły porównywane są przy wielu krokach)."""
+    hit = _VOL_CACHE.get(id(shape))
+    if hit is not None and hit[0]() is shape:
+        return hit[1]
+    value = float(shape.Volume())
+    if len(_VOL_CACHE) > 512:
+        _VOL_CACHE.clear()
+    _VOL_CACHE[id(shape)] = (weakref.ref(shape), value)
+    return value
+
+
+def _changed_box(a, b):
+    """Pudełko obejmujące ściany, które różnią się między dwiema wersjami bryły (None - brak różnic)."""
+    sa, sb = _face_signatures(a), _face_signatures(b)
+    boxes = []
+    for key in sa.keys() | sb.keys():
+        na, nb = sa.get(key, []), sb.get(key, [])
+        if len(na) != len(nb):
+            boxes += na + nb
+    if not boxes:
+        return None
+    arr = np.array(boxes, float)
+    return np.concatenate([arr[:, :3].min(axis=0), arr[:, 3:].max(axis=0)])
+
+
+def local_replay(before, after, current, recipe):
+    """Krok, który zmienia jedną bryłę, a wcześniejsza zmiana tej bryły leży w innym miejscu niż obszar tego kroku:
+    wynik kroku nie jest liczony od nowa - jego fragment (z poprzedniego wyniku) trafia do nowej bryły, a reszta bryły
+    pochodzi z nowej wersji. Dwie szybkie operacje z prostopadłościanem zamiast np. kilkunastosekundowego gwintu.
+    None - nie da się (wtedy zwykłe przeliczenie)."""
+    if recipe.get('type') not in LOCAL_TYPES:
+        return None
+    try:
+        touched = changed_ids(before, after)
+        if len(touched) != 1:
+            return None
+        (bid,) = touched
+        old_in = next((b for b in before if b.id == bid), None)
+        old_out = next((b for b in after if b.id == bid), None)
+        new_in = next((b for b in current if b.id == bid), None)
+        if old_in is None or old_out is None or new_in is None or old_in.kind != 'solid' or new_in.kind != 'solid':
+            return None
+        if new_in.shape is old_in.shape:
+            return None
+        deps = reads(recipe, current)
+        if deps is None or (deps - {bid}) & changed_ids(before, current):
+            return None
+        if len(old_in.shape.Solids()) != 1 or len(new_in.shape.Solids()) != 1 or len(old_out.shape.Solids()) != 1:
+            return None
+        step_box = _changed_box(old_in.shape, old_out.shape)        # gdzie ten krok zmienił bryłę
+        edit_box = _changed_box(old_in.shape, new_in.shape)         # gdzie wcześniejsza zmiana zmieniła bryłę
+        if step_box is None or edit_box is None:
+            return None
+        size = np.maximum(step_box[3:] - step_box[:3], 0)
+        pad = max(1.0, 0.05 * float(size.max()))
+        lo, hi = step_box[:3] - pad, step_box[3:] + pad
+        if np.all(edit_box[:3] <= hi + 1e-6) and np.all(edit_box[3:] >= lo - 1e-6):
+            return None                     # zmiana sięga obszaru tego kroku - trzeba liczyć od nowa
+        cage = cq.Solid.makeBox(*(hi - lo), cq.Vector(*lo))
+        outside = new_in.shape.cut(cage)
+        inside = old_out.shape.intersect(cage)
+        shape = kernel.boolean('union', outside, [inside])
+        if len(shape.Solids()) != 1 or not shape.isValid():
+            return None
+        expect = _volume(new_in.shape) + _volume(old_out.shape) - _volume(old_in.shape)
+        if abs(_volume(shape) - expect) > 1e-5 * max(1.0, abs(expect)) + 1e-3:
+            return None
+        body = old_out.changed(shape, None)
+        body = replace(body, name=new_in.name, folder=new_in.folder, color=old_out.color, visible=old_out.visible, group=new_in.group)
+        return tuple(body if b.id == bid else b for b in current)
+    except Exception:
+        return None
+
+
 def _replay_step(current, recipe, values):
     """Krok przeliczany ponownie (w wątku przeliczania; proces liczący okazał się dwa razy wolniejszy - przesyłanie
     dużych brył tam i z powrotem kosztuje więcej niż samo liczenie)."""
@@ -3875,7 +4101,11 @@ def _rebuild(base, steps, ctx, job):
                     recipe = _follow_recipe_plane(recipe, before, after, current)
                     if recipe is not info.get('op'):
                         info = dict(info, op=recipe)
-                    result = _replay_step(current, recipe, ctx.values)
+                    result = None if (info != original or expr_step) else local_replay(before, after, current, recipe)
+                    if result is None:
+                        result = _replay_step(current, recipe, ctx.values)
+                    elif job is not None:
+                        job['local'] = job.get('local', 0) + 1
                 except Exception as exc:
                     result, why = None, str(exc) or exc.__class__.__name__
                     if recipe.get('type') == 'mod' and not failed:      # wcześniejszy krok nie wyszedł: to on jest przyczyną, nie zaokrąglenie

@@ -1,5 +1,6 @@
 """Biblioteka obiektów i szkiców (zakładka Biblioteka)."""
 import os
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 import tempfile
 import unittest
 from pathlib import Path

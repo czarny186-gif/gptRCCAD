@@ -1,5 +1,6 @@
 """Kolor (zakładka Edycja): kolorowanie brył, kolor domyślny, zapis w projekcie, import w folderze i w kolorach."""
 import os
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 import tempfile
 import time
 import unittest

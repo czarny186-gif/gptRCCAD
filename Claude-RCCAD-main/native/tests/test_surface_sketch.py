@@ -1,4 +1,6 @@
 """Conformal sketch material across cylindrical, sharp and rounded corners."""
+import os
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu
 import math
 import tempfile
 import unittest

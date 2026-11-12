@@ -1,5 +1,6 @@
 """Wyrównaj rozmiar (zakładka Szkic): takie same kształty przyjmują wymiary wzorca na żywo; Zastosuj / Zamknij."""
 import os
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 import tempfile
 import time
 import unittest

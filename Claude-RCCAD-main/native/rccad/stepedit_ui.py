@@ -198,7 +198,7 @@ class StepEditTools:
         if doc.merging:
             if doc.finish_merge():
                 self._step_replayed = True
-            else:
+            elif not doc.held:            # bez zmian: model wraca tam, gdzie był (zmiana wstrzymana - zostaje na kroku)
                 QTimer.singleShot(0, lambda b=edit['back']: self._step_restore(b))
             return
         if doc.replace_next:              # narzędzie zamknięte bez Zastosuj: model wraca tam, gdzie był

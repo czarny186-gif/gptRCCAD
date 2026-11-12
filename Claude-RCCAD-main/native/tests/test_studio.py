@@ -1,5 +1,6 @@
 """Okno Studio: układ jak w HTML oraz przepływ szkic → wyciągnięcie → Boolean / zaokrąglenie / lustro."""
 import os, faulthandler
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 DIAG=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w")
 # strażnik zawieszenia: włączany w setUp każdego testu okna i wyłączany w tearDown (nie liczy czasu innych modułów)
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
@@ -1960,6 +1961,39 @@ class StudioTests(unittest.TestCase):
             v1=vol();self.assertNotAlmostEqual(v1,v0,0)                      # więcej liter - inna objętość
             self.assertGreater(abs(v1-50*25*10),abs(v0-50*25*10),mode)       # nowy napis nadal wycięty / dodany
 
+    def test_history_changes_wait_for_commit_button(self):
+        """„Zatwierdź zmianę”: po edycji kroku dalsze kroki czekają (pomarańczowe), można zmienić kolejny krok, a dopiero
+        przycisk przelicza wszystko raz i wraca na koniec historii."""
+        w=self.w;w.history_hold=True;w.hist_button.setChecked(True)
+        self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        self.sketch('circle',(5,5),(7,5));c=w.document.bodies[-1];w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(c);w.ex_op.setCurrentIndex(2);w.ex_value.setValue(30);w.apply_extrude();self.wait();w.set_mode(None)
+        self.sketch('rect',(40,0),(50,10));w.set_mode(None)
+        n=len(w.document.infos()[0]);self.assertFalse(w.hist_commit.isEnabled())
+        vol=lambda:sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid')
+        replays=[]
+        orig=hist.rebuild
+        with patch.object(hist,'rebuild',side_effect=lambda *a,**kw:(replays.append(1),orig(*a,**kw))[1]):
+            w.history_edit(2);w.ex_value.setValue(8);w.apply_extrude();self.wait();self.wait()
+            self.assertEqual(replays,[])                                              # nic nie przeliczone
+            self.assertIsNotNone(w.document.pending);self.assertTrue(w.hist_commit.isEnabled())
+            self.assertEqual(len(w.document.infos()[0]),n);self.assertEqual(w.document.infos()[1],2)   # model na zmienionym kroku
+            self.assertIsNone(w._step_edit)
+            self.assertIn('fff4e5',w._hist_widgets[n-1][-1].styleSheet())             # dalsze kroki czekają
+            # druga zmiana przed zatwierdzeniem: średnica otworu
+            w.history_edit(3);body=w.document.get(c.id);meta=sm.apply_values(body.meta,[3])
+            w._commit_sketch_edit(body,w._meta_shape(body.plane,meta),meta);self.wait();w.set_mode(None);self.wait()
+            self.assertEqual(replays,[]);self.assertEqual(w.document.infos()[1],3)
+            w.hist_commit.click();self.wait();self.wait()
+        self.assertEqual(len(replays),1)                                                 # jedno przeliczenie dla obu zmian
+        self.assertIsNone(w.document.pending);self.assertFalse(w.hist_commit.isEnabled())
+        infos,cur=w.document.infos();self.assertEqual((len(infos),cur),(n,n-1))
+        self.assertFalse([i for i in infos if i.get('stale')])
+        self.assertAlmostEqual(vol(),20*10*8-math.pi*9*8,0)                               # wyższa bryła z większym otworem
+        w.undo();self.wait()
+        self.assertIsNotNone(w.document.pending)                                         # Cofnij: zmiany znowu czekają na zatwierdzenie
+
     def test_history_edit_fillet_and_boolean_prefill_the_tool(self):
         w=self.w
         a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(10,10,40)).prepared()
@@ -2146,6 +2180,23 @@ class StudioTests(unittest.TestCase):
         w.history_edit(2);w.ex_value.setValue(500);w.apply_extrude();long_wait();long_wait()
         shape=check(15);self.assertAlmostEqual(k.bounds(shape).zmax,501,3);self.assertEqual(k.point_state(shape,(54,-41.5,450)),'out')
         w.undo();long_wait();self.assertAlmostEqual(k.bounds(check(15)).zmax,301,3)
+
+    def test_hidden_and_locked_objects_survive_saving_the_project(self):
+        import tempfile
+        w=self.w;a=Body('A',k.box(5,5,5)).prepared();b=Body('B',k.transform(k.box(5,5,5),(10,0,0))).prepared();c=Body('C',k.transform(k.box(5,5,5),(20,0,0))).prepared()
+        w.document.commit([a,b,c]);w.refresh()
+        w.objects_hide(a.id);w.objects_lock(b.id)
+        self.assertTrue(w.document.dirty)
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'Ukryte.rccadx'
+            w.document.save(path);self.assertFalse(w.document.dirty)
+            w.new_project();self.assertEqual(w.hidden_ids,set())
+            w.document._saved_revision=w.document._revision
+            w.open_path(path);self.wait()
+            self.assertEqual(w.hidden_ids,{a.id});self.assertEqual(w.locked_ids,{b.id})
+            self.assertIn(a.id,w.shown_hidden());self.assertNotIn(c.id,w.shown_hidden())
+            self.assertFalse(w.document.dirty)
+            w.objects_hide(a.id);self.assertTrue(w.document.dirty);self.assertNotIn(a.id,w.shown_hidden())
 
     def test_project_file_given_at_start_opens(self):
         import tempfile
@@ -2473,6 +2524,29 @@ class StudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'p.rccadx';w.document.save(path);loaded=Document.load(path)
             self.assertEqual(hist.link_of(loaded.get(a.id)),hist.link_of(w.document.get(a.id)))
+
+    def test_hole_with_chamfer_or_fillet_highlights_and_moves_with_its_edge(self):
+        w=self.w
+        for kind in ('chamfer','fillet'):
+            w.document.clear_all();w.refresh()
+            box=cq.Workplane().box(80,60,20).val().cut(cq.Workplane().center(10,0).circle(6).extrude(30,both=True).val())
+            idx={i for i,e in enumerate(box.Edges()) if e.geomType()=='CIRCLE' and e.Center().z>9}
+            a=Body('A',k.blend(box,idx,2.0,kind)).prepared();w.document.commit([a]);w.refresh()
+            wall=next(f for f in a.shape.Faces() if f.geomType()=='CYLINDER');pt=k._face_point(wall)
+            edge=next(f for f in a.shape.Faces() if f.geomType()==('CONE' if kind=='chamfer' else 'TORUS'));ept=k._face_point(edge)
+            w.set_mode('move')
+            with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array(ept))):
+                t=time.time();w.view_hover(5,5);self.assertLess(time.time()-t,2.0)
+            self.assertTrue(w.view.preview_items,kind)                               # najechanie na fazę / zaokrąglenie podświetla cały otwór
+            with patch.object(w,'pick_object',return_value=a.id),patch.object(w.view,'pick_face',return_value=(a.id,np.array((-1.0,0,0)),np.array(pt))):
+                w.view_clicked(5,5,False,False)
+            self.assertIsNotNone(w.t_feature,kind)
+            w.t_spins[0].setValue(-15);w.apply_transform();self.wait()
+            sh=w.document.get(a.id).shape;types=[f.geomType() for f in sh.Faces()]
+            self.assertEqual(types.count('CONE' if kind=='chamfer' else 'TORUS'),1,kind)   # faza / zaokrąglenie przesunięte razem z otworem
+            self.assertAlmostEqual(sh.Volume(),a.shape.Volume(),2)
+            self.assertEqual(k.point_state(sh,(-5,0,0)),'out');self.assertEqual(k.point_state(sh,(10,0,0)),'in')
+            w.set_mode(None)
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

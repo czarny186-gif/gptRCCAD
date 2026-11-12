@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.5.4 — historia sprawdzona na projekcie użytkownika
+# RCCAD Desktop 0.5.5 — Zatwierdź zmianę, szybsza historia, ukryte obiekty w pliku
+
+- **Przycisk „Zatwierdź zmianę” na pasku historii** (obok „Pokaż wygaszone”): po zmianie kroku w historii dalsze kroki czekają (jasnopomarańczowe), a przycisk świeci na pomarańczowo. Można zmienić kilka kroków po kolei; kliknięcie przycisku przelicza wszystko raz, dopasowuje dalsze kroki i wraca na koniec projektu. Cofnij działa także na zatwierdzenie.
+- **Przeliczanie tylko tego, co się zmieniło**: krok leżący w innym miejscu bryły niż zmiana (np. prawdziwy gwint na przedniej ścianie, gdy zmieniasz otwór na górze) nie jest liczony od nowa - jego fragment bryły przechodzi do nowej bryły. W projekcie z gwintem M64 przeliczenie po zmianie otworu trwa ok. 2 razy krócej, a wynik jest identyczny.
+- **Przesuwanie otworu z fazą albo zaokrągleniem brzegu**: faza przesuwa się razem z otworem (wcześniej znikała), a przesunięcie liczy się kilka razy szybciej (ok. 3 s zamiast 8-9 s w dużej bryle). Gdy faza / zaokrąglenie nachodziłoby na inny otwór, zostaje usunięte z bryły i z historii (jedno Cofnij przywraca).
+- **Podświetlenie otworu w Przesuń / Obróć** pojawia się od razu po najechaniu (także na fazę albo zaokrąglenie brzegu) - wcześniej liczyło się kilka sekund.
+- **Ukryte i zablokowane obiekty z listy Obiekty zapisują się w projekcie** - po otwarciu pliku są dalej ukryte / zablokowane.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.4 — historia sprawdzona na projekcie użytkownika
 
 - **Edycja wyciągnięcia z historii ze strzałką**: dwuklik w krok Wyciągnięcia otwiera narzędzie z pomarańczową strzałką na profilu z kroku - przeciągnięcie zmienia wysokość jak przy zwykłym wyciąganiu (wcześniej strzałki nie było).
 - **Niższa / wyższa bryła**: otwór wycięty ze szkicu na górnej ścianie, napis wyciągnięty na górze i zaokrąglenie brzegu otworu idą za nową górą (wcześniej Wycięcie świeciło na czerwono, a zaokrąglenie znikało z historii).
@@ -8,10 +20,6 @@
 - **Przesunięty otwór po zmianie bryły**: krok Przesunięcie otworu odnajduje otwór także wtedy, gdy wcześniejsza zmiana przesunęła go (np. wyższa bryła).
 - Zaokrąglenie nie jest usuwane z historii, gdy przyczyną jest błąd wcześniejszego kroku.
 - Przeliczanie prawdziwego gwintu (zwoje) trwa kilka - kilkanaście sekund przy każdej zmianie wcześniejszych kroków; gwint kosmetyczny przelicza się od razu.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.3 — Połącz / Rozłącz, rysunek i biblioteka z kilku brył
 

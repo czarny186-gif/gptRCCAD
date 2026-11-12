@@ -1,5 +1,6 @@
 """Section picking follows the same half-space as the displayed surfaces."""
 import os,unittest
+os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import numpy as np
 import cadquery as cq

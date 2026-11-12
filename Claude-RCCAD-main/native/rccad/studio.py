@@ -1,6 +1,7 @@
 """Okno „Studio”: układ, grafika i sposób modelowania / szkicowania odtworzone z wersji HTML (natywnie, bez przeglądarki)."""
 from __future__ import annotations
 import json
+import os
 import math
 import uuid
 import cadquery as cq
@@ -243,6 +244,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self.hidden_ids: set[str] = set()
         self.revealed_ids: set[str] = set()      # szkice wygaszone po wyciągnięciu, pokazane okiem na liście
         self.locked_ids: set[str] = set()
+        self.history_hold = os.environ.get('RCCAD_HISTORY_HOLD', '1') != '0'      # zmiany w historii czekają na „Zatwierdź zmianę”
         self._obj_no: dict[str, int] = {}
         self._obj_count: dict[str, int] = {}
         self._obj_doc = None
@@ -726,6 +728,13 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self.hist_ghost.setToolTip('Wygaszone szkice (użyte do wyciągnięcia) pokazują się ponownie')
         self.hist_ghost.toggled.connect(lambda *_: self.refresh())
         hl.addWidget(self.hist_ghost)
+        self.hist_commit = QPushButton('Zatwierdź zmianę')
+        self.hist_commit.setObjectName('chip')
+        self.hist_commit.setEnabled(False)
+        self.hist_commit.setToolTip('Zmiany zrobione w historii (edycja kroku, wstawiony krok) czekają: dalsze kroki przeliczą się\n'
+                                    'i dopasują dopiero po kliknięciu - potem wracasz na koniec projektu.')
+        self.hist_commit.clicked.connect(lambda _=False: self.history_commit_changes())
+        hl.addWidget(self.hist_commit)
         self.hist_bar.hide()
         self._lib_action = None        # biblioteka: wskazywanie obiektu na polu albo wybór miejsca wstawienia
         self.libraries = {}
@@ -3251,7 +3260,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         utworzył - historia nie dostaje nowego kroku ani duplikatu, a dalsze kroki (wyciągnięcia, wycięcia, zaokrąglenia)
         przeliczają się na zmienionych obiektach. False - tej zmiany nie da się tak zapisać (wtedy zwykły nowy krok)."""
         doc = self.document
-        if not changes or doc.can_redo or doc.merging or self.step_editing or self.busy:
+        if not changes or doc.can_redo or doc.merging or self.step_editing or self.busy or doc.pending is not None:
             return False
         states = doc.states()
         if any(hist.change_step(states, i) is None for i in changes):
@@ -8148,9 +8157,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             found = None
             try:
                 faces = hist.feature_faces(body.shape, seed)
-                if faces:
-                    filled, hole = hist.feature_split(body.shape, faces)
-                    found = (faces, hole, kernel.display_mesh(hole))
+                if faces:          # podświetlenie: same ściany otworu (szybko, bez wyodrębniania bryły otworu)
+                    walls = kernel.compound([body.shape.Faces()[i] for i in sorted(faces)])
+                    found = (faces, walls, kernel.display_mesh(walls))
             except Exception:
                 found = None
             for other in (found[0] if found else ()):        # ta sama odpowiedź dla każdej ściany tego otworu
@@ -8653,7 +8662,14 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self.view.locked = frozenset(self.locked_ids)
         self._prefetch_sketch_regions()
         self.objects_update()
+        self.document.hold = self.history_hold
+        if self.document.held:          # zmiana kroku zapisana, dalsze kroki czekają na „Zatwierdź zmianę”
+            self.document.held = False
+            self._step_edit, self._step_replayed = None, False
+            self.toast('Zmiana zapisana w kroku. Możesz zmieniać kolejne kroki - dalsze kroki przeliczą się po kliknięciu '
+                       '„Zatwierdź zmianę” na pasku historii.', 7000)
         self._hist_update()
+        self._hist_commit_update()
         if self.document.deferred and not self.busy:
             self._replay_deferred()
         highlighted = [] if self.mode in ('sheet', 'flange', 'hem', 'tabwall') else self.selected
@@ -8737,8 +8753,10 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         return cache[key]
 
     @staticmethod
-    def _hist_chip_style(i, info, current):
+    def _hist_chip_style(i, info, current, pending=None):
         style = []
+        if pending is not None and i >= pending:      # krok czeka na przeliczenie („Zatwierdź zmianę”)
+            style.append('background:#fff4e5;')
         if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
             style.append('border-style:dashed; border-color:#9fb2c4;')
         if info.get('group'):
@@ -8760,7 +8778,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         if self._hist_trim:
             infos = infos[:current + 1]
         keyed = [(hist.step_label(i), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos]
-        mode = tuple(sorted(self._hist_folded))
+        mode = (tuple(sorted(self._hist_folded)), self.document.pending_index())
         old = self._hist_sig
         if old is not None and old == (keyed, current, mode):
             return
@@ -8825,7 +8843,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             if not isinstance(chip, _HistChip):
                 continue
             chip.setChecked(i == current)
-            sheet = self._hist_chip_style(i, infos[i], current)
+            sheet = self._hist_chip_style(i, infos[i], current, self.document.pending_index())
             if chip.property('sheet') != sheet:
                 chip.setProperty('sheet', sheet)
                 chip.setStyleSheet(sheet)
@@ -8835,6 +8853,47 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self._hist_stretch = True
         if active is not None:
             QTimer.singleShot(0, lambda a=active: self.hist_scroll.ensureWidgetVisible(a, 40, 0) if a.parent() else None)
+
+    def _hist_commit_update(self):
+        if not hasattr(self, 'hist_commit'):
+            return
+        waiting = self.document.pending is not None
+        self.hist_commit.setEnabled(waiting and not self.busy)
+        sheet = 'QPushButton#chip { background:#f39a21; color:white; border-color:#d97c06; font-weight:700; }' if waiting else ''
+        if self.hist_commit.styleSheet() != sheet:
+            self.hist_commit.setStyleSheet(sheet)
+        if waiting and not self.hist_bar.isVisible() and hasattr(self, 'hist_button'):
+            self.hist_button.setChecked(True)            # pasek historii widoczny, żeby było widać przycisk
+
+    def history_commit_changes(self):
+        """„Zatwierdź zmianę”: dalsze kroki przeliczają się na zmienionych krokach (tylko te, których zmiana dotyczy), model
+        wraca na koniec historii."""
+        doc = self.document
+        if doc.pending is None or self.busy:
+            return
+        if self.mode is not None:
+            self.set_mode(None)
+            if self.mode is not None:
+                return
+        if doc.merging:
+            doc.finish_merge()
+        head, start, steps = doc.pending_job()
+        constraints = self._hist_ctx()
+
+        def apply(result):
+            tail, failed = result
+            doc.begin_edit()
+            doc.rewrite(list(head) + list(tail), len(head) + len(tail) - 1)
+            self.selected, self.edges, self.override = [], {}, {}
+            self._hist_sig = None
+            self.toast(f'Zmiany zatwierdzone, {failed} kroków wymaga poprawy (czerwone, powód w dymku).' if failed else
+                       'Zmiany zatwierdzone - dalsze kroki dopasowane.', 4500)
+
+        if not steps:
+            doc.pending = None
+            self.refresh()
+            return
+        self.run_history(lambda job: hist.rebuild(start, steps, constraints, job), apply)
 
     def _history_menu(self, index, pos):
         from PySide6.QtWidgets import QMenu
@@ -8883,6 +8942,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
     def history_restructure(self, change):
         """Wyłączenie / usunięcie / zmiana kolejności kroku: nowa oś czasu jest przeliczana w tle, poprzednią można przywrócić strzałką."""
         if self.busy:
+            return
+        if self.document.pending is not None:
+            self.toast('Najpierw kliknij „Zatwierdź zmianę” na pasku historii.', 4000)
             return
         states = self.document.states()
         if self.mode is not None:
@@ -8955,13 +9017,14 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self.set_mode(None)
             self.document = doc
             self.selected = []
+            self._restore_view_state()
 
         self.run_operation('Otwieranie autozapisu', lambda: Document.load(auto), loaded, True)
 
     def _autosave(self):
         """Co kilka minut zapisuje kopię projektu obok pliku (albo w ~/.rccad) w tle; nie zmienia stanu „zapisany”."""
         # zapisywane są tylko zatwierdzone kroki, więc autozapis działa także przy włączonym narzędziu (np. Kołnierz) - nie w trakcie operacji
-        if self.busy or not self.document.dirty or not self.document.can_undo and not self.document.can_redo:
+        if self.busy or self.document.pending is not None or not self.document.dirty or not self.document.can_undo and not self.document.can_redo:
             return
         document, path = self.document, self._autosave_path()
         revision = document._revision
@@ -9343,6 +9406,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         else:
             self.hidden_ids.difference_update(ids)
             revealed.update(i for i in ids if not self.document.get(i).visible)
+        self._store_view_state()
 
     def objects_hide(self, oid):
         """Oko na liście: klikniętą pozycję (szyk „jako jeden element” to jedna pozycja); gdy jest wśród zaznaczonych -
@@ -9358,7 +9422,21 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         else:
             self.locked_ids.update(members)
             self.selected = [i for i in self.selected if i not in members]
+        self._store_view_state()
         self.refresh()
+
+    def _store_view_state(self, mark=True):
+        """Ukryte / zablokowane obiekty z listy Obiekty trafiają do projektu (zapis pliku je zachowuje)."""
+        live = {b.id for s in [self.document.bodies] for b in s}
+        known = {b.id for bodies, _ in self.document.states() for b in bodies} | live
+        self.document.set_view_state(self.hidden_ids & known, self.locked_ids & known,
+                                     getattr(self, 'revealed_ids', set()) & known, mark=mark)
+
+    def _restore_view_state(self):
+        state = self.document.view_state or {}
+        self.hidden_ids = set(state.get('hidden') or ())
+        self.locked_ids = set(state.get('locked') or ())
+        self.revealed_ids = set(state.get('revealed') or ())
 
     # ---------- grupy (foldery) na liście obiektów ----------
     def _folder_targets(self, ids):
@@ -9658,14 +9736,16 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self.section_origin=self.section_normal=None
             self.document = doc
             self.selected = []
-            self.hidden_ids, self.locked_ids = set(), set()
-            self.revealed_ids = set()
+            self._restore_view_state()          # ukryte i zablokowane obiekty takie, jak przy zapisie
 
         self.run_operation('Otwieranie projektu', lambda: Document.load(path), loaded, True)
 
     def save_project(self, save_as=False, compact=False):
         """compact: zapis kompaktowy - pełna geometria tylko co kilka kroków historii (oraz bieżący krok); pozostałe kroki
         program odtwarza z ich przepisów przy otwieraniu projektu. Plik jest kilka razy mniejszy, otwieranie trwa dłużej."""
+        if self.document.pending is not None:
+            self.toast('Najpierw kliknij „Zatwierdź zmianę” na pasku historii - potem zapisz projekt.', 5000)
+            return
         path = self.document.path
         if save_as is True or path is None:
             title = 'Zapisz projekt kompaktowo' if compact else 'Zapisz projekt'
@@ -10173,6 +10253,13 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         if answer == QMessageBox.Discard:
             event.accept()
         elif answer == QMessageBox.Save:
+            doc = self.document
+            if doc.pending is not None:          # niezatwierdzone zmiany w historii: przeliczone przed zapisem
+                head, start, steps = doc.pending_job()
+                if steps:
+                    tail, _ = hist.rebuild(start, steps, self._hist_ctx())
+                    doc.rewrite(list(head) + list(tail), len(head) + len(tail) - 1)
+                doc.pending = None
             path = self.document.path
             if path is None:
                 value, _ = QFileDialog.getSaveFileName(self, 'Zapisz projekt', 'Projekt.rccadx', 'RCCAD (*.rccadx)')
