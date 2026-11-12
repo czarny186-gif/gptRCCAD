@@ -120,9 +120,16 @@ def _same_ids(old_op, bodies, info):
             mapping[b] = a
         elif isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)) and len(a) == len(b):
             mapping.update({y: x for x, y in zip(a, b) if isinstance(x, str) and isinstance(y, str) and x != y})
+    if new_op.get('type') == 'text' and old_op.get('out') and new_op.get('out'):
+        # napis po zmianie treści ma inną liczbę liter: litery dostają grupę starego napisu, więc wycięcie / wyciągnięcie
+        # zrobione z całego napisu dalej go znajduje (identyfikator litery = grupa + numer)
+        from .history import text_group_of
+        old_group, new_group = text_group_of(old_op['out'][0]), text_group_of(new_op['out'][0])
+        if old_group and new_group and old_group != new_group:
+            mapping = {new_group: old_group}
     if not mapping:
         return bodies, info
-    bodies = tuple(replace(b, id=mapping.get(b.id, b.id), group=_remap(b.group, mapping) if b.group else b.group,
+    bodies = tuple(replace(b, id=_remap(b.id, mapping), group=_remap(b.group, mapping) if b.group else b.group,
                            meta=_remap(b.meta, mapping) if b.meta else b.meta) for b in bodies)
     return bodies, dict(info, op=_remap(new_op, mapping))
 
@@ -150,6 +157,9 @@ class Document:
         self._merge = None         # edycja szkicu z kroku: zmiany wchodzą do bieżącego kroku (bez nowych kroków), potem przeliczenie dalszych
         self.dropped = 0           # ile najstarszych kroków wypadło z historii (limit MAX_UNDO)
         self.default_color = None  # kolor brył bez własnego koloru (R, G, B 0..1); None - jasnoszary programu
+        self._edits = []           # zmiany historii (edycja / usunięcie / przestawienie kroku): oś czasu sprzed zmiany - Cofnij ją przywraca
+        self._edits_redo = []      # cofnięte zmiany historii - Ponów je przywraca
+        self._edit_live = None     # trwająca zmiana historii (jej wynik może jeszcze dojść z przeliczenia w tle)
 
     def set_default_color(self, color):
         """Kolor domyślny projektu (nie jest krokiem historii, ale zmienia projekt - trzeba go zapisać)."""
@@ -230,6 +240,12 @@ class Document:
         if op:
             info['op'] = op
         replaced = None
+        if self.keep_future and self._redo:
+            if self._edit_live is None:       # nowa operacja wstawiona w środek historii: też do cofnięcia jako całość
+                self.begin_edit()
+        else:
+            self._edit_live = None            # zwykły nowy krok na końcu: zmiana historii zakończona
+            self._edits_redo.clear()
         if self.replace_next and self.keep_future and self._redo:      # edycja kroku: nowy wynik zastępuje stary krok
             replaced = self._redo.pop()
             for key in ('note', 'group'):
@@ -250,6 +266,7 @@ class Document:
         self.bodies = bodies
         self._revision = self._next_revision
         self._next_revision += 1
+        self._edit_touch()
 
     # ---------- edycja szkicu z kroku historii (zmiany wchodzą do tego kroku) ----------
     def begin_merge(self):
@@ -272,6 +289,7 @@ class Document:
         self.pending_label = self.pending_icon = self.pending_op = None
         self._revision = self._next_revision
         self._next_revision += 1
+        self._edit_touch()
 
     def finish_merge(self):
         """Koniec edycji szkicu z kroku: dalsze kroki przeliczają się na zmienionym szkicu (True - jest co przeliczać)."""
@@ -282,6 +300,7 @@ class Document:
         self.keep_future = False
         if merge['future']:
             self.deferred = (merge['old'], merge['future'])
+        self._edit_touch()
         return True
 
     @property
@@ -405,6 +424,72 @@ class Document:
         states = self.states() + list(tail)
         self._set_states(states, len(states) - 1)
 
+    # ---------- Cofnij / Ponów dla zmian historii ----------
+    MAX_EDITS = 30
+
+    def begin_edit(self, current=None):
+        """Początek zmiany historii: zapamiętuje całą oś czasu (bryły są niezmienne, więc to tylko odwołania).
+        `current` - krok, na którym stał użytkownik przed zmianą (tam wraca Cofnij)."""
+        snap = dict(states=self.states(), current=len(self._undo) if current is None else current,
+                    constraints=list(self.constraints), after=None)
+        self._edits = [e for e in self._edits if e['after'] is not None][-(self.MAX_EDITS - 1):] + [snap]
+        self._edits_redo.clear()
+        self._edit_live = snap
+        return snap
+
+    def _edit_touch(self):
+        if self._edit_live is not None:
+            self._edit_live['after'] = self._revision
+
+    def end_edit(self):
+        self._edit_live = None
+
+    def _edit_top(self):
+        while self._edits and self._edits[-1]['after'] is None and self._edits[-1] is not self._edit_live:
+            self._edits.pop()
+        top = self._edits[-1] if self._edits else None
+        return top if top is not None and top['after'] == self._revision else None
+
+    @property
+    def can_undo_edit(self):
+        return self._edit_top() is not None
+
+    @property
+    def can_redo_edit(self):
+        return bool(self._edits_redo) and self._edits_redo[-1]['before'] == self._revision
+
+    def _snapshot(self):
+        return dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints))
+
+    def _restore(self, snap):
+        self.constraints = list(snap['constraints'])
+        states = snap['states']
+        self._set_states(states, max(0, min(snap['current'], len(states) - 1)))
+
+    def undo_edit(self):
+        """Cofa ostatnią zmianę historii (edycję kroku, usunięcie, przestawienie...), gdy model stoi na jej wyniku."""
+        top = self._edit_top()
+        if top is None:
+            return False
+        self._edits.pop()
+        self._edit_live = None
+        now = self._snapshot()
+        self._restore(top)
+        now['before'] = self._revision
+        self._edits_redo.append(now)
+        return True
+
+    def redo_edit(self):
+        if not self.can_redo_edit:
+            return False
+        snap = self._edits_redo.pop()
+        self._edit_live = None
+        back = self._snapshot()
+        self._restore(snap)
+        back['after'] = self._revision
+        self._edits.append(back)
+        return True
+
     def undo(self, mesh=True):
         self.keep_future = False
         if self._undo:
@@ -463,6 +548,7 @@ class Document:
         self.pending_label = self.pending_icon = self.pending_op = None
         self.keep_future, self.deferred = False, None
         self.replace_next, self._merge = False, None
+        self._edits, self._edits_redo, self._edit_live = [], [], None
         self._mesh_cache.clear()
         self._revision = self._next_revision
         self._next_revision += 1
@@ -477,8 +563,10 @@ class Document:
         self._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(states))[current + 1:])]
         self._revision = revisions[current]
         self.keep_future, self.deferred = False, None
+        self._edit_touch()
 
     def goto(self, index, mesh=True):
+        self._edit_live = None
         labels, current = self.timeline()
         index = max(0, min(index, len(labels) - 1))
         while current > index:

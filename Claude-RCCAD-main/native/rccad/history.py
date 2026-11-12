@@ -593,8 +593,15 @@ def resolve_profiles(bodies, spec):
     if spec['k'] != 'textgroup':
         return [resolve_profile(bodies, spec)]
     plane = plane_from_json(spec['plane'])
-    found = sketch_groups(bodies).get(plane_key(plane))
+    groups = sketch_groups(bodies)
+    found = groups.get(plane_key(plane))
     members = [b for b in (found[1] if found else []) if text_group_of(b.id) == spec['group']]
+    if not members:          # napis przeniesiony razem ze ścianą (np. wyższa bryła): szukany po grupie, na nowej płaszczyźnie
+        for other in groups.values():
+            members = [b for b in other[1] if text_group_of(b.id) == spec['group']]
+            if members:
+                found = other
+                break
     if not members:
         raise kernel.CadError('Napis użyty w tym kroku już nie istnieje.')
     faces = material_regions(found[0], members)
@@ -1551,6 +1558,8 @@ def feature_faces(shape, seed):
                 kind = _edge_kind(faces, edge, f, others[0])
             except Exception:
                 return None
+            if kind == 'tangent' and not _blend_like(shape, faces, ancestors, number, others[0]):
+                continue          # przez styczną krawędź tylko do zaokrąglenia brzegu / ściany otworu, nie na zewnętrzną ścianę bryły
             if kind != 'convex':
                 group.add(others[0])
                 todo.append(others[0])
@@ -1559,6 +1568,25 @@ def feature_faces(shape, seed):
     if len(group) >= len(faces) or not any(_faces_inward(shape, faces[i]) for i in group):
         return None
     return group
+
+
+def _blend_like(shape, faces, ancestors, number, i):
+    """Ściana za styczną krawędzią należy do otworu: zaokrąglenie brzegu (bez wypukłych krawędzi) albo ściana patrząca
+    w głąb bryły (np. prosta ścianka owalnego otworu). Zewnętrzna ściana bryły (z wypukłymi krawędziami) - nie."""
+    if _faces_inward(shape, faces[i]):
+        return True
+    for edge in faces[i].Edges():
+        if not ancestors.Contains(edge.wrapped):
+            continue
+        others = [number(x) for x in ancestors.FindFromKey(edge.wrapped)]
+        others = [o for o in others if o != i]
+        if others:
+            try:
+                if _edge_kind(faces, edge, i, others[0]) == 'convex':
+                    return False
+            except Exception:
+                return False
+    return True
 
 
 def _faces_inward(shape, face):
@@ -1612,18 +1640,122 @@ def face_at_point(shape, point, tol=None):
     return None if best is None else best[1]
 
 
+class BlendCollision(kernel.CadError):
+    """Przesunięty otwór z zaokrągleniem / fazą brzegu nachodzi na inny otwór albo wychodzi poza bryłę."""
+    def __init__(self, message, blends=()):
+        super().__init__(message)
+        self.blends = list(blends)       # punkty na ścianach zaokrąglenia (do odszukania kroku, który je zrobił)
+
+
+def hole_blends(shape, group):
+    """Ściany zaokrąglenia / fazy brzegu otworu: należą do otworu i stykają się (stycznie) ze ścianą spoza otworu."""
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    faces = shape.Faces()
+    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
+    out = []
+    for i in group:
+        for edge in faces[i].Edges():
+            if not ancestors.Contains(edge.wrapped):
+                continue
+            others = [next(j for j, x in enumerate(faces) if x.wrapped.IsSame(f)) for f in ancestors.FindFromKey(edge.wrapped)]
+            others = [o for o in others if o != i and o not in group]
+            try:
+                if others and _edge_kind(faces, edge, i, others[0]) == 'tangent':
+                    out.append(i)
+                    break
+            except Exception:
+                continue
+    return out
+
+
+def _remove_faces(shape, ids):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Defeaturing
+    from OCP.TopTools import TopTools_ListOfShape
+    faces = shape.Faces()
+    remove = TopTools_ListOfShape()
+    for i in ids:
+        remove.Append(faces[i].wrapped)
+    maker = BRepAlgoAPI_Defeaturing()
+    maker.SetShape(shape.wrapped)
+    maker.AddFacesToRemove(remove)
+    maker.SetRunParallel(False)
+    maker.Build()
+    if not maker.IsDone():
+        raise kernel.CadError('Nie udało się usunąć zaokrąglenia otworu.')
+    return kernel.valid(cq.Shape.cast(maker.Shape()))
+
+
+def featmove_shape(shape, recipe, strict=False):
+    """Bryła z przesuniętym / obróconym otworem. Otwór z zaokrągleniem brzegu, który po przesunięciu nachodziłby na inny
+    otwór: strict - BlendCollision (narzędzie decyduje), inaczej otwór przesuwa się bez zaokrąglenia (ostre krawędzie)."""
+    seed = face_at_point(shape, recipe['point'])
+    ids = feature_faces(shape, seed) if seed is not None else None
+    if not ids:
+        raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
+    v = tuple(float(c) for c in recipe['v'])
+    tr, rot = (v, (0, 0, 0)) if recipe['mode'] == 'move' else ((0, 0, 0), v)
+
+    def moved_out(base, group):
+        filled, hole = feature_split(base, group)
+        moved = kernel.transform(hole, tr, rot, recipe.get('center'))
+        result = kernel.valid(filled.cut(moved))
+        free = abs(filled.Volume() - moved.Volume() - result.Volume()) <= 1e-6 * max(1.0, filled.Volume()) + 1e-6
+        return result, free
+
+    result, free = moved_out(shape, ids)
+    if free:
+        return result
+    blends = hole_blends(shape, ids)
+    if not blends:
+        return result                 # zwykły otwór połączony z innym - tak jak chciał użytkownik
+    faces = shape.Faces()
+    if strict:
+        raise BlendCollision('Zaokrąglenie brzegu otworu nachodziłoby na inny otwór albo wychodziło poza bryłę.',
+                             [tuple(kernel._face_point(faces[i])) for i in blends])
+    sharp = _remove_faces(shape, blends)
+    seed = face_at_point(sharp, recipe['point'])
+    group = feature_faces(sharp, seed) if seed is not None else None
+    if not group:
+        raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
+    return moved_out(sharp, group)[0]
+
+
 def run_featmove(bodies, recipe):
     """Przesunięcie / obrót otworu albo kieszeni wewnątrz bryły: otwór wskazany punktem na jednej z jego ścian."""
     body = _body(bodies, recipe['id'])
-    seed = face_at_point(body.shape, recipe['point'])
-    ids = feature_faces(body.shape, seed) if seed is not None else None
-    if not ids:
-        raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
-    filled, hole = feature_split(body.shape, ids)
-    v = tuple(float(c) for c in recipe['v'])
-    tr, rot = (v, (0, 0, 0)) if recipe['mode'] == 'move' else ((0, 0, 0), v)
-    moved = kernel.transform(hole, tr, rot, recipe.get('center'))
-    return _replace(bodies, body.changed(kernel.valid(filled.cut(moved))))
+    return _replace(bodies, body.changed(featmove_shape(body.shape, recipe)))
+
+
+def strip_blend_edges(states, j, points, hole, constraints=(), job=None):
+    """Krok j (zaokrąglenie / faza) bez krawędzi brzegu otworu `hole` (bryła otworu przed przesunięciem); gdy nic nie
+    zostaje - krok znika z historii. Dalsze kroki przeliczone. Zwraca (nowa oś czasu, liczba nieprzeliczonych)."""
+    info = dict(states[j][1])
+    recipe = info.get('op') or {}
+    tol = 1e-3 * max(1.0, _scale(hole)) + 1e-4
+    keep = []
+    for u in _mod_units(recipe):
+        where, n, e = u
+        if e == 'verts':
+            keep.append(u)
+            continue
+        refs = recipe['groups'][n]['edges'] if where == 'groups' else recipe['items'][n]['edges'] if where == 'items' else recipe.get('edges') or ()
+        if where == 'verts':
+            keep.append(u)
+            continue
+        mid = refs[e]['mid'] if isinstance(refs[e], dict) else refs[e]
+        if hole.distance(cq.Vertex.makeVertex(*[float(c) for c in mid])) > tol:
+            keep.append(u)
+    reduced = _mod_subset(recipe, keep)
+    if reduced is None:
+        tail, failed = rebuild(states[j - 1][0], _steps(states, range(j + 1, len(states))), constraints, job)
+        return list(states[:j]) + tail, failed
+    info['op'] = reduced
+    steps = [(states[j - 1][0], states[j][0], info, states[j][1]), *_steps(states, range(j + 1, len(states)))]
+    tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
+    return list(states[:j]) + tail, failed
 
 
 def tilt_frame(shape, face):
@@ -3494,6 +3626,88 @@ def _replay_step(current, recipe, values):
     return run_recipe(current, recipe, values)
 
 
+def _mod_units(recipe):
+    """Pojedyncze elementy kroku zaokrąglenia / fazy (każda krawędź osobno, narożniki obiektu razem)."""
+    units = []
+    if recipe.get('groups'):
+        for g, group in enumerate(recipe['groups']):
+            units += [('groups', g, e) for e in range(len(group.get('edges') or ()))]
+    elif recipe.get('items'):
+        for n, item in enumerate(recipe['items']):
+            units += [('items', n, e) for e in range(len(item.get('edges') or ()))]
+            if item.get('verts'):
+                units.append(('items', n, 'verts'))
+    else:
+        units += [('edges', None, e) for e in range(len(recipe.get('edges') or ()))]
+        if recipe.get('verts'):
+            units.append(('verts', None, None))
+    return units
+
+
+def _mod_subset(recipe, keep):
+    """Przepis kroku zaokrąglenia ograniczony do elementów `keep` (None - nic nie zostało)."""
+    keep = set(keep)
+    out = dict(recipe)
+    if recipe.get('groups'):
+        groups = []
+        for g, group in enumerate(recipe['groups']):
+            edges = [r for e, r in enumerate(group.get('edges') or ()) if ('groups', g, e) in keep]
+            if edges:
+                groups.append(dict(group, edges=edges))
+        if not groups:
+            return None
+        out['groups'] = groups
+        return out
+    if recipe.get('items'):
+        items = []
+        for n, item in enumerate(recipe['items']):
+            edges = [r for e, r in enumerate(item.get('edges') or ()) if ('items', n, e) in keep]
+            verts = ('items', n, 'verts') in keep
+            if edges or verts:
+                items.append(dict(item, edges=edges, **({} if verts else {'verts': [], 'vrefs': []})))
+        if not items:
+            return None
+        out['items'] = items
+        return out
+    edges = [r for e, r in enumerate(recipe.get('edges') or ()) if ('edges', None, e) in keep]
+    verts = ('verts', None, None) in keep
+    if not edges and not verts:
+        return None
+    out['edges'] = edges
+    if not verts:
+        out['verts'], out['vrefs'] = [], []
+    return out
+
+
+def mod_partial(current, recipe, values=None):
+    """Zaokrąglenie / faza, które po zmianie wcześniejszego kroku nie da się już policzyć w całości (np. otwór przesunięty
+    tak, że nachodzi na inny): zostają krawędzie, które nadal pasują. (wynik, okrojony przepis, ile odpadło) albo
+    (None, None, wszystkie) - żadna krawędź już nie pasuje (krok trzeba usunąć)."""
+    units = _mod_units(recipe)
+    if len(units) > 40:
+        return None
+    alone = []
+    for u in units:
+        try:
+            run_recipe(current, _mod_subset(recipe, [u]), values)
+            alone.append(u)
+        except Exception:
+            pass
+    kept = []
+    result = None
+    for u in alone:
+        trial = _mod_subset(recipe, kept + [u])
+        try:
+            result = run_recipe(current, trial, values)
+            kept.append(u)
+        except Exception:
+            continue
+    if not kept:
+        return None, None, len(units)
+    recipe = _mod_subset(recipe, kept)
+    return run_recipe(current, recipe, values), recipe, len(units) - len(kept)
+
+
 def _rebuild(base, steps, ctx, job):
     out, failed, current = [], 0, tuple(base)
     for n, step in enumerate(steps):
@@ -3526,6 +3740,20 @@ def _rebuild(base, steps, ctx, job):
                     result = _replay_step(current, recipe, ctx.values)
                 except Exception as exc:
                     result, why = None, str(exc) or exc.__class__.__name__
+                    if recipe.get('type') == 'mod':
+                        try:
+                            partial = mod_partial(current, recipe, ctx.values)
+                        except Exception:
+                            partial = None
+                        if partial is not None:
+                            what = 'Faza' if recipe.get('kind') == 'chamfer' else 'Zaokrąglenie'
+                            notes = job.setdefault('notes', []) if job is not None else []
+                            if partial[0] is None:          # żadna krawędź już nie pasuje: krok znika z historii
+                                notes.append(f'{what} (krok {n + 1} przeliczania) już nie pasuje do bryły - usunięto je z historii.')
+                                continue
+                            result, recipe, lost = tuple(partial[0]), partial[1], partial[2]
+                            info = dict(info, op=recipe)
+                            notes.append(f'{what}: {lost} krawędzi już nie pasuje do bryły - usunięto je z kroku.')
         else:
             merged, ok = diff_apply(before, after, current)
             result = tuple(merged) if ok else None
@@ -3621,7 +3849,12 @@ def amend(states, changes, constraints=(), job=None):
                 if job.get('cancel'):
                     raise kernel.CadError('Przeliczanie przerwane.')
                 job['i'], job['n'] = j - first, len(states) - first
-            tail, bad = _rebuild(current, [(states[j - 1][0], states[j][0], states[j][1])], ctx, None)
+            local = {}
+            tail, bad = _rebuild(current, [(states[j - 1][0], states[j][0], states[j][1])], ctx, local)
+            if job is not None and local.get('notes'):
+                job.setdefault('notes', []).extend(local['notes'])
+            if not tail:              # krok usunięty przy przeliczaniu (zaokrąglenie, które już nie pasuje)
+                continue
             bodies, info = tail[0]
             failed += bad
             if j in targets:
@@ -3638,6 +3871,41 @@ def amend(states, changes, constraints=(), job=None):
             out.append((tuple(bodies), info))
             current = tuple(bodies)
     return out, failed
+
+
+def fold_point(states, ids, match):
+    """Krok, do którego można dopisać kolejną taką samą zmianę tych obiektów (przesunięcie, obrót, skala, kolor, nazwa):
+    ostatni krok spełniający `match`, po którym żaden krok nie korzysta z tych obiektów ani ich nie zmienia.
+    Indeks kroku albo None (wtedy zwykły nowy krok)."""
+    ids = set(ids)
+    for j in range(len(states) - 1, 0, -1):
+        info = states[j][1]
+        op = info.get('op') or {}
+        if info.get('off'):
+            continue
+        if not info.get('stale') and match(op):
+            return j
+        if changed_ids(states[j - 1][0], states[j][0]) & ids:
+            return None
+        if op.get('type') in RUNNERS:
+            try:
+                got = reads(op, states[j - 1][0])
+            except Exception:
+                got = None
+            if got is None or got & ids:
+                return None
+    return None
+
+
+def replace_step_op(states, j, op, constraints=(), job=None, label=None):
+    """Krok j z nowym przepisem (np. łączne przesunięcie) i przeliczone dalsze kroki: (nowa oś czasu, nieprzeliczone)."""
+    info = {k: v for k, v in states[j][1].items() if k not in ('stale', 'why')}
+    info['op'] = op
+    if label:
+        info['label'] = label
+    steps = [(states[j - 1][0], states[j][0], info, states[j][1]), *_steps(states, range(j + 1, len(states)))]
+    tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
+    return list(states[:j]) + tail, failed
 
 
 def toggle_step(states, j, constraints=(), job=None):

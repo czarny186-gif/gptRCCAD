@@ -3240,6 +3240,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
 
         def apply(result):
             new_states, failed = result
+            doc.begin_edit()
             doc.rewrite(new_states, len(new_states) - 1)
             self.override = {}
             if select is not None:
@@ -6733,6 +6734,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         def apply(result):
             if result[0] == 'joint':        # razem z wcześniejszymi zaokrągleniami tej bryły (jeden połączony krok)
                 timeline = result[1]
+                self.document.begin_edit()
                 self.document.rewrite(timeline, len(timeline) - 1)
                 self.toast('Naroża z wcześniejszymi zaokrągleniami nie dały się policzyć osobno - zaokrąglenia tej bryły '
                            'policzono od nowa razem, jako jeden krok historii.', 7000)
@@ -8314,15 +8316,58 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             recipe = dict(type='featmove', id=target.id, point=feature['point'], mode=mode, v=[float(c) for c in v],
                           center=[float(c) for c in self.t_mass])
             existing = list(self.document.bodies)
+            states = None if (self.document.can_redo or self.step_editing) else self.document.states()
+            constraints = self._hist_ctx()
+            if states and mode == 'move' and not self.document.merging:
+                j = hist.fold_point(states, [target.id], lambda op: op.get('type') == 'featmove' and op.get('mode') == 'move' and op.get('id') == target.id)
+                prev = states[j][1]['op'] if j is not None else None
+                if prev is not None:
+                    try:          # ten sam otwór przesunięty jeszcze raz: łączne przesunięcie w jego wcześniejszym kroku
+                        moved = np.asarray(prev['point'], float) + np.asarray(prev['v'], float)
+                        body_now = target.shape
+                        seed_now = hist.face_at_point(body_now, recipe['point'])
+                        same = seed_now is not None and hist.face_at_point(body_now, moved) in (hist.feature_faces(body_now, seed_now) or ())
+                    except Exception:
+                        same = False
+                    if same:
+                        merged = dict(prev, v=[float(a + b) for a, b in zip(prev['v'], recipe['v'])])
+                        self.view.set_handles([])
+                        self.view.set_preview_mesh(None)
+                        self.set_mode(None)
+                        self._fold_step(j, merged, 'Przesunięcie otworu')
+                        return
 
             def build():
-                return hist.offloaded(hist.run_featmove, existing, recipe)
+                body = next(b for b in existing if b.id == target.id)
+                try:
+                    shape = hist.featmove_shape(body.shape, recipe, strict=True)
+                    return None, [body.changed(shape) if b.id == body.id else b for b in existing]
+                except hist.BlendCollision as exc:
+                    # zaokrąglenie brzegu otworu nie zmieści się w nowym miejscu: znika z bryły i z kroku historii,
+                    # który je zrobił (gdy krok miał tylko te krawędzie - cały krok), a otwór przesuwa się z ostrym brzegiem
+                    j = next((hist.blend_step(states, body.id, p) for p in exc.blends), None) if states else None
+                    seed = hist.face_at_point(body.shape, recipe['point'])
+                    hole = hist.feature_split(body.shape, hist.feature_faces(body.shape, seed))[1]
+                    if j is None:
+                        return None, [b.changed(hist.featmove_shape(b.shape, recipe)) if b.id == body.id else b for b in existing]
+                    timeline, _ = hist.strip_blend_edges(states, j, exc.blends, hole, constraints)
+                    last = list(timeline[-1][0])
+                    return timeline, hist.run_featmove(last, recipe)
 
-            def apply(bodies):
+            def apply(result):
+                timeline, bodies = result
+                snap = None
+                if timeline is not None:
+                    snap = self.document.begin_edit()
+                    self.document.rewrite(timeline, len(timeline) - 1)
+                    self.toast('Zaokrąglenie brzegu otworu nachodziłoby na inny otwór - usunięto je z bryły i z historii. '
+                               'Cofnij przywraca je razem z poprzednim położeniem otworu.', 8000)
                 self.document.pending_op = recipe
                 self.document.pending_label = 'Przesunięcie otworu' if mode == 'move' else 'Obrót otworu'
                 self.document.pending_icon = 'move' if mode == 'move' else 'rotate'
                 self.document.commit(bodies)
+                if snap is not None:          # jedno Cofnij przywraca zaokrąglenie i poprzednie położenie otworu
+                    snap['after'] = self.document._revision
 
             self.view.set_handles([])
             self.view.set_preview_mesh(None)
@@ -8348,8 +8393,14 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
                 return
             self._place_gizmo()
         previous = self._merged_transform(recipe, ids)
-        if previous is not None:        # kolejne przesunięcie tego samego obiektu: poprawia poprzedni krok zamiast dodawać nowy
-            recipe, existing = previous
+        if previous is not None:        # kolejne przesunięcie tego samego obiektu: poprawia jego wcześniejszy krok zamiast dodawać nowy
+            j, recipe = previous
+            if j < self.document.history_length:
+                self.view.set_handles([])
+                self.set_mode(None)
+                self._fold_step(j, recipe, 'Przesunięcie' if mode == 'move' else 'Obrót', select=ids)
+                return
+            existing = list(self.document.states()[j - 1][0])
 
         def build():
             return hist.offloaded(hist.run_transform, existing, recipe)
@@ -8369,14 +8420,18 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.run_operation('Przekształcenie', build, apply, after=lambda: self.set_mode(None))
 
     def _merged_transform(self, recipe, ids):
-        """Ostatni krok historii to przesunięcie tych samych obiektów (albo obrót wokół tej samej osi i środka): (łączny przepis,
-        stan sprzed tamtego kroku) - nowy krok go zastąpi. None - zwykły nowy krok."""
+        """Wcześniejszy krok przesunięcia tych samych obiektów (albo obrotu wokół tej samej osi i środka), po którym nic z nich
+        nie korzystało: (indeks kroku, łączny przepis) - nowe przesunięcie poprawia tamten krok. None - zwykły nowy krok."""
         doc = self.document
-        last = doc.info.get('op') or {}
-        if doc.can_redo or doc.merging or self.step_editing or last.get('type') != 'transform' or last.get('mode') != recipe['mode']:
+        if doc.can_redo or doc.merging or self.step_editing or not doc.can_undo:
             return None
-        if sorted(last.get('ids') or [last['id']]) != sorted(ids) or not doc.can_undo:
+        states = doc.states()
+        same = sorted(ids)
+        j = hist.fold_point(states, ids, lambda op: op.get('type') == 'transform' and op.get('mode') == recipe['mode']
+                            and sorted(op.get('ids') or [op.get('id')]) == same)
+        if j is None:
             return None
+        last = states[j][1]['op']
         a, b = np.array(last['v'], float), np.array(recipe['v'], float)
         if recipe['mode'] == 'rotate':
             axes = {int(i) for i in np.nonzero(np.abs(a) > 1e-9)[0]} | {int(i) for i in np.nonzero(np.abs(b) > 1e-9)[0]}
@@ -8386,7 +8441,31 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         merged = dict(recipe, v=[float(c) for c in a + b])
         if 'center' in last:
             merged['center'] = last['center']
-        return merged, list(doc._undo[-1][0])
+        return j, merged
+
+    def _fold_step(self, j, op, label, select=None, step_label=None):
+        """Kolejna zmiana tych samych obiektów poprawia wcześniejszy krok j (nowy przepis), a dalsze kroki się przeliczają -
+        historia nie dostaje duplikatu. Jedno Cofnij przywraca stan sprzed zmiany."""
+        doc = self.document
+        states = doc.states()
+        constraints = self._hist_ctx()
+
+        def apply(result):
+            new_states, failed = result
+            doc.begin_edit()
+            doc.rewrite(new_states, len(new_states) - 1)
+            doc.end_edit()
+            self.view.clear_body_matrices()
+            self.override = {}
+            if select is not None:
+                self.selected = [i for i in select if doc.get(i) is not None]
+            if failed:
+                self.toast(f'{label}: {failed} dalszych kroków wymaga poprawy (czerwone, powód w dymku).', 6000)
+            else:
+                self.toast(f'{label} - poprawiono wcześniejszy krok {j} (bez nowego kroku w historii).', 3000)
+            self.refresh()
+
+        self.run_history(lambda job: hist.replace_step_op(states, j, op, constraints, job, step_label), apply)
 
     # =====================================================================
     # model, odświeżanie
@@ -8508,8 +8587,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self._history_timer.start()
         if hasattr(self, '_refine_timer') and any(b.mesh is not None and not b.mesh.fine for b in self.document.bodies):
             self._refine_timer.start()     # duże bryły pokazane zgrubnie: dokładne siatki liczą się w tle
-        self.undo_button.setEnabled(self.document.can_undo and not self.busy)
-        self.redo_button.setEnabled(self.document.can_redo and not self.busy)
+        doc = self.document
+        self.undo_button.setEnabled((doc.can_undo or doc.can_undo_edit) and not self.busy)
+        self.redo_button.setEnabled((doc.can_redo or doc.can_redo_edit) and not self.busy)
         name = self.document.path.name if self.document.path else 'Nowy projekt'
         self.setWindowTitle(f"{'● ' if self.document.dirty else ''}{name} — RCCAD")
 
@@ -8698,12 +8778,14 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             from PySide6.QtWidgets import QInputDialog
             text, ok = QInputDialog.getText(self, 'Nazwa kroku', 'Podpis kroku (puste = domyślny):', text=states[index][1].get('note', ''))
             if ok:
+                self.document.begin_edit()
                 self.document.set_info(index, note=text.strip()[:80])
                 self.refresh()
         elif chosen is group:
             from PySide6.QtWidgets import QInputDialog
             text, ok = QInputDialog.getText(self, 'Grupa kroków', 'Nazwa grupy (kolejne kroki o tej samej nazwie tworzą grupę; puste = bez grupy):', text=states[index][1].get('group', ''))
             if ok:
+                self.document.begin_edit()
                 self.document.set_info(index, group=text.strip()[:40])
                 self.refresh()
         elif chosen is delete:
@@ -8719,6 +8801,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
 
         def apply(result):
             new_states, failed = result
+            self.document.begin_edit()
             self.document.rewrite(new_states, len(new_states) - 1)
             self.selected, self.edges = [], {}
             if failed:
@@ -8816,6 +8899,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self._hist_job = None
             self.hist_status.setText('')
             apply(value)
+            notes = list(dict.fromkeys(job.get('notes') or ()))
+            if notes:          # zaokrąglenia / fazy, które po zmianie nie pasowały: okrojone albo usunięte z historii
+                self.toast(' '.join(notes[:3]) + (f' (+{len(notes) - 3})' if len(notes) > 3 else ''), 8000)
 
         def work():
             value = build(job)
@@ -9058,7 +9144,15 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self.toast('Trwa edycja kroku - zakończ ją (Zastosuj albo Zamknij).')
             return
         if not self.busy:
-            self.document.undo(mesh=False)
+            doc = self.document
+            doc.end_edit()
+            if doc.undo_edit():          # model stoi na wyniku zmiany historii: wraca cała oś czasu sprzed tej zmiany
+                self.selected, self.edges, self.override = [], {}, {}
+                self._hist_sig = None
+                self.toast('Cofnięto zmianę historii - przywrócono wszystkie kroki sprzed niej.', 3500)
+                self._show_state()
+                return
+            doc.undo(mesh=False)
             self._hist_trim = True
             self.edges = {}
             self._show_state()
@@ -9068,7 +9162,15 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self.toast('Trwa edycja kroku - zakończ ją (Zastosuj albo Zamknij).')
             return
         if not self.busy:
-            self.document.redo(mesh=False)
+            doc = self.document
+            doc.end_edit()
+            if doc.redo_edit():
+                self.selected, self.edges, self.override = [], {}, {}
+                self._hist_sig = None
+                self.toast('Ponowiono zmianę historii.', 3000)
+                self._show_state()
+                return
+            doc.redo(mesh=False)
             self.edges = {}
             self._show_state()
 
@@ -9263,6 +9365,13 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if last.get('type') == 'rename' and last.get('id') == oid and doc.can_undo and not doc.can_redo and not self.step_editing:
             doc.undo(mesh=False)          # kolejna zmiana nazwy tego samego obiektu poprawia poprzedni krok
             doc._redo.clear()
+        elif doc.can_undo and not doc.can_redo and not doc.merging and not self.step_editing:
+            j = hist.fold_point(doc.states(), [oid], lambda op: op.get('type') == 'rename' and op.get('id') == oid)
+            if j is not None:             # wcześniejsza zmiana nazwy tego obiektu: poprawiona, bez nowego kroku
+                first = doc.states()[j - 1][0]
+                was = next((b.name for b in first if b.id == oid), body.name)
+                self._fold_step(j, dict(type='rename', id=oid, name=name), 'Zmiana nazwy', step_label=f'Zmiana nazwy: {was} → {name}')
+                return
         self.document.pending_op = dict(type='rename', id=oid, name=name)
         self.document.pending_label, self.document.pending_icon = f'Zmiana nazwy: {body.name} → {name}', 'text'
         self.document.commit([replace(b, name=name) if b.id == oid else b for b in self.document.bodies])

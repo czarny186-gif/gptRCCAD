@@ -218,6 +218,35 @@ class ScaleTools:
         reach = float(hi[k] - c[k]) or 1.0
         spin.setValue(max(.01, round(self._hv + delta / reach * 100.0, 1)))
 
+    def _sc_fold(self, recipe):
+        """Wcześniejszy krok skali tych samych obiektów, po którym nic z nich nie korzystało: (krok, łączna skala) albo None.
+        Dwa skalowania to jedno skalowanie (iloczyn współczynników) wokół wyliczonego środka."""
+        import numpy as np
+        doc = self.document
+        if doc.can_redo or doc.merging or self.step_editing or not doc.can_undo:
+            return None
+        ids = sorted(recipe['ids'])
+        states = doc.states()
+        j = hist.fold_point(states, ids, lambda op: op.get('type') == 'scale' and sorted(op.get('ids') or ()) == ids)
+        if j is None:
+            return None
+        old = states[j][1]['op']
+        f1, f2 = np.array(old['f'], float), np.array(recipe['f'], float)
+        c1, c2 = np.array(old['center'], float), np.array(recipe['center'], float)
+        f = f1 * f2
+        shift = c2 * (1 - f2) + f2 * c1 * (1 - f1)
+        center = np.zeros(3)
+        for a in range(3):
+            if abs(1 - f[a]) < 1e-9:
+                if abs(shift[a]) > 1e-9:
+                    return None          # łącznie wyszłoby przesunięcie, nie skala
+                center[a] = c1[a]
+            else:
+                center[a] = shift[a] / (1 - f[a])
+        if np.allclose(f, 1, atol=1e-12):
+            return None
+        return j, dict(recipe, ids=list(old['ids']), f=[float(v) for v in f], center=[float(v) for v in center])
+
     def apply_scale(self):
         if self.busy:
             return
@@ -231,6 +260,14 @@ class ScaleTools:
             return
         recipe = dict(type='scale', ids=ids, f=[float(v) for v in f], center=self._sc_center())
         existing = list(self.document.bodies)
+        folded = self._sc_fold(recipe)
+        if folded is not None:          # kolejne skalowanie tych samych obiektów: poprawia ich wcześniejszy krok skali
+            j, merged = folded
+            self.view.clear_body_matrices()
+            self.view.set_handles([])
+            self.set_mode(None)
+            self._fold_step(j, merged, 'Skalowanie', select=ids)
+            return
 
         def build():
             return hist.run_scale(existing, recipe)

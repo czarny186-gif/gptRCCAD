@@ -529,7 +529,7 @@ class PlywoodTools:
         states,current=self.document.states(),self.document.infos()[1]
         states=states[:current+1];ctx=self._hist_ctx()
         def apply(result):
-            values,_=result;self.document.rewrite(values,len(values)-1)
+            values,_=result;self.document.begin_edit();self.document.rewrite(values,len(values)-1)
             self.selected=[];self.pw_base=None;self.pw_edges=[]
             if self.mode=='ply_wall':self._ply_update();self.pw_status.setText('Anulowano wstawienie wskazanej ścianki. Kliknij inną krawędź.')
         self.run_history(lambda job:hist.cancel_ply_wall(states,bid,ctx,job),apply)

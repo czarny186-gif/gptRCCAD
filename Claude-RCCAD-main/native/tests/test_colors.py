@@ -138,6 +138,33 @@ class ColorToolTests(unittest.TestCase):
         self.assertEqual(w.mode, 'color')                     # okno zostaje otwarte - można kolorować dalej
         self.assertEqual(w.view.solid_rgba(w.document.get(self.a.id))[:3], tuple(round(c, 4) for c in RED))
 
+    def test_recoloring_the_same_body_later_fixes_its_earlier_color_step(self):
+        w = self.w
+
+        def wait():
+            end = time.monotonic() + 30
+            while w.busy and time.monotonic() < end:
+                self.app.processEvents()
+                time.sleep(.005)
+            self.app.processEvents()
+
+        def paint(body, swatch):
+            w.set_mode('color')
+            w.co_swatches[swatch].click()
+            self.click_body(body)
+            w.co_save.click()
+            wait()
+            w.set_mode(None)
+
+        paint(self.a, 0)
+        w.set_mode('move'); w.select_transform_target(w.document.get(self.b.id)); w.t_spins[0].setValue(3); w.apply_transform(); wait()
+        paint(self.a, 7)                                   # A znowu: poprawia jego krok koloru, bez nowego kroku
+        colors = [i['op'] for i in w.document.infos()[0] if (i.get('op') or {}).get('type') == 'color']
+        self.assertEqual(len(colors), 1)
+        self.assertEqual(w.document.get(self.a.id).color, tuple(round(c, 4) for c in BLUE))
+        w.undo(); wait()
+        self.assertEqual(w.document.get(self.a.id).color, tuple(round(c, 4) for c in RED))
+
     def test_closing_without_save_discards_colors(self):
         w = self.w
         w.set_mode('color')

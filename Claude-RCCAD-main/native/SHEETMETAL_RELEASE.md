@@ -1,12 +1,20 @@
-# RCCAD Desktop 0.5.1 — edycja kroków blach i sklejki
+# RCCAD Desktop 0.5.2 — Cofnij dla zmian historii, bez duplikatów i czerwonych kroków
 
-- **Blachy**: dwuklik w krok Zamiany na blachę, Kołnierza, Zawinięcia albo Kołnierza na noski otwiera to samo narzędzie ze ścianą / krawędzią i wartościami z kroku (długość, kąt, promień, strona wymiaru, zawinięcie, ścianka). Zatwierdź zastępuje krok. Późniejsze kołnierze tej blachy zachowują nową wartość wcześniejszego kołnierza (wcześniej przeliczenie przywracało starą).
-- **Sklejka**: dwuklik w krok Płyty (profile z kroku), Ścianki (krawędzie i wysokość), Półki / przegrody (obie ściany) i Połączeń (wybrane rodzaje połączeń każdego styku) otwiera narzędzie z wyborem z kroku.
-- Zastąpiony krok zachowuje identyfikatory swoich obiektów (ścianki, kopie, części) - dalsze kroki, które się do nich odwołują (np. Połączenia po zmianie wysokości ścianek), przeliczają się bez błędu.
+- **Cofnij / Ponów działa na zmiany w historii**: po edycji kroku, usunięciu, wyłączeniu albo przestawieniu kroku strzałka Cofnij (Ctrl+Z) przywraca całą historię sprzed tej zmiany, a Ponów - wynik zmiany. Popsuty edycją projekt da się zawsze cofnąć.
+- **Zmiana treści napisu w historii**: napis po zmianie (inna liczba liter) dalej jest wycięty / wyciągnięty - krok Wycięcia albo Wyciągnięcia z połączeniem nie świeci się już na czerwono.
+- **Wyciągnięcie górnej ściany na początku historii**: otwory, wycięte i wyciągnięte napisy oraz zaokrąglenia zrobione później na tej ścianie idą za nią na nową wysokość (bez czerwonych kroków).
+- **Zaokrąglenie, które przestaje pasować**: zamiast błędu zostają krawędzie, które nadal pasują; gdy nie pasuje żadna, krok znika z historii (z komunikatem). Przesunięcie otworu z zaokrąglonym brzegiem tak, że nachodzi na inny otwór, usuwa to zaokrąglenie z bryły i z historii - jedno Cofnij przywraca oba. Otwór z zaokrąglonym brzegiem przesuwa się teraz razem z zaokrągleniem (wcześniej dawał błąd).
+- **Bez duplikatów w historii**: kolejne przesunięcie / obrót tej samej bryły albo otworu, skalowanie, kolor i zmiana nazwy tego samego obiektu poprawiają jego wcześniejszy krok (zostaje ostatnia korekta), także gdy w międzyczasie były inne operacje, które tego obiektu nie dotyczyły.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.1 — edycja kroków blach i sklejki
+
+- **Blachy**: dwuklik w krok Zamiany na blachę, Kołnierza, Zawinięcia albo Kołnierza na noski otwiera to samo narzędzie ze ścianą / krawędzią i wartościami z kroku (długość, kąt, promień, strona wymiaru, zawinięcie, ścianka). Zatwierdź zastępuje krok. Późniejsze kołnierze tej blachy zachowują nową wartość wcześniejszego kołnierza (wcześniej przeliczenie przywracało starą).
+- **Sklejka**: dwuklik w krok Płyty (profile z kroku), Ścianki (krawędzie i wysokość), Półki / przegrody (obie ściany) i Połączeń (wybrane rodzaje połączeń każdego styku) otwiera narzędzie z wyborem z kroku.
+- Zastąpiony krok zachowuje identyfikatory swoich obiektów (ścianki, kopie, części) - dalsze kroki, które się do nich odwołują (np. Połączenia po zmianie wysokości ścianek), przeliczają się bez błędu.
 
 ### 0.5.0 — historia: wszystkie kroki edytowane w swoich narzędziach
 

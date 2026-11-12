@@ -75,6 +75,7 @@ class StepEditTools:
             self.set_mode(None)
         back = self.document.infos()[1]
         self.document.goto(at)
+        self.document.begin_edit(current=back)     # Cofnij po edycji kroku przywraca całą historię sprzed niej
         self.document.keep_future = True
         self._hist_trim = False
         self.selected, self.edges = [], {}

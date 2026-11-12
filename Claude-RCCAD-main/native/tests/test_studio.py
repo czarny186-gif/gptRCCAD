@@ -1900,6 +1900,66 @@ class StudioTests(unittest.TestCase):
         self.assertNotIn('op',infos[1])
         self.assertFalse(hasattr(w,'hist_compare') or hasattr(w,'hist_revert') or hasattr(w,'hist_vars') or hasattr(w,'hist_menu_button'))
 
+    def test_undo_redo_revert_history_edits(self):
+        w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        self.sketch('rect',(30,0),(40,10));w.set_mode(None)
+        vol=lambda:sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid')
+        n=len(w.document.infos()[0])
+        w.history_edit(2);w.ex_value.setValue(8);w.apply_extrude();self.wait();self.wait()
+        self.assertAlmostEqual(vol(),1600,2);self.assertTrue(w.undo_button.isEnabled())
+        w.undo();self.wait()                                           # Cofnij: cała historia sprzed edycji kroku
+        self.assertAlmostEqual(vol(),1000,2);self.assertEqual(w.document.infos()[0][2]['op']['d1'],5.0);self.assertEqual(len(w.document.infos()[0]),n)
+        self.assertEqual(w.document.infos()[1],n-1)
+        w.redo();self.wait()                                           # Ponów: wraca wynik edycji
+        self.assertAlmostEqual(vol(),1600,2);self.assertEqual(w.document.infos()[0][2]['op']['d1'],8.0)
+        w.undo();w.undo();self.wait()                                   # druga strzałka: zwykłe cofnięcie kroku
+        self.assertAlmostEqual(vol(),1000,2);self.assertEqual(w.document.infos()[1],n-2)
+        w.redo();self.wait()
+        # usunięcie kroku też da się cofnąć
+        w.history_restructure(lambda st,c,job:hist.delete_step(st,2,c,job));self.wait();self.wait()
+        self.assertAlmostEqual(vol(),0,2);self.assertEqual(len(w.document.infos()[0]),n-1)
+        w.undo();self.wait();self.assertAlmostEqual(vol(),1000,2);self.assertEqual(len(w.document.infos()[0]),n)
+        # zwykły nowy krok po edycji: Cofnij najpierw cofa ten krok, potem edycję
+        w.history_edit(2);w.ex_value.setValue(8);w.apply_extrude();self.wait();self.wait()
+        self.sketch('rect',(60,0),(70,10));w.set_mode(None)
+        w.undo();self.wait();self.assertEqual(len(w.document.infos()[0]),n+1);self.assertAlmostEqual(vol(),1600,2)
+        w.undo();self.wait();self.assertAlmostEqual(vol(),1000,2);self.assertEqual(len(w.document.infos()[0]),n)
+
+    def _text_cut_project(self,mode='cut',text='AB'):
+        from rccad import history as hist
+        w=self.w;self.sketch('rect',(-5,-5),(45,20));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(10);w.apply_extrude();self.wait()
+        w.set_mode('plane');w.plane_picked('XY');w.choose_tool('text');w.text_edit.setText(text);w.text_size.setValue(10)
+        w.txt.update(anchor=(0.0,0.0),size=10.0,angle=0.0);w._text_set_stage('edit');w.apply_text();self.wait();w.set_mode(None);self.wait()
+        letters=[b for b in w.document.bodies if hist.text_group_of(b.id)];self.assertTrue(letters)
+        key,(plane,bodies)=next((kk,v) for kk,v in w._drawn_sketches().items() if any(hist.text_group_of(b.id) for b in v[1]))
+        face=w._regions_for(key,plane,bodies)[0];pt=hist._inner_point(face)
+        src=dict(kind='region',id=None,face=face,wire=face.outerWire(),plane=plane,normal=tuple(k.frame_of(plane).normal),center=face.Center().toTuple())
+        with patch.object(w.view,'_plane_hit',return_value=(1.0,pt)):out=w._with_letters(src,5,5)
+        w.set_mode('extrude')
+        with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,False)
+        w.ex_op.setCurrentIndex(['new','join','cut','intersect'].index(mode));w.ex_value.setValue(4 if mode=='cut' else -4)
+        w.apply_extrude();self.wait();w.set_mode(None)
+        self.sketch('rect',(60,0),(70,10));w.set_mode(None)          # dalszy, niezależny krok
+        infos=w.document.infos()[0];ti=next(i for i,f in enumerate(infos) if (f.get('op') or {}).get('type')=='text')
+        return ti
+
+    def test_history_edit_text_keeps_later_cut_and_join(self):
+        for mode in ('cut','join'):
+            self.w.document.clear_all();self.w.refresh()
+            w=self.w;ti=self._text_cut_project(mode)
+            vol=lambda:sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid')
+            v0=vol();self.assertNotAlmostEqual(v0,50*25*10,0)
+            w.history_edit(ti);self.assertEqual(w.tool,'text')
+            w.text_edit.setText('ABCD');w.apply_text();self.wait();w.set_mode(None);self.wait();self.wait()
+            infos,cur=w.document.infos()
+            self.assertFalse([f for f in infos if f.get('stale')],mode)
+            self.assertEqual(infos[ti]['op']['params']['text'],'ABCD')
+            self.assertEqual(cur,len(infos)-1)
+            v1=vol();self.assertNotAlmostEqual(v1,v0,0)                      # więcej liter - inna objętość
+            self.assertGreater(abs(v1-50*25*10),abs(v0-50*25*10),mode)       # nowy napis nadal wycięty / dodany
+
     def test_history_edit_fillet_and_boolean_prefill_the_tool(self):
         w=self.w
         a=Body('A',k.box(20,20,20)).prepared();b=Body('B',k.box(10,10,40)).prepared()
@@ -2000,6 +2060,53 @@ class StudioTests(unittest.TestCase):
         shape=w.document.get(a.id).shape
         self.assertAlmostEqual(k.bounds(shape).zmax,20,4)
         self.assertEqual(k.point_state(shape,(10,10,18)),'out');self.assertEqual(k.point_state(shape,(10,10,8)),'in')    # otwór na nowej górze
+
+    def test_extruding_top_face_early_in_history_keeps_later_work_on_that_face(self):
+        """Sześcian, na górnej ścianie: otwór, napis wycięty, zaokrąglone krawędzie. Potem powrót do kroku po wyciągnięciu
+        i wyciągnięcie górnej ściany o 5 mm: dalsze kroki idą za nową górą (bez czerwonych kroków)."""
+        from rccad import history as hist
+        w=self.w
+        self.sketch('rect',(0,0),(40,30));rect=w.document.bodies[-1];w.set_mode('extrude');self.pick_sketch_profile(rect)
+        w.ex_value.setValue(10);w.apply_extrude();self.wait();w.set_mode(None)
+        a=next(b for b in w.document.bodies if b.kind=='solid')
+        def top_sketch():
+            w.set_mode('plane')
+            with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array((20,15,10.0)))):
+                w.view_clicked(5,5,False,False)
+        top_sketch();uv=lambda x,y:k.uv_of(w.sketch_plane,(x,y,10))
+        w.choose_tool('circle');w.sketch_clicked(w.sketch_plane,*uv(8,8));w.sketch_clicked(w.sketch_plane,*uv(11,8));self.wait()
+        circ=w.document.bodies[-1];w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(circ);w.ex_value.setValue(-4);w.ex_op.setCurrentIndex(2);w.apply_extrude();self.wait();w.set_mode(None)
+        top_sketch();w.choose_tool('text');w.text_edit.setText('AB');w.text_size.setValue(8)
+        w.txt.update(anchor=tuple(k.uv_of(w.sketch_plane,(18,12,10))),size=8.0,angle=0.0);w._text_set_stage('edit');w.apply_text();self.wait();w.set_mode(None);self.wait()
+        key,(plane,bodies)=next((kk,v) for kk,v in w._drawn_sketches().items() if any(hist.text_group_of(b.id) for b in v[1]))
+        face=w._regions_for(key,plane,bodies)[0];pt=hist._inner_point(face)
+        src=dict(kind='region',id=None,face=face,wire=face.outerWire(),plane=plane,normal=tuple(k.frame_of(plane).normal),center=face.Center().toTuple())
+        with patch.object(w.view,'_plane_hit',return_value=(1.0,pt)):out=w._with_letters(src,5,5)
+        w.set_mode('extrude')
+        with patch.object(w,'_profile_at',return_value=out):w.pick_profile(5,5,False)
+        w.ex_op.setCurrentIndex(2);w.ex_value.setValue(-2);w.apply_extrude();self.wait();w.set_mode(None)
+        E=w.document.get(a.id).shape.Edges();ids={i for i,e in enumerate(E) if e.geomType()=='LINE' and e.Center().z>9.9 and (abs(e.Center().x)<1e-6 or abs(e.Center().x-40)<1e-6)}
+        self.assertEqual(len(ids),2)
+        w.set_mode('mod');w.edges={a.id:ids};w.mod_size.setValue(2);w.apply_mod();self.wait();w.set_mode(None)
+        before=w.document.get(a.id).shape.Volume();count=len(w.document.infos()[0])
+        self.assertFalse(any(i.get('stale') for i in w.document.infos()[0]))
+        # powrót za wyciągnięcie i wyciągnięcie górnej ściany o 5 mm
+        w.history_goto(2);self.wait()
+        body=w.document.get(a.id);top=next(f for f in body.shape.Faces() if f.normalAt().z>.99)
+        sub,others,hole_ids=w._face_with_holes(top,(0,0,1.0),(20,15,10.0))
+        src=dict(kind='face',id=a.id,face=sub,whole=top,holes=True,hole_ids=hole_ids,wire=sub.outerWire(),plane=None,normal=(0,0,1.0),
+                 center=sub.Center().toTuple(),hit=(20,15,10.0),cluster=(a.id,'top'),sibling=False,siblings=[])
+        w.set_mode('extrude')
+        with patch.object(w,'_profile_at',return_value=src):w.pick_profile(5,5,False)
+        w.ex_op.setCurrentIndex(1);w.ex_value.setValue(5);w.apply_extrude();self.wait();self.wait();self.wait()
+        infos=w.document.infos()[0]
+        self.assertEqual(len(infos),count+1)
+        self.assertFalse([(i['label'],i.get('why')) for i in infos if i.get('stale')])
+        shape=w.document.get(a.id).shape
+        self.assertAlmostEqual(k.bounds(shape).zmax,15,4)
+        self.assertAlmostEqual(shape.Volume(),before+40*30*5,0)                  # otwór, napis i zaokrąglenia przeszły na nową górę
+        self.assertEqual(k.point_state(shape,(8,8,13)),'out');self.assertEqual(k.point_state(shape,(8,8,9)),'in')
 
     def test_project_file_given_at_start_opens(self):
         import tempfile
@@ -2152,6 +2259,90 @@ class StudioTests(unittest.TestCase):
             w.set_mode('move');w.select_transform_target(w.document.get(a.id));w.t_spins[2].setValue(dz);w.apply_transform();self.wait()
         infos=w.document.infos()[0]
         self.assertEqual(len(infos),7);self.assertEqual(infos[-1]['op']['v'],[0.0,0.0,12.0])
+
+    def _holes_with_fillet(self):
+        w=self.w
+        self.sketch('rect',(0,0),(60,40));base=w.document.bodies[-1];w.set_mode('extrude');self.pick_sketch_profile(base)
+        w.ex_value.setValue(10);w.apply_extrude();self.wait();w.set_mode(None)
+        a=next(b for b in w.document.bodies if b.kind=='solid')
+        self.sketch('rect',(5,15),(21,25));r=w.document.bodies[-1];w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(r);w.ex_op.setCurrentIndex(2);w.ex_value.setValue(30);w.apply_extrude();self.wait();w.set_mode(None)
+        self.sketch('circle',(40,20),(45,20));c=w.document.bodies[-1];w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(c);w.ex_op.setCurrentIndex(2);w.ex_value.setValue(30);w.apply_extrude();self.wait();w.set_mode(None)
+        sh=w.document.get(a.id).shape
+        ids={i for i,e in enumerate(sh.Edges()) if e.geomType()=='CIRCLE' and e.Center().z>9.9}
+        w.set_mode('mod');w.edges={a.id:ids};w.mod_size.setValue(2);w.apply_mod();self.wait();w.set_mode(None)
+        self.assertEqual(w.document.info['op']['type'],'mod')
+        return a,c
+
+    def test_moving_filleted_hole_onto_another_drops_the_fillet(self):
+        w=self.w;a,c=self._holes_with_fillet()
+        n=len(w.document.infos()[0]);filleted=w.document.get(a.id).shape.Volume()
+        w.set_mode('move')
+        with patch.object(w,'pick_object',return_value=a.id),patch.object(w.view,'pick_face',return_value=(a.id,np.array((-1.0,0,0)),np.array((45.0,20,5)))):
+            w.view_clicked(5,5,False,False)
+        self.assertIsNotNone(w.t_feature)
+        w.t_spins[0].setValue(-20);w.apply_transform();self.wait();self.wait()
+        infos=w.document.infos()[0]
+        self.assertEqual(len(infos),n);self.assertNotIn('mod',[(i.get('op') or {}).get('type') for i in infos])   # krok zaokrąglenia usunięty, doszło przesunięcie
+        self.assertEqual(infos[-1]['op']['type'],'featmove');self.assertFalse([i for i in infos if i.get('stale')])
+        sh=w.document.get(a.id).shape;self.assertTrue(sh.isValid())
+        self.assertEqual(k.point_state(sh,(20,20,5)),'out');self.assertEqual(k.point_state(sh,(40,20,5)),'in')
+        w.undo();self.wait()                                                            # jedno Cofnij: zaokrąglenie i otwór wracają
+        self.assertEqual(len(w.document.infos()[0]),n);self.assertEqual(w.document.info['op']['type'],'mod')
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),filleted,3)
+        # przesunięcie bez kolizji: otwór jedzie razem z zaokrągleniem
+        w.set_mode('move')
+        with patch.object(w,'pick_object',return_value=a.id),patch.object(w.view,'pick_face',return_value=(a.id,np.array((-1.0,0,0)),np.array((45.0,20,5)))):
+            w.view_clicked(5,5,False,False)
+        w.t_spins[0].setValue(10);w.apply_transform();self.wait()
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),filleted,2)
+        self.assertEqual(w.document.info['op']['type'],'featmove')
+
+    def test_moving_hole_sketch_onto_another_drops_unfit_fillet_from_history(self):
+        w=self.w;a,c=self._holes_with_fillet()
+        n=len(w.document.infos()[0])
+        w.set_mode('move');w.select_transform_target(w.document.get(c.id));w.t_spins[0].setValue(-20);w.apply_transform();self.wait();self.wait()
+        infos=w.document.infos()[0]
+        self.assertFalse([i for i in infos if i.get('stale')],[i.get('why') for i in infos])
+        self.assertLessEqual(len(infos),n)
+        sh=w.document.get(a.id).shape;self.assertTrue(sh.isValid());self.assertEqual(k.point_state(sh,(20,20,5)),'out')
+
+    def test_repeated_changes_of_one_object_fold_into_its_earlier_step(self):
+        w=self.w
+        a=Body('A',k.box(10,10,10)).prepared();b=Body('B',k.transform(k.box(10,10,10),(30,0,0))).prepared()
+        w.document.commit([a,b]);w.refresh()
+        def move(body,dx):
+            w.set_mode('move');w.select_transform_target(w.document.get(body.id));w.t_spins[0].setValue(dx);w.apply_transform();self.wait();self.wait()
+        move(a,10);move(b,5);move(a,4)                                     # A, B, A: drugi ruch A poprawia pierwszy
+        ops=[(i.get('op') or {}) for i in w.document.infos()[0]]
+        moves=[o for o in ops if o.get('type')=='transform']
+        self.assertEqual(len(moves),2);self.assertEqual(moves[0]['v'],[14.0,0.0,0.0]);self.assertEqual(moves[0]['id'],a.id)
+        self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).xmin,14,5);self.assertAlmostEqual(k.bounds(w.document.get(b.id).shape).xmin,35,5)
+        w.undo();self.wait()                                                # Cofnij: A wraca na 10, krok B zostaje
+        self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).xmin,10,5);self.assertAlmostEqual(k.bounds(w.document.get(b.id).shape).xmin,35,5)
+        w.redo();self.wait();self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).xmin,14,5)
+        n=len(w.document.infos()[0])
+        # nazwa
+        self.assertIsNone(w.mode)
+        w.objects_rename(a.id,'Pierwsza');self.wait();w.objects_rename(b.id,'Druga');self.wait();w.objects_rename(a.id,'Nowa');self.wait()
+        infos=w.document.infos()[0];ren=[i for i in infos if (i.get('op') or {}).get('type')=='rename']
+        self.assertEqual(len(ren),2);self.assertEqual(ren[0]['op']['name'],'Nowa');self.assertEqual(w.document.get(a.id).name,'Nowa')
+        self.assertIn('Nowa',ren[0]['label'])
+        # skala
+        w.selected=[];w.toggle_scale(True)
+        with patch.object(w,'pick_object',return_value=a.id):w.view_clicked(5,5,False,False)
+        w.sc_value.setValue(200);w.apply_scale();self.wait();self.wait()
+        w.selected=[];w.toggle_scale(True)
+        with patch.object(w,'pick_object',return_value=b.id):w.view_clicked(5,5,False,False)
+        w.sc_value.setValue(50);w.apply_scale();self.wait();self.wait()
+        w.selected=[];w.toggle_scale(True)
+        with patch.object(w,'pick_object',return_value=a.id):w.view_clicked(5,5,False,False)
+        w.sc_value.setValue(150);w.apply_scale();self.wait();self.wait()
+        sc=[i['op'] for i in w.document.infos()[0] if (i.get('op') or {}).get('type')=='scale']
+        self.assertEqual(len(sc),2);self.assertTrue(np.allclose(sc[0]['f'],[3,3,3]))
+        self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).xlen,30,4)
+        self.assertFalse([i for i in w.document.infos()[0] if i.get('stale')])
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

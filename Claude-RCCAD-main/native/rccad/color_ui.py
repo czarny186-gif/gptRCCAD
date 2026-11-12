@@ -6,6 +6,8 @@ Zamknięcie okna bez zapisu przywraca poprzednie kolory. Kolor domyślny dotyczy
 w projekcie razem z nim."""
 from __future__ import annotations
 
+from . import history as hist
+
 from dataclasses import replace
 
 from PySide6.QtCore import QPointF, QSize, Qt
@@ -248,6 +250,19 @@ class ColorTools:
             doc.undo(mesh=False)
             doc._redo.clear()
             changed = {**{i: tuple(c) for i, c in merged.items() if doc.get(i) is not None}, **changed}
+        elif changed and doc.can_undo and not doc.can_redo and not doc.merging and not self.step_editing:
+            # ponowna zmiana koloru tych samych obiektów: poprawia wcześniejszy krok koloru (bez duplikatu w historii)
+            states = doc.states()
+            j = hist.fold_point(states, changed, lambda op: op.get('type') == 'color' and set(changed) <= set(op.get('colors') or ()))
+            if j is not None:
+                old = dict(states[j][1]['op'].get('colors') or {})
+                old.update({i: [round(float(v), 4) for v in c] for i, c in changed.items()})
+                self.co_pending = {}
+                self.co_default_new = None
+                self.view.tints = {}
+                self._fold_step(j, dict(type='color', colors=old), 'Kolor')
+                self._co_refresh()
+                return
         if changed:
             colors = {i: [round(float(v), 4) for v in c] for i, c in changed.items()}
             n = len(colors)
