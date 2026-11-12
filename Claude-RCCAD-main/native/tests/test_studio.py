@@ -1972,6 +1972,7 @@ class StudioTests(unittest.TestCase):
         self.sketch('rect',(40,0),(50,10));w.set_mode(None)
         n=len(w.document.infos()[0]);self.assertFalse(w.hist_commit.isEnabled())
         vol=lambda:sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid')
+        self.wait();self.wait()
         replays=[]
         orig=hist.rebuild
         with patch.object(hist,'rebuild',side_effect=lambda *a,**kw:(replays.append(1),orig(*a,**kw))[1]):
