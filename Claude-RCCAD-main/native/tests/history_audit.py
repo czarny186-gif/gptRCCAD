@@ -80,6 +80,8 @@ def audited_commit(self, bodies, label=None, icon=None, op=None):
     recipe = op or self.pending_op
     before = self.bodies
     result = _commit(self, bodies, label, icon, op)
+    if recipe and not self.merging:
+        recipe = self.info.get('op') or recipe        # przepis zapisany w kroku (po edycji kroku - z identyfikatorami starego kroku)
     if not recipe or self.merging and recipe.get('type') != 'sketchmeta':
         return result
     kind = recipe.get('type')

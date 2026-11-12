@@ -94,7 +94,12 @@ class Body:
 
 def _remap(value, mapping):
     if isinstance(value, str):
-        return mapping.get(value, value)
+        if value in mapping:
+            return mapping[value]
+        for new, old in mapping.items():          # identyfikator w środku nazwy grupy (np. „sheet-<id>”)
+            if len(new) >= 16 and new in value:
+                value = value.replace(new, old)
+        return value
     if isinstance(value, dict):
         return {k: _remap(v, mapping) for k, v in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -117,7 +122,7 @@ def _same_ids(old_op, bodies, info):
             mapping.update({y: x for x, y in zip(a, b) if isinstance(x, str) and isinstance(y, str) and x != y})
     if not mapping:
         return bodies, info
-    bodies = tuple(replace(b, id=mapping.get(b.id, b.id), group=mapping.get(b.group, b.group) if b.group else b.group,
+    bodies = tuple(replace(b, id=mapping.get(b.id, b.id), group=_remap(b.group, mapping) if b.group else b.group,
                            meta=_remap(b.meta, mapping) if b.meta else b.meta) for b in bodies)
     return bodies, dict(info, op=_remap(new_op, mapping))
 
