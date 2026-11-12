@@ -1,13 +1,19 @@
-# RCCAD Desktop 0.5.0 — historia: wszystkie kroki edytowane w swoich narzędziach
+# RCCAD Desktop 0.5.1 — edycja kroków blach i sklejki
+
+- **Blachy**: dwuklik w krok Zamiany na blachę, Kołnierza, Zawinięcia albo Kołnierza na noski otwiera to samo narzędzie ze ścianą / krawędzią i wartościami z kroku (długość, kąt, promień, strona wymiaru, zawinięcie, ścianka). Zatwierdź zastępuje krok. Późniejsze kołnierze tej blachy zachowują nową wartość wcześniejszego kołnierza (wcześniej przeliczenie przywracało starą).
+- **Sklejka**: dwuklik w krok Płyty (profile z kroku), Ścianki (krawędzie i wysokość), Półki / przegrody (obie ściany) i Połączeń (wybrane rodzaje połączeń każdego styku) otwiera narzędzie z wyborem z kroku.
+- Zastąpiony krok zachowuje identyfikatory swoich obiektów (ścianki, kopie, części) - dalsze kroki, które się do nich odwołują (np. Połączenia po zmianie wysokości ścianek), przeliczają się bez błędu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.0 — historia: wszystkie kroki edytowane w swoich narzędziach
 
 - **Gwint, Skalowanie, Dopasowanie / Wyrównanie, Ścianka i Półka / przegroda (sklejka)**: dwuklik w krok otwiera narzędzie z wyborem i wartościami z kroku (otwór / wałek z rozmiarem i długością gwintu, skala, obie ściany dopasowania, krawędzie ścianek, ściany półki). Zastosuj zastępuje krok.
 - **Usunięcie i zmiana nazwy**: dwuklik w krok usunięcia pokazuje model sprzed kroku z zaznaczonymi usuniętymi obiektami - zaznacz inne i naciśnij Delete (krok zostaje zastąpiony), Esc anuluje. Dwuklik w zmianę nazwy otwiera pole nazwy na liście Obiekty - Enter zapisuje nową nazwę w tym kroku.
 - **Szybsze przeliczanie historii**: wymiary brył liczone raz na kształt (przy przeliczaniu wielu kroków te same bryły były mierzone setki razy).
 - Okno wymiarów pod Tab przechodzi między polami także wtedy, gdy okno programu chwilowo nie ma fokusu.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.4.99 — otwieranie plików, edycja kroków w oryginalnych narzędziach
 

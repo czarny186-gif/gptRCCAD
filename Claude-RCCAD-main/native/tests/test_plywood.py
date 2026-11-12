@@ -601,6 +601,56 @@ if __name__ == '__main__':
     unittest.main()
 
 
+class PlywoodStepEditTests(PlywoodWindowTests):
+    """0.5.1: dwuklik w krok Płyty / Ścianki / Połączeń otwiera to samo narzędzie z wyborem i wartościami z kroku."""
+
+    def test_panel_wall_and_joints_steps_reopen_prefilled(self):
+        w = self.w
+        sk = Body('Szkic', k.sketch('rectangle', 'XY', 200, 150), 'sketch', 'XY').prepared()
+        w.document.commit([sk]); w.refresh()
+        w.toggle_mode('ply')
+        w._ply_widgets[0][1].setValue(18)
+        with patch.object(w, '_profile_at', return_value=w._sketch_profile(sk)):
+            w.view_clicked(5, 5, False, False)
+        w.apply_ply_panel(); self.wait()
+        base = next(b for b in w.document.bodies if pw.is_panel(b))
+        w.toggle_mode('ply_wall')
+        tops = [i for i, e in enumerate(base.shape.Edges()) if abs(e.Center().z - 18) < 1e-6]
+        for n, i in enumerate(tops):
+            with patch.object(w.view, 'nearest_edge', return_value=(base.id, i)):
+                w.view_clicked(5, 5, n > 0, False)
+        w.pw_height.setValue(80); w.apply_ply_wall(); self.wait()
+        w.set_mode(None)
+        w.toggle_mode('ply_joints'); self.wait()
+        key = next(c['key'] for c in w.pj_contacts)
+        combo = w.pj_rows[key][1]
+        options = [combo.itemData(i) for i in range(combo.count()) if combo.model().item(i).isEnabled()]
+        choice = next(o for o in options if o != w.pj_contacts[0]['joint'])
+        combo.setCurrentIndex(combo.findData(choice))
+        w.apply_ply_joints(); self.wait(); w.set_mode(None)
+        doc = w.document
+        infos = doc.infos()[0]; count = len(infos)
+        kinds = [(i.get('op') or {}).get('type') for i in infos]
+        # Ścianka: krawędzie i wysokość z kroku
+        w.history_edit(kinds.index('ply_wall')); self.app.processEvents()
+        self.assertEqual(w.mode, 'ply_wall'); self.assertEqual(len(w.pw_edges), 4); self.assertAlmostEqual(w.pw_height.value(), 80)
+        w.pw_height.setValue(60); w.apply_ply_wall(); self.wait(); self.wait()
+        infos = doc.infos()[0]
+        self.assertEqual(len(infos), count); self.assertAlmostEqual(infos[kinds.index('ply_wall')]['op']['h'], 60)
+        self.assertFalse(any(i.get('stale') for i in infos),[(i['label'],i.get('why')) for i in infos if i.get('stale')])
+        # Połączenia: wybrane rodzaje połączeń z kroku
+        w.history_edit(kinds.index('ply_joints')); self.wait()
+        self.assertEqual(w.mode, 'ply_joints')
+        self.assertEqual(next(c['joint'] for c in w.pj_contacts if c['key'] == key), choice)
+        w.set_mode(None); self.app.processEvents(); self.wait()
+        # Płyta: profile z kroku, Zastosuj bez nowego wyboru zastępuje krok
+        w.history_edit(kinds.index('ply_panel')); self.app.processEvents()
+        self.assertEqual(w.mode, 'ply')
+        w.apply_ply_panel(); self.wait(); self.wait()
+        self.assertEqual(len(doc.infos()[0]), count)
+        self.assertFalse(any(i.get('stale') for i in doc.infos()[0]))
+
+
 class PlywoodFoldTests(PlywoodWindowTests):
     """0.4.64: Rozłóż / Złóż płyty - pamięć w płytach, przesunięcie, biblioteka; frez i narożniki gniazd."""
 
@@ -1018,6 +1068,48 @@ class SheetTabBendTests(SheetTabWallTests):
             c, v = before[b.id]
             self.assertTrue(np.allclose(b.shape.Center().toTuple(), c, atol=1e-5), b.name)
             self.assertAlmostEqual(b.shape.Volume(), v, 4)
+
+    def test_sheet_flange_hem_and_tabwall_steps_reopen_with_their_edges(self):
+        """0.5.1: dwuklik w krok blachy otwiera to samo narzędzie z krawędzią i wartościami z kroku; Zatwierdź zastępuje krok."""
+        w = self.w
+        sheet = self._sheet(w)
+        w.toggle_mode('tabwall'); w.tw_length.setValue(30); w.tw_bend.click()
+        self._click(sheet.id, (100, 30, 2))
+        w.set_mode(None)
+        wall = next(b for b in w.document.bodies if b.name.startswith('Ścianka blachy'))
+        w.toggle_mode('flange'); w.fl_length.setValue(15); w.toggle_bending()
+        self._click(wall.id, (100, 30, 30))
+        w.set_mode(None)
+        w.toggle_mode('hem'); w.toggle_bending()
+        self._click(wall.id, (115, 30, 30))
+        w.set_mode(None)
+        doc = w.document
+        infos = doc.infos()[0]; count = len(infos)
+        steps = {i['label']: n for n, i in enumerate(infos)}
+        # kołnierz: ta sama krawędź, długość z kroku; nowa długość zastępuje krok
+        w.history_edit(steps['Kołnierz']); self.app.processEvents()
+        self.assertEqual(w.mode, 'flange'); self.assertIsNotNone(w.fl_pick); self.assertAlmostEqual(w.fl_length.value(), 15)
+        w.fl_length.setValue(20); w.apply_flange(); self.wait(); self.wait()
+        infos = doc.infos()[0]
+        self.assertEqual(len(infos), count); self.assertFalse(any(i.get('stale') for i in infos))
+        flanges = doc.get(wall.id).meta['sheet']['recipe']['flanges']
+        self.assertEqual(len(flanges), 2); self.assertAlmostEqual(float(flanges[0]['length']), 20)
+        # zawinięcie: otwiera się Zawinięcie z wartościami z kroku
+        w.history_edit(steps['Zawinięcie']); self.app.processEvents()
+        self.assertEqual(w.mode, 'hem'); self.assertIsNotNone(w.fl_pick)
+        w.set_mode(None); self.app.processEvents(); self.wait()
+        self.assertEqual(doc.infos()[1], count - 1)
+        # ścianka na noski: krawędź z kroku, wysokość z kroku
+        w.history_edit(steps['Kołnierz na noski']); self.app.processEvents()
+        self.assertEqual(w.mode, 'tabwall'); self.assertIsNotNone(w.tw_pick); self.assertAlmostEqual(w.tw_length.value(), 30)
+        w.tw_length.setValue(35); w._tw_save(); self.wait(); self.wait()
+        infos = doc.infos()[0]
+        self.assertEqual(len(infos), count); self.assertAlmostEqual(infos[steps['Kołnierz na noski']]['op']['length'], 35)
+        # zamiana na blachę: ta sama ściana
+        w.history_edit(steps.get('Konwersja na blachę', 1) if 'Konwersja na blachę' in steps else 1); self.app.processEvents()
+        if w.mode == 'sheet':
+            self.assertIsNotNone(w.sheet_pick); self.assertEqual(w.sheet_pick['id'], sheet.id)
+        w.set_mode(None); self.app.processEvents(); self.wait()
 
     def test_side_flange_on_tabwall_keeps_fingers_in_place(self):
         # kołnierz przy bocznej krawędzi ścianki (od strony początku jej płyty) przesuwał noski o promień + grubość

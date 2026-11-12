@@ -23,10 +23,10 @@ from . import sketchmeta as sm
 TOOL_OF = {'extrude': 'extrude', 'revolve': 'revolve', 'mod': 'mod', 'shell': 'shell', 'bool': 'bool', 'color': 'color', 'tilt': 'tilt',
            'sweep': 'sweep', 'loft': 'loft', 'pattern': 'pattern', 'mirror': 'mirror', 'split': 'split',
            'transform': None, 'featmove': None, 'mate': None, 'scale': 'scale', 'thread': 'thread',
-           'ply_wall': 'ply_wall', 'ply_between': 'ply_between'}   # None: tryb z przepisu
+           'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'sheet': 'sheet', 'sheetbuild': None, 'sheet_tabwall': 'tabwall',
+           'ply_panel': 'ply', 'ply_joints': 'ply_joints'}   # None: tryb z przepisu
 # narzędzia otwierane na modelu sprzed kroku bez odtworzenia wyboru - elementy wskazuje się ponownie, Zastosuj zastępuje krok
-FRESH_OF = {'thread_real': 'thread', 'sheet': 'sheet', 'flange': 'flange',
-            'sheetbuild': 'flange', 'sheet_tabwall': 'tabwall', 'ply_panel': 'ply', 'ply_joints': 'ply_joints', 'text': 'text'}
+FRESH_OF = {'thread_real': 'thread', 'flange': 'flange', 'text': 'text'}
 PREVIEW_TOL = .2
 
 
@@ -86,6 +86,13 @@ class StepEditTools:
         self._step_begin(index, index - 1)
         self.document.replace_next = True
         mode = (FRESH_OF if fresh else TOOL_OF)[kind] or recipe.get('mode')
+        if kind == 'sheetbuild':
+            added = self._sheet_added_spec(index, recipe)
+            if added is None:
+                mode, fresh = 'flange', True        # zmiana kilku kołnierzy naraz: narzędzie do ponownego wskazania
+            else:
+                mode = 'hem' if added.get('hem') else 'flange'
+                recipe = dict(recipe, _added=added)
         if kind == 'text':
             mode = 'sketch'
         self._step_edit.update(mode=mode, recipe=recipe)
@@ -498,6 +505,90 @@ class StepEditTools:
             self.pb_pos.setValue(float(recipe['pos']))
         self._ply_update()
 
+    # ---------- blachy ----------
+    def _sheet_added_spec(self, index, recipe):
+        """Kołnierz / zawinięcie dodane w tym kroku blachy (porównanie z listą kołnierzy przed krokiem) albo None."""
+        states = self.document.states()
+        before = next((b for b in states[index - 1][0] if b.id == recipe['id']), None)
+        meta = ((before.meta or {}).get('sheet') or {}).get('recipe') if before is not None else None
+        previous = list((meta or {}).get('flanges') or [])
+        flanges = list(recipe.get('flanges') or [])
+        if len(flanges) != len(previous) + 1:
+            return None
+        strip = lambda f: {k: v for k, v in f.items() if k != 'outside'}
+        if any(strip(a) != strip(b) for a, b in zip(flanges, previous)):
+            return None
+        return flanges[-1]
+
+    def _step_fill_sheet(self, recipe):
+        from . import sheetmetal as shm
+        body = self.document.get(recipe['id'])
+        if body is None:
+            raise kernel.CadError('brak bryły')
+        face, normal = hist.match_face(body.shape, recipe['face'])
+        info = shm.sheet_of_face(body.shape, face)
+        self.sheet_pick = dict(id=body.id, face=face, normal=tuple(float(c) for c in recipe['face']['normal']),
+                               point=tuple(float(c) for c in recipe['face']['point']), info=info)
+        self.view.set_selection_meshes([kernel.display_mesh(face)], color=(1, .55, .1, .55), line_color=(.95, .42, .02, 1))
+        a, b = info['dims']
+        num = lambda v: f'{v:.2f}'.rstrip('0').rstrip('.').replace('.', ',')
+        self.sheet_t.setText(f'{num(info["t"])} mm')
+        self.sheet_dims.setText(f'{num(max(a, b))} × {num(min(a, b))} mm')
+        self.sheet_status.setText('Ściana z kroku. Kliknij „Zamień na blachę”, żeby zastąpić krok (albo kliknij inną ścianę).')
+
+    def _step_fill_sheetbuild(self, recipe):
+        """Kołnierz albo zawinięcie z kroku: ta sama krawędź wskazana, wartości z kroku w polach; Zatwierdź zastępuje krok."""
+        spec = dict(recipe['_added'])
+        body = self.document.get(recipe['id'])
+        if body is None:
+            raise kernel.CadError('brak blachy')
+        self.fl_armed = False
+        self._style_bend_button()
+        if spec.get('hem'):
+            self.hm_radius.setValue(float(spec.get('r', self.hm_radius.value())))
+            self.hm_length.setValue(float(spec.get('length', self.hm_length.value())))
+            self.hm_gap.setValue(float(spec['hem'].get('gap', self.hm_gap.value())))
+        else:
+            self._set_flange_values(dict(radius=spec.get('r'), angle=spec.get('angle'), length=spec.get('length'), measure=spec.get('measure', 'outer')))
+            self.fl_reverse.setChecked(False)              # kierunek już zapisany w krawędzi kroku
+        rules = recipe.get('rules') or {}
+        for key, widget in (('gap', getattr(self, 'fl_gap', None)), ('relief_size', getattr(self, 'fl_relief_size', None)),
+                            ('kfactor', getattr(self, 'fl_kfactor', None))):
+            if widget is not None and rules.get(key) is not None:
+                widget.setValue(float(rules[key]))
+        self.fl_pick = dict(id=body.id, spec=spec)
+        self._edge_status().setText('Krawędź z kroku jest wskazana. Zmień wartości i kliknij Zatwierdź - krok zostanie zastąpiony.')
+
+    def _step_fill_sheet_tabwall(self, recipe):
+        body = self.document.get(recipe['id'])
+        if body is None:
+            raise kernel.CadError('brak blachy')
+        index = hist.edge_indices(body.shape, recipe['edges'])[0]
+        self._tw_set(recipe)
+        self.tw_flip.setChecked(bool(recipe.get('flip')))
+        if recipe.get('corner') is not None:
+            self.tw_corner.setCurrentIndex(max(0, self.tw_corner.findData(recipe['corner'])))
+        self.tw_armed = False
+        self._tw_style()
+        self.tw_pick = dict(id=body.id, index=index, t=float(recipe['t']))
+        self.view.set_picked_edge((body.id, index))
+        self.tw_status.setText('Krawędź z kroku jest wskazana. Zmień wartości i kliknij Zatwierdź - krok zostanie zastąpiony.')
+
+    # ---------- sklejka ----------
+    def _step_fill_ply_panel(self, recipe):
+        self.ply_status.setText('Profile z edytowanego kroku. Zmień ustawienia i kliknij Zastosuj '
+                                '(kliknięcie innego profilu wybiera profile od nowa).')
+
+    def _step_fill_ply_joints(self, recipe):
+        """Połączenia: wykrywanie styków jak zwykle, potem rodzaj połączenia każdego styku z kroku."""
+        params = recipe.get('params') or {}
+        for key, widget in (('width', self.pj_width), ('fit', self.pj_fit), ('tool', self.pj_tool)):
+            if params.get(key):
+                widget.setValue(float(params[key]))
+        if params.get('depth') is not None:
+            self.pj_depth.setValue(float(params['depth']) * 100.0)
+        self._pj_preset = dict(recipe.get('joints') or {})
+
     def _step_fill_color(self, recipe):
         self.co_pending = {i: tuple(c) for i, c in (recipe.get('colors') or {}).items() if self.document.get(i) is not None}
         self._co_refresh()
@@ -515,6 +606,8 @@ class StepEditTools:
             return dict(recipe, mode=self.rev_op.currentData(), angle=self.rev_angle.value())
         if self.mode == 'sweep' and not self.sw_profiles:
             return dict(recipe, mode=self.sw_op.currentData())
+        if self.mode == 'ply' and not self.ply_profiles and recipe['type'] == 'ply_panel':
+            return dict(recipe, t=self.ply_thickness(), method=self.ply_method)
         if self.mode == 'loft' and not self.lf_profiles:
             return dict(recipe, mode=self.lf_op.currentData(), ruled=self.lf_ruled.currentData() == 'ruled')
         return None
@@ -582,6 +675,6 @@ class StepEditTools:
 
     @staticmethod
     def _step_label(recipe):
-        if recipe['type'] in ('revolve', 'sweep', 'loft'):
-            return {'revolve': 'Obrót', 'sweep': 'Przeciągnięcie', 'loft': 'Wyciągnięcie złożone'}[recipe['type']]
+        if recipe['type'] in ('revolve', 'sweep', 'loft', 'ply_panel'):
+            return {'revolve': 'Obrót', 'sweep': 'Przeciągnięcie', 'loft': 'Wyciągnięcie złożone', 'ply_panel': 'Płyta'}[recipe['type']]
         return {'cut': 'Wycięcie', 'join': 'Wyciągnięcie (dodaj)', 'intersect': 'Część wspólna'}.get(recipe.get('mode'), 'Wyciągnięcie')

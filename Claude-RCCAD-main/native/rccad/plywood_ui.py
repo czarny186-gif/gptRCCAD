@@ -783,6 +783,8 @@ class PlywoodTools:
 
     # ------------------------------------------------------------------ zastosowanie: Płyta, Ścianka, Półka
     def apply_ply_panel(self):
+        if self.apply_step_recipe():
+            return
         if self.busy or not self.ply_profiles:
             self.toast('Kliknij profil szkicu albo ścianę.')
             return
@@ -877,10 +879,12 @@ class PlywoodTools:
                 if common != self.ply_method and common in pw.METHODS:
                     self.ply_cfg['method'] = common
                     self._ply_sync()
+            preset = getattr(self, '_pj_preset', None) or {}      # edycja kroku Połączenia: rodzaje połączeń z kroku
+            self._pj_preset = None
             for c in contacts:
-                c['joint'] = pw.joint_for(self.ply_method, c['kind'])
+                c['joint'] = preset.get(c['key'], pw.joint_for(self.ply_method, c['kind']))
                 c['title'] = f"{pw.KIND_TITLES[c['kind']]}: {names.get(c['a'], '?')} ↔ {names.get(c['b'], '?')}"
-                if c['kind'] == 'M' and float(c.get('angle') or 90) < pw.FLAT_MITRE:
+                if c['key'] not in preset and c['kind'] == 'M' and float(c.get('angle') or 90) < pw.FLAT_MITRE:
                     c['joint'] = 'none'             # ścianki prawie w jednej linii - zwykły styk na skos
                     c['title'] += ' (prawie w linii - styk na skos)'
             self.pj_contacts, self.pj_skipped, self.pj_ids = contacts, skipped, found_ids

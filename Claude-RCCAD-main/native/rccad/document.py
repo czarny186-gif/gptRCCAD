@@ -92,6 +92,36 @@ class Body:
         return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False or (mesh is None and not mesh_deferred()) else mesh, meta=meta)
 
 
+def _remap(value, mapping):
+    if isinstance(value, str):
+        return mapping.get(value, value)
+    if isinstance(value, dict):
+        return {k: _remap(v, mapping) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return type(value)(_remap(v, mapping) for v in value)
+    return value
+
+
+def _same_ids(old_op, bodies, info):
+    """Krok zastąpiony w edycji kroku: nowe obiekty dostają identyfikatory obiektów ze starego kroku (te same ściany,
+    kopie, części...), więc dalsze kroki, które się do nich odwołują, dalej je znajdują."""
+    new_op = info.get('op')
+    if not old_op or not new_op or old_op.get('type') != new_op.get('type'):
+        return bodies, info
+    mapping = {}
+    for key in ('out', 'group', 'key'):
+        a, b = old_op.get(key), new_op.get(key)
+        if isinstance(a, str) and isinstance(b, str) and a != b:
+            mapping[b] = a
+        elif isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)) and len(a) == len(b):
+            mapping.update({y: x for x, y in zip(a, b) if isinstance(x, str) and isinstance(y, str) and x != y})
+    if not mapping:
+        return bodies, info
+    bodies = tuple(replace(b, id=mapping.get(b.id, b.id), group=mapping.get(b.group, b.group) if b.group else b.group,
+                           meta=_remap(b.meta, mapping) if b.meta else b.meta) for b in bodies)
+    return bodies, dict(info, op=_remap(new_op, mapping))
+
+
 class Document:
     def __init__(self):
         self.bodies: tuple[Body, ...] = ()
@@ -200,6 +230,7 @@ class Document:
             for key in ('note', 'group'):
                 if replaced[2].get(key):
                     info[key] = replaced[2][key]
+            bodies, info = _same_ids(replaced[2].get('op'), bodies, info)
         self.replace_next = False
         self._undo.append((self.bodies, self._revision, self.info))
         if len(self._undo) > self.MAX_UNDO:

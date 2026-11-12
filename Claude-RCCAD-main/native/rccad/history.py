@@ -3466,6 +3466,28 @@ def rebuild(base, steps, constraints=(), job=None):
         return _rebuild(base, steps, ctx, job)
 
 
+def _sheet_flanges(bodies, body_id):
+    body = next((b for b in bodies if b.id == body_id), None)
+    recipe = (((body.meta or {}).get('sheet') or {}).get('recipe') or {}) if body is not None else {}
+    return list(recipe.get('flanges') or []) if recipe else None
+
+
+def _rebase_sheet(recipe, before, current):
+    """Krok blachy zapisuje całą listę kołnierzy. Po zmianie wcześniejszego kołnierza (edycja kroku) ten krok dokłada
+    tylko swoje kołnierze do aktualnej listy - inaczej przywróciłby stare wartości wcześniejszych kołnierzy."""
+    if recipe.get('type') != 'sheetbuild':
+        return recipe
+    old = _sheet_flanges(before, recipe['id'])
+    new = _sheet_flanges(current, recipe['id'])
+    flanges = list(recipe.get('flanges') or [])
+    if old is None or new is None or old == new or len(flanges) < len(old):
+        return recipe
+    strip = lambda f: {k: v for k, v in f.items() if k != 'outside'}
+    if any(strip(a) != strip(b) for a, b in zip(flanges, old)):
+        return recipe            # krok zmienił wcześniejsze kołnierze - zostaje jak był
+    return dict(recipe, flanges=[*new, *flanges[len(old):]])
+
+
 def _replay_step(current, recipe, values):
     """Krok przeliczany ponownie (w wątku przeliczania; proces liczący okazał się dwa razy wolniejszy - przesyłanie
     dużych brył tam i z powrotem kosztuje więcej niż samo liczenie)."""
@@ -3498,6 +3520,9 @@ def _rebuild(base, steps, ctx, job):
                 result = tuple(merged) if ok else None
             if result is None:
                 try:
+                    recipe = _rebase_sheet(recipe, before, current)
+                    if recipe is not info.get('op'):
+                        info = dict(info, op=recipe)
                     result = _replay_step(current, recipe, ctx.values)
                 except Exception as exc:
                     result, why = None, str(exc) or exc.__class__.__name__
