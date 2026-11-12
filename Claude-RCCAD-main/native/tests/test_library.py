@@ -160,6 +160,51 @@ class LibraryWindowTests(unittest.TestCase):
         d.go_home()
         self.assertFalse(d.back_btn.isEnabled())
 
+    def test_several_bodies_or_a_group_save_as_one_entry_and_insert_separately(self):
+        w = self.w
+        a = Body('Noga', k.box(4, 4, 20), folder='Stolik').prepared()
+        b = Body('Blat', k.transform(k.box(30, 20, 2), (0, 0, 20)), folder='Stolik').prepared()
+        c = Body('Kostka', k.transform(k.box(5, 5, 5), (60, 0, 0))).prepared()
+        w.document.commit([a, b, c])
+        w.refresh()
+        w.tools['libobj'].click()
+        d = w.libraries['object']
+        d.take_from_workspace()
+        self.assertTrue(w.lib_panel.isVisible())
+        w.objects_folder_select([a.id, b.id])                    # cała grupa z listy Obiekty
+        self.assertEqual(w._lib_action['ids'], [a.id, b.id])
+        with patch.object(w, 'pick_object', return_value=c.id):
+            w.view_clicked(5, 5, True, False)                   # Shift + klik - kolejna
+        self.assertEqual(w._lib_action['ids'], [a.id, b.id, c.id])
+        w.objects_select(c.id, Qt.NoModifier)                    # ponownie - odchodzi
+        self.assertEqual(w._lib_action['ids'], [a.id, b.id])
+        w.lib_save.click()
+        self.assertIsNone(w._lib_action)
+        self.assertFalse(w.lib_panel.isVisible())
+        self.assertTrue(d.isVisible())
+        files = [p for p in lib.entries('object', d.folder) if p.is_file()]
+        self.assertEqual([p.name for p in files], ['Stolik.rccadx'])
+        self.assertEqual(len(lib.load_bodies('object', files[0])), 2)           # jeden plik, dwie osobne bryły
+        d.view.clearSelection()
+        for i in range(d.view.count()):
+            if Path(d.view.item(i).data(Qt.UserRole)) == files[0]:
+                d.view.item(i).setSelected(True)
+        d.place_selected()
+        self.wait()
+        with patch.object(w, '_library_target', return_value=(np.array([100.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]), 'Siatka')):
+            w.view_clicked(5, 5, False, False)
+        self.wait()
+        placed = w.document.bodies[3:]
+        self.assertEqual(len(placed), 2)                         # wstawione jako dwie niepołączone bryły
+        self.assertEqual({p.name for p in placed}, {'Noga', 'Blat'})
+        self.assertEqual(len({p.folder for p in placed}), 1)
+        self.assertAlmostEqual(sum(p.shape.Volume() for p in placed), 4 * 4 * 20 + 30 * 20 * 2, 3)
+        # zaznaczone przed „Wstaw z pola roboczego” - od razu wybrane
+        w.selected = [a.id, c.id]
+        d.take_from_workspace()
+        self.assertEqual(w._lib_action['ids'], [a.id, c.id])
+        w.library_cancel()
+
     def test_sketch_library_and_clipboard_in_window(self):
         w = self.w
         sk = Body('Okrąg', k.sketch('circle', 'XY', 8, 8), 'sketch', 'XY').prepared()

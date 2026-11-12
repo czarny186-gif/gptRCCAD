@@ -1,14 +1,20 @@
-# RCCAD Desktop 0.5.2 — Cofnij dla zmian historii, bez duplikatów i czerwonych kroków
+# RCCAD Desktop 0.5.3 — Połącz / Rozłącz, rysunek i biblioteka z kilku brył
+
+- **Nowe narzędzie Połącz (zakładka Edycja)**: okno z wyborem Połącz albo Rozłącz. Połącz - wskaż co najmniej dwie bryły (podświetlają się przed kliknięciem, prawy przycisk odznacza, można też klikać pozycje i grupy na liście Obiekty) i Zatwierdź. Bryły nie są scalane - widać miejsca styku - ale zaznaczają się, przesuwają, kolorują i tną inne bryły razem, jak jedna. Na liście Obiekty trafiają do jednej grupy „Połączenie”. Rozłącz - kliknij jedną połączoną bryłę (zaznacza się całe połączenie) i Zatwierdź: bryły wracają do swoich dawnych grup. Zamknij anuluje.
+- **Rysunek techniczny z kilku brył**: przy włączonym Utwórz rysunek albo Rysunek automatyczny zaznacz bryły albo całą grupę na liście Obiekty (albo Shift + klik) - okno już się nie zamyka - i kliknij Zastosuj: rysunek obejmuje wszystkie, jak jedną bryłę.
+- **Biblioteka - kilka obiektów w jednym pliku**: przy Wstaw z pola roboczego zaznacz kilka brył albo całą grupę na liście Obiekty (albo Shift + klik) i kliknij Zapisz w okienku Do biblioteki. Wstawiony później plik daje kilka osobnych, niepołączonych brył - tak jak zostały zapisane.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.2 — Cofnij dla zmian historii, bez duplikatów i czerwonych kroków
 
 - **Cofnij / Ponów działa na zmiany w historii**: po edycji kroku, usunięciu, wyłączeniu albo przestawieniu kroku strzałka Cofnij (Ctrl+Z) przywraca całą historię sprzed tej zmiany, a Ponów - wynik zmiany. Popsuty edycją projekt da się zawsze cofnąć.
 - **Zmiana treści napisu w historii**: napis po zmianie (inna liczba liter) dalej jest wycięty / wyciągnięty - krok Wycięcia albo Wyciągnięcia z połączeniem nie świeci się już na czerwono.
 - **Wyciągnięcie górnej ściany na początku historii**: otwory, wycięte i wyciągnięte napisy oraz zaokrąglenia zrobione później na tej ścianie idą za nią na nową wysokość (bez czerwonych kroków).
 - **Zaokrąglenie, które przestaje pasować**: zamiast błędu zostają krawędzie, które nadal pasują; gdy nie pasuje żadna, krok znika z historii (z komunikatem). Przesunięcie otworu z zaokrąglonym brzegiem tak, że nachodzi na inny otwór, usuwa to zaokrąglenie z bryły i z historii - jedno Cofnij przywraca oba. Otwór z zaokrąglonym brzegiem przesuwa się teraz razem z zaokrągleniem (wcześniej dawał błąd).
 - **Bez duplikatów w historii**: kolejne przesunięcie / obrót tej samej bryły albo otworu, skalowanie, kolor i zmiana nazwy tego samego obiektu poprawiają jego wcześniejszy krok (zostaje ostatnia korekta), także gdy w międzyczasie były inne operacje, które tego obiektu nie dotyczyły.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.1 — edycja kroków blach i sklejki
 

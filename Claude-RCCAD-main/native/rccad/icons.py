@@ -305,6 +305,23 @@ def _draw_tilt(p, ink, acc, soft, pen):
     p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(41, 4), QPointF(36, 11), QPointF(46, 11)]))
 
 
+def _draw_link(p, ink, acc, soft, pen, action=None):
+    """Połącz: dwie osobne kostki (widoczna szczelina styku) spięte pomarańczowym ogniwem; Rozłącz - ogniwo rozpięte."""
+    p.setBrush(soft); p.setPen(pen(ink, 2.4))
+    p.drawRoundedRect(QRectF(4, 18, 18, 20), 2.5, 2.5)
+    p.drawRoundedRect(QRectF(26, 18, 18, 20), 2.5, 2.5)
+    p.setBrush(Qt.NoBrush)
+    if action == 'split':
+        p.setPen(pen(acc, 3.0))
+        p.drawArc(QRectF(7, 5, 14, 14), 30 * 16, 180 * 16)
+        p.drawArc(QRectF(27, 5, 14, 14), -30 * 16, 180 * 16)
+        p.setPen(pen(ink, 2.0)); p.drawLine(QPointF(24, 4), QPointF(24, 12))
+        return
+    p.setPen(pen(acc, 3.0))
+    p.drawRoundedRect(QRectF(9, 6, 18, 10), 5, 5)
+    p.drawRoundedRect(QRectF(21, 6, 18, 10), 5, 5)
+
+
 def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     S = 48.0
     pm = QPixmap(size * scale, size * scale)
@@ -414,6 +431,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_tilt':
         _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind in ('x_link', 'lk_join', 'lk_split'):
+        _draw_link(p, INK, ORANGE, QColor(BLUE_SOFT), pen, 'split' if kind == 'lk_split' else None)
     elif kind=='x_section':
         _draw_section(p,INK,ORANGE,QColor(BLUE_SOFT),pen)
     elif kind in ('x_scale', 'sc_center', 'sc_bottom', 'sc_origin'):
@@ -943,6 +962,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_matchsize(p, ink, acc, soft, pen)
         elif name == 'tilt':
             _draw_tilt(p, ink, acc, soft, pen)
+        elif name == 'link':
+            _draw_link(p, ink, acc, soft, pen)
         elif name == 'color':
             # kolor: cztery kwadraciki palety, pomarańczowy wybrany (gruba ramka)
             _draw_color(p, ink, acc, pen)

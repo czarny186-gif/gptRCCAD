@@ -36,6 +36,7 @@ from .color_ui import ColorTools
 from .matchsize_ui import MatchSizeTools
 from .stepedit_ui import StepEditTools
 from .tilt_ui import TiltTools
+from .link_ui import LinkTools
 from .sectionview import SectionTools
 from PySide6.QtWidgets import QSizePolicy
 from . import measurement
@@ -200,7 +201,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'thread', 'bool', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -213,7 +214,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -473,6 +474,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
                  ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
                  ('matchsize', ui.style_icon('matchsize', 38), 'Wyrównaj rozmiar — takie same kształty przyjmują wymiary wzorca'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
+                 ('link', ui.style_icon('link', 38), 'Połącz — bryły zachowują się jak jedna (bez scalania); Rozłącz je rozdziela'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
                  ('split', ui.style_icon('split', 38), 'Przetnij bryłę — płaszczyzną, ścianą, szkicem albo inną bryłą'),
                  ('shell', ui.style_icon('shell', 38), 'Skorupa — wydrąż bryłę i otwórz ściany'),
@@ -1295,7 +1297,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self.ms_panels[key], self.ms_status[key] = panel, status
 
         # --- rysunek techniczny ---
-        self.dr_panels = {}
+        self.dr_panels, self.dr_status, self.dr_apply = {}, {}, {}
+        self.dr_ids = []
         for key, title, kind, sub, desc in (
                 ('drawing', 'Rysunek techniczny', 'x_drawing', 'Wskaż bryłę', 'Kliknij bryłę (podświetla się na niebiesko). Otworzy się osobne okno: wybierzesz rzuty, wymiary i arkusz, zmierzysz dowolne miejsce rysunku i zapiszesz go jako PDF, DXF, SVG lub JPG.'),
                 ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę', 'Kliknij bryłę. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.'),
@@ -1309,6 +1312,16 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             pic.setToolTip(desc)
             lay.addWidget(pic)
             lay.addWidget(_label('Kliknij ' + {'sheetdrawing': 'blachę', 'plydrawing': 'płytę ze sklejki'}.get(key, 'bryłę') + ' na polu roboczym.', 'status'))
+            if key in ('drawing', 'autodrawing'):
+                status = _label('Kilka brył naraz: zaznacz je (albo całą grupę) na liście Obiekty albo klikaj z Shift - '
+                                'Zastosuj zrobi z nich jeden rysunek.', 'help')
+                status.setWordWrap(True)
+                lay.addWidget(status)
+                apply = QPushButton('Zastosuj')
+                apply.setEnabled(False)
+                apply.clicked.connect(lambda _=False: self.apply_drawing())
+                lay.addWidget(apply)
+                self.dr_status[key], self.dr_apply[key] = status, apply
             close = QPushButton('Zamknij')
             close.clicked.connect(lambda _=False: self.set_mode(None))
             lay.addWidget(close)
@@ -1672,8 +1685,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self._build_color_panel()
         self._build_matchsize_panel()
         self._build_tilt_panel()
+        self._build_link_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1722,7 +1736,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.link_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1763,7 +1777,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'tilt': self.apply_tilt,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'tilt': self.apply_tilt, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -1875,6 +1889,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if self.mode == 'matchsize' and mode != 'matchsize' and getattr(self, 'mz_pending', None):
             self.toast('Niezastosowane zmiany rozmiaru zostały cofnięte.', 2500)
         self.mz_pending, self.mz_ref = {}, None
+        if self.mode == 'link' and mode != 'link':
+            self._link_leave()
         self.wrap_sketch = False
         self.wrap_corner = False
         self.surface_target = None
@@ -1993,6 +2009,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self.hint({'mdist': 'Odległość: kliknij pierwszy punkt.', 'mangle': 'Kąt: kliknij pierwszy punkt ramienia.',
                        'mrad': 'Kliknij okrągłą krawędź lub łuk.', 'mprops': 'Kliknij bryłę albo szkic.'}[mode])
         elif mode in DRAWING_MODES:
+            solids = [i for i in self.selected if (b := self.document.get(i)) is not None and b.kind == 'solid']
+            self.dr_ids = solids if mode in ('drawing', 'autodrawing') and len(solids) > 1 else []   # kilka zaznaczonych - od razu wybrane
+            self._dr_update(mode)
             self.dr_panels[mode].show()
             self.view.setCursor(Qt.PointingHandCursor)
             self.hint('Rysunek techniczny: kliknij bryłę, z której ma powstać rysunek.')
@@ -2051,6 +2070,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self._matchsize_enter()
         elif mode == 'tilt':
             self._tilt_enter()
+        elif mode == 'link':
+            self._link_enter()
         elif mode == 'thread':
             self.thread_panel.show()
             self.th_pick = None
@@ -3467,6 +3488,8 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
                 self._hover_shell_solid(x, y)
             elif self.mode == 'matchsize':
                 self._mz_hover(x, y)
+            elif self.mode == 'link':
+                self.link_hover(x, y)
             elif self.mode in ('move', 'rotate') and getattr(self, 't_feature', None) is None and self._hv is None:
                 self._hover_transform_feature(x, y)
             elif self.mode == 'sweep':
@@ -3564,7 +3587,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if self.section_picking:
             self.section_pick(x,y);return
         if self._lib_action is not None:
-            self._library_click(x, y)
+            self._library_click(x, y, shift or ctrl)
             return
         if self.mode == 'sketch' and self.tool == 'text' and self.txt is not None:
             if self.txt['stage'] == 'surface':
@@ -3631,8 +3654,10 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             self.pick_matchsize(x, y)
         elif self.mode == 'tilt':
             self.pick_tilt(x, y)
+        elif self.mode == 'link':
+            self.pick_link(x, y)
         elif self.mode in DRAWING_MODES:
-            self.pick_drawing(x, y)
+            self.pick_drawing(x, y, shift or ctrl)
         elif self.mode == 'bool':
             self.pick_bool(x, y)
         elif self.mode == 'mod':
@@ -3667,9 +3692,15 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
     def _group_ids(self, bid):
         """Obiekt razem z pozostałymi z jego grupy (np. szyk „jako jeden element”); bez grupy - sam obiekt."""
         body = self.document.get(bid) if bid else None
-        if body is None or not body.group:
+        link = hist.link_of(body)
+        if body is None or not (body.group or link):
             return [bid] if bid else []
-        return [b.id for b in self.document.bodies if b.group == body.group]
+        if not link:
+            return [b.id for b in self.document.bodies if b.group == body.group]
+        # połączone bryły (Edycja → Połącz) - razem z grupami, z których pochodzą (np. szyk „jako jeden element”)
+        ids = [b.id for b in self.document.bodies if hist.link_of(b) == link or (body.group and b.group == body.group)]
+        groups = {b.group for b in self.document.bodies if b.id in ids and b.group}
+        return ids + [b.id for b in self.document.bodies if b.group in groups and b.id not in ids]
 
     def pick_object(self, x, y):
         """Obiekt pod kursorem. Linia szkicu blisko kursora ma pierwszeństwo przed bryłą, na której leży (szkic narysowany
@@ -5160,13 +5191,62 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
     # =====================================================================
     # rysunek techniczny
     # =====================================================================
-    def pick_drawing(self, x, y):
+    def _dr_update(self, mode=None):
+        """Rysunek z kilku brył: wybrane bryły podświetlone, opis i przycisk Zastosuj."""
+        mode = mode or self.mode
+        live = {b.id for b in self.document.bodies}
+        self.dr_ids = [i for i in self.dr_ids if i in live]
+        if mode not in self.dr_apply:
+            return
+        n = len(self.dr_ids)
+        self.view.tints = {i: TINT_BASE for i in self.dr_ids}
+        self.dr_apply[mode].setEnabled(n > 0)
+        self.dr_status[mode].setText(f'Wybrane bryły: {n} - Zastosuj zrobi z nich jeden rysunek (jak z jednej bryły). '
+                                     'Ponowne kliknięcie odznacza.' if n else
+                                     'Kilka brył naraz: zaznacz je (albo całą grupę) na liście Obiekty albo klikaj z Shift - '
+                                     'Zastosuj zrobi z nich jeden rysunek.')
+        self.refresh()
+
+    def dr_add(self, ids):
+        """Lista Obiekty / Shift + klik w trybie rysunku: bryły (także cała grupa) dochodzą do rysunku; ponownie - odchodzą."""
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        if not ids:
+            self.toast('Ta pozycja nie zawiera brył.')
+            return
+        if all(i in self.dr_ids for i in ids):
+            self.dr_ids = [i for i in self.dr_ids if i not in ids]
+        else:
+            self.dr_ids = [*self.dr_ids, *[i for i in ids if i not in self.dr_ids]]
+        self._dr_update()
+
+    def apply_drawing(self):
+        """Zastosuj w oknie rysunku: wybrane bryły razem - jak jedna bryła (wspólne rzuty, wymiary całości)."""
+        if self.busy or self.mode not in ('drawing', 'autodrawing'):
+            return
+        bodies = [self.document.get(i) for i in self.dr_ids if self.document.get(i) is not None]
+        if not bodies:
+            self.toast('Wybierz bryły na liście Obiekty albo kliknij bryłę.')
+            return
+        auto = self.mode == 'autodrawing'
+        if len(bodies) == 1:
+            body = bodies[0]
+        else:
+            folders = {b.folder for b in bodies}
+            name = folders.pop() if len(folders) == 1 and next(iter({b.folder for b in bodies})) else f'{bodies[0].name} (+{len(bodies) - 1})'
+            body = Body(name, kernel.compound([b.shape for b in bodies]), 'solid')
+        self.set_mode(None)
+        self.open_drawing(body, auto=auto)
+
+    def pick_drawing(self, x, y, shift=False):
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         if body is None or body.kind != 'solid':
             self.toast('Kliknij bryłę (nie szkic).')
             return
         mode = self.mode
+        if mode in ('drawing', 'autodrawing') and (shift or self.dr_ids):
+            self.dr_add(self._group_ids(body.id))      # rysunek z kilku brył: kliknięta dochodzi do wybranych
+            return
         if mode == 'plydrawing':
             from . import plywood as pw
             if not pw.is_panel(body):
@@ -6349,10 +6429,11 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if body is None or body.kind != 'solid':
             self.toast('Kliknij bryłę (nie szkic).')
             return
+        members = [i for i in self._group_ids(bid) if (b := self.document.get(i)) is not None and b.kind == 'solid'] if hist.link_of(body) else [bid]
         if bid in self.bool_ids:
-            self.bool_ids.remove(bid)
+            self.bool_ids = [i for i in self.bool_ids if i not in members]
         else:
-            self.bool_ids.append(bid)
+            self.bool_ids += [i for i in members if i not in self.bool_ids]
         self.update_bool_status()
 
     def _bool_add(self, ids):
@@ -6418,6 +6499,13 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         keep = self.bool_keep.isChecked()
 
         recipe = dict(type='bool', op=op, base=base.id, tools=[b.id for b in tools], keep=keep)
+        link = hist.link_of(base)
+        bases = [b.id for b in tools if link and hist.link_of(b) == link]
+        if bases:            # baza to połączone bryły: narzędzia tną każdą z nich, połączenie zostaje
+            recipe.update(bases=bases, tools=[b.id for b in tools if b.id not in bases])
+            if not recipe['tools']:
+                self.toast('Wskaż też bryłę-narzędzie (inną niż połączone bryły bazy).')
+                return
         existing = list(self.document.bodies)
 
         def build():
@@ -9218,6 +9306,15 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if self.mode == 'bool':
             self._bool_add(self._group_ids(oid))
             return
+        if self._lib_action is not None and self._lib_action['kind'] == 'pick':
+            self.library_pick_add(self._group_ids(oid))
+            return
+        if self.mode == 'link':
+            self.lk_add(self._group_ids(oid), toggle=True)
+            return
+        if self.mode in ('drawing', 'autodrawing'):
+            self.dr_add(self._group_ids(oid))
+            return
         if self.mode is not None:
             self.set_mode(None)
         members = self._group_ids(oid)
@@ -9333,6 +9430,15 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             return
         if self.mode == 'bool':
             self._bool_add(ids)
+            return
+        if self._lib_action is not None and self._lib_action['kind'] == 'pick':
+            self.library_pick_add(ids)
+            return
+        if self.mode == 'link':
+            self.lk_add(ids, toggle=True)
+            return
+        if self.mode in ('drawing', 'autodrawing'):
+            self.dr_add(ids)
             return
         if self.mode is not None:
             self.set_mode(None)
@@ -9459,6 +9565,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             return
         if self.mode == 'ply_cut':
             self.ply_cut_unpick(x, y)          # Do cięcia: prawy przycisk odznacza płytę
+            return
+        if self.mode == 'link':
+            self.unpick_link(x, y)             # Połącz: prawy przycisk odznacza bryłę
             return
         if self.mode is not None:
             return
@@ -9616,11 +9725,73 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         """Wstaw z pola roboczego: okno chowa się, kliknięty obiekt (bryła albo szkic) trafia do bieżącego folderu."""
         if self.busy:
             return
+        want = 'solid' if dialog.kind == 'object' else 'sketch'
+        chosen = [i for i in self.selected if (b := self.document.get(i)) is not None and b.kind == want]
         self.set_mode(None)
         dialog.hide()
-        self._lib_action = dict(kind='pick', dialog=dialog)
+        self._lib_action = dict(kind='pick', dialog=dialog, ids=chosen if len(chosen) > 1 else [])   # kilka zaznaczonych - od razu wybrane
+        self._lib_pick_panel()
         what = 'bryłę' if dialog.kind == 'object' else 'szkic'
-        self.toast(f'Kliknij {what} na polu roboczym, aby zapisać ją w bibliotece · prawy przycisk albo Esc - anuluj.', 6000)
+        self.toast(f'Kliknij {what} na polu roboczym, aby zapisać ją w bibliotece; kilka naraz - lista Obiekty albo Shift + klik, '
+                   'potem Zapisz · prawy przycisk albo Esc - anuluj.', 7000)
+
+    def _lib_pick_panel(self):
+        """Okienko wyboru kilku obiektów do biblioteki (lista wybranych, Zapisz, Anuluj)."""
+        from PySide6.QtWidgets import QPushButton
+        if getattr(self, 'lib_panel', None) is None:
+            self.lib_panel, lay = self._panel(300, 'Do biblioteki', 'libtake', 'Kilka obiektów jako jeden plik', plain=True)
+            self.lib_status = _label('', 'status')
+            self.lib_status.setWordWrap(True)
+            lay.addWidget(self.lib_status)
+            self.lib_save, cancel = self._buttons(lay, 'Zapisz', 'Anuluj', self.library_save_picked, self.library_cancel)
+        action = self._lib_action
+        if action is None or action['kind'] != 'pick':
+            self.lib_panel.hide()
+            self.view.tints = {}
+            return
+        n = len(action['ids'])
+        what = 'brył' if action['dialog'].kind == 'object' else 'szkiców'
+        self.lib_status.setText(f'Wybrane: {n}. Zapisz zapisze je jako jeden plik biblioteki (osobne {what}).' if n else
+                                f'Kliknij obiekt, aby od razu go zapisać. Kilka naraz: zaznacz je (albo całą grupę) na liście Obiekty '
+                                f'albo klikaj z Shift, potem Zapisz.')
+        self.lib_save.setEnabled(n > 0)
+        self.view.tints = {i: TINT_BASE for i in action['ids'] if (b := self.document.get(i)) is not None and b.kind == 'solid'}
+        self.lib_panel.adjustSize()
+        self.lib_panel.move(18, 88 + TOOLS_TOP - 18)
+        self.lib_panel.show()
+        self.lib_panel.raise_()
+        self.refresh()
+
+    def library_pick_add(self, ids):
+        """Wybór do biblioteki: obiekty (także cała grupa) dochodzą do listy; ponownie - odchodzą."""
+        action = self._lib_action
+        want = 'solid' if action['dialog'].kind == 'object' else 'sketch'
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == want]
+        if not ids:
+            self.toast('Ta pozycja nie zawiera ' + ('brył.' if want == 'solid' else 'szkiców.'))
+            return
+        if all(i in action['ids'] for i in ids):
+            action['ids'] = [i for i in action['ids'] if i not in ids]
+        else:
+            action['ids'] = [*action['ids'], *[i for i in ids if i not in action['ids']]]
+        self._lib_pick_panel()
+
+    def library_save_picked(self):
+        from . import library
+        action = self._lib_action
+        if action is None or action['kind'] != 'pick' or not action['ids']:
+            return
+        members = [self.document.get(i) for i in action['ids'] if self.document.get(i) is not None]
+        folders = {b.folder for b in members}
+        name = folders.pop() if len(folders) == 1 and members[0].folder else (members[0].name if len(members) == 1 else f'{members[0].name} i inne ({len(members)})')
+        dialog = action['dialog']
+        try:
+            path = library.save_bodies(members, dialog.folder, name)
+        except Exception as exc:
+            self.toast(f'Nie udało się zapisać w bibliotece: {exc}', 5000)
+            return
+        self._library_end()
+        dialog.picked(path)
 
     def library_place(self, dialog, path):
         """Wstaw na pole robocze: element z biblioteki idzie za kursorem, kliknięcie stawia go w tym miejscu."""
@@ -9733,7 +9904,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.view.set_preview_mesh(moved, color=(.3, .62, .95, .45), line_color=(.12, .36, .7, 1), width=1.6)
         self.view.set_marker(point, label=label)          # miejsce na siatce / ścianie, w którym stanie element
 
-    def _library_click(self, x, y):
+    def _library_click(self, x, y, shift=False):
         from . import library
         action = self._lib_action
         dialog = action['dialog']
@@ -9743,6 +9914,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             want = 'solid' if dialog.kind == 'object' else 'sketch'
             if body is None or body.kind != want:
                 self.toast('Kliknij ' + ('bryłę.' if want == 'solid' else 'szkic.') + ' (prawy przycisk albo Esc - anuluj)', 3000)
+                return
+            if shift or action['ids']:          # kilka obiektów: kliknięty dochodzi do listy, Zapisz zapisuje wszystkie
+                self.library_pick_add(self._group_ids(bid))
                 return
             ids = list(self._group_ids(bid))
             group = hist.text_group_of(bid)
@@ -9773,6 +9947,9 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
 
     def _library_end(self):
         self._lib_action = None
+        if getattr(self, 'lib_panel', None) is not None:
+            self.lib_panel.hide()
+            self.view.tints = {}
         self.view.set_preview_mesh(None)
         self.view.set_marker(None)
         self.view.unsetCursor()
@@ -9811,6 +9988,11 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
                 if ply.get('joined'):
                     ply['joined'] = [ids.get(j, j) for j in ply['joined']]
                 made[i] = replace(b, meta=dict(b.meta, ply=ply))
+        links = {}                     # połączone bryły (Edycja → Połącz): kopia dostaje własne połączenie
+        for i, b in enumerate(made):
+            link = (b.meta or {}).get('link')
+            if isinstance(link, dict) and link.get('id'):
+                made[i] = replace(b, meta=dict(b.meta, link=dict(link, id=links.setdefault(link['id'], uuid.uuid4().hex), folder='')))
         keys = {}                      # każda wstawiona kopia pudełka dostaje własny klucz rozłożenia
         for i, b in enumerate(made):
             fold = ((b.meta or {}).get('ply') or {}).get('fold')

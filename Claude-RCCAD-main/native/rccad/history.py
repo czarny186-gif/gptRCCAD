@@ -22,7 +22,7 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'link': 'link'}
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
@@ -1968,6 +1968,16 @@ def run_split(bodies, recipe):
 
 
 def run_bool(bodies, recipe):
+    bases = [i for i in (recipe.get('bases') or ()) if i != recipe['base']]
+    if bases and recipe['op'] != 'union':
+        # baza to połączone bryły (Edycja → Połącz): każda z nich jest cięta / przecinana tymi samymi narzędziami
+        out = list(bodies)
+        for n, i in enumerate([recipe['base'], *bases]):
+            last = n == len(bases)
+            out = list(run_bool(out, dict(recipe, base=i, bases=[], keep=recipe.get('keep') or not last)))
+        return out
+    if bases:
+        recipe = dict(recipe, tools=[*bases, *recipe['tools']], bases=[])
     base = _body(bodies, recipe['base'])
     tools = [_body(bodies, i) for i in recipe['tools']]
     result = base.changed(kernel.boolean(recipe['op'], base.shape, [t.shape for t in tools]))
@@ -3182,6 +3192,39 @@ def run_folder(bodies, recipe):
     return [replace(b, folder=folder) if b.id in ids else b for b in bodies]
 
 
+def link_of(body):
+    """Identyfikator połączenia (Edycja → Połącz), do którego należy obiekt, albo ''."""
+    link = ((body.meta or {}).get('link') or {}) if body is not None else {}
+    return link.get('id', '') if isinstance(link, dict) else ''
+
+
+def run_link(bodies, recipe):
+    """Połącz: obiekty zachowują się jak jeden (zaznaczanie, przesuwanie, cięcie innych brył), ale pozostają osobnymi
+    bryłami; trafiają do wspólnej grupy na liście Obiekty (poprzednia grupa każdego zapamiętana). Rozłącz: każdy obiekt
+    wraca do swojej grupy, połączenie znika."""
+    if recipe.get('action') == 'split':
+        links = set(recipe.get('links') or ())
+        out = []
+        for b in bodies:
+            link = (b.meta or {}).get('link') if b.meta else None
+            if isinstance(link, dict) and link.get('id') in links:
+                meta = {k: v for k, v in b.meta.items() if k != 'link'} or None
+                b = replace(b, meta=meta, folder=str(link.get('folder') or ''))
+            out.append(b)
+        return out
+    ids, lid, folder = set(recipe['ids']), recipe['link'], str(recipe.get('folder') or '')
+    if not ids or any(_body(bodies, i) is None for i in ids):
+        raise kernel.CadError('Obiekt połączony w tym kroku już nie istnieje.')
+    out = []
+    for b in bodies:
+        if b.id in ids:
+            old = (b.meta or {}).get('link') if b.meta else None
+            keep = old.get('folder', '') if isinstance(old, dict) else b.folder      # wcześniejsza grupa (także sprzed starszego połączenia)
+            b = replace(b, meta=dict(b.meta or {}, link={'id': lid, 'folder': keep}), folder=folder)
+        out.append(b)
+    return out
+
+
 def run_sketchmeta(bodies, recipe):
     body = _body(bodies, recipe['id'])
     meta = recipe['meta']
@@ -3254,7 +3297,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -3377,7 +3420,7 @@ def reads(recipe, current):
     if kind in ('mod', 'shell', 'mirror', 'pattern', 'sketchmeta', 'rename', 'sheet', 'flange', 'sheetbuild', 'sheetmode', 'featmove', 'tilt'):
         return {recipe['id']}
     if kind == 'bool':
-        return {recipe['base'], *recipe['tools']}
+        return {recipe['base'], *recipe['tools'], *(recipe.get('bases') or ())}
     if kind == 'mate':
         return {recipe['id'], recipe['target']}
     if kind == 'split':
@@ -3386,6 +3429,11 @@ def reads(recipe, current):
         return set(recipe['ids'])
     if kind == 'color':
         return set(recipe.get('colors') or ())
+    if kind == 'link':
+        if recipe.get('action') == 'split':
+            links = set(recipe.get('links') or ())
+            return {b.id for b in current if link_of(b) in links}
+        return set(recipe['ids'])
     if kind == 'sheet_tabwall':
         return None
     if kind == 'thread':
@@ -3436,7 +3484,9 @@ def diff_apply(old_prev, old_cur, new_prev):
             else:
                 ok = False          # ten obiekt zmienił się na wcześniejszym kroku, a ten krok nie ma przepisu
             continue
-        changes = {f: getattr(b, f) for f in ('name', 'visible', 'plane', 'color') if getattr(b, f) != getattr(ob, f)}
+        changes = {f: getattr(b, f) for f in ('name', 'visible', 'plane', 'color', 'folder', 'group') if getattr(b, f) != getattr(ob, f)}
+        if b.meta is not ob.meta and link_of(b) != link_of(ob):
+            changes['meta'] = dict(nb.meta or {}, link=b.meta['link']) if link_of(b) else ({k: v for k, v in (nb.meta or {}).items() if k != 'link'} or None)   # połączenie (Edycja → Połącz) zmienione w tym kroku
         if changes:
             merged[i] = replace(nb, **changes)
     for i, b in cur.items():         # szkic dodany w tym kroku na ścianie bryły, która wcześniej się zmieniła: idzie za ścianą

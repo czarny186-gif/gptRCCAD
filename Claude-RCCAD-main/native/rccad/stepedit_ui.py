@@ -24,7 +24,7 @@ TOOL_OF = {'extrude': 'extrude', 'revolve': 'revolve', 'mod': 'mod', 'shell': 's
            'sweep': 'sweep', 'loft': 'loft', 'pattern': 'pattern', 'mirror': 'mirror', 'split': 'split',
            'transform': None, 'featmove': None, 'mate': None, 'scale': 'scale', 'thread': 'thread',
            'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'sheet': 'sheet', 'sheetbuild': None, 'sheet_tabwall': 'tabwall',
-           'ply_panel': 'ply', 'ply_joints': 'ply_joints'}   # None: tryb z przepisu
+           'ply_panel': 'ply', 'ply_joints': 'ply_joints', 'link': 'link'}   # None: tryb z przepisu
 # narzędzia otwierane na modelu sprzed kroku bez odtworzenia wyboru - elementy wskazuje się ponownie, Zastosuj zastępuje krok
 FRESH_OF = {'thread_real': 'thread', 'flange': 'flange', 'text': 'text'}
 PREVIEW_TOL = .2
@@ -408,6 +408,16 @@ class StepEditTools:
                 self._text_sync_spins()
             except Exception:
                 pass
+
+    def _step_fill_link(self, recipe):
+        if recipe.get('action') == 'split':
+            self.lk_action.setCurrentIndex(1)
+            links = set(recipe.get('links') or ())
+            self.lk_ids = [b.id for b in self.document.bodies if hist.link_of(b) in links]
+        else:
+            self.lk_action.setCurrentIndex(0)
+            self.lk_ids = [i for i in recipe['ids'] if self.document.get(i) is not None]
+        self._lk_update()
 
     def _step_fill_scale(self, recipe):
         ids = [i for i in recipe['ids'] if self.document.get(i) is not None]

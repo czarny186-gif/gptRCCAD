@@ -2344,6 +2344,97 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).xlen,30,4)
         self.assertFalse([i for i in w.document.infos()[0] if i.get('stale')])
 
+    def test_drawing_of_several_objects_or_a_whole_group(self):
+        w=self.w
+        a=Body('A',k.box(10,10,10),folder='Zestaw').prepared();b=Body('B',k.transform(k.box(10,10,10),(20,0,0)),folder='Zestaw').prepared()
+        c=Body('C',k.transform(k.box(5,5,5),(50,0,0))).prepared()
+        w.document.commit([a,b,c]);w.refresh()
+        opened=[]
+        with patch.object(w,'open_drawing',side_effect=lambda body,auto=False:opened.append((body,auto))):
+            w.set_mode('drawing')
+            w.objects_folder_select([a.id,b.id])                                   # cała grupa z listy Obiekty
+            self.assertEqual(w.mode,'drawing');self.assertEqual(w.dr_ids,[a.id,b.id]);self.assertTrue(w.dr_apply['drawing'].isEnabled())
+            w.objects_select(c.id,Qt.NoModifier);self.assertEqual(w.dr_ids,[a.id,b.id,c.id])
+            w.objects_select(c.id,Qt.NoModifier);self.assertEqual(w.dr_ids,[a.id,b.id])        # ponownie - odchodzi
+            w.dr_apply['drawing'].click()
+            self.assertIsNone(w.mode);body,auto=opened[-1]
+            self.assertEqual(body.name,'Zestaw');self.assertFalse(auto)
+            self.assertAlmostEqual(body.shape.Volume(),2000,3);self.assertAlmostEqual(k.bounds(body.shape).xlen,30,4)   # obie razem jak jedna
+            # zaznaczone przed włączeniem narzędzia; rysunek automatyczny
+            w.selected=[a.id,c.id];w.set_mode('autodrawing');self.assertEqual(w.dr_ids,[a.id,c.id])
+            w.apply_drawing();self.assertTrue(opened[-1][1]);self.assertAlmostEqual(opened[-1][0].shape.Volume(),1125,3)
+            # pojedyncze kliknięcie bez wyboru - jak dotąd od razu jedna bryła
+            w.selected=[];w.set_mode('drawing')
+            with patch.object(w.view,'pick_face',return_value=(c.id,np.array((0,0,1.0)),np.array((52,2,5.0)))):w.view_clicked(5,5,False,False)
+            self.assertEqual(opened[-1][0].id,c.id)
+            # Shift + klik dodaje kolejne bryły
+            w.set_mode('drawing')
+            with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array((2,2,10.0)))):w.view_clicked(5,5,True,False)
+            with patch.object(w.view,'pick_face',return_value=(c.id,np.array((0,0,1.0)),np.array((52,2,5.0)))):w.view_clicked(5,5,False,False)
+            self.assertEqual(w.dr_ids,[a.id,c.id]);self.assertEqual(w.mode,'drawing')
+        # prawdziwe okno rysunku z kilku brył
+        w.apply_drawing();self.wait()
+        self.assertTrue(any(x.isVisible() for x in w._drawing_windows))
+        for x in w._drawing_windows:x.close()
+
+    def test_link_tool_joins_bodies_without_merging_and_splits_them_back(self):
+        from rccad import history as hist
+        w=self.w
+        a=Body('A',k.box(10,10,10)).prepared();b=Body('B',k.transform(k.box(10,10,10),(10,0,0)),folder='Stare').prepared()
+        c=Body('C',k.transform(k.box(4,4,30),(4,3,-10))).prepared();d=Body('D',k.transform(k.box(5,5,5),(40,0,0))).prepared()
+        e=Body('E',k.transform(k.box(4,4,30),(8,3,-10))).prepared()
+        w.document.commit([a,b,c,d,e]);w.refresh()
+        self.assertIn('link',TABS['Edycja']);w.tools['link'].click();self.assertEqual(w.mode,'link');self.assertTrue(w.link_panel.isVisible())
+        with patch.object(w.view,'pick_body',return_value=a.id):w.view_hover(5,5)
+        self.assertTrue(w.view.preview_items)                                            # podświetlenie przed kliknięciem
+        with patch.object(w.view,'pick_body',return_value=a.id):w.view_clicked(5,5,False,False)
+        self.assertFalse(w.lk_apply.isEnabled())
+        w.objects_select(b.id,Qt.NoModifier)                                            # z listy Obiekty
+        with patch.object(w.view,'pick_body',return_value=d.id):w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'pick_body',return_value=d.id):w.context_menu(5,5)     # prawy przycisk odznacza
+        self.assertEqual(w.lk_ids,[a.id,b.id]);self.assertTrue(w.lk_apply.isEnabled())
+        steps=w.document.history_length
+        w.set_mode('link');w.lk_add([a.id,b.id]);w.set_mode(None)                         # Zamknij: bez zmian
+        self.assertEqual(w.document.history_length,steps);self.assertEqual(hist.link_of(w.document.get(a.id)),'')
+        w.set_mode('link');w.lk_add([a.id]);w.lk_add([b.id]);w.apply_link()
+        A,B=w.document.get(a.id),w.document.get(b.id)
+        self.assertTrue(hist.link_of(A)) ;self.assertEqual(hist.link_of(A),hist.link_of(B))
+        self.assertEqual(A.folder,B.folder);self.assertTrue(A.folder.startswith('Połączenie'))
+        self.assertEqual(len([x for x in w.document.bodies if x.kind=='solid']),5)    # nie scalone
+        self.assertEqual(sorted(w._group_ids(a.id)),sorted([a.id,b.id]))                # zaznaczają się razem
+        # przesunięcie jednej - jadą obie
+        w.set_mode('move');w.select_transform_target(w.document.get(a.id));w.t_spins[2].setValue(5);w.apply_transform();self.wait()
+        self.assertAlmostEqual(k.bounds(w.document.get(b.id).shape).zmin,5,5);self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).zmin,5,5)
+        # połączone bryły tną inną bryłę jak jedna
+        w.set_mode('bool');w.bool_op.setCurrentIndex(1)
+        with patch.object(w.view,'pick_body',return_value=c.id):w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'pick_body',return_value=a.id):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.bool_ids,[c.id,a.id,b.id])
+        w.bool_keep.setChecked(True);w.apply_bool();self.wait()
+        self.assertLess(w.document.get(c.id).shape.Volume(),4*4*30-1)
+        # połączone bryły jako baza: narzędzie tnie obie, połączenie zostaje
+        w.bool_ids=[];w.update_bool_status()
+        with patch.object(w.view,'pick_body',return_value=a.id):w.view_clicked(5,5,False,False)
+        with patch.object(w.view,'pick_body',return_value=e.id):w.view_clicked(5,5,False,False)
+        va,vb=w.document.get(a.id).shape.Volume(),w.document.get(b.id).shape.Volume()
+        w.bool_keep.setChecked(False);w.apply_bool();self.wait();w.set_mode(None)
+        self.assertLess(w.document.get(a.id).shape.Volume(),va);self.assertLess(w.document.get(b.id).shape.Volume(),vb)
+        self.assertIsNone(w.document.get(e.id));self.assertEqual(hist.link_of(w.document.get(a.id)),hist.link_of(w.document.get(b.id)))
+        # Rozłącz: klik w jedną zaznacza całe połączenie, Zatwierdź przywraca dawne grupy
+        w.set_mode('link');w.lk_action.setCurrentIndex(1)
+        with patch.object(w.view,'pick_body',return_value=b.id):w.view_clicked(5,5,False,False)
+        self.assertEqual(sorted(w.lk_ids),sorted([a.id,b.id]))
+        w.apply_link()
+        A,B=w.document.get(a.id),w.document.get(b.id)
+        self.assertEqual((hist.link_of(A),hist.link_of(B)),('',''));self.assertEqual((A.folder,B.folder),('','Stare'))
+        self.assertEqual(w._group_ids(a.id),[a.id])
+        w.undo();self.assertTrue(hist.link_of(w.document.get(a.id)))                   # Cofnij przywraca połączenie
+        # zapis i odczyt projektu zachowuje połączenie
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'p.rccadx';w.document.save(path);loaded=Document.load(path)
+            self.assertEqual(hist.link_of(loaded.get(a.id)),hist.link_of(w.document.get(a.id)))
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()
