@@ -4521,12 +4521,13 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self._place_extrude_handle()
 
     def _place_extrude_handle(self):
-        if self.mode != 'extrude' or not self.ex_profiles:
+        step_src = getattr(self, '_step_ex_src', None) if self._step_edit is not None else None
+        if self.mode != 'extrude' or not (self.ex_profiles or step_src):
             self.view.set_handles([])
             return
         order=[p for p in getattr(self,'_ex_pick_order',[]) if any(p is q for q in self.ex_profiles)]
         self._ex_pick_order=order
-        src=order[-1] if order else self.ex_profiles[-1]
+        src=order[-1] if order else (self.ex_profiles[-1] if self.ex_profiles else step_src)     # edycja kroku: strzałka na profilu z kroku
         n = np.array(src['normal'], float)
         c = np.array(src['center'], float)
         d = self.ex_value.value()

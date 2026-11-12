@@ -236,6 +236,30 @@ def find_cylinder(shape, origin, axis, radius, tol=1e-3):
     return best
 
 
+def find_cylinder_near(shape, origin, axis, radius, internal=None):
+    """Walec pod gwint po zmianie otworu (inna średnica albo przesunięty otwór): pełny walec o równoległej osi, tego samego
+    rodzaju (otwór / wałek), najbliżej zapisanej osi; przy kilku równie bliskich - o najbliższym promieniu. None - brak."""
+    origin, axis = np.asarray(origin, float), np.asarray(axis, float)
+    best = None
+    for i, face in enumerate(shape.Faces()):
+        if face.geomType() != 'CYLINDER':
+            continue
+        info = cylinder_info(shape, i)
+        if info is None or not info.get('full', True):
+            continue
+        if internal is not None and bool(info['internal']) != bool(internal):
+            continue
+        a = np.asarray(info['axis'])
+        if abs(abs(float(a @ axis)) - 1) > 1e-6:
+            continue
+        d = np.asarray(info['origin']) - origin
+        off = float(np.linalg.norm(d - axis * float(d @ axis)))
+        key = (round(off, 3), abs(info['radius'] - radius))
+        if best is None or key < best[0]:
+            best = (key, info)
+    return None if best is None else best[1]
+
+
 def set_diameter(shape, info, diameter):
     """Otwór / wałek na nową średnicę w zakresie ściany walcowej (szybka operacja logiczna z walcem lub tuleją)."""
     import cadquery as cq

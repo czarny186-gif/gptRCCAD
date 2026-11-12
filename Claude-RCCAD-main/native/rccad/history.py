@@ -539,7 +539,12 @@ def resolve_profile(bodies, spec):
         return dict(wire=body.shape, normal=tuple(float(c) for c in normal), plane=None if tilted else body.plane, face=None)
     if spec['k'] == 'region':
         plane = plane_from_json(spec['plane'])
-        group = sketch_groups(bodies).get(plane_key(plane))
+        groups = sketch_groups(bodies)
+        group = groups.get(plane_key(plane))
+        anchor = spec.get('anchor')
+        owner = by_id.get(anchor['id']) if anchor else None
+        if owner is not None and owner.kind == 'sketch' and (group is None or not any(b.id == owner.id for b in group[1])):
+            group = groups.get(plane_key(owner.plane)) or group      # szkic-kotwica przeszedł za ścianą (np. niższa bryła)
         if group is None:
             raise kernel.CadError('Brak szkiców w płaszczyźnie tego kroku.')
         plane, members = group
@@ -1252,7 +1257,10 @@ def edge_indices(shape, refs):
                 a, b = np.array(e.positionAt(0).toTuple(), float), np.array(e.positionAt(1).toTuple(), float)
                 info.append((_unit(b - a) if np.linalg.norm(b - a) > 1e-12 else np.zeros(3), _adjacent_normals(shape, edge=e, neighbours=neighbours)))
         mid, direction = np.array(ref['mid'], float), np.array(ref['dir'], float)
-        cands = [i for i, (d, n) in enumerate(info) if abs(float(d @ direction)) > .999 and _same_normals(n, ref['normals'])]
+        if float(np.linalg.norm(direction)) < .5:      # krawędź zamknięta (okrąg, elipsa): bez kierunku - te same ściany obok
+            cands = [i for i, (d, n) in enumerate(info) if float(np.linalg.norm(d)) < .5 and _same_normals(n, ref['normals'])]
+        else:
+            cands = [i for i, (d, n) in enumerate(info) if abs(float(d @ direction)) > .999 and _same_normals(n, ref['normals'])]
         if not cands:
             d = np.linalg.norm(mids - mid, axis=1)
             i = int(np.argmin(d))
@@ -1688,11 +1696,28 @@ def _remove_faces(shape, ids):
     return kernel.valid(cq.Shape.cast(maker.Shape()))
 
 
+def _nearest_feature(shape, point, tries=8):
+    """Ściany otworu / kieszeni najbliższej punktowi (punkt nie leży już na bryle) albo None."""
+    vertex = cq.Vertex.makeVertex(*[float(c) for c in point])
+    faces = shape.Faces()
+    order = sorted(range(len(faces)), key=lambda i: faces[i].distance(vertex))
+    for i in order[:tries]:
+        try:
+            ids = feature_faces(shape, i)
+        except Exception:
+            ids = None
+        if ids:
+            return ids
+    return None
+
+
 def featmove_shape(shape, recipe, strict=False):
     """Bryła z przesuniętym / obróconym otworem. Otwór z zaokrągleniem brzegu, który po przesunięciu nachodziłby na inny
     otwór: strict - BlendCollision (narzędzie decyduje), inaczej otwór przesuwa się bez zaokrąglenia (ostre krawędzie)."""
     seed = face_at_point(shape, recipe['point'])
     ids = feature_faces(shape, seed) if seed is not None else None
+    if not ids:
+        ids = _nearest_feature(shape, recipe['point'])     # bryła zmieniona wcześniej (np. wyższa): otwór najbliżej zapisanego punktu
     if not ids:
         raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
     v = tuple(float(c) for c in recipe['v'])
@@ -1717,7 +1742,7 @@ def featmove_shape(shape, recipe, strict=False):
                              [tuple(kernel._face_point(faces[i])) for i in blends])
     sharp = _remove_faces(shape, blends)
     seed = face_at_point(sharp, recipe['point'])
-    group = feature_faces(sharp, seed) if seed is not None else None
+    group = feature_faces(sharp, seed) if seed is not None else _nearest_feature(sharp, recipe['point'])
     if not group:
         raise kernel.CadError('Otwór przesuwany w tym kroku już nie istnieje.')
     return moved_out(sharp, group)[0]
@@ -2464,6 +2489,8 @@ def run_thread(bodies, recipe):
         body = _body(out, item['id'])
         c = item['cylinder']
         info = th.find_cylinder(body.shape, c['origin'], c['axis'], c['radius'])
+        if info is None:          # otwór zmieniony wcześniej w historii (średnica, położenie): gwint idzie za nim
+            info = th.find_cylinder_near(body.shape, c['origin'], c['axis'], c['radius'], c.get('internal'))
         if info is None:
             raise kernel.CadError('Nie znaleziono otworu / wałka pod gwint.')
         info['internal'] = bool(c.get('internal', info['internal']))
@@ -3542,6 +3569,40 @@ def _resting_on(body, original):
     return None
 
 
+def follow_offset(body, surface, old_shape, new_shape):
+    """O ile (wzdłuż normalnej ściany) przesunęła się ściana pod szkicem: różnica odległości od środka szkicu do najbliższej
+    ściany zwróconej w tę samą stronę przed zmianą bryły i po niej (środek szkicu, nie początek jego płaszczyzny - początek
+    może leżeć za inną częścią bryły). None - nie da się wyznaczyć."""
+    n = surface.get('normal') or body.plane.normal
+    try:
+        point = np.array(body.shape.Center().toTuple(), float)
+        before = surface_offset(old_shape, point, n)
+        after = surface_offset(new_shape, point, n)
+    except Exception:
+        return None
+    if after is None:
+        return None
+    return after - (before or 0.0)
+
+
+def follow_plane(plane, point, normal, old_shape, new_shape):
+    """Płaszczyzna szkicu (Frame) przesunięta za ścianą bryły, na której leży punkt `point` (np. napis po zmianie wysokości
+    bryły). None - bez zmian."""
+    if not isinstance(plane, kernel.Frame):
+        return None
+    try:
+        before = surface_offset(old_shape, point, normal)
+        after = surface_offset(new_shape, point, normal)
+    except Exception:
+        return None
+    if before is None or after is None or abs(after - before) < 1e-6:
+        return None
+    n = np.asarray(normal, float)
+    n = n / max(np.linalg.norm(n), 1e-12)
+    move = n * (after - before)
+    return kernel.Frame(tuple(float(a + b) for a, b in zip(plane.origin, move)), tuple(plane.xdir), tuple(plane.normal))
+
+
 def follow_surface(body, original, current):
     """Szkic na ścianie bryły (meta surface) po zmianie tej bryły we wcześniejszym kroku: przesuwa się wzdłuż normalnej
     na nowe położenie ściany (np. wyższa bryła - szkic na górze idzie w górę, większy promień - szkic na walcu na zewnątrz).
@@ -3555,10 +3616,7 @@ def follow_surface(body, original, current):
     old_target, new_target = original.get(surface.get('target')), current.get(surface.get('target'))
     if old_target is None or new_target is None or old_target.shape is new_target.shape:
         return None
-    try:
-        t = surface_offset(new_target.shape, body.plane.origin, surface.get('normal') or body.plane.normal)
-    except Exception:
-        return None
+    t = follow_offset(body, surface, old_target.shape, new_target.shape)
     if t is None or abs(t) < 1e-6:
         return None
     n = np.asarray(surface.get('normal') or body.plane.normal, float)
@@ -3758,6 +3816,33 @@ def mod_partial(current, recipe, values=None):
     return run_recipe(current, recipe, values), recipe, len(units) - len(kept)
 
 
+def _follow_recipe_plane(recipe, before, after, current):
+    """Napis narysowany na ścianie bryły: gdy ta bryła zmieniła się we wcześniejszym kroku (np. jest niższa), płaszczyzna
+    napisu idzie za ścianą - tak jak zwykłe szkice na ścianie."""
+    if recipe.get('type') != 'text' or recipe.get('surface') or not isinstance(recipe.get('plane'), dict):
+        return recipe
+    try:
+        plane = plane_from_json(recipe['plane'])
+        known = {b.id for b in before}
+        made = [b for b in after if b.id not in known and b.kind == 'sketch']
+        if not made:
+            return recipe
+        point = np.array(kernel.compound([b.shape for b in made]).Center().toTuple(), float)
+        vertex = cq.Vertex.makeVertex(*point)
+        now = {b.id: b for b in current}
+        for old in before:
+            new = now.get(old.id)
+            if old.kind != 'solid' or new is None or new.shape is old.shape or old.shape.distance(vertex) > 1e-4:
+                continue
+            face = min(old.shape.Faces(), key=lambda f: f.distance(vertex))
+            normal = np.array(face.normalAt(cq.Vector(*point)).toTuple(), float)
+            moved = follow_plane(plane, point, normal, old.shape, new.shape)
+            return recipe if moved is None else dict(recipe, plane=plane_to_json(moved))
+    except Exception:
+        return recipe
+    return recipe
+
+
 def _rebuild(base, steps, ctx, job):
     out, failed, current = [], 0, tuple(base)
     for n, step in enumerate(steps):
@@ -3787,10 +3872,13 @@ def _rebuild(base, steps, ctx, job):
                     recipe = _rebase_sheet(recipe, before, current)
                     if recipe is not info.get('op'):
                         info = dict(info, op=recipe)
+                    recipe = _follow_recipe_plane(recipe, before, after, current)
+                    if recipe is not info.get('op'):
+                        info = dict(info, op=recipe)
                     result = _replay_step(current, recipe, ctx.values)
                 except Exception as exc:
                     result, why = None, str(exc) or exc.__class__.__name__
-                    if recipe.get('type') == 'mod':
+                    if recipe.get('type') == 'mod' and not failed:      # wcześniejszy krok nie wyszedł: to on jest przyczyną, nie zaokrąglenie
                         try:
                             partial = mod_partial(current, recipe, ctx.values)
                         except Exception:

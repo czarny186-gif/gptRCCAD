@@ -225,6 +225,16 @@ class StepEditTools:
         self.ex_second.setValue(float(recipe.get('d2', 0) or 0))
         self.ex_status.setText('Profile z edytowanego kroku. Zmień odległość lub operację i kliknij Zastosuj '
                                '(kliknięcie innego profilu wybiera profile od nowa).')
+        self._step_ex_src = None
+        try:          # strzałka wyciągnięcia na profilu z kroku - przeciąganie zmienia odległość jak przy zwykłym wyciąganiu
+            found = [q for spec in recipe['profiles'] for q in hist.resolve_profiles(list(self.document.bodies), spec)]
+            if found:
+                q = found[0]
+                center = q['face'].Center().toTuple() if q.get('face') is not None else q['wire'].Center().toTuple()
+                self._step_ex_src = dict(center=tuple(float(c) for c in center), normal=tuple(float(c) for c in q['normal']))
+        except Exception:
+            self._step_ex_src = None
+        self._place_extrude_handle()
         self._step_preview_hook((self.ex_value.valueChanged, self.ex_second.valueChanged, self.ex_dir.currentIndexChanged, self.ex_op.currentIndexChanged))
 
     def _step_fill_revolve(self, recipe):
@@ -389,6 +399,13 @@ class StepEditTools:
     def _step_fill_text(self, recipe):
         """Tekst: szkic na płaszczyźnie napisu z narzędziem Tekst i treścią, czcionką i wielkością z kroku."""
         plane = hist.plane_from_json(recipe['plane'])
+        edit = self._step_edit or {}
+        states = self.document.states()
+        if edit.get('index') is not None and edit['index'] < len(states):
+            group = hist.text_group_of((recipe.get('out') or [''])[0])
+            letter = next((b for b in states[edit['index']][0] if group and hist.text_group_of(b.id) == group), None)
+            if letter is not None and not recipe.get('surface'):
+                plane = letter.plane          # napis przeszedł za ścianą (np. niższa bryła): edycja na jego obecnym miejscu
         q = recipe.get('params') or {}
         if recipe.get('surface'):
             self.wrap_sketch = True

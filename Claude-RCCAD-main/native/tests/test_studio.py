@@ -2108,6 +2108,45 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(shape.Volume(),before+40*30*5,0)                  # otwór, napis i zaokrąglenia przeszły na nową górę
         self.assertEqual(k.point_state(shape,(8,8,13)),'out');self.assertEqual(k.point_state(shape,(8,8,9)),'in')
 
+    def test_user_project_history_edits_keep_every_later_step(self):
+        """Projekt użytkownika (sześcian 440 mm, napis, otwór z zaokrągleniem, prostokąt na przedniej ścianie, otwór z gwintem
+        M64): niższa bryła, inny napis, inny otwór pod gwint, przesunięty otwór z zaokrągleniem, prostokąt zamieniony na
+        wycięcie 20 mm, ściana z gwintem wyciągnięta o 20 mm, potem wyższa bryła - żaden krok nie znika i nie jest czerwony."""
+        from rccad import history as hist
+        w=self.w
+        def long_wait():
+            end=time.monotonic()+300
+            while w.busy and time.monotonic()<end:
+                self.app.processEvents();time.sleep(.005)
+            self.app.processEvents();self.assertFalse(w.busy)
+        def check(n):
+            infos=w.document.infos()[0]
+            self.assertEqual(len(infos),n);self.assertFalse([(hist.step_label(i),i.get('why')) for i in infos if i.get('stale')])
+            return next(b for b in w.document.bodies if b.kind=='solid').shape
+        w.document=Document.load(Path(__file__).parent/'data'/'projekt_radek.rccadx');w.refresh();long_wait()
+        w.history_edit(2);self.assertEqual(w.mode,'extrude');self.assertEqual([h['id'] for h in w.view.handles],['ex'])   # strzałka jak przy wyciąganiu
+        w.handle_dragged('ex',-140.0);w.handle_released('ex');self.assertAlmostEqual(w.ex_value.value(),300)
+        w.apply_extrude();long_wait();long_wait()
+        shape=check(14);self.assertAlmostEqual(k.bounds(shape).zmax,301,3)                 # napis 1 mm na nowej górze
+        self.assertEqual(k.point_state(shape,(-6.2,-41.5,250)),'out')                     # otwór z góry poszedł za ścianą
+        w.history_edit(3);self.assertEqual(w.tool,'text');w.text_edit.setText('Radek');w.apply_text();long_wait();w.set_mode(None);long_wait();long_wait()
+        check(14);self.assertEqual(w.document.infos()[0][3]['op']['params']['text'],'Radek')
+        self.assertAlmostEqual(w.document.infos()[0][3]['op']['plane']['origin'][2],300,3)
+        solid=next(b for b in w.document.bodies if b.kind=='solid')
+        f=min((f for f in solid.shape.Faces() if f.geomType()=='CYLINDER' and k.bounds(f).zmax>200),key=lambda f:abs(f.Center().x+6));pt=k._face_point(f)
+        w.set_mode('move')
+        with patch.object(w,'pick_object',return_value=solid.id),patch.object(w.view,'pick_face',return_value=(solid.id,np.array(f.normalAt(cq.Vector(*pt)).toTuple()),np.array(pt))):
+            w.view_clicked(5,5,False,False)
+        self.assertIsNotNone(w.t_feature);w.t_spins[0].setValue(60);w.apply_transform();long_wait()
+        shape=check(15);self.assertEqual(k.point_state(shape,(54,-41.5,250)),'out')
+        j=next(i for i,f in enumerate(w.document.infos()[0]) if (f.get('op') or {}).get('d1')==30.5)
+        w.history_edit(j);self.assertEqual([h['id'] for h in w.view.handles],['ex'])
+        w.ex_op.setCurrentIndex(2);w.ex_value.setValue(-20);w.apply_extrude();long_wait();long_wait()
+        shape=check(15);self.assertAlmostEqual(k.bounds(shape).ymin,-190,3)
+        w.history_edit(2);w.ex_value.setValue(500);w.apply_extrude();long_wait();long_wait()
+        shape=check(15);self.assertAlmostEqual(k.bounds(shape).zmax,501,3);self.assertEqual(k.point_state(shape,(54,-41.5,450)),'out')
+        w.undo();long_wait();self.assertAlmostEqual(k.bounds(check(15)).zmax,301,3)
+
     def test_project_file_given_at_start_opens(self):
         import tempfile
         w=self.w;a=Body('A',k.box(5,5,5)).prepared();d=Document();d.commit([a])
