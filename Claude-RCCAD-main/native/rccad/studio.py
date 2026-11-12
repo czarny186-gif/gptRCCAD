@@ -1747,9 +1747,12 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
             if self.dim_panel.isVisible():
                 edits = [e for e in self.dim_edits if e.isVisible()]
                 if len(edits) > 1:
-                    index = next((i for i, e in enumerate(edits) if e.hasFocus()), -1)
-                    edits[(index + 1) % len(edits)].setFocus()
-                    edits[(index + 1) % len(edits)].selectAll()
+                    index = next((i for i, e in enumerate(edits) if e.hasFocus()), None)
+                    if index is None:         # fokus poza oknem (np. podczas przełączania): pamiętane pole
+                        index = getattr(self, '_dim_tab', 0) % len(edits)
+                    self._dim_tab = (index + 1) % len(edits)
+                    edits[self._dim_tab].setFocus()
+                    edits[self._dim_tab].selectAll()
                 return True
             if self.mode == 'sketch' and self.points and self.open_dim_input():
                 return True
@@ -3073,6 +3076,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self.dim_panel.show()
         self.dim_panel.raise_()
         self.dim_edits[0].setFocus()
+        self._dim_tab = 0
         if first:
             self.dim_edits[0].setCursorPosition(len(first))
         else:
@@ -3193,6 +3197,7 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         self._dim_target = dict(body=body, meta=meta)
         self.dim_panel.raise_()
         self.dim_edits[0].setFocus()
+        self._dim_tab = 0
         self.dim_edits[0].selectAll()
         self.dim.hide()
         self._dim_edit_shape()
@@ -9782,6 +9787,11 @@ class StudioWindow(StepEditTools, TiltTools, SectionTools, ScaleTools, ColorTool
         if event.modifiers() & Qt.AltModifier and not self.busy and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Home, Qt.Key_End):
             {Qt.Key_Left: lambda: self.history_step(-1), Qt.Key_Right: lambda: self.history_step(1),
              Qt.Key_Home: lambda: self.history_step(0, True), Qt.Key_End: lambda: self.history_step(10 ** 6, True)}[key]()
+            event.accept()
+            return
+        if key == Qt.Key_Escape and self._step_edit is not None and self._step_edit['mode'] == 'delete' and not self.busy:
+            self._step_cancel()
+            self.toast('Edycja kroku anulowana.', 2000)
             event.accept()
             return
         if key == Qt.Key_Escape and self.section_picking:

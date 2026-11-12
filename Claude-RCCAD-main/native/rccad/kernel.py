@@ -127,11 +127,27 @@ def point_state(shape, point, tol=1e-4):
     return 'in' if state == TopAbs_IN else ('on' if state == TopAbs_ON else 'out')
 
 
+_BOUNDS = {}
+
+
 def bounds(shape):
     # Measurements must not depend on the display tessellation's deflection.
+    # Kształty się nie zmieniają: wymiary liczone raz na kształt (przeliczanie historii pyta o te same bryły wiele razy).
+    import weakref
+    key = id(shape)
+    hit = _BOUNDS.get(key)
+    if hit is not None and hit[0]() is shape:
+        return hit[1]
     box = Bnd_Box()
     BRepBndLib.AddOptimal_s(shape.wrapped, box, False, False)
-    return cq.BoundBox(box)
+    result = cq.BoundBox(box)
+    try:
+        if len(_BOUNDS) > 4096:
+            _BOUNDS.clear()
+        _BOUNDS[key] = (weakref.ref(shape), result)
+    except TypeError:
+        pass
+    return result
 
 
 def box(x, y, z):

@@ -22,11 +22,11 @@ from . import sketchmeta as sm
 
 TOOL_OF = {'extrude': 'extrude', 'revolve': 'revolve', 'mod': 'mod', 'shell': 'shell', 'bool': 'bool', 'color': 'color', 'tilt': 'tilt',
            'sweep': 'sweep', 'loft': 'loft', 'pattern': 'pattern', 'mirror': 'mirror', 'split': 'split',
-           'transform': None, 'featmove': None}          # None: tryb z przepisu (move / rotate)
+           'transform': None, 'featmove': None, 'mate': None, 'scale': 'scale', 'thread': 'thread',
+           'ply_wall': 'ply_wall', 'ply_between': 'ply_between'}   # None: tryb z przepisu
 # narzędzia otwierane na modelu sprzed kroku bez odtworzenia wyboru - elementy wskazuje się ponownie, Zastosuj zastępuje krok
-FRESH_OF = {'mate': None, 'thread': 'thread', 'thread_real': 'thread', 'scale': 'scale', 'sheet': 'sheet', 'flange': 'flange',
-            'sheetbuild': 'flange', 'sheet_tabwall': 'tabwall', 'ply_panel': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between',
-            'ply_joints': 'ply_joints', 'text': 'text'}
+FRESH_OF = {'thread_real': 'thread', 'sheet': 'sheet', 'flange': 'flange',
+            'sheetbuild': 'flange', 'sheet_tabwall': 'tabwall', 'ply_panel': 'ply', 'ply_joints': 'ply_joints', 'text': 'text'}
 PREVIEW_TOL = .2
 
 
@@ -51,6 +51,8 @@ class StepEditTools:
             return self._edit_sketch_step(index, sketch)
         if kind in FRESH_OF:
             return self._edit_with_tool(index, recipe, fresh=True)
+        if kind in ('delete', 'rename'):
+            return self._edit_list_step(index, recipe)
         added = [b.id for b in states[index][0] if b.id not in {x.id for x in states[index - 1][0]}]
         if kind is None and added:              # krok dodający obiekty (import, wstawienie z biblioteki): położenie w Przesuń
             return self._edit_added_step(index, added)
@@ -114,6 +116,53 @@ class StepEditTools:
         self.sk_hint.setText('Edycja kroku: przeciągnij uchwyty albo Tab – wymiary. Wyjście ze szkicu przelicza dalsze kroki.')
         self.toast(f'Edycja kroku {index}: zmień kształt (uchwyty, Tab - wymiary). Wyjście ze szkicu zapisze zmianę i przeliczy dalsze kroki.', 7000)
 
+    def _edit_list_step(self, index, recipe):
+        """Usunięcie: model sprzed kroku z zaznaczonymi usuniętymi obiektami - Delete usuwa (krok zastąpiony), Esc anuluje.
+        Zmiana nazwy: pole nazwy obiektu na liście Obiekty - Enter zapisuje (krok zastąpiony), Esc anuluje."""
+        kind = recipe['type']
+        self._step_begin(index, index - 1)
+        self.document.replace_next = True
+        self._step_edit.update(mode=kind, recipe=recipe)
+        if kind == 'delete':
+            self.selected = [i for i in recipe['ids'] if self.document.get(i) is not None]
+            self.refresh()
+            self.toast(f'Edycja kroku {index}: zaznacz obiekty do usunięcia (Shift - kolejne) i naciśnij Delete - krok zostanie '
+                       'zastąpiony. Esc - bez zmian.', 8000)
+            return
+        oid = recipe['id']
+        self.selected = [oid] if self.document.get(oid) is not None else []
+        self.refresh()
+        row = getattr(self.objects, 'rows', {}).get(oid)
+        if row is None:
+            self._step_cancel()
+            self.toast('Tego obiektu nie ma na liście Obiekty.')
+            return
+        row.start_edit()
+        row.editing.connect(self._step_rename_closed)
+        self._step_edit['row'] = row
+        self.toast(f'Edycja kroku {index}: wpisz nową nazwę i naciśnij Enter - krok zostanie zastąpiony. Esc - bez zmian.', 7000)
+
+    def _step_rename_closed(self, editing):
+        if editing:
+            return
+        edit = self._step_edit
+        if edit is not None and edit.get('row') is not None:
+            try:
+                edit['row'].editing.disconnect(self._step_rename_closed)
+            except Exception:
+                pass
+        QTimer.singleShot(50, lambda: self._step_cancel() if self.document.replace_next and self._step_edit is edit else None)
+
+    def _step_cancel(self):
+        """Edycja kroku przerwana: model wraca do stanu sprzed edycji, nic się nie zmienia."""
+        edit, self._step_edit = self._step_edit, None
+        if edit is None:
+            return
+        self.document.replace_next = False
+        if self.document.merging:
+            self.document.finish_merge()
+        self._step_restore(edit['back'])
+
     def _edit_added_step(self, index, ids):
         """Krok, który dodał obiekty bez przepisu: narzędzie Przesuń z tymi obiektami - nowe położenie wchodzi do tego kroku,
         a po zamknięciu narzędzia przeliczają się dalsze kroki."""
@@ -129,6 +178,11 @@ class StepEditTools:
     # ---------- koniec edycji (wywoływane z set_mode) ----------
     def _step_leaving(self, old_mode, new_mode):
         edit = self._step_edit
+        if edit is not None and edit['mode'] in ('delete', 'rename') and new_mode is not None:
+            self._step_edit = None                 # inne narzędzie w trakcie: edycja kroku przerwana bez zmian
+            self.document.replace_next = False
+            QTimer.singleShot(0, lambda b=edit['back']: self._step_restore(b))
+            return
         if edit is None or old_mode != edit['mode'] or new_mode == old_mode:
             return
         self._step_edit = None
@@ -346,6 +400,103 @@ class StepEditTools:
                 self._text_sync_spins()
             except Exception:
                 pass
+
+    def _step_fill_scale(self, recipe):
+        ids = [i for i in recipe['ids'] if self.document.get(i) is not None]
+        if not ids:
+            raise kernel.CadError('brak obiektu')
+        f = [float(v) for v in recipe['f']]
+        uniform = max(f) - min(f) < 1e-9
+        self.sc_axes.setChecked(not uniform)
+        if uniform:
+            self.sc_value.setValue(f[0] * 100.0)
+        else:
+            for spin, v in zip(self.sc_xyz, f):
+                spin.setValue(v * 100.0)
+        self._sc_set(ids)
+
+    def _step_fill_mate(self, recipe):
+        picks = {}
+        for key, bid, ref in (('moving', recipe['id'], recipe['face']), ('target', recipe['target'], recipe['tface'])):
+            body = self.document.get(bid)
+            if body is None:
+                raise kernel.CadError('brak bryły')
+            face, normal = hist.match_face(body.shape, ref)
+            normal = hist.outward_normal(body.shape, face, normal)
+            picks[key] = dict(id=body.id, face=face, normal=tuple(float(c) for c in normal), point=tuple(float(c) for c in ref['point']))
+        self.mt_pick = picks
+        if recipe.get('spin'):
+            self.mt_spin = float(recipe['spin'])
+            if hasattr(self, 'mt_angle'):
+                self.mt_angle.setText(f'{self.mt_spin:.0f}°')
+        self._mt_update()
+
+    def _step_fill_thread(self, recipe):
+        """Gwint: otwory / wałki z kroku wybrane jak po kliknięciu, rozmiar, norma i długość z kroku."""
+        from . import threads as th
+        picks = []
+        for item in recipe['items']:
+            body = self.document.get(item['id'])
+            if body is None:
+                raise kernel.CadError('brak bryły')
+            cyl = item['cylinder']
+            best = None
+            for info in th.cylinders(body.shape):
+                if bool(info['internal']) != bool(cyl['internal']) or abs(float(info['radius']) - float(cyl['radius'])) > 1e-4:
+                    continue
+                axis = np.asarray(info['axis'], float)
+                if abs(abs(float(axis @ np.asarray(cyl['axis'], float))) - 1) > 1e-6:
+                    continue
+                off = np.asarray(cyl['origin'], float) - np.asarray(info['origin'], float)
+                gap = float(np.linalg.norm(off - axis * float(off @ axis)))
+                if gap < 1e-4 and (best is None or gap < best[0]):
+                    best = (gap, info)
+            if best is None:
+                raise kernel.CadError('otwór / wałek z kroku nie istnieje')
+            picks.append(dict(id=body.id, info=dict(best[1])))
+        self.th_extra, self.th_pick = picks[:-1], picks[-1]
+        spec = recipe['items'][-1]['spec']
+        self.th_side.setCurrentIndex(0 if self.th_pick['info']['internal'] else 1)
+        if hasattr(self, 'th_real'):
+            self.th_real.setChecked(bool(recipe.get('real')))
+        info = self.th_pick['info']
+        self.th_standard.setCurrentIndex(max(0, self.th_standard.findData(spec['standard'])))
+        self.th_auto.setChecked(False)                        # rozmiar z kroku, nie dobierany od nowa
+        index = self.th_size.findData(spec['size'])
+        if index >= 0:
+            self.th_size.setCurrentIndex(index)
+        self.th_hand.setCurrentIndex(['right', 'left'].index(spec.get('hand', 'right')))
+        full = abs(float(spec['start']) - info['t0']) < 1e-6 and abs(float(spec['end']) - info['t1']) < 1e-6
+        self.th_extent.setCurrentIndex(0 if full else 1)
+        if not full:
+            self.th_offset.setValue(float(spec['start']) - info['t0'])
+            self.th_length.setValue(float(spec['end']) - float(spec['start']))
+        self._th_update()
+
+    def _step_fill_ply_wall(self, recipe):
+        base = self.document.get(recipe['base'])
+        if base is None:
+            raise kernel.CadError('brak płyty')
+        self.pw_base, self.pw_edges = base.id, list(hist.edge_indices(base.shape, recipe['edges']))
+        self.pw_height.setValue(float(recipe['h']))
+        self.pw_side.setCurrentIndex(max(0, self.pw_side.findData(recipe.get('side'))) if hasattr(self.pw_side, 'findData') else 0)
+        self.pw_flip.setChecked(bool(recipe.get('flip')))
+        self._ply_update()
+
+    def _step_fill_ply_between(self, recipe):
+        faces = []
+        for ref in (recipe['a'], recipe['b']):
+            body = self.document.get(ref['id'])
+            if body is None:
+                raise kernel.CadError('brak bryły')
+            face, normal = hist.match_face(body.shape, ref)
+            faces.append(dict(id=body.id, face=face, normal=np.array(ref['normal'], float), point=np.array(ref['point'], float), name=body.name))
+        self.pb_faces = faces
+        self.pb_count.setValue(int(recipe.get('count', 1)))
+        self.pb_turn.setCurrentIndex(1 if recipe.get('turn') else 0)
+        if recipe.get('pos') is not None:
+            self.pb_pos.setValue(float(recipe['pos']))
+        self._ply_update()
 
     def _step_fill_color(self, recipe):
         self.co_pending = {i: tuple(c) for i, c in (recipe.get('colors') or {}).items() if self.document.get(i) is not None}

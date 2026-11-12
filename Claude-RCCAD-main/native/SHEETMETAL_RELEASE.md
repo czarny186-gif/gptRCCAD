@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.4.99 — otwieranie plików, edycja kroków w oryginalnych narzędziach
+# RCCAD Desktop 0.5.0 — historia: wszystkie kroki edytowane w swoich narzędziach
+
+- **Gwint, Skalowanie, Dopasowanie / Wyrównanie, Ścianka i Półka / przegroda (sklejka)**: dwuklik w krok otwiera narzędzie z wyborem i wartościami z kroku (otwór / wałek z rozmiarem i długością gwintu, skala, obie ściany dopasowania, krawędzie ścianek, ściany półki). Zastosuj zastępuje krok.
+- **Usunięcie i zmiana nazwy**: dwuklik w krok usunięcia pokazuje model sprzed kroku z zaznaczonymi usuniętymi obiektami - zaznacz inne i naciśnij Delete (krok zostaje zastąpiony), Esc anuluje. Dwuklik w zmianę nazwy otwiera pole nazwy na liście Obiekty - Enter zapisuje nową nazwę w tym kroku.
+- **Szybsze przeliczanie historii**: wymiary brył liczone raz na kształt (przy przeliczaniu wielu kroków te same bryły były mierzone setki razy).
+- Okno wymiarów pod Tab przechodzi między polami także wtedy, gdy okno programu chwilowo nie ma fokusu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.4.99 — otwieranie plików, edycja kroków w oryginalnych narzędziach
 
 - **Dwuklik w plik projektu**: program uruchomiony z plikiem .rccadx (dwuklik w Eksploratorze, „Otwórz za pomocą”) otwiera ten projekt - wcześniej nie uruchamiał się wcale. Przy pierwszym uruchomieniu RCCAD sam kojarzy pliki .rccadx ze sobą (dla bieżącego użytkownika).
 - **Zmiana wysokości wyciągnięcia nie psuje historii**: szkic narysowany na ścianie bryły zapamiętuje tę ścianę i po zmianie bryły idzie za nią - otwory, wycięcia i zaokrąglenia zrobione później dopasowują się do nowej wysokości (działa też dla szkiców ze starszych projektów).
 - **Edycja kroku zawsze w oryginalnym narzędziu**: usunięto zastępcze okienka edycji historii. Dwuklik w krok otwiera okno narzędzia, którym krok powstał - teraz także Szyk, Lustro, Przetnij, Przeciągnięcie, Loft, Przesuń / Obróć (także otworu) z wartościami i wyborem z kroku; Gwint, Skalowanie, Dopasowanie, Tekst, blachy i sklejka otwierają swoje narzędzie do ponownego wskazania. Zastosuj zastępuje krok, Zamknij - bez zmian.
 - Lustro bez kopii zostawia obiekt tym samym obiektem - dalsze kroki go znajdują.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.4.98 — pochylenie ścianki, przyciąganie do siatki i kątów
 

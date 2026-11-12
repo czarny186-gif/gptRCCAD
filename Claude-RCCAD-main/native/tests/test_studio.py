@@ -2011,6 +2011,53 @@ class StudioTests(unittest.TestCase):
         import main
         self.assertTrue(callable(main.main))
 
+    def test_scale_mate_and_thread_steps_reopen_prefilled(self):
+        w=self.w
+        a=Body('A',cq.Workplane().box(20,20,10).faces('>Z').workplane().hole(8.5).val()).prepared()
+        b=Body('B',k.box(5,5,5).translate(cq.Vector(40,0,0))).prepared()
+        w.document.commit([a,b]);w.refresh();doc=w.document
+        def step(op,label):
+            doc.commit(list(hist.run_recipe(doc.bodies,op)),label,op=op)
+        step(dict(type='scale',ids=[b.id],f=[2.0,2.0,2.0],center=[42.5,2.5,2.5]),'Skala')
+        bb=doc.get(b.id)
+        fa=next(f for f in bb.shape.Faces() if f.normalAt().x<-.9);fb=next(f for f in doc.get(a.id).shape.Faces() if f.normalAt().x>.9)
+        step(dict(type='mate',mode='mate',id=b.id,target=a.id,face=hist.face_ref(fa,(-1,0,0),fa.Center().toTuple(),bb.shape),
+                  tface=hist.face_ref(fb,(1,0,0),fb.Center().toTuple(),doc.get(a.id).shape)),'Dopasowanie')
+        from rccad import threads as th
+        info=next(i for i in th.cylinders(doc.get(a.id).shape) if i['internal'])
+        std=next(iter(th.STANDARDS));name=th.fit(std,2*info['radius'],True)[0];spec=th.make_thread(info,std,name,'right',info['t0'],info['t1'])
+        step(dict(type='thread',items=[dict(id=a.id,cylinder=dict(origin=info['origin'],axis=info['axis'],radius=info['radius'],internal=True),
+                  spec=dict(standard=spec['standard'],size=spec['size'],hand='right',start=spec['start'],end=spec['end']),adjust=False)]),'Gwint')
+        w.refresh();count=len(doc.infos()[0])
+        w.history_edit(2);self.assertEqual(w.mode,'scale');self.assertEqual(w.sc_ids,[b.id]);self.assertAlmostEqual(w.sc_value.value(),200)
+        w.sc_value.setValue(150);w.apply_scale();self.wait();self.wait()
+        self.assertEqual(len(doc.infos()[0]),count);self.assertEqual(doc.infos()[0][2]['op']['f'],[1.5,1.5,1.5])
+        w.history_edit(3);self.assertEqual(w.mode,'mate');self.assertEqual(set(w.mt_pick),{'moving','target'})
+        self.assertEqual(w.mt_pick['moving']['id'],b.id);w.set_mode(None);self.app.processEvents();self.wait()
+        self.assertEqual(doc.infos()[1],count-1)
+        w.history_edit(4);self.assertEqual(w.mode,'thread');self.assertEqual(w.th_pick['id'],a.id);self.assertEqual(w.th_size.currentData(),name)
+        w.set_mode(None);self.app.processEvents();self.wait()
+        self.assertFalse(any(i.get('stale') for i in doc.infos()[0]))
+
+    def test_delete_and_rename_steps_are_edited_in_place(self):
+        w=self.w
+        a=Body('A',k.box(5,5,5)).prepared();b=Body('B',k.box(5,5,5).translate(cq.Vector(10,0,0))).prepared();c=Body('C',k.box(5,5,5).translate(cq.Vector(20,0,0))).prepared()
+        w.document.commit([a,b,c]);w.refresh();doc=w.document
+        w.selected=[b.id];w.delete_selected()
+        w.objects_rename(a.id,'Pierwsza');self.wait()
+        count=len(doc.infos()[0])
+        w.history_edit(2)                                                   # usunięcie: zaznaczone usunięte obiekty, Delete zastępuje krok
+        self.assertEqual(doc.infos()[1],1);self.assertEqual(w.selected,[b.id])
+        w.selected=[c.id];w.delete_selected();self.wait();self.wait()
+        self.assertEqual(len(doc.infos()[0]),count);self.assertEqual(doc.infos()[0][2]['op']['ids'],[c.id])
+        self.assertIsNotNone(doc.get(b.id));self.assertIsNone(doc.get(c.id));self.assertEqual(doc.get(a.id).name,'Pierwsza')
+        w.history_edit(3)                                                   # zmiana nazwy: pole nazwy na liście Obiekty
+        row=w.objects.rows[a.id];self.assertIsNotNone(row.edit)
+        row.edit.setText('Druga');row._commit();self.app.processEvents();self.wait();self.wait()
+        self.assertEqual(len(doc.infos()[0]),count);self.assertEqual(doc.get(a.id).name,'Druga');self.assertEqual(doc.infos()[0][3]['op']['name'],'Druga')
+        w.history_edit(2);ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier);w.keyPressEvent(ev);self.app.processEvents();self.wait()
+        self.assertEqual(doc.infos()[1],count-1);self.assertFalse(doc.replace_next)    # Esc: bez zmian
+
     def test_fillet_meeting_earlier_fillets_is_computed_together_and_chamfer_still_works(self):
         w=self.w
         w.document=Document.load(Path(__file__).parent/'data'/'zaokraglenie.rccadx');w.refresh()      # projekt użytkownika: 3 kroki zaokrągleń r 2
@@ -3375,7 +3422,7 @@ class StudioTests(unittest.TestCase):
             w.view_hover(5,5);self.assertTrue(w.view.preview_items)          # podświetlona ściana otworu
             w.view_clicked(5,5,False,False)
         self.assertEqual(w.th_side.currentData(),'in')
-        self.assertEqual(w.th_size.currentData(),'M10')                       # dopasowanie do otworu Ø8 -> M10 (wiertło 8.5)
+        self.assertEqual(w.th_size.currentData(),name)                       # dopasowanie do otworu Ø8 -> M10 (wiertło 8.5)
         self.assertIn('Ø8.50',w.th_status.text())
         self.assertIsNotNone(w.view._thread_preview)                          # podgląd od razu, bez geometrii
         self.assertEqual(w.document.bodies[0].shape.Volume(),plate.Volume())  # nic nie policzone przed Zastosuj
@@ -3436,6 +3483,7 @@ class StudioTests(unittest.TestCase):
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect')
         w.sketch_clicked('XY',0,0);w.sketch_moved('XY',20,10)
         tab=QKeyEvent(QEvent.KeyPress,Qt.Key_Tab,Qt.NoModifier)
+        active=patch.object(type(w),'isActiveWindow',return_value=True);active.start();self.addCleanup(active.stop)   # okno testowe bez fokusu systemu
         self.assertTrue(w.eventFilter(w.view,tab))
         e=w.dim_edits
         self.assertTrue(w.dim_panel.isVisible());self.assertEqual((e[0].text(),e[1].text()),('20,000','10,000'))   # bieżące wymiary

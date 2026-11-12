@@ -3466,6 +3466,12 @@ def rebuild(base, steps, constraints=(), job=None):
         return _rebuild(base, steps, ctx, job)
 
 
+def _replay_step(current, recipe, values):
+    """Krok przeliczany ponownie (w wątku przeliczania; proces liczący okazał się dwa razy wolniejszy - przesyłanie
+    dużych brył tam i z powrotem kosztuje więcej niż samo liczenie)."""
+    return run_recipe(current, recipe, values)
+
+
 def _rebuild(base, steps, ctx, job):
     out, failed, current = [], 0, tuple(base)
     for n, step in enumerate(steps):
@@ -3492,7 +3498,7 @@ def _rebuild(base, steps, ctx, job):
                 result = tuple(merged) if ok else None
             if result is None:
                 try:
-                    result = run_recipe(current, recipe, ctx.values)
+                    result = _replay_step(current, recipe, ctx.values)
                 except Exception as exc:
                     result, why = None, str(exc) or exc.__class__.__name__
         else:
