@@ -1,12 +1,18 @@
-# RCCAD Desktop 0.5.9 — szybkie wyciągnięcie i wycięcie importów SVG / DXF
+# RCCAD Desktop 0.5.10 — czyszczenie importów SVG / DXF
 
-- **Wyciągnięcie z połączeniem i wycięcie kształtów z SVG / DXF jest wielokrotnie szybsze**: sześcian z „krową” (75 profili) łączył się ok. 150 s, a teraz ok. 1 s; wycinanie „kieszeni” analogicznie. Wynik (objętość, liczba ścian) jest identyczny jak wcześniej.
-- **Przyczyna**: import tworzy wiele profili (zdublowane, zagnieżdżone, nakładające się obrysy i splajny o wspólnych krawędziach). Każdy profil był osobną bryłą, a operacja logiczna kernela sprawdzała przecięcia każdej bryły z każdą (kilkaset par), co trwało minuty i zawieszało program.
-- **Naprawa**: profile leżące na jednej płaszczyźnie i wyciągane tak samo najpierw łączą się płasko (suma przekrojów - szybka operacja na ścianach), a potem są wyciągane jako kilka brył i dopiero one wchodzą w operację z bryłą. Gdy suma nie zgadza się z pojedynczymi bryłami, program wraca do starej metody.
+- **Każdy import SVG i DXF jest teraz automatycznie czyszczony i dostosowywany do programu**: usuwane są zdublowane krawędzie i zdublowane kontury (ten sam kształt narysowany kilka razy, także z różnicą do 0,02 mm), pomijane są punkty zerowej wielkości, a obwody z mikroszczelinami (do 0,05 mm) są domykane.
+- **Bez utraty jakości**: krzywe (Béziery, splajny, łuki, okręgi) zostają dokładne - nic nie jest próbkowane ani upraszczane, usuwane są tylko powtórzenia i szczeliny.
+- **To samo we wszystkich miejscach importu**: Plik → Importuj, import rysunku, wstawianie z biblioteki (obiekty i szkice, SVG i DXF). Pliki w bibliotece zostają w oryginalnym formacie, a czyszczenie następuje przy wstawianiu na pole robocze.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.9 — szybkie wyciągnięcie i wycięcie importów SVG / DXF
+
+- **Wyciągnięcie z połączeniem i wycięcie kształtów z SVG / DXF jest wielokrotnie szybsze**: sześcian z „krową” (75 profili) łączył się ok. 150 s, a teraz ok. 1 s; wycinanie „kieszeni” analogicznie. Wynik (objętość, liczba ścian) jest identyczny jak wcześniej.
+- **Przyczyna**: import tworzy wiele profili (zdublowane, zagnieżdżone, nakładające się obrysy i splajny o wspólnych krawędziach). Każdy profil był osobną bryłą, a operacja logiczna kernela sprawdzała przecięcia każdej bryły z każdą (kilkaset par), co trwało minuty i zawieszało program.
+- **Naprawa**: profile leżące na jednej płaszczyźnie i wyciągane tak samo najpierw łączą się płasko (suma przekrojów - szybka operacja na ścianach), a potem są wyciągane jako kilka brył i dopiero one wchodzą w operację z bryłą. Gdy suma nie zgadza się z pojedynczymi bryłami, program wraca do starej metody.
 
 ### 0.5.8 — przycisk Anuluj w historii, szybkie importy SVG / DXF
 

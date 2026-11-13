@@ -646,6 +646,60 @@ def _inside_point(face):
     return face.Center().toTuple()
 
 
+def _pt_key(v, q=1e-4):
+    return (round(v.x / q), round(v.y / q))
+
+
+def _edge_key(edge):
+    """Klucz krawędzi niezależny od kierunku: końce i punkt środkowy (zaokrąglone do 0,0001 mm)."""
+    a, b, m = _pt_key(edge.startPoint()), _pt_key(edge.endPoint()), _pt_key(edge.positionAt(0.5))
+    return (min(a, b), max(a, b), m)
+
+
+def dedupe_edges(edges):
+    """Usuwa krawędzie zdublowane (ten sam przebieg, także odwrócony) - bez zmiany kształtu pozostałych."""
+    seen, out = set(), []
+    for e in edges:
+        try:
+            key = _edge_key(e)
+        except Exception:
+            out.append(e)
+            continue
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
+
+
+def clean_wires(wires):
+    """Porządkuje obwody po imporcie, nie zmieniając ich kształtu (krzywe zostają dokładne, nic nie jest próbkowane):
+    zamyka obwody z mikroszczelinami (do 0,05 mm i mniej niż 0,5% wymiaru), usuwa obwody zdublowane (z dokładnością 0,02 mm)
+    (ten sam kontur narysowany kilka razy) i punkty zerowej wielkości."""
+    out, seen = [], set()
+    for w in wires:
+        try:
+            box = w.BoundingBox()
+            diag = box.DiagonalLength
+            if diag < 1e-4:
+                continue
+            if not w.IsClosed():
+                a, b = w.startPoint(), w.endPoint()
+                gap = (a - b).Length
+                if 1e-7 < gap <= min(0.05, 0.005 * diag):
+                    w = cq.Wire.assembleEdges([*w.Edges(), cq.Edge.makeLine(b, a)])
+            c = w.Center()
+            key = (round(w.Length() / 2e-2), round(box.xmin / 2e-2), round(box.ymin / 2e-2), round(box.xmax / 2e-2),
+                   round(box.ymax / 2e-2), round(c.x / 2e-2), round(c.y / 2e-2), w.IsClosed())
+        except Exception:
+            out.append(w)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(w)
+    return out
+
+
 def load_flat_parts(path):
     """Plik SVG albo DXF → (płaski kształt konturu, linie gięcia [(a, b, 'up' | 'down')] przycięte do obrysu)."""
     ext = Path(path).suffix.lower()
@@ -655,6 +709,7 @@ def load_flat_parts(path):
         sink = dxf_edges(path)
     else:
         raise CadError('Obsługiwane są pliki SVG i DXF.')
+    sink.edges = dedupe_edges(sink.edges)
     shape = sink.shape()
     bends = []
     raw = getattr(sink, 'bends', [])
@@ -693,7 +748,7 @@ def sketch_wires(path):
         marks = [0, *marks]
     wires = []
     for a, b in zip(marks, marks[1:]):          # SVG: osobno każdy kształt (stykające się kształty się nie zlewają)
-        group = sink.edges[a:b]
+        group = dedupe_edges(sink.edges[a:b])
         if not group:
             continue
         try:
@@ -701,7 +756,7 @@ def sketch_wires(path):
         except Exception:
             wires += [cq.Wire.assembleEdges([e]) for e in group]
     out = []
-    for w in wires:
+    for w in clean_wires(wires):
         try:
             if w.Length() > _TOL:
                 out.append(w)

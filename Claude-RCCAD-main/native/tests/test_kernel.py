@@ -289,6 +289,20 @@ class KernelTests(unittest.TestCase):
         self.assertAlmostEqual(bounds.zmax,30,places=6)
         self.assertAlmostEqual(k.hole(shape,4,15,15,10).Volume(),27000-math.pi*16*10,places=5)
 
+    def test_svg_import_removes_duplicate_outlines_keeping_shape(self):
+        import tempfile, os
+        from rccad import import2d
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">'
+               '<path d="M10 10 L50 10 L50 50 L10 50 Z"/><path d="M10 10 L50 10 L50 50 L10 50 Z"/>'
+               '<path d="M50 50 L10 50 L10 10 L50 10.01 L50 50"/><circle cx="70" cy="70" r="10"/><circle cx="70" cy="70" r="10"/></svg>')
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'a.svg')
+            open(path, 'w').write(svg)
+            wires = import2d.sketch_wires(path)
+        self.assertEqual(len(wires), 2)                       # kwadrat (z kopiami) i koło (z kopią)
+        self.assertEqual(sorted(round(w.Length(), 2) for w in wires), [62.83, 160.0])
+        self.assertTrue(all(w.IsClosed() for w in wires))
+
     def test_dxf_sketch_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'profile.dxf'
