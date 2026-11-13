@@ -1996,6 +1996,23 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait()
         self.assertIsNotNone(w.document.pending)                                         # Cofnij: zmiany znowu czekają na zatwierdzenie
 
+    def test_merge_prism_tools_gives_same_result_as_plain_boolean(self):
+        import cadquery as cq
+        from rccad import history as hist
+        cube = cq.Workplane('XY').box(40, 40, 40).val()
+        tools = []
+        for i in range(6):          # nakładające się, zdublowane i zagnieżdżone profile na jednej ścianie
+            tools.append(cq.Workplane('XY').workplane(offset=15).center(-10 + 4 * i, 0).rect(10, 8).extrude(10).val())
+        tools.append(tools[0].copy())
+        tools.append(cq.Workplane('XY').workplane(offset=15).circle(2).extrude(10).val())
+        merged = hist.merge_prism_tools(tools)
+        self.assertLess(len(merged), len(tools))
+        for op in ('cut', 'join'):
+            ref = cube.cut(*tools) if op == 'cut' else cube.fuse(*tools)
+            out = cube.cut(*merged) if op == 'cut' else cube.fuse(*merged)
+            self.assertAlmostEqual(ref.clean().Volume(), out.clean().Volume(), places=3)
+            self.assertTrue(out.clean().isValid())
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""

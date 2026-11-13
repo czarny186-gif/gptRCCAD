@@ -745,6 +745,72 @@ def extrusion_receivers(bodies,profiles,side,target=None):
     return [b.id for b in solids if b.id in chosen]
 
 
+def _prism_info(tool):
+    """(normalna, dolny koniec, górny koniec, dolna ściana) gdy narzędzie jest prostym graniastosłupem (ściana płaska przesunięta
+    wzdłuż normalnej), inaczej None."""
+    try:
+        volume = float(tool.Volume())
+        if volume <= 1e-9:
+            return None
+        planar = sorted((f for f in tool.Faces() if f.geomType() == 'PLANE'), key=lambda f: -f.Area())[:3]
+        points = None
+        for face in planar:
+            n = np.array(face.normalAt().toTuple(), float)
+            n /= np.linalg.norm(n)
+            if points is None:
+                points = np.array([v.toTuple() for v in tool.Vertices()], float)
+            heights = points @ n
+            lo, hi = float(heights.min()), float(heights.max())
+            if hi - lo < 1e-6 or abs(volume - float(face.Area()) * (hi - lo)) > 1e-5 * volume:
+                continue
+            if n[np.argmax(np.abs(n))] < 0:
+                n = -n
+                lo, hi = -hi, -lo
+            base = [f for f in tool.Faces() if f.geomType() == 'PLANE' and abs(float(np.dot(f.Center().toTuple(), n)) - lo) < 1e-6
+                    and abs(abs(np.dot(f.normalAt().toTuple(), n)) - 1) < 1e-6]
+            if len(base) != 1:
+                continue
+            return n, lo, hi, base[0]
+    except Exception:
+        return None
+    return None
+
+
+def merge_prism_tools(tools):
+    """Wiele narzędzi o tym samym kierunku i wysokości (profile jednego szkicu, także zagnieżdżone i powtórzone) łączy się najpierw na
+    płaszczyźnie - suma ich przekrojów (szybka operacja na ścianach) - i dopiero potem wyciąga jako jedna bryła na grupę. Suma
+    graniastosłupów to graniastosłup sumy przekrojów, więc wynik jest ten sam, a przy setkach profili nie ma dużej operacji
+    logicznej między bryłami (które się stykają, nakładają i dublują)."""
+    infos = [_prism_info(t) for t in tools]
+    groups = {}
+    for i, info in enumerate(infos):
+        if info is None:
+            continue
+        n, lo, hi, _ = info
+        key = (tuple(np.round(n, 6)), round(lo, 5), round(hi, 5))
+        groups.setdefault(key, []).append(i)
+    merged, drop = [], set()
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        n, lo, hi = np.array(key[0]), infos[members[0]][1], infos[members[0]][2]
+        caps = [infos[i][3] for i in members]
+        union = caps[0].fuse(*caps[1:]).clean() if len(caps) > 1 else caps[0]
+        faces = union.Faces()
+        if not faces:
+            continue
+        before = sum(float(tools[i].Volume()) for i in members)
+        solids = [cq.Solid.extrudeLinear(f, cq.Vector(*[float(c) for c in n * (hi - lo)])) for f in faces]
+        after = sum(float(sol.Volume()) for sol in solids)
+        if after > before * (1 + 1e-6) or after < max(float(tools[i].Volume()) for i in members) * (1 - 1e-6):
+            continue        # suma przekrojów nie zgadza się z bryłami - zostają osobne
+        merged += solids
+        drop |= set(members)
+    if not drop:
+        return list(tools)
+    return [t for i, t in enumerate(tools) if i not in drop] + merged
+
+
 def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(), folder='', only=None):
     """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają.
     skip: bryły, których operacja nie zmienia (bryła wskazana tylko jako wysokość przy wyciąganiu do elementu, bryły ukryte na liście obiektów).
@@ -759,6 +825,11 @@ def combine(existing, tools, op, spent=(), ids=(), name='Wyciągnięcie', skip=(
         ids2 = pad_ids(ids, len(tools), list(ids)[0] if ids else None)
         group = folder if len(tools) > 1 else ''
         return fade([*existing, *prepared_many(Body(name, t, id=ids2[i], folder=group) for i, t in enumerate(tools))])
+    if op in ('cut', 'join') and len(tools) >= 4:
+        try:
+            tools = merge_prism_tools(tools)
+        except Exception:
+            pass
     if op in ('cut', 'join') and len(tools) > 1:
         batched = _combine_batched(existing, tools, op, skip)
         if batched is not None:

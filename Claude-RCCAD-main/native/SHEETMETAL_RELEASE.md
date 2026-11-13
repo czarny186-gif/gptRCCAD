@@ -1,11 +1,17 @@
-# RCCAD Desktop 0.5.8 — przycisk Anuluj w historii, szybkie importy SVG / DXF
+# RCCAD Desktop 0.5.9 — szybkie wyciągnięcie i wycięcie importów SVG / DXF
 
-- **Przycisk „Anuluj” na pasku historii** (za „Zatwierdź zmianę”): cofa wszystkie zmiany zrobione w ostatnim wejściu do historii - projekt wraca do stanu sprzed wejścia, jakby nic nie zmieniano. Działa tylko dla ostatniego wejścia; wygasa po nowych zmianach wprost w projekcie, a po Cofnij do miejsca zmiany w historii włącza się znowu.
-- **Złożone importy SVG / DXF nie przycinają programu**: wybór profili do wyciągnięcia na projekcie z kotem i krową skrócił się z ok. 23 s do ułamka sekundy, podgląd wyciągnięcia z ok. 18 s do 0,6 s (sprawdzanie odstępu szkicu od ścian bryły liczyło się przy każdym odświeżeniu podglądu). Podświetlanie profilu pod kursorem w wyciąganiu jest kilka razy szybsze (obrysy, ściany i wierzchołki szkiców liczone raz).
+- **Wyciągnięcie z połączeniem i wycięcie kształtów z SVG / DXF jest wielokrotnie szybsze**: sześcian z „krową” (75 profili) łączył się ok. 150 s, a teraz ok. 1 s; wycinanie „kieszeni” analogicznie. Wynik (objętość, liczba ścian) jest identyczny jak wcześniej.
+- **Przyczyna**: import tworzy wiele profili (zdublowane, zagnieżdżone, nakładające się obrysy i splajny o wspólnych krawędziach). Każdy profil był osobną bryłą, a operacja logiczna kernela sprawdzała przecięcia każdej bryły z każdą (kilkaset par), co trwało minuty i zawieszało program.
+- **Naprawa**: profile leżące na jednej płaszczyźnie i wyciągane tak samo najpierw łączą się płasko (suma przekrojów - szybka operacja na ścianach), a potem są wyciągane jako kilka brył i dopiero one wchodzą w operację z bryłą. Gdy suma nie zgadza się z pojedynczymi bryłami, program wraca do starej metody.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.8 — przycisk Anuluj w historii, szybkie importy SVG / DXF
+
+- **Przycisk „Anuluj” na pasku historii** (za „Zatwierdź zmianę”): cofa wszystkie zmiany zrobione w ostatnim wejściu do historii - projekt wraca do stanu sprzed wejścia, jakby nic nie zmieniano. Działa tylko dla ostatniego wejścia; wygasa po nowych zmianach wprost w projekcie, a po Cofnij do miejsca zmiany w historii włącza się znowu.
+- **Złożone importy SVG / DXF nie przycinają programu**: wybór profili do wyciągnięcia na projekcie z kotem i krową skrócił się z ok. 23 s do ułamka sekundy, podgląd wyciągnięcia z ok. 18 s do 0,6 s (sprawdzanie odstępu szkicu od ścian bryły liczyło się przy każdym odświeżeniu podglądu). Podświetlanie profilu pod kursorem w wyciąganiu jest kilka razy szybsze (obrysy, ściany i wierzchołki szkiców liczone raz).
 
 ### 0.5.7 — siatka w szyku kołowym, przyciąganie w szkicu, pełny Przybornik
 
