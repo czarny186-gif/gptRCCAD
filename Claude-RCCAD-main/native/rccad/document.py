@@ -172,6 +172,8 @@ class Document:
         self._edits = []           # zmiany historii (edycja / usunięcie / przestawienie kroku): oś czasu sprzed zmiany - Cofnij ją przywraca
         self._edits_redo = []      # cofnięte zmiany historii - Ponów je przywraca
         self._edit_live = None     # trwająca zmiana historii (jej wynik może jeszcze dojść z przeliczenia w tle)
+        self._session = None       # ostatnie wejście do historii: {'first': stan przed pierwszą zmianą, 'last': ostatnia zmiana, 'dirty': ...}
+        self._home = None          # krok, na którym użytkownik stał przed wejściem w historię (tam wraca „Anuluj”)
 
     def set_default_color(self, color):
         """Kolor domyślny projektu (nie jest krokiem historii, ale zmienia projekt - trzeba go zapisać)."""
@@ -275,6 +277,8 @@ class Document:
         else:
             self._edit_live = None            # zwykły nowy krok na końcu: zmiana historii zakończona
             self._edits_redo.clear()
+            if self._session is not None:
+                self._session['dirty'] = True   # dalsza praca bezpośrednio w projekcie: „Anuluj” czeka, aż Cofnij wróci do tego miejsca
         if self.replace_next and self.keep_future and self._redo:      # edycja kroku: nowy wynik zastępuje stary krok
             replaced = self._redo.pop()
             for key in ('note', 'group'):
@@ -501,6 +505,11 @@ class Document:
         `current` - krok, na którym stał użytkownik przed zmianą (tam wraca Cofnij)."""
         snap = dict(states=self.states(), current=len(self._undo) if current is None else current,
                     constraints=list(self.constraints), after=None, pending=self.pending)
+        snap['home'] = self._home if self._home is not None else snap['current']
+        if self._session is not None and not self._session['dirty']:
+            self._session['last'] = snap        # kolejna zmiana w tym samym wejściu do historii
+        else:
+            self._session = dict(first=snap, last=snap, dirty=False)
         self._edits = [e for e in self._edits if e['after'] is not None][-(self.MAX_EDITS - 1):] + [snap]
         self._edits_redo.clear()
         self._edit_live = snap
@@ -526,6 +535,25 @@ class Document:
     @property
     def can_redo_edit(self):
         return bool(self._edits_redo) and self._edits_redo[-1]['before'] == self._revision
+
+    @property
+    def can_cancel_history(self):
+        """„Anuluj” w historii: model stoi dokładnie na wyniku ostatniego wejścia do historii (po późniejszych zmianach wprost w
+        projekcie przycisk wygasa, a Cofnij do tego miejsca włącza go znowu)."""
+        s = self._session
+        return s is not None and s['last']['after'] is not None and s['last']['after'] == self._revision
+
+    def cancel_history(self):
+        """Cofa wszystkie zmiany ostatniego wejścia do historii: oś czasu i miejsce, w którym stał projekt przed wejściem."""
+        if not self.can_cancel_history:
+            return False
+        first = self._session['first']
+        snap = dict(first, current=first.get('home', first['current']))
+        self._restore(snap)
+        self._edits, self._edits_redo, self._edit_live = [], [], None
+        self._session, self._home = None, None
+        self.keep_future, self.deferred, self.replace_next = False, None, False
+        return True
 
     def _snapshot(self):
         return dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints), pending=self.pending)
@@ -620,6 +648,7 @@ class Document:
         self.replace_next, self._merge = False, None
         self.pending = None
         self._edits, self._edits_redo, self._edit_live = [], [], None
+        self._session, self._home = None, None
         self._mesh_cache.clear()
         self._revision = self._next_revision
         self._next_revision += 1
@@ -641,6 +670,10 @@ class Document:
         self._edit_live = None
         labels, current = self.timeline()
         index = max(0, min(index, len(labels) - 1))
+        if index < current == len(labels) - 1 and self._home is None:
+            self._home = current              # wejście w historię z końca projektu: tu wraca „Anuluj”
+        elif index == len(labels) - 1:
+            self._home = None
         while current > index:
             self.undo(False); current -= 1      # stany pośrednie nie są siatkowane: tylko docelowy
         while current < index:

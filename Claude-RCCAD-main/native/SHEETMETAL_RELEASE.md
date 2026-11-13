@@ -1,13 +1,18 @@
-# RCCAD Desktop 0.5.7 — siatka w szyku kołowym, przyciąganie w szkicu, pełny Przybornik
+# RCCAD Desktop 0.5.8 — przycisk Anuluj w historii, szybkie importy SVG / DXF
+
+- **Przycisk „Anuluj” na pasku historii** (za „Zatwierdź zmianę”): cofa wszystkie zmiany zrobione w ostatnim wejściu do historii - projekt wraca do stanu sprzed wejścia, jakby nic nie zmieniano. Działa tylko dla ostatniego wejścia; wygasa po nowych zmianach wprost w projekcie, a po Cofnij do miejsca zmiany w historii włącza się znowu.
+- **Złożone importy SVG / DXF nie przycinają programu**: wybór profili do wyciągnięcia na projekcie z kotem i krową skrócił się z ok. 23 s do ułamka sekundy, podgląd wyciągnięcia z ok. 18 s do 0,6 s (sprawdzanie odstępu szkicu od ścian bryły liczyło się przy każdym odświeżeniu podglądu). Podświetlanie profilu pod kursorem w wyciąganiu jest kilka razy szybsze (obrysy, ściany i wierzchołki szkiców liczone raz).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.7 — siatka w szyku kołowym, przyciąganie w szkicu, pełny Przybornik
 
 - **Szyk kołowy**: po włączeniu „Wskaż środek na modelu” na płaszczyźnie szyku pojawia się siatka z osiami współrzędnych (jak przy zakresie 3 punktów w szyku prostokątnym); środek obrotu przyciąga się do punktów siatki, wierzchołków, środków okręgów i krawędzi. Po wskazaniu poprzedni stan siatki wraca.
 - **Dopasowanie / Wyrównanie**: okno powiększa się po włączeniu „Połóż na płaszczyźnie”, wybór płaszczyzny XY / XZ / YZ nie jest już przykryty.
 - **Szkic - poziom / pion / 45°**: linia konstrukcyjna, wymiar szkicu oraz pierwszy odcinek łuku 3-punktowego i fasolki prostują się tak samo jak zwykła linia (czerwony podgląd).
 - **Przybornik (Ulubione)**: dodane brakujące „Szkic na powierzchni” i „Szkic na narożniku”; Przybornik sam oferuje każde narzędzie z zakładek, więc nowe narzędzia będą się tam pojawiać automatycznie.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.6 — płaszczyzny w Dopasowaniu, podświetlanie, bez duplikatów rozmiaru
 

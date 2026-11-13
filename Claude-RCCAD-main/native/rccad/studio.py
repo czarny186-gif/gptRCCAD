@@ -141,12 +141,8 @@ def _fit_circle(points):
 
 
 def profile_face(wire):
-    """Powierzchnia ograniczona zamkniętym drutem (do podświetlania profilu)."""
-    import cadquery as cq
-    try:
-        return cq.Face.makeFromWires(wire)
-    except Exception:
-        return None
+    """Powierzchnia ograniczona zamkniętym drutem (do podświetlania profilu); pamiętana dla tego samego drutu."""
+    return hist.profile_face(wire)
 
 
 class _HistChip(QToolButton):
@@ -737,6 +733,14 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                                     'i dopasują dopiero po kliknięciu - potem wracasz na koniec projektu.')
         self.hist_commit.clicked.connect(lambda _=False: self.history_commit_changes())
         hl.addWidget(self.hist_commit)
+        self.hist_cancel = QPushButton('Anuluj')
+        self.hist_cancel.setObjectName('chip')
+        self.hist_cancel.setEnabled(False)
+        self.hist_cancel.setToolTip('Anuluje wszystkie zmiany zrobione w ostatnim wejściu do historii: projekt wraca do stanu sprzed wejścia,\n'
+                                    'jakby nic w historii nie było zmieniane. Działa tylko dla ostatniego wejścia i wygasa po nowych zmianach\n'
+                                    'wprost w projekcie (wraca po Cofnij do miejsca zmiany w historii).')
+        self.hist_cancel.clicked.connect(lambda _=False: self.history_cancel_changes())
+        hl.addWidget(self.hist_cancel)
         self.hist_bar.hide()
         self._lib_action = None        # biblioteka: wskazywanie obiektu na polu albo wybór miejsca wstawienia
         self.libraries = {}
@@ -3605,7 +3609,13 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             if src.get('surface'):
                 show(self._surface_profile_mesh(src), color=(.35, .65, .94, .6), line_color=(.05, .3, .75, 1), width=3)
             else:
-                show(kernel.display_mesh(face) if face is not None else None, **blue)
+                cache = self.__dict__.setdefault('_hover_mesh_cache', {})
+                mesh = cache.get(key)
+                if mesh is None or mesh[0] is not face:
+                    if len(cache) > 256:
+                        cache.clear()
+                    mesh = cache[key] = (face, kernel.display_mesh(face) if face is not None else None)
+                show(mesh[1], **blue)
 
     def _surface_profile_mesh(self, src):
         """Wypełniony obrys szkicu na powierzchni (z otworami liter), uniesiony nad bryłę - widać go przed kliknięciem."""
@@ -3618,7 +3628,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         cache = self.__dict__.setdefault('_surface_mesh_cache', {})
         key = (src.get('kind'), src.get('id'), tuple(round(c, 4) for c in src['center']), id(target.shape))
         if key not in cache:
-            if len(cache) > 64:
+            if len(cache) > 4096:
                 cache.clear()
             try:
                 cache[key] = kernel.project_surface_mesh(kernel.display_mesh(face), target.shape, surface['normal'],
@@ -9035,8 +9045,24 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                  if running else '')        # czerwony tylko w trakcie przeliczania; poza tym wygląda jak „Pokaż wygaszone”
         if self.hist_commit.styleSheet() != sheet:
             self.hist_commit.setStyleSheet(sheet)
+        self.hist_cancel.setEnabled(self.document.can_cancel_history and not self.busy and not self.step_editing)
         if waiting and not self.hist_bar.isVisible() and hasattr(self, 'hist_button'):
             self.hist_button.setChecked(True)            # pasek historii widoczny, żeby było widać przycisk
+
+    def history_cancel_changes(self):
+        """„Anuluj”: wszystkie zmiany ostatniego wejścia do historii znikają - projekt jak przed wejściem (nic nie było zmieniane)."""
+        if self.busy or self.step_editing:
+            return
+        doc = self.document
+        doc.end_edit()
+        if not doc.cancel_history():
+            self.toast('Nie ma zmian historii do anulowania w tym miejscu projektu.', 3500)
+            return
+        self.selected, self.edges, self.override = [], {}, {}
+        self._hist_sig = None
+        self._commit_running = False
+        self.toast('Anulowano zmiany w historii - projekt wrócił do stanu sprzed wejścia w historię.', 4500)
+        self._show_state()
 
     def history_commit_changes(self):
         """„Zatwierdź zmianę”: dalsze kroki przeliczają się na zmienionych krokach (tylko te, których zmiana dotyczy), model

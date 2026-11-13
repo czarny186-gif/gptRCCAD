@@ -1645,6 +1645,28 @@ class CadView(gl.GLViewWidget):
             if ids is not None and hint[1]<len(ids):face_id=int(ids[hint[1]])
         return kernel.face_at(body.shape,hit[1],hit[2],curved=curved,face_hint=face_id)
 
+    def _uv_outlines(self, body):
+        """Obrys szkicu we współrzędnych jego płaszczyzny (U, V) i ramka - liczone raz na siatkę szkicu."""
+        cache = self.__dict__.setdefault('_uv_outline_cache', {})
+        hit = cache.get(body.id)
+        if hit is not None and hit[0] is body.mesh and hit[1] == body.plane:
+            return hit[2]
+        frame = kernel.frame_of(body.plane)
+        o, ux, uy = np.array(frame.origin), np.array(frame.xdir), np.array(frame.ydir)
+        lines = []
+        for points in body.mesh.edges.values():
+            rel = points.astype(float) - o
+            lines.append((rel @ ux, rel @ uy))
+        if lines:
+            allu, allv = np.concatenate([u for u, _ in lines]), np.concatenate([v for _, v in lines])
+            box = (np.array([allu.min(), allv.min()]) - 1e-6, np.array([allu.max(), allv.max()]) + 1e-6)
+        else:
+            box = (np.array([1.0, 1.0]), np.array([-1.0, -1.0]))
+        if len(cache) > 512:
+            cache.clear()
+        cache[body.id] = (body.mesh, body.plane, (box, lines))
+        return cache[body.id][2]
+
     def pick_profile(self, x, y):
         """Identyfikator szkicu, którego zamknięty obrys obejmuje punkt pod kursorem."""
         best = None
@@ -1680,13 +1702,13 @@ class CadView(gl.GLViewWidget):
             hit = self._plane_hit(body.plane, x, y)
             if not hit or not self.section_contains(hit[1]):
                 continue
-            frame = kernel.frame_of(body.plane)
-            o, ux, uy = np.array(frame.origin), np.array(frame.xdir), np.array(frame.ydir)
             px, py = kernel.uv_of(body.plane, hit[1])
+            cached = self._uv_outlines(body)
+            low, high = cached[0]
+            if px < low[0] or px > high[0] or py < low[1] or py > high[1]:
+                continue                  # punkt poza obrysem szkicu (bez liczenia przecięć)
             crossings = 0
-            for points in body.mesh.edges.values():
-                rel = points.astype(float) - o
-                us, vs = rel @ ux, rel @ uy
+            for us, vs in cached[1]:
                 ax, ay, bx, by = us[:-1], vs[:-1], us[1:], vs[1:]
                 straddle = (ay > py) != (by > py)
                 with np.errstate(divide='ignore', invalid='ignore'):

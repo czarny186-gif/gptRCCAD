@@ -1996,6 +1996,32 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait()
         self.assertIsNotNone(w.document.pending)                                         # Cofnij: zmiany znowu czekają na zatwierdzenie
 
+    def test_history_cancel_restores_project_from_before_entering_history(self):
+        """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
+        w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""
+        w=self.w;w.history_hold=True;w.hist_button.setChecked(True)
+        self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        self.sketch('circle',(5,5),(7,5));c=w.document.bodies[-1];w.set_mode(None)
+        w.set_mode('extrude');self.pick_sketch_profile(c);w.ex_op.setCurrentIndex(2);w.ex_value.setValue(30);w.apply_extrude();self.wait();w.set_mode(None)
+        vol=lambda:sum(b.shape.Volume() for b in w.document.bodies if b.kind=='solid')
+        self.wait();self.wait()
+        before_labels,before_cur=w.document.infos();before_vol=vol();before_labels=[i['label'] for i in before_labels]
+        self.assertFalse(w.hist_cancel.isEnabled())
+        w.document.goto(2);w.history_edit(2);w.ex_value.setValue(8);w.apply_extrude();self.wait();self.wait()
+        w.hist_commit.click();self.wait();self.wait()
+        self.assertNotAlmostEqual(vol(),before_vol,1);self.assertTrue(w.hist_cancel.isEnabled())
+        # nowa zmiana wprost w projekcie: Anuluj wygasa
+        self.sketch('rect',(40,0),(50,10));w.set_mode(None);self.wait()
+        self.assertFalse(w.hist_cancel.isEnabled())
+        w.undo();self.wait()                                   # Cofnij do miejsca zmiany historii: Anuluj znowu aktywny
+        self.assertTrue(w.hist_cancel.isEnabled())
+        w.hist_cancel.click();self.wait()
+        infos,cur=w.document.infos()
+        self.assertEqual([i['label'] for i in infos],before_labels);self.assertEqual(cur,before_cur)
+        self.assertAlmostEqual(vol(),before_vol,3)
+        self.assertFalse(w.hist_cancel.isEnabled());self.assertIsNone(w.document.pending)
+
     def test_mate_and_align_can_put_a_face_on_a_standard_plane(self):
         """Dopasowanie / Wyrównanie: przycisk płaszczyzny - wybrana ściana ląduje na XY, XZ albo YZ (odległość 0)."""
         w=self.w

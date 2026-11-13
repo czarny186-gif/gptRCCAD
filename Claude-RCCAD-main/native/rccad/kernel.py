@@ -1516,13 +1516,23 @@ def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="l
     return [w.translate(shift) for w in wires]
 
 
+_PROFILE_NORMALS = {}
+
+
 def profile_normal(shape, reference):
     """Rzeczywista normalna płaskiego profilu (także po obrocie / przesunięciu szkicu), zwrócona zgodnie z płaszczyzną odniesienia."""
     ref = np.asarray(reference, dtype=float)
     try:
-        wires = shape.Wires() if hasattr(shape, "Wires") else [shape]
-        n = np.array(cq.Face.makeFromWires(wires[0]).normalAt().toTuple(), dtype=float)
-        n = n / np.linalg.norm(n)
+        hit = _PROFILE_NORMALS.get(id(shape))
+        if hit is not None and hit[0] is shape:
+            n = hit[1]
+        else:
+            wires = shape.Wires() if hasattr(shape, "Wires") else [shape]
+            n = np.array(cq.Face.makeFromWires(wires[0]).normalAt().toTuple(), dtype=float)
+            n = n / np.linalg.norm(n)
+            if len(_PROFILE_NORMALS) > 2048:
+                _PROFILE_NORMALS.clear()
+            _PROFILE_NORMALS[id(shape)] = (shape, n)
     except Exception:
         return tuple(ref)
     if float(n @ ref) < 0:

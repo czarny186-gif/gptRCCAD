@@ -355,6 +355,36 @@ def same_face(a, b):
         return False
 
 
+_VERTICES = {}
+
+
+def _vertex_array(shape):
+    """Wierzchołki kształtu jako tablica (N, 3) - liczone raz na kształt."""
+    hit = _VERTICES.get(id(shape))
+    if hit is not None and hit[0] is shape:
+        return hit[1]
+    pts = np.array([v.toTuple() for v in shape.Vertices()], float).reshape(-1, 3)
+    if len(_VERTICES) > 2048:
+        _VERTICES.clear()
+    _VERTICES[id(shape)] = (shape, pts)
+    return pts
+
+
+_OUTLINES = {}
+
+
+def _outline_point(shape):
+    """Punkt wewnątrz obrysu zamkniętego szkicu - liczony raz na kształt (wskazywanie pyta o to przy każdym ruchu myszy)."""
+    hit = _OUTLINES.get(id(shape))
+    if hit is not None and hit[0] is shape:
+        return hit[1]
+    point = _inner_point(cq.Face.makeFromWires(shape))
+    if len(_OUTLINES) > 2048:
+        _OUTLINES.clear()
+    _OUTLINES[id(shape)] = (shape, point)
+    return point
+
+
 def coplanar_sketches(face, normal, bodies):
     """Widoczne, zamknięte szkice leżące w płaszczyźnie ściany i wewnątrz niej (np. okrąg lub napis narysowany na ścianie)."""
     n = _unit(normal)
@@ -366,10 +396,9 @@ def coplanar_sketches(face, normal, bodies):
         try:
             if not b.shape.IsClosed():
                 continue
-            if any(abs(float((np.array(v.toTuple(), float) - origin) @ n)) > 1e-4 for v in b.shape.Vertices()):
+            if bool((np.abs((_vertex_array(b.shape) - origin) @ n) > 1e-4).any()):
                 continue
-            outline = cq.Face.makeFromWires(b.shape)
-            if kernel.face_contains(face, _inner_point(outline)):
+            if kernel.face_contains(face, _outline_point(b.shape)):
                 out.append(b)
         except Exception:
             continue
@@ -988,8 +1017,31 @@ def _swallowed(shape, tool):
         return False
 
 
+_FACE_DATA = {}
+
+
+def _face_data(shape):
+    """Dane ścian bryły do szybkiego sprawdzania odstępu szkicu: (ściany, czy płaska, normalne, środki, obrysy), liczone raz na kształt."""
+    hit = _FACE_DATA.get(id(shape))
+    if hit is not None and hit[0] is shape:
+        return hit[1]
+    faces = shape.Faces()
+    planar = [kernel.is_planar_face(f) for f in faces]
+    normals = np.array([f.normalAt().toTuple() if p else (0.0, 0.0, 0.0) for f, p in zip(faces, planar)], float).reshape(-1, 3)
+    centers = np.array([f.Center().toTuple() for f in faces], float).reshape(-1, 3)
+    boxes = [f.BoundingBox() for f in faces]
+    lows = np.array([(b.xmin, b.ymin, b.zmin) for b in boxes], float).reshape(-1, 3)
+    highs = np.array([(b.xmax, b.ymax, b.zmax) for b in boxes], float).reshape(-1, 3)
+    data = (faces, np.array(planar, bool), normals, centers, lows, highs)
+    if len(_FACE_DATA) > 24:
+        _FACE_DATA.clear()
+    _FACE_DATA[id(shape)] = (shape, data)
+    return data
+
+
 def gap_pad(bodies, src):
-    """Odstęp między płaszczyzną szkicu a skręconą (nie płaską) ścianą bryły pod nim; 0, gdy szkic leży na płaskiej ścianie albo w pustce."""
+    """Odstęp między płaszczyzną szkicu a skręconą (nie płaską) ścianą bryły pod nim; 0, gdy szkic leży na płaskiej ścianie albo w pustce.
+    Szybkie: dane ścian bryły liczone raz, a odległości tylko do ścian leżących w pobliżu punktu szkicu."""
     plane = src.get('plane')
     if plane is None or src.get('wire') is None:
         return 0.0
@@ -998,24 +1050,37 @@ def gap_pad(bodies, src):
         o, n = np.array(f.origin, float), np.array(f.normal, float)
         wire = src['wire']
         pts = [wire.positionAt(t) for t in np.linspace(0.0, 1.0, 13)] + [wire.Center()]
+        coords = np.array([(p.x, p.y, p.z) for p in pts], float)
         pad = 0.0
         for body in bodies:
             if body.kind != 'solid':
                 continue
             bb = body.shape.BoundingBox()
             limit = 0.1 * float(bb.DiagonalLength)
-            faces = body.shape.Faces()
-            for face in faces:       # szkic leży na płaskiej ścianie tej bryły: nic nie trzeba cofać
-                if kernel.is_planar_face(face):
-                    fn = np.array(face.normalAt().toTuple(), float)
-                    if abs(float(fn @ n)) > 1 - 1e-6 and abs(float((np.array(face.Center().toTuple(), float) - o) @ n)) < 1e-4:
-                        return 0.0
-            near = [[float(face.distance(cq.Vertex.makeVertex(p.x, p.y, p.z))) for face in faces] for p in pts]      # odległość każdego punktu szkicu od każdej ściany
-            centre = near[-1]
-            nearest = min(range(len(faces)), key=lambda i: centre[i])
-            if kernel.is_planar_face(faces[nearest]) or centre[nearest] > limit:
+            low, high = np.array([bb.xmin, bb.ymin, bb.zmin]), np.array([bb.xmax, bb.ymax, bb.zmax])
+            if (coords.max(axis=0) < low - limit).any() or (coords.min(axis=0) > high + limit).any():
+                continue                       # szkic daleko od tej bryły
+            faces, planar, normals, centers, lows, highs = _face_data(body.shape)
+            if len(faces) == 0:
                 continue
-            pad = max(pad, max(min(row) for row in near))
+            on_plane = planar & (np.abs(normals @ n) > 1 - 1e-6) & (np.abs((centers - o) @ n) < 1e-4)
+            if bool(on_plane.any()):       # szkic leży na płaskiej ścianie tej bryły: nic nie trzeba cofać
+                return 0.0
+
+            def nearest_distance(point, cap=None):
+                near = np.where(((lows - (cap or 0.0)) <= point).all(axis=1) & ((highs + (cap or 0.0)) >= point).all(axis=1))[0]
+                if cap is None or len(near) == 0:
+                    near = np.arange(len(faces)) if len(near) == 0 else near
+                vertex = cq.Vertex.makeVertex(*point)
+                best = min((float(faces[i].distance(vertex)), int(i)) for i in near)
+                if cap is not None and best[0] > cap and len(near) < len(faces):      # najbliższa ściana poza zasięgiem: licz dokładnie po wszystkich
+                    best = min((float(faces[i].distance(vertex)), i) for i in range(len(faces)))
+                return best
+
+            centre_d, nearest = nearest_distance(coords[-1], limit)
+            if bool(planar[nearest]) or centre_d > limit:
+                continue
+            pad = max(pad, max(nearest_distance(p, limit)[0] for p in coords))
         return pad + 1e-3 if pad > 1e-4 else 0.0
     except Exception:
         return 0.0
@@ -1045,11 +1110,21 @@ def run_extrude(bodies, recipe):
     return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()), skip=recipe.get('skip', ()), folder=recipe.get('folder', ''),only=recipe.get('join_to'))
 
 
+_PROFILE_FACES = {}
+
+
 def profile_face(wire):
+    hit = _PROFILE_FACES.get(id(wire))
+    if hit is not None and hit[0] is wire:
+        return hit[1]
     try:
-        return cq.Face.makeFromWires(wire)
+        face = cq.Face.makeFromWires(wire)
     except Exception:
-        return None
+        face = None
+    if len(_PROFILE_FACES) > 1024:
+        _PROFILE_FACES.clear()
+    _PROFILE_FACES[id(wire)] = (wire, face)
+    return face
 
 
 def profile_frame(src):
