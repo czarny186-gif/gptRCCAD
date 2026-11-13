@@ -16,3 +16,4 @@
 - Nowe narzędzie: ikona `t_nazwa` (+ `_w`), wpis w `_build_overlays` (lista ikon), tryb w `set_mode`/`view_clicked`, panel dopisany do `self.panels`, wpis w Pomocy i test.
 - Przesuń / obróć, siatka i historia są w dolnym pasku (`self.pad`), nie w zakładkach.
 - Zakładka Sklejka: geometria w `rccad/plywood.py`, okno w `rccad/plywood_ui.py` (mixin `PlywoodTools`), kroki historii `run_ply_*` w `rccad/history.py`.
+- Przybornik / Ulubione bierze narzędzia automatycznie z `TABS` (`FAVORITE_TOOLS`); wyjątki tylko w `FAVORITE_EXCLUDED`. Nowe narzędzie dopisz do `TABS` i sprawdź, czy da się je dodać do Ulubionych (test w test_studio).

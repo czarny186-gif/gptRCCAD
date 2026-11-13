@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.5.6 — płaszczyzny w Dopasowaniu, podświetlanie, bez duplikatów rozmiaru
+# RCCAD Desktop 0.5.7 — siatka w szyku kołowym, przyciąganie w szkicu, pełny Przybornik
+
+- **Szyk kołowy**: po włączeniu „Wskaż środek na modelu” na płaszczyźnie szyku pojawia się siatka z osiami współrzędnych (jak przy zakresie 3 punktów w szyku prostokątnym); środek obrotu przyciąga się do punktów siatki, wierzchołków, środków okręgów i krawędzi. Po wskazaniu poprzedni stan siatki wraca.
+- **Dopasowanie / Wyrównanie**: okno powiększa się po włączeniu „Połóż na płaszczyźnie”, wybór płaszczyzny XY / XZ / YZ nie jest już przykryty.
+- **Szkic - poziom / pion / 45°**: linia konstrukcyjna, wymiar szkicu oraz pierwszy odcinek łuku 3-punktowego i fasolki prostują się tak samo jak zwykła linia (czerwony podgląd).
+- **Przybornik (Ulubione)**: dodane brakujące „Szkic na powierzchni” i „Szkic na narożniku”; Przybornik sam oferuje każde narzędzie z zakładek, więc nowe narzędzia będą się tam pojawiać automatycznie.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.6 — płaszczyzny w Dopasowaniu, podświetlanie, bez duplikatów rozmiaru
 
 - **Dopasowanie / Wyrównanie na płaszczyznę**: przycisk „Połóż na płaszczyźnie” pozwala zamiast ściany drugiej bryły wskazać XY, XZ albo YZ - wybrana ściana przeskakuje na tę płaszczyznę (odległość 0 od powierzchni), bryła zostaje po swojej stronie płaszczyzny.
 - **Pochylenie ścianki i Boolean**: płaska ściana / bryła pod kursorem podświetla się przed wyborem.
 - **Zatwierdź zmianę**: usunięty komunikat po każdej zmianie w historii; przycisk wygląda i reaguje jak „Pokaż wygaszone”, a w czasie przeliczania jest czerwony, potem wraca do normalnego wyglądu.
 - **Zmiana rozmiaru bryły bez duplikatów w historii**: kolejne pociągnięcie tej samej ściany (Wyciągnij - dodaj / wytnij) poprawia wcześniejszy krok (suma odległości) zamiast dodawać nowy.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.5 — Zatwierdź zmianę, szybsza historia, ukryte obiekty w pliku
 

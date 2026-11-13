@@ -2017,6 +2017,21 @@ class StudioTests(unittest.TestCase):
             self.assertAlmostEqual((bb.zmin,bb.xmin,bb.ymin)[(2,0,1).index(axis)],0.0,3)
         self.assertEqual(w.document.infos()[0][-1]['op']['plane'],'XZ')
 
+    def test_circular_pattern_pick_center_shows_grid_with_axes(self):
+        w=self.w
+        a=Body('A',k.box(10,10,10)).prepared();w.document.commit([a]);w.refresh()
+        w.set_mode('pattern');w.pat_id=a.id;w.pat_kind.setCurrentIndex(1)
+        self.assertEqual(w.pat_kind.currentData(),'circ')
+        w.pat_pick.setChecked(True)
+        self.assertTrue(w.pat_picking);self.assertIsNotNone(w._pat_pick_frame_on);self.assertIsNotNone(w.view._grid_plane)
+        w.pat_pick.setChecked(False)
+        self.assertIsNone(w._pat_pick_frame_on);self.assertIsNone(w.view._grid_plane)
+
+    def test_favorites_offer_every_tool_of_the_tabs(self):
+        import rccad.studio as st
+        missing=[t for tab,tools in st.TABS.items() if tab!='Ulubione' for t in tools if t not in st.FAVORITE_TOOLS and t not in st.FAVORITE_EXCLUDED]
+        self.assertEqual(missing,[]);self.assertIn('wrapsketch',st.FAVORITE_TOOLS);self.assertIn('wrapcorner',st.FAVORITE_TOOLS)
+
     def test_repeated_face_extrude_keeps_only_latest_step(self):
         """Zmiana rozmiaru bryły kolejnym pociągnięciem tej samej ściany: jeden krok z sumą odległości, nie duplikaty."""
         w=self.w
@@ -3078,6 +3093,21 @@ class StudioTests(unittest.TestCase):
         self.assertIsNone(w._line_aligned)
         end=far((20.0,0.7))[:2];w.sketch_clicked('XY',*end);w.sketch_clicked('XY',*end);self.wait()
         line=w.document.bodies[-1];bb=k.bounds(line.shape);self.assertAlmostEqual(bb.ylen,0,6);self.assertAlmostEqual(bb.xlen,20,6)
+
+    def test_construction_measure_arc_and_slot_straighten_like_the_line(self):
+        """Linia konstrukcyjna, wymiar szkicu, łuk 3-punktowy i fasolka (pierwszy odcinek) prostują się do poziomu / pionu / 45°."""
+        w=self.w;w.enter_sketch('XY')
+        far=lambda raw:w._snapper(-500,-500,raw)
+        for tool in ('construction','measure','arc','slot'):
+            w.choose_tool(tool);w.sketch_clicked('XY',0.0,0.0)
+            u,v,label=far((20.0,0.9));self.assertEqual((round(u,6),round(v,6),label),(20.0,0.0,'Poziomo'),tool)
+            u,v,label=far((-0.8,15.0));self.assertEqual((round(u,6),round(v,6),label),(0.0,15.0,'Pionowo'),tool)
+            u,v,label=far((10.5,10.0));self.assertEqual(label,'45°',tool)
+            u,v,label=far((20.0,5.0));self.assertIsNone(label,tool)
+            w.points=[];w.view._sk_start=None
+        # drugi i trzeci punkt łuku / szerokość fasolki nie są prostowane
+        w.choose_tool('slot');w.points=[(0.0,0.0),(20.0,0.0)]
+        self.assertIsNone(far((10.0,0.5))[2])
 
     def test_overlapping_shapes_make_regions_and_extrude_overlap(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));self.sketch('rect',(5,0),(15,10))

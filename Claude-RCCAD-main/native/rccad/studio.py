@@ -207,8 +207,10 @@ TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner',
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
-# narzędzia, które można dodać do Ulubionych (bez Pliku, Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu)
-FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for tool in tools if tool not in ('surface', 'wrapsketch', 'wrapcorner')]
+# narzędzia, które można dodać do Ulubionych: WSZYSTKIE z zakładek (nowe narzędzie wpisane do TABS trafia tu samo) - oprócz Pliku,
+# Przybornika i przycisku „Inna powierzchnia”, widocznego tylko w szkicu
+FAVORITE_EXCLUDED = ('surface',)
+FAVORITE_TOOLS = [tool for tab, tools in TABS.items() if tab != 'Ulubione' for tool in tools if tool not in FAVORITE_EXCLUDED]
 TAB_TOP = 14        # pasek zakładek
 TOOLS_TOP = 50      # przyciski narzędzi pod zakładkami
 MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
@@ -1977,6 +1979,10 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None;self._pat_path_limits = None
         self.pat_range_button.blockSignals(True);self.pat_range_button.setChecked(False);self.pat_range_button.blockSignals(False)
         self._pattern_range_controls(False)
+        if getattr(self, '_pat_pick_frame_on', None) is not None:
+            self.pat_pick.blockSignals(True);self.pat_pick.setChecked(False);self.pat_pick.blockSignals(False)
+            self.pat_picking = False
+            self._pattern_pick_grid(False)
         self.mod_vertices = {}
         self.t_target = None
         self.t_feature = None
@@ -2352,11 +2358,23 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
 
     ALIGN_DEG = 5.0          # linia prostuje się do poziomu / pionu / 45°, gdy jest od nich bliżej niż tyle stopni
 
+    LINE_ALIGN_TOOLS = ('line', 'construction', 'measure')      # każdy odcinek prowadzony kursorem
+    SEGMENT_ALIGN_TOOLS = ('arc', 'slot')                       # tylko pierwszy odcinek: końce łuku / oś fasolki
+
+    def _line_align_active(self):
+        """Poziom / pion / 45° działa przy rysowaniu linii, linii konstrukcyjnej, wymiaru szkicu oraz pierwszego odcinka łuku
+        3-punktowego i fasolki (środki końców)."""
+        if not self.points:
+            return False
+        if self.tool in self.LINE_ALIGN_TOOLS:
+            return True
+        return self.tool in self.SEGMENT_ALIGN_TOOLS and len(self.points) == 1
+
     def _line_align(self, result, raw):
         """Rysowanie linii: w pobliżu poziomu, pionu albo 45° linia sama się prostuje (i robi się czerwona) - jak przyciąganie do
         siatki: wystarczy odsunąć kursor dalej, żeby narysować pod innym kątem. Punkty szkicu i krawędzi mają pierwszeństwo."""
         self._line_aligned = None
-        if self.tool != 'line' or not self.points or result[2] not in (None, *snapping.GRID_LABELS):
+        if not self._line_align_active() or result[2] not in (None, *snapping.GRID_LABELS):
             return result
         a = np.asarray(self.points[-1], float)
         d = np.asarray(raw[:2], float) - a
@@ -2430,7 +2448,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             mesh = kernel.display_mesh(shape) if shape is not None else None
         except Exception:
             mesh = None
-        aligned = self.tool == 'line' and getattr(self, '_line_aligned', None)
+        aligned = self._line_align_active() and getattr(self, '_line_aligned', None)
         self.view.set_preview_mesh(mesh, line_color=(.92, .12, .12, 1) if aligned else SKETCH_ORANGE, width=2.6 if aligned else 2, dashed=not aligned)
 
     # ---------- tekst: kreator (powierzchnia -> obszar -> treść, uchwyty skalowania i obrotu) ----------
@@ -3476,6 +3494,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             elif self.mode == 'pattern' and self.pat_id and self.pat_picking:
                 target = self._pattern_target(x, y)
                 self.view.hover_vertex = target
+                frame = getattr(self, '_pat_pick_frame_on', None)
+                snapped = self._pattern_range_point(x, y, frame) if frame is not None else None
+                self.view.snap_marker = None if snapped is None else (self.view.project_one(snapped[0]), snapped[1])
                 self.view.overlay.update()
             elif self.mode == 'pattern' and self.pat_id and self.pat_range_button.isChecked():
                 if self._pat_range_frame is None:
@@ -7220,6 +7241,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         if self.mode not in self.mt_plane_btns:
             return
         self.mt_plane_bar.setVisible(on)
+        self._mt_resize_panel()
         if on:
             self.mt_plane_bar.setCurrentIndex(0)
             self._mt_plane_chosen()
@@ -7227,6 +7249,17 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self.mt_pick.pop('target', None)
             self.view.set_preview_mesh(None)
             self._mt_update()
+
+    def _mt_resize_panel(self):
+        """Okno Dopasowania / Wyrównania rośnie razem z wyborem płaszczyzny (nic nie jest przykryte)."""
+        panel = self.mt_panels[self.mode]
+        lay = panel.layout()
+        lay.activate()
+        panel.setMinimumHeight(0)
+        panel.setMaximumHeight(16777215)
+        need = max(lay.sizeHint().height(), lay.totalHeightForWidth(panel.width()) if lay.hasHeightForWidth() else 0)
+        panel.setFixedHeight(need + 8)
+        panel.raise_()
 
     def _mt_plane_chosen(self):
         if self.mode not in self.mt_plane_btns or not self.mt_plane_on.isChecked():
@@ -7242,6 +7275,8 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 btn.setChecked(False)
                 btn.blockSignals(False)
                 bar.setVisible(False)
+            if self.mode in self.mt_plane_btns:
+                self._mt_resize_panel()
         self.mt_spin = 0.0
         if hasattr(self, 'mt_angle'):
             self.mt_angle.setText('0°')
@@ -7306,6 +7341,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         meshes = [kernel.display_mesh(p['face']) for p in (mv, tg) if p and p.get('face') is not None]
         self.view.set_selection_meshes(meshes)
         status.setText('Zastosuj (Enter) przesuwa pierwszą bryłę.' if done else ('Teraz kliknij ścianę innej bryły.' if a else 'Kliknij ścianę bryły, która ma się przesunąć.'))
+        self._mt_resize_panel()
         self.refresh()
         self.update_mate_preview()
 
@@ -7489,9 +7525,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self.pat_range_status.setText('Kliknij środek ostatniej kopii w górę lub dół.' if len(self._pat_range_points)==2 else 'Zakres gotowy. Zmieniaj ilości lub przeciągaj strzałki.')
         self._place_pattern_handles();self._timers['pattern'].start()
 
-    def _pattern_range_point(self, x, y):
+    def _pattern_range_point(self, x, y, frame=None):
         """Snap on the sketch plane; geometry wins over the displayed grid."""
-        frame=self._pat_range_frame
+        frame=frame or self._pat_range_frame
         if frame is None:return None
         hit=self.view._plane_hit(frame,x,y)
         if hit is None:return None
@@ -7687,6 +7723,8 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         body = self.document.get(self.pat_id) if self.pat_id else None
         if body is not None and body.mesh is not None:
             self._pattern_set([self.pat_radius], [self._radial(body)[0]])
+        if self.pat_picking:
+            self._pattern_pick_grid(True)
         self._timers['pattern'].start()
 
     def _pattern_pick_toggled(self, on):
@@ -7696,14 +7734,52 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self.toast('Najpierw wybierz obiekt.')
             return
         if on:
-            self.toast('Kliknij dowolny punkt: wierzchołek, ścianę, płaszczyznę lub podłoże - to będzie środek obrotu.', 4000)
+            self.toast('Kliknij punkt na siatce (albo wierzchołek, środek okręgu, krawędź) - to będzie środek obrotu.', 4000)
         self.view.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
+        self._pattern_pick_grid(on)
+
+    def _pattern_pick_frame(self):
+        """Płaszczyzna szyku kołowego: płaszczyzna szkicu, a dla bryły - prostopadła do osi obrotu, przez środek obiektu."""
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        if body is None or body.mesh is None:
+            return None
+        if body.kind == 'sketch':
+            try:
+                return kernel.actual_frame(body.shape, body.plane)
+            except Exception:
+                pass
+        normal = np.asarray(self._pattern_axes(body)[self.pat_axis.currentData()], float)
+        return kernel.face_frame(tuple(float(c) for c in self._pattern_center(body)[0]), tuple(float(c) for c in normal))
+
+    def _pattern_pick_grid(self, on):
+        """Przy wskazywaniu środka obrotu na płaszczyźnie szyku pojawia się siatka z osiami współrzędnych (jak przy zakresie
+        3 punktów szyku prostokątnego); po wskazaniu wraca poprzedni stan siatki."""
+        if self.pat_range_button.isChecked():
+            return
+        if on and self.pat_kind.currentData() == 'circ':
+            frame = self._pattern_pick_frame()
+            if frame is not None:
+                if getattr(self, '_pat_pick_frame_on', None) is None:
+                    self._pat_grid_was_on = getattr(self.view, '_grid_on', self.grid_button.isChecked())
+                self._pat_pick_frame_on = frame
+                self.view.set_grid_visible(True)
+                self.view.set_grid_frame(frame)
+                return
+        if getattr(self, '_pat_pick_frame_on', None) is not None:
+            self._pat_pick_frame_on = None
+            self.view.set_grid_frame(None)
+            self.view.set_grid_visible(getattr(self, '_pat_grid_was_on', self.grid_button.isChecked()))
 
     def _pattern_target(self, x, y):
         """Dowolny punkt środka obrotu: wierzchołek (też szkicu), punkt na ścianie, płaszczyzna lub podłoże (z=0)."""
         vertex = self.view.nearest_vertex(x, y, solids_only=False)
         if vertex is not None:
             return np.array(vertex[1], float)
+        frame = getattr(self, '_pat_pick_frame_on', None)
+        if frame is not None:                      # siatka na płaszczyźnie szyku: geometria w tej płaszczyźnie albo punkt siatki
+            snapped = self._pattern_range_point(x, y, frame)
+            if snapped is not None:
+                return np.asarray(snapped[0], float)
         hit = self.view.pick_face(x, y)
         if hit is not None:
             return np.array(hit[2], float)
@@ -7725,6 +7801,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             return
         self._pattern_set(self.pat_pivot, point)
         self.view.hover_vertex = None
+        self.view.snap_marker = None
         self.pat_pick.setChecked(False)
         self._pattern_pivot_changed()
 
