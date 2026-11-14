@@ -1,12 +1,19 @@
-# RCCAD Desktop 0.5.11 — szybsze wybieranie wielu szkiców, poprawne wycinanie napisów
+# RCCAD Desktop 0.5.12 — płynne Przesuń / Obróć otworów, obrót widoku bez blokady, okno Obiekty
 
-- **Wybieranie wielu szkiców do wyciągnięcia / wycięcia jest wielokrotnie szybsze**: każde kliknięcie liczyło od nowa obszary wszystkich szkiców w grupie (np. 16 płatków śniegu czy 105 otworów szyku), żeby znaleźć resztę grupy. Teraz grupa liczy się raz, a materiał szkicu jest zapamiętywany - na projekcie z płatkami, otworami i napisem obliczenia przy 128 kliknięciach spadły z ok. 12 s do ok. 1 s.
-- **Naprawa wycinania napisów razem z innymi szkicami (błąd z 0.5.9)**: przy łączeniu profili na płasko porządkowanie ścian zmieniało krzywe liter i wycięcie zostawiało trochę materiału. Teraz suma profili zachowuje dokładnie te same krawędzie (tylko wewnętrzne podziały znikają), a profil wybrany dwa razy (obszar i cały szkic) liczy się raz. Wynik jest identyczny z wycinaniem każdego profilu osobno.
-- Import z „krową”: połączenie z sześcianem nadal ok. 0,5 s zamiast 150 s.
+- **Przesuń / Obróć nie zawiesza się na złożonych bryłach**: w tym trybie program przy każdym najechaniu na nową ściankę sprawdza, czy to otwór. Przy otworach przechodzących do wnętrza (np. pudełko z otworami w ściankach) cała ściana wnętrza była brana za fazę otworu i sprawdzanie przechodziło przez setki ścianek - jedno najechanie trwało do 30-45 s, a pamięć wyników czyściła się co chwilę, więc liczyło się od nowa. Teraz: duża ściana z wieloma krawędziami nie jest uznawana za fazę, odrzucona ściana nie jest sprawdzana ponownie, topologia bryły i promienie są przygotowane raz, a grupa ścian otworu ma rozsądny limit. Przejazd kursorem po całym pudełku z płatkami, otworami, napisem i fasolkami: z ok. 300 s do ok. 6 s, a ponowny przejazd jest natychmiastowy.
+- **Otwór sprawdza się dopiero, gdy kursor się zatrzyma** (ok. 0,2 s) - przesuwanie kursora po bryle nie blokuje programu. Kliknięcie w otwór (także wycięty fasolką) zaznacza go od razu.
+- **Obrót widoku bez ograniczeń**: lewy przycisk myszy obraca widok dalej przez górę i dół (wcześniej zatrzymywał się po 180° na płaszczyźnie).
+- **Okno Obiekty**: przyciski Ukryj, Wyłącz i Usuń stoją tuż za nazwą z małym odstępem, który zależy od długości nazwy (dotyczy też nagłówków grup).
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.11 — szybsze wybieranie wielu szkiców, poprawne wycinanie napisów
+
+- **Wybieranie wielu szkiców do wyciągnięcia / wycięcia jest wielokrotnie szybsze**: każde kliknięcie liczyło od nowa obszary wszystkich szkiców w grupie (np. 16 płatków śniegu czy 105 otworów szyku), żeby znaleźć resztę grupy. Teraz grupa liczy się raz, a materiał szkicu jest zapamiętywany - na projekcie z płatkami, otworami i napisem obliczenia przy 128 kliknięciach spadły z ok. 12 s do ok. 1 s.
+- **Naprawa wycinania napisów razem z innymi szkicami (błąd z 0.5.9)**: przy łączeniu profili na płasko porządkowanie ścian zmieniało krzywe liter i wycięcie zostawiało trochę materiału. Teraz suma profili zachowuje dokładnie te same krawędzie (tylko wewnętrzne podziały znikają), a profil wybrany dwa razy (obszar i cały szkic) liczy się raz. Wynik jest identyczny z wycinaniem każdego profilu osobno.
+- Import z „krową”: połączenie z sześcianem nadal ok. 0,5 s zamiast 150 s.
 
 ### 0.5.10 — czyszczenie importów SVG / DXF
 

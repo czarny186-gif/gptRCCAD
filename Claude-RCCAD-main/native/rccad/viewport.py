@@ -1338,10 +1338,20 @@ class CadView(gl.GLViewWidget):
         super().pan(dx, dy, dz, relative)
 
     def orbit(self, azim, elev):
+        """Obrót kamery bez ograniczenia: przez biegun widok przechodzi „do góry nogami” zamiast zatrzymać się na 90°
+        (wcześniej lewy przycisk obracał tylko o 180° i blokował się na płaszczyźnie)."""
         if self.roll():
             ox, oy = self._unroll(-azim, elev)
             azim, elev = -ox, oy
-        super().orbit(azim, elev)
+        if self.opts.get('rotationMethod') == 'quaternion':
+            super().orbit(azim, elev)
+            return
+        el = float(self.opts['elevation'])
+        if math.cos(math.radians(el)) < 0:
+            azim = -azim                        # po przejściu przez biegun ruch w poziomie idzie dalej za kursorem
+        self.opts['azimuth'] = ((float(self.opts['azimuth']) + azim + 180.0) % 360.0) - 180.0
+        self.opts['elevation'] = ((el + elev + 180.0) % 360.0) - 180.0
+        self.update()
 
     def setCameraPosition(self, pos=None, distance=None, elevation=None, azimuth=None, rotation=None):
         if elevation is not None or azimuth is not None:

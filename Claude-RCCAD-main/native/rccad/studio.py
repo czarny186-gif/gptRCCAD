@@ -8345,8 +8345,8 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         cache = self.__dict__.setdefault('_feature_cache', {})
         key = (body.id, id(body.shape), seed)
         if key not in cache:
-            if len(cache) > 64:
-                cache.clear()
+            if len({k[:2] for k in cache}) > 6 or len(cache) > 20000:
+                cache.clear()      # czyszczenie według liczby brył, nie wpisów (otwór o wielu ścianach to wiele wpisów)
             found = None
             try:
                 faces = hist.feature_faces(body.shape, seed)
@@ -8361,8 +8361,23 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         found = cache[key]
         return None if found is None else (body, seed, *found)
 
-    def _hover_transform_feature(self, x, y):
-        """Przesuń / Obróć: otwór pod kursorem podświetla się na pomarańczowo, zanim się go kliknie."""
+    FEATURE_HOVER_DELAY = 220     # ms: otwór pod kursorem liczy się dopiero, gdy kursor się zatrzyma (przejazd po bryle nie blokuje)
+
+    def _hover_transform_feature(self, x, y, now=False):
+        """Przesuń / Obróć: otwór pod kursorem podświetla się na pomarańczowo, zanim się go kliknie. Wynik z pamięci od razu;
+        nowa ściana jest sprawdzana dopiero po krótkim zatrzymaniu kursora."""
+        if not now and not self._feature_known(x, y):
+            timer = self.__dict__.get('_feature_hover_timer')
+            if timer is None:
+                timer = self._feature_hover_timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(lambda: self._feature_hover_due())
+            self._feature_hover_xy = (x, y)
+            timer.start(self.FEATURE_HOVER_DELAY)
+            if getattr(self, '_feature_hover_key', None) is not None:
+                self._feature_hover_key = None
+                self.view.set_preview_mesh(None)
+            return
         try:
             found = self._feature_under(x, y)
         except Exception:
@@ -8375,6 +8390,28 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self.view.set_preview_mesh(None)
             return
         self.view.set_preview_mesh(found[4], color=(.98, .62, .2, .4), line_color=(.9, .45, .05, 1), width=2.4, on_top=True)
+
+    def _feature_hover_due(self):
+        xy = getattr(self, '_feature_hover_xy', None)
+        if xy is None or self.mode not in ('move', 'rotate') or getattr(self, 't_feature', None) is not None:
+            return
+        self._hover_transform_feature(*xy, now=True)
+
+    def _feature_known(self, x, y):
+        """Czy odpowiedź dla ściany pod kursorem jest już w pamięci (bez liczenia)."""
+        try:
+            hit = self.view.pick_face(x, y)
+            body = self.document.get(hit[0]) if hit else None
+            if body is None or body.kind != 'solid':
+                return True
+            hint = getattr(self.view, '_face_hint', None)
+            ids = getattr(body.mesh, 'face_ids', None) if body.mesh is not None else None
+            if not (hint is not None and hint[0] == body.id and ids is not None and hint[1] < len(ids) and hint[3] == id(body.mesh)):
+                return False
+            seed = int(ids[hint[1]])
+            return (body.id, id(body.shape), seed) in self.__dict__.get('_feature_cache', {})
+        except Exception:
+            return False
 
     def _pick_transform_feature(self, body, x, y):
         """Kliknięta ściana otworu albo kieszeni (okrągłej, kwadratowej, wielokątnej): zaznacza się cały otwór - wszystkie

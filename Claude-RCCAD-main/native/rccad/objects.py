@@ -2,7 +2,7 @@
 przyciskami ukrycia / wyłączenia / usunięcia oraz zaznaczaniem wielu pozycji (Shift / Ctrl)."""
 from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QScrollArea, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from . import icons, shell_ui as ui
 
@@ -72,6 +72,12 @@ class _NameEdit(QLineEdit):
         self.cancelled.emit()
 
 
+def _fit_label(label):
+    """Nazwa zajmuje tyle miejsca, ile potrzebuje (przyciski stoją tuż za nią), a przy wąskim panelu może się skrócić."""
+    label.setMinimumWidth(24)
+    label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+
 class Row(QWidget):
     clicked = Signal(str, object)
     hovered = Signal(str)
@@ -107,12 +113,14 @@ class Row(QWidget):
         self._lay = lay
         lay.addWidget(pic)
         lay.addWidget(num)
-        lay.addWidget(label, 1)
+        _fit_label(label)
+        lay.addWidget(label)
         if count > 1:            # szyk „jako jeden element”: jedna pozycja z liczbą elementów
             badge = QLabel(f'×{count}')
             badge.setObjectName('badge')
             badge.setToolTip(f'Jeden element: {count} kształtów razem')
             lay.addWidget(badge)
+        lay.addSpacing(8)        # przyciski tuż za nazwą (odstęp zależy od długości nazwy), reszta wiersza pusta
         for key, icon_name, tip, active in (('hide', 'eyeoff' if hidden else 'eye', 'Pokaż' if hidden else 'Ukryj', hidden),
                                             ('lock', 'lock' if locked else 'unlock', 'Włącz (odblokuj)' if locked else 'Wyłącz (nie do zaznaczania)', locked),
                                             ('del', 'trash', 'Usuń', False)):
@@ -125,6 +133,7 @@ class Row(QWidget):
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=key, o=oid: QTimer.singleShot(0, lambda: hooks[k](o)))
             lay.addWidget(b)
+        lay.addStretch(1)
 
     def enterEvent(self, event):
         self.hovered.emit(self.oid)
@@ -219,8 +228,10 @@ class FolderHead(QWidget):
         self._lay = lay
         lay.addWidget(fold)
         lay.addWidget(pic)
-        lay.addWidget(self.label, 1)
+        _fit_label(self.label)
+        lay.addWidget(self.label)
         lay.addWidget(badge)
+        lay.addSpacing(8)
         for key, icon_name, tip in (('hide', 'eyeoff' if hidden else 'eye', 'Pokaż grupę' if hidden else 'Ukryj grupę'),
                                     ('del', 'trash', 'Usuń całą grupę')):
             b = QToolButton()
@@ -232,6 +243,7 @@ class FolderHead(QWidget):
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=key: QTimer.singleShot(0, hooks[k]))
             lay.addWidget(b)
+        lay.addStretch(1)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -503,9 +515,11 @@ class ObjectsPanel(QFrame):
             trash.clicked.connect(lambda _=False, c=cat: QTimer.singleShot(0, lambda: self.group_delete.emit(c)))
             eye.setCursor(Qt.PointingHandCursor)
             head.addWidget(fold)
-            head.addWidget(label, 1)
+            head.addWidget(label)
+            head.addSpacing(8)
             head.addWidget(eye)
             head.addWidget(trash)
+            head.addStretch(1)
             lay.addLayout(head)
             if cat in self._folded:
                 continue

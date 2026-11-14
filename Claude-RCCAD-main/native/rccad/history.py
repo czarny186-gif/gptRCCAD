@@ -1807,33 +1807,89 @@ def feature_faces(shape, seed):
     if group or not 0 <= seed < len(shape.Faces()):
         return group
     faces = shape.Faces()
-    for edge in faces[seed].Edges():           # faza brzegu: otwór sąsiada, do którego ta faza należy
-        for j, f in enumerate(faces):
-            if j != seed and any(e.wrapped.IsSame(edge.wrapped) for e in f.Edges()):
-                if _faces_inward(shape, f):
-                    found = _feature_faces(shape, j)
-                    if found and seed in found:
-                        return found
+    edges = faces[seed].Edges()
+    if len(edges) > 24:
+        return None             # duża ściana z wieloma krawędziami (np. ścianka z wieloma otworami) nie jest fazą brzegu otworu
+    ctx = _topology(shape)
+    if ctx is None:
+        return None
+    faces, ancestors, index = ctx
+    tried = set()
+    for edge in edges:                          # faza brzegu: otwór sąsiada, do którego ta faza należy
+        if not ancestors.Contains(edge.wrapped):
+            continue
+        for face in ancestors.FindFromKey(edge.wrapped):
+            j = next((i for i in index.get(hash(face), ()) if faces[i].wrapped.IsSame(face)), None)
+            if j is None or j == seed or j in tried:
+                continue
+            tried.add(j)
+            if _faces_inward(shape, faces[j]):
+                found = _feature_faces(shape, j)
+                if found and seed in found:
+                    return found
     return None
+
+
+FEATURE_MAX_FACES = 160     # otwór / kieszeń ma najwyżej tyle ścian - większa grupa to wnętrze bryły, nie otwór (szybka rezygnacja)
+_TOPOLOGY = {}
+
+
+def _topology(shape):
+    """Ściany, mapa krawędź -> ściany i indeks ścian bryły - liczone raz na bryłę (rozpoznawanie otworu pod kursorem pyta
+    wiele razy o tę samą bryłę)."""
+    hit = _TOPOLOGY.get(id(shape))
+    if hit is not None and hit[0] is shape:
+        return hit[1]
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    ctx = None
+    if len(shape.Solids()) == 1:
+        faces = shape.Faces()
+        ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+        TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
+        index = {}
+        for i, f in enumerate(faces):
+            index.setdefault(hash(f.wrapped), []).append(i)
+        ctx = (faces, ancestors, index)
+    if len(_TOPOLOGY) > 8:
+        _TOPOLOGY.clear()
+    _TOPOLOGY[id(shape)] = (shape, ctx)
+    return ctx
+
+
+_FACE_FACTS = {}
+
+
+def _face_fact(face, what):
+    """Pole / punkt wewnętrzny ściany z pamięcią (wielokrotnie dla tych samych ścian przy rozpoznawaniu otworu)."""
+    key = (hash(face.wrapped), what)
+    for f, value in _FACE_FACTS.get(key, ()):
+        if f.wrapped.IsSame(face.wrapped) and f.wrapped.Location().IsEqual(face.wrapped.Location()):
+            return value
+    value = float(face.Area()) if what == 'area' else face.Edges() if what == 'edges' else kernel._face_point(face)
+    if len(_FACE_FACTS) > 20000:
+        _FACE_FACTS.clear()
+    _FACE_FACTS.setdefault(key, []).append((face, value))
+    return value
 
 
 def _feature_faces(shape, seed):
     from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     from OCP.TopExp import TopExp
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
-    faces = shape.Faces()
-    if len(shape.Solids()) != 1 or not 0 <= seed < len(faces):
+    ctx = _topology(shape)
+    if ctx is None:
         return None
-    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
-    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
-    index = {}
-    for i, f in enumerate(faces):
-        index.setdefault(hash(f.wrapped), []).append(i)
+    faces, ancestors, index = ctx
+    if not 0 <= seed < len(faces):
+        return None
 
     def number(face):
         return next((i for i in index.get(hash(face), ()) if faces[i].wrapped.IsSame(face)), None) if index.get(hash(face)) else next(i for i, x in enumerate(faces) if x.wrapped.IsSame(face))
 
-    group, todo = {seed}, [seed]
+    group, todo, not_bevel = {seed}, [seed], set()
+    group_edges = len(faces[seed].Edges())
     while todo:
         f = todo.pop()
         for edge in faces[f].Edges():
@@ -1849,26 +1905,57 @@ def _feature_faces(shape, seed):
                 return None
             if kind == 'tangent' and not _blend_like(shape, faces, ancestors, number, others[0]):
                 continue          # przez styczną krawędź tylko do zaokrąglenia brzegu / ściany otworu, nie na zewnętrzną ścianę bryły
-            if kind == 'convex' and _faces_inward(shape, faces[f]) and _bevel_like(shape, faces, ancestors, number, others[0], group):
-                kind = 'bevel'    # faza na brzegu otworu: ściana skośna w głąb otworu, między ścianą otworu a ścianą zewnętrzną
+            if kind == 'convex' and others[0] not in not_bevel and faces[others[0]].geomType() in ('PLANE', 'CONE') \
+                    and _faces_inward(shape, faces[f]):
+                if _bevel_like(shape, faces, ancestors, number, others[0], group, group_edges):
+                    kind = 'bevel'    # faza na brzegu otworu: ściana skośna w głąb otworu, między ścianą otworu a ścianą zewnętrzną
+                else:
+                    not_bevel.add(others[0])      # raz odrzucona ściana nie jest sprawdzana ponownie z każdej sąsiedniej ściany
             if kind != 'convex':
                 group.add(others[0])
+                group_edges += len(faces[others[0]].Edges())
                 todo.append(others[0])
-                if len(group) > max(2, len(faces) * .6):
+                if len(group) > max(2, min(len(faces) * .6, FEATURE_MAX_FACES)):
                     return None
     if len(group) >= len(faces) or not any(_faces_inward(shape, faces[i]) for i in group):
         return None
     return group
 
 
+_RAYS = {}
+
+
+def _ray_tool(shape):
+    """Przecinanie promieniami tej samej bryły wiele razy: przygotowanie (klasyfikatory ścian) liczone raz na bryłę - przy bryle
+    z setkami ścian każdy promień liczony od zera kosztował kilka ms, a rozpoznanie otworu pod kursorem puszcza ich dziesiątki."""
+    hit = _RAYS.get(id(shape))
+    if hit is not None and hit[0] is shape:
+        return hit[1]
+    from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
+    tool = IntCurvesFace_ShapeIntersector()
+    tool.Load(shape.wrapped, 1e-7)
+    if len(_RAYS) > 8:
+        _RAYS.clear()
+    _RAYS[id(shape)] = (shape, tool)
+    return tool
+
+
 def _ray_hits_again(shape, point, direction, eps):
-    from OCP.BRepIntCurveSurface import BRepIntCurveSurface_Inter
     from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
     d = np.asarray(direction, float)
     d = d / max(np.linalg.norm(d), 1e-12)
     start = np.asarray(point, float) + d * eps
+    line = gp_Lin(gp_Pnt(*[float(c) for c in start]), gp_Dir(*[float(c) for c in d]))
+    try:
+        tool = _ray_tool(shape)
+        tool.Perform(line, 0.0, 1e100)
+        if tool.IsDone():
+            return any(tool.WParameter(i) > eps for i in range(1, tool.NbPnt() + 1))
+    except Exception:
+        pass
+    from OCP.BRepIntCurveSurface import BRepIntCurveSurface_Inter
     inter = BRepIntCurveSurface_Inter()
-    inter.Init(shape.wrapped, gp_Lin(gp_Pnt(*[float(c) for c in start]), gp_Dir(*[float(c) for c in d])), 1e-7)
+    inter.Init(shape.wrapped, line, 1e-7)
     while inter.More():
         if inter.W() > eps:
             return True
@@ -1876,13 +1963,25 @@ def _ray_hits_again(shape, point, direction, eps):
     return False
 
 
-def _bevel_like(shape, faces, ancestors, number, i, group):
+def _bevel_like(shape, faces, ancestors, number, i, group, group_edges=None):
     """Ściana za wypukłą krawędzią otworu jest fazą jego brzegu: patrzy skośnie w głąb otworu - promień poprowadzony z niej
     w kierunku jej normalnej pozbawionej składowej wzdłuż sąsiedniej ściany zewnętrznej trafia w przeciwległą ścianę
     otworu. Zewnętrzna ściana bryły (promień ucieka w powietrze) - nie."""
     face = faces[i]
+    edges = _face_fact(face, 'edges')
+    if group_edges is None:
+        group_edges = sum(len(_face_fact(faces[g], 'edges')) for g in group)
+    if len(edges) > 2 * group_edges + 8:
+        return False      # szybko: ściana ma dużo więcej krawędzi niż cały otwór - na pewno nie faza jego brzegu
+    shared = 0
+    for edge in edges:
+        if ancestors.Contains(edge.wrapped) and any(number(x) in group for x in ancestors.FindFromKey(edge.wrapped)):
+            shared += 1
+    if len(edges) > 2 * shared + 8:
+        return False      # faza to wąski pas wokół brzegu otworu (krawędzie: brzeg otworu + brzeg zewnętrzny); duża ściana
+                          # z wieloma innymi krawędziami (np. ścianka wnętrza z innymi otworami) nie jest fazą
     outer = []
-    for edge in face.Edges():
+    for edge in edges:
         if not ancestors.Contains(edge.wrapped):
             continue
         for o in (number(x) for x in ancestors.FindFromKey(edge.wrapped)):
@@ -1890,13 +1989,13 @@ def _bevel_like(shape, faces, ancestors, number, i, group):
                 outer.append(o)
     if not outer:
         return False
-    big = max(outer, key=lambda o: faces[o].Area())
-    if faces[big].Area() < face.Area():
+    big = max(outer, key=lambda o: _face_fact(faces[o], 'area'))
+    if _face_fact(faces[big], 'area') < _face_fact(face, 'area'):
         return False                              # faza jest mała w porównaniu ze ścianą zewnętrzną
-    p = kernel._face_point(face)
+    p = _face_fact(face, 'point')
     try:
         n = np.array(face.normalAt(cq.Vector(*p)).toTuple(), float)
-        m = np.array(faces[big].normalAt(cq.Vector(*kernel._face_point(faces[big]))).toTuple(), float)
+        m = np.array(faces[big].normalAt(cq.Vector(*_face_fact(faces[big], 'point'))).toTuple(), float)
     except Exception:
         return False
     m = m / max(np.linalg.norm(m), 1e-12)
@@ -1927,19 +2026,10 @@ def _blend_like(shape, faces, ancestors, number, i):
 
 def _faces_inward(shape, face):
     """Czy ściana patrzy w głąb bryły (ściana otworu): prosta wychodząca z niej na zewnątrz materiału trafia z powrotem w bryłę."""
-    from OCP.BRepIntCurveSurface import BRepIntCurveSurface_Inter
-    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
-    p = kernel._face_point(face)
+    p = _face_fact(face, 'point')
     n = np.array(face.normalAt(cq.Vector(*p)).toTuple(), float)
     eps = 1e-4 * max(1.0, _scale(shape))
-    start = p + n * eps
-    inter = BRepIntCurveSurface_Inter()
-    inter.Init(shape.wrapped, gp_Lin(gp_Pnt(*[float(c) for c in start]), gp_Dir(*[float(c) for c in n])), 1e-7)
-    while inter.More():
-        if inter.W() > eps:
-            return True
-        inter.Next()
-    return False
+    return _ray_hits_again(shape, p, n, eps)
 
 
 def feature_split(shape, ids):

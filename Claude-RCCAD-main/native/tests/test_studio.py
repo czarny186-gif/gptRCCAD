@@ -2028,6 +2028,30 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(out.isValid())
         self.assertAlmostEqual(ref.Volume(), out.Volume(), places=3)
 
+    def test_view_orbits_past_the_pole_without_stopping(self):
+        v=self.w.view
+        v.setCameraPosition(elevation=30,azimuth=0)
+        for _ in range(20):v.orbit(0,10)                       # 200° w pionie - wcześniej blokowało się na 90°
+        el=float(v.opts['elevation'])
+        self.assertAlmostEqual(((30+200+180)%360)-180,el,6)
+        d=v.camera_dir();self.assertLess(d[0],0)             # kamera przeszła przez biegun na drugą stronę
+
+    def test_hollow_box_with_slot_and_holes_feature_detection_is_fast(self):
+        """Pudełko z otworami w ściance i wyciętą fasolką: otwór fasolki da się zaznaczyć, a ściany wnętrza (z wieloma
+        otworami) nie zawieszają rozpoznawania - wcześniej ściana wnętrza uchodziła za fazę i grupa rosła przez całe wnętrze."""
+        from rccad import history as hist
+        box=cq.Workplane().box(200,120,80).faces('>Z').shell(-4).val().Solids()[0]
+        holes=[cq.Workplane('YZ').workplane(offset=90).center(y,z).circle(3).extrude(20).val() for y in range(-40,41,16) for z in range(-20,21,10)]
+        slot=cq.Workplane('XY').workplane(offset=-50).center(-40,0).slot2D(40,10,30).extrude(30).val()
+        shape=box.cut(*holes).cut(slot).clean()
+        F=shape.Faces()
+        start=time.time()
+        for i in range(len(F)):hist.feature_faces(shape,i)
+        self.assertLess(time.time()-start,20.0)
+        walls=[i for i,f in enumerate(F) if f.geomType()=='CYLINDER' and abs(f.Center().x+40)<25 and f.Center().z<-30]
+        group=hist.feature_faces(shape,walls[0])
+        self.assertTrue(group);self.assertTrue(set(walls)<=group);self.assertLessEqual(len(group),6)
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""
@@ -2399,10 +2423,10 @@ class StudioTests(unittest.TestCase):
                 w.view_clicked(5,5,False,False)
         w.set_mode('move')
         with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,1,0)),np.array((4,0,3)))):
-            w.view_hover(5,5)                                                          # przed kliknięciem otwór się podświetla
+            w.view_hover(5,5);w._feature_hover_due()                                   # przed kliknięciem (po zatrzymaniu kursora) otwór się podświetla
         self.assertTrue(w.view.preview_items)
         with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1)),np.array((15,10,5)))):
-            w.view_hover(6,6)
+            w.view_hover(6,6);w._feature_hover_due()
         self.assertFalse(w.view.preview_items)                                         # ściana zewnętrzna - bez podświetlenia
         click((0,-3,3),(0,1,0))                                                        # jedna ściana kieszeni
         self.assertIsNotNone(w.t_feature);self.assertIn('ściany: 5',w.t_status.text())
@@ -2647,7 +2671,7 @@ class StudioTests(unittest.TestCase):
             edge=next(f for f in a.shape.Faces() if f.geomType()==('CONE' if kind=='chamfer' else 'TORUS'));ept=k._face_point(edge)
             w.set_mode('move')
             with patch.object(w.view,'pick_face',return_value=(a.id,np.array((0,0,1.0)),np.array(ept))):
-                t=time.time();w.view_hover(5,5);self.assertLess(time.time()-t,2.0)
+                t=time.time();w.view_hover(5,5);w._feature_hover_due();self.assertLess(time.time()-t,2.0)
             self.assertTrue(w.view.preview_items,kind)                               # najechanie na fazę / zaokrąglenie podświetla cały otwór
             with patch.object(w,'pick_object',return_value=a.id),patch.object(w.view,'pick_face',return_value=(a.id,np.array((-1.0,0,0)),np.array(pt))):
                 w.view_clicked(5,5,False,False)
