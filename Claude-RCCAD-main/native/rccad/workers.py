@@ -34,8 +34,7 @@ _lock = threading.Lock()
 
 
 def count():
-    """Liczba procesów: RCCAD_WORKERS (0 = wyłączone), domyślnie tyle, ile rdzeni (najwyżej 8; okno czeka na wynik, więc
-    nie zabiera im rdzenia). Na komputerze z jednym rdzeniem procesy nie mają sensu."""
+    """Liczba procesów: RCCAD_WORKERS (0 = wyłączone), domyślnie połowa rdzeni (od 2 do 6). Na komputerze z jednym rdzeniem procesy nie mają sensu."""
     value = os.environ.get('RCCAD_WORKERS')
     if value is not None:
         try:
@@ -43,7 +42,7 @@ def count():
         except ValueError:
             return 0
     cores = os.cpu_count() or 1
-    return 0 if cores < 2 else min(cores, 8)
+    return 0 if cores < 2 else max(2, min(cores // 2, 6))      # połowa rdzeni: reszta zostaje dla okna i systemu (mniej ciepła)
 
 
 IN_WORKER = False          # True w procesie liczącym

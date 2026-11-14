@@ -9433,8 +9433,14 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         alive = lambda: self.document is doc and not self.busy
 
         def work():
-            while doc.warm_meshes(24, alive):
-                pass
+            # po kawałku, z przerwami i tylko gdy nie pracujesz (mysz / klawiatura) - bez ciągłego obciążenia wszystkich rdzeni
+            while alive():
+                if time.monotonic() - self._last_input < 3.0:
+                    time.sleep(.5)
+                    continue
+                if not doc.warm_meshes(12, alive):
+                    break
+                time.sleep(.25)
             return None
 
         def finished(*_):

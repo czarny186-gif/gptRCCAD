@@ -1,12 +1,20 @@
-# RCCAD Desktop 0.5.13 — zapis w tle, gdy nie pracujesz
+# RCCAD Desktop 0.5.14 — program nie obciąża komputera, gdy nic nie robisz
 
-- **Zapis w tle**: projekt, który ma już plik na dysku, po zmianie zapisuje się sam do swojego pliku - dopiero gdy przez ok. 4 s nie ruszasz myszą ani klawiaturą (zapis trwa ułamek sekundy i nie przeszkadza w pracy). Podczas trwającej operacji, przy niezatwierdzonej zmianie historii i w edycji kroku zapis czeka. Nowy projekt zapisujesz pierwszy raz sam (Zapisz) - od tego momentu działa zapis w tle.
-- **Naprawa autozapisu kopii** (co 2,5 min, nazwa.autosave.rccadx): program nie zapamiętywał, że kopia jest aktualna, i zapisywał ją za każdym razem od nowa.
-- **Przesuwanie folderu „Modół” w projekcie regulatora**: sprawdzone - przesunięcie 37 brył trwa ok. 1 s. Długie liczenie w wersji 0.5.11 i starszych było spowodowane rozpoznawaniem otworu pod kursorem w trybie Przesuń (do ok. 8 s na każde najechanie na obudowę) - naprawione w 0.5.12.
+- **Naprawa liczenia w tle bez końca**: program po otwarciu projektu i po zmianach przygotowuje w tle siatki brył z kroków historii (żeby przeskoki w historii były natychmiastowe). Gdy siatka któregoś kształtu się nie udawała albo pamięć siatek była pełna, ta pętla liczyła te same kształty w kółko na wszystkich rdzeniach - bez końca, także gdy nic nie robisz (wentylator). Teraz każdy kształt jest próbowany raz, a przy pełnej pamięci przygotowanie się kończy.
+- **Przygotowanie siatek tylko gdy nie pracujesz**: liczy się małymi porcjami z przerwami i czeka, gdy używasz myszy lub klawiatury.
+- **Mniej procesów liczących**: domyślnie połowa rdzeni (od 2 do 6) zamiast wszystkich (do 8) - mniej ciepła przy starcie i w czasie pracy, reszta rdzeni zostaje dla okna i systemu.
+- **Pasek „liczenie w tle”** sprawdza stan 5 razy na sekundę zamiast 25, gdy nic się nie liczy.
+- Zawiera też zapis w tle z 0.5.13 (projekt zapisany na dysku zapisuje się sam po ok. 4 s bez ruchu myszy i klawiatury).
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.13 — zapis w tle, gdy nie pracujesz
+
+- **Zapis w tle**: projekt, który ma już plik na dysku, po zmianie zapisuje się sam do swojego pliku - dopiero gdy przez ok. 4 s nie ruszasz myszą ani klawiaturą (zapis trwa ułamek sekundy i nie przeszkadza w pracy). Podczas trwającej operacji, przy niezatwierdzonej zmianie historii i w edycji kroku zapis czeka. Nowy projekt zapisujesz pierwszy raz sam (Zapisz) - od tego momentu działa zapis w tle.
+- **Naprawa autozapisu kopii** (co 2,5 min, nazwa.autosave.rccadx): program nie zapamiętywał, że kopia jest aktualna, i zapisywał ją za każdym razem od nowa.
+- **Przesuwanie folderu „Modół” w projekcie regulatora**: sprawdzone - przesunięcie 37 brył trwa ok. 1 s. Długie liczenie w wersji 0.5.11 i starszych było spowodowane rozpoznawaniem otworu pod kursorem w trybie Przesuń (do ok. 8 s na każde najechanie na obudowę) - naprawione w 0.5.12.
 
 ### 0.5.12 — płynne Przesuń / Obróć otworów, obrót widoku bez blokady, okno Obiekty
 

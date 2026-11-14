@@ -750,6 +750,8 @@ class BusyBar(QWidget):
     def _tick(self):
         if self.busy():
             self._idle = 0
+            if self._timer.interval() != 40:
+                self._timer.setInterval(40)        # animacja paska
             if not self.isVisible():
                 self._phase = 0.0
                 self.show()
@@ -760,6 +762,8 @@ class BusyBar(QWidget):
             self._idle += 1
             if self._idle > 4:            # krótkie przerwy między zadaniami nie migają paskiem
                 self.hide()
+        elif self._timer.interval() != 200:
+            self._timer.setInterval(200)          # nic się nie liczy: sprawdzanie 5 razy na sekundę zamiast 25
 
     def paintEvent(self, event):
         painter = QPainter(self)

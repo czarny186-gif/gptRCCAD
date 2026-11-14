@@ -458,23 +458,30 @@ class Document:
     def warm_meshes(self, budget=40, alive=lambda: True):
         """W tle: siatki brył z innych kroków historii (najbliższe bieżącemu najpierw), żeby przeskok był natychmiastowy.
         Zwraca True, gdy zostało jeszcze coś do policzenia."""
+        if len(self._mesh_cache) >= 2000:
+            return False                 # pamięć siatek pełna - koniec (wcześniej pętla liczyła wciąż te same bryły bez końca)
+        tried = self.__dict__.setdefault('_warm_tried', {})
         states = self.states()
         current = len(self._undo)
         order = sorted(range(len(states)), key=lambda i: abs(i - current))
         todo = {}
         for i in order:
             for b in states[i][0]:
-                if b.mesh is None and id(b.shape) not in todo:
-                    hit = self._mesh_cache.get(id(b.shape))
+                key = id(b.shape)
+                if b.mesh is None and key not in todo and tried.get(key) is not b.shape:
+                    hit = self._mesh_cache.get(key)
                     if hit is None or hit[0] is not b.shape:
-                        todo[id(b.shape)] = b
+                        todo[key] = b
             if len(todo) >= budget:
                 break
         if not todo or not alive():
             return False
         from . import workers
         items = list(todo.values())
+        if len(tried) > 20000:
+            tried.clear()
         for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items], coarse=True)):
+            tried[id(b.shape)] = b.shape     # każdy kształt próbowany raz - błąd siatki nie wraca w kółko
             if error is None and len(self._mesh_cache) < 2000:
                 self._mesh_cache[id(b.shape)] = (b.shape, mesh)
         return True

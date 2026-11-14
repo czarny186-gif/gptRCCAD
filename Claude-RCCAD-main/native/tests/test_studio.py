@@ -2072,6 +2072,21 @@ class StudioTests(unittest.TestCase):
         self.assertFalse(w.document.dirty)
         self.assertEqual(sorted(x.name for x in Document.load(path).bodies),['A','B'])
 
+    def test_history_mesh_warming_stops_on_failing_meshes(self):
+        """Siatki kroków historii liczone w tle: kształt, którego siatka się nie udaje, nie jest liczony w kółko
+        (wcześniej pętla w tle mogła kręcić się bez końca i obciążać wszystkie rdzenie)."""
+        from rccad.document import Document
+        from rccad import workers
+        doc=Document()
+        for i in range(4):doc.commit([Body(f'B{i}',cq.Workplane().box(5+i,5,5).val())])
+        calls=[]
+        def broken(items,tolerance=.12,coarse=False):
+            calls.append(len(items));return [(None,'błąd')]*len(items)
+        with patch.object(workers,'mesh_many',broken):
+            n=0
+            while doc.warm_meshes(24) and n<10:n+=1
+        self.assertLessEqual(n,2);self.assertEqual(sum(calls),len({id(b.shape) for s,_ in doc.states() for b in s if b.mesh is None}))
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""
