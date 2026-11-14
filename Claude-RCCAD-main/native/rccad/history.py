@@ -314,7 +314,25 @@ def _inner_point(face):
     return np.mean([np.asarray(vertices[i].toTuple(),float) for i in triangles[0]],axis=0)
 
 
+_MATERIAL = {}
+
+
 def material_faces(sketches):
+    """Jak _material_faces, z pamięcią wyników dla tych samych kształtów (przy wybieraniu profili jedno kliknięcie pytało
+    o materiał każdego szkicu w grupie od nowa)."""
+    sketches = list(sketches)
+    key = tuple(id(b.shape) for b in sketches)
+    hit = _MATERIAL.get(key)
+    if hit is not None and all(a is b.shape for a, b in zip(hit[0], sketches)):
+        return list(hit[1])
+    out = _material_faces(sketches)
+    if len(_MATERIAL) > 2048:
+        _MATERIAL.clear()
+    _MATERIAL[key] = (tuple(b.shape for b in sketches), tuple(out))
+    return out
+
+
+def _material_faces(sketches):
     """Materiał zamkniętych szkiców (np. liter): kontury zagnieżdżone naprzemiennie dodają i odejmują obszar (litera - otwór + wyspa w otworze...),
     a kontury nakładające się bez zagnieżdżenia (częste w glifach, np. k, s, t) łączą się w jedną sumę - nic nie wypada z wyciągnięcia."""
     items = []
@@ -776,38 +794,123 @@ def _prism_info(tool):
     return None
 
 
+def _precise_area(face, eps=1e-9):
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face.wrapped, props, eps)
+    return float(props.Mass())
+
+
+def _precise_volume(solid, eps=1e-9):
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(solid.wrapped, props, eps)
+    return float(props.Mass())
+
+
+def _tool_signature(tool):
+    """Odcisk bryły (objętość, środek masy, prostopadłościan otaczający) do wykrycia narzędzi zdublowanych."""
+    box = tool.BoundingBox()
+    c = tool.Center()
+    q = lambda v: round(float(v) / 1e-5)
+    return (q(tool.Volume()), q(c.x), q(c.y), q(c.z), q(box.xmin), q(box.ymin), q(box.zmin), q(box.xmax), q(box.ymax), q(box.zmax),
+            len(tool.Faces()))
+
+
+def _union_faces(caps):
+    """Suma płaskich ścian jednej płaszczyzny jako ściany bez wewnętrznych podziałów. Krawędzie zostają dokładnie takie, jakie
+    dało przecięcie (bez upraszczania krzywych - porządkowanie ścian potrafi zmienić krzywe liter): z kawałków po sumie brane są
+    tylko krawędzie brzegu (należące do jednego kawałka), z nich obwody, a obwody zagnieżdżone stają się otworami."""
+    from OCP.TopExp import TopExp
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    pieces = caps[0].fuse(*caps[1:])
+    faces = pieces.Faces()
+    if len(faces) < 2:
+        return faces
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(pieces.wrapped, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    border = []
+    for k in range(1, edge_faces.Extent() + 1):
+        if edge_faces.FindFromIndex(k).Size() == 1:
+            border.append(cq.Edge(edge_faces.FindKey(k)))
+    if len(border) == sum(len(f.Edges()) for f in faces):
+        return faces            # kawałki się nie stykają - zostają bez zmian
+    wires = [w for w in cq.Wire.combine(border, tol=1e-7) if w.IsClosed()]
+    if not wires:
+        return None
+    loops = []
+    for w in wires:
+        f = cq.Face.makeFromWires(w)
+        loops.append((abs(float(f.Area())), w, f, np.array(w.Edges()[0].positionAt(0.5).toTuple(), float)))
+    loops.sort(key=lambda x: -x[0])
+    depth = [sum(1 for j in range(i) if kernel.face_contains(loops[j][2], loops[i][3])) for i in range(len(loops))]
+    out = []
+    for i, (area, wire, face, _) in enumerate(loops):
+        if depth[i] % 2:
+            continue
+        holes = [loops[j][1] for j in range(i + 1, len(loops)) if depth[j] == depth[i] + 1 and kernel.face_contains(face, loops[j][3])]
+        made = cq.Face.makeFromWires(wire, holes)
+        if not made.isValid():
+            return None
+        out.append(made)
+    return out
+
+
 def merge_prism_tools(tools):
-    """Wiele narzędzi o tym samym kierunku i wysokości (profile jednego szkicu, także zagnieżdżone i powtórzone) łączy się najpierw na
-    płaszczyźnie - suma ich przekrojów (szybka operacja na ścianach) - i dopiero potem wyciąga jako jedna bryła na grupę. Suma
-    graniastosłupów to graniastosłup sumy przekrojów, więc wynik jest ten sam, a przy setkach profili nie ma dużej operacji
-    logicznej między bryłami (które się stykają, nakładają i dublują)."""
+    """Przygotowanie wielu narzędzi do jednej operacji logicznej, bez zmiany wyniku:
+    1. narzędzia zdublowane (ten sam profil wybrany dwa razy - np. obszar i cały szkic) zostają raz;
+    2. narzędzia o tym samym kierunku i wysokości (profile jednego szkicu, także zagnieżdżone i nakładające się) łączą się
+       najpierw płasko - suma przekrojów z niezmienionymi krawędziami - i są wyciągane jako kilka brył. Suma graniastosłupów to
+       graniastosłup sumy przekrojów, więc wynik jest ten sam, a przy setkach profili nie ma porównań każdej bryły z każdą.
+    Wynik płaskiej sumy jest sprawdzany (poprawność ścian, pokrycie każdego przekroju, pole); gdy coś się nie zgadza, ta grupa
+    zostaje w postaci oryginalnej."""
+    tools = list(tools)
+    seen, unique = set(), []
+    for t in tools:
+        try:
+            key = _tool_signature(t)
+        except Exception:
+            unique.append(t)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(t)
+    tools = unique
     infos = [_prism_info(t) for t in tools]
     groups = {}
     for i, info in enumerate(infos):
         if info is None:
             continue
         n, lo, hi, _ = info
-        key = (tuple(np.round(n, 6)), round(lo, 5), round(hi, 5))
-        groups.setdefault(key, []).append(i)
+        groups.setdefault((tuple(np.round(n, 6)), round(lo, 5), round(hi, 5)), []).append(i)
     merged, drop = [], set()
     for key, members in groups.items():
         if len(members) < 2:
             continue
         n, lo, hi = np.array(key[0]), infos[members[0]][1], infos[members[0]][2]
+        h = hi - lo
         caps = [infos[i][3] for i in members]
-        union = caps[0].fuse(*caps[1:]).clean() if len(caps) > 1 else caps[0]
-        faces = union.Faces()
-        if not faces:
+        try:
+            faces = _union_faces(caps)
+            if not faces or not all(f.isValid() for f in faces):
+                continue
+            total = sum(float(f.Area()) for f in faces)
+            if total > sum(float(c.Area()) for c in caps) * (1 + 1e-6) or total < max(float(c.Area()) for c in caps) * (1 - 1e-6):
+                continue
+            union = faces[0] if len(faces) == 1 else cq.Compound.makeCompound(faces)
+            if any(sum(float(f.Area()) for f in c.cut(union).Faces()) > 1e-6 * float(c.Area()) for c in caps):
+                continue        # któryś przekrój nie jest w całości w sumie
+            solids = [cq.Solid.extrudeLinear(f, cq.Vector(*[float(c) for c in n * h])) for f in faces]
+            if any(not s.isValid() for s in solids):
+                continue
+        except Exception:
             continue
-        before = sum(float(tools[i].Volume()) for i in members)
-        solids = [cq.Solid.extrudeLinear(f, cq.Vector(*[float(c) for c in n * (hi - lo)])) for f in faces]
-        after = sum(float(sol.Volume()) for sol in solids)
-        if after > before * (1 + 1e-6) or after < max(float(tools[i].Volume()) for i in members) * (1 - 1e-6):
-            continue        # suma przekrojów nie zgadza się z bryłami - zostają osobne
         merged += solids
         drop |= set(members)
-    if not drop:
-        return list(tools)
     return [t for i, t in enumerate(tools) if i not in drop] + merged
 
 

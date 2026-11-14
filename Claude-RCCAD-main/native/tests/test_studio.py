@@ -2013,6 +2013,21 @@ class StudioTests(unittest.TestCase):
             self.assertAlmostEqual(ref.clean().Volume(), out.clean().Volume(), places=3)
             self.assertTrue(out.clean().isValid())
 
+    def test_merge_prism_tools_keeps_letter_curves_exact(self):
+        """Napis z pliku użytkownika (krzywe liter, profil wybrany dwa razy, wypełniony otwór litery): scalanie nie może zmienić
+        wyniku - porządkowanie ścian po sumie zmieniało krzywe liter i wycięcie zostawiało ok. 170 mm3 materiału."""
+        import cadquery as cq
+        from pathlib import Path
+        from rccad import history as hist
+        shapes = list(cq.Shape.importBrep(str(Path(__file__).parent / 'data' / 'tekst_wyciecie.brep')).Solids())
+        block, tools = shapes[0], shapes[1:]
+        merged = hist.merge_prism_tools(tools)
+        self.assertLess(len(merged), len(tools))
+        ref = block.cut(*tools).clean()
+        out = block.cut(*merged).clean()
+        self.assertTrue(out.isValid())
+        self.assertAlmostEqual(ref.Volume(), out.Volume(), places=3)
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""

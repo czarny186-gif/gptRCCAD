@@ -4006,8 +4006,17 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 result=dict(src,source_id=body.id,cluster=('group',body.group),siblings=siblings)
                 cache[cache_key]=(self.document.bodies,result)
                 return result
-            members = [b for b in self.document.bodies if b.group == body.group and b.kind == 'sketch' and b.id != body.id]
-            if not members:
+            gcache=self.__dict__.setdefault('_group_sibling_cache',{})
+            gkey=(id(self.document.bodies),body.group)
+            ghit=gcache.get(gkey)
+            if ghit is not None and ghit[0] is self.document.bodies:
+                mine=[p for p in ghit[2] if p.get('source_id',p.get('id'))!=body.id]
+                result=dict(src,source_id=body.id,cluster=ghit[1],siblings=[*src.get('siblings',()),*mine])
+                cache[cache_key]=(self.document.bodies,result)
+                return result
+            # cała grupa liczona raz (także kliknięty szkic) - kolejne kliknięcia w tę grupę tylko ją filtrują
+            members = [b for b in self.document.bodies if b.group == body.group and b.kind == 'sketch']
+            if len(members) < 2:
                 return src
             cluster = ('group', body.group)
             siblings = []
@@ -4044,6 +4053,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             for member in members:
                 if member.id not in covered and (member.shape.IsClosed() if hasattr(member.shape, 'IsClosed') else False):
                     siblings.append(dict(self._sketch_profile(member), cluster=cluster))
+            if len(gcache)>64:gcache.clear()
+            gcache[gkey]=(self.document.bodies,cluster,siblings)
+            siblings=[p for p in siblings if p.get('source_id',p.get('id'))!=body.id]
             result=dict(src,source_id=body.id,cluster=cluster,siblings=[*src.get('siblings',()),*siblings])
             cache[cache_key]=(self.document.bodies,result)
             return result

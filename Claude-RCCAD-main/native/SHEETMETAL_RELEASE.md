@@ -1,12 +1,18 @@
-# RCCAD Desktop 0.5.10 — czyszczenie importów SVG / DXF
+# RCCAD Desktop 0.5.11 — szybsze wybieranie wielu szkiców, poprawne wycinanie napisów
 
-- **Każdy import SVG i DXF jest teraz automatycznie czyszczony i dostosowywany do programu**: usuwane są zdublowane krawędzie i zdublowane kontury (ten sam kształt narysowany kilka razy, także z różnicą do 0,02 mm), pomijane są punkty zerowej wielkości, a obwody z mikroszczelinami (do 0,05 mm) są domykane.
-- **Bez utraty jakości**: krzywe (Béziery, splajny, łuki, okręgi) zostają dokładne - nic nie jest próbkowane ani upraszczane, usuwane są tylko powtórzenia i szczeliny.
-- **To samo we wszystkich miejscach importu**: Plik → Importuj, import rysunku, wstawianie z biblioteki (obiekty i szkice, SVG i DXF). Pliki w bibliotece zostają w oryginalnym formacie, a czyszczenie następuje przy wstawianiu na pole robocze.
+- **Wybieranie wielu szkiców do wyciągnięcia / wycięcia jest wielokrotnie szybsze**: każde kliknięcie liczyło od nowa obszary wszystkich szkiców w grupie (np. 16 płatków śniegu czy 105 otworów szyku), żeby znaleźć resztę grupy. Teraz grupa liczy się raz, a materiał szkicu jest zapamiętywany - na projekcie z płatkami, otworami i napisem obliczenia przy 128 kliknięciach spadły z ok. 12 s do ok. 1 s.
+- **Naprawa wycinania napisów razem z innymi szkicami (błąd z 0.5.9)**: przy łączeniu profili na płasko porządkowanie ścian zmieniało krzywe liter i wycięcie zostawiało trochę materiału. Teraz suma profili zachowuje dokładnie te same krawędzie (tylko wewnętrzne podziały znikają), a profil wybrany dwa razy (obszar i cały szkic) liczy się raz. Wynik jest identyczny z wycinaniem każdego profilu osobno.
+- Import z „krową”: połączenie z sześcianem nadal ok. 0,5 s zamiast 150 s.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.10 — czyszczenie importów SVG / DXF
+
+- **Każdy import SVG i DXF jest teraz automatycznie czyszczony i dostosowywany do programu**: usuwane są zdublowane krawędzie i zdublowane kontury (ten sam kształt narysowany kilka razy, także z różnicą do 0,02 mm), pomijane są punkty zerowej wielkości, a obwody z mikroszczelinami (do 0,05 mm) są domykane.
+- **Bez utraty jakości**: krzywe (Béziery, splajny, łuki, okręgi) zostają dokładne - nic nie jest próbkowane ani upraszczane, usuwane są tylko powtórzenia i szczeliny.
+- **To samo we wszystkich miejscach importu**: Plik → Importuj, import rysunku, wstawianie z biblioteki (obiekty i szkice, SVG i DXF). Pliki w bibliotece zostają w oryginalnym formacie, a czyszczenie następuje przy wstawianiu na pole robocze.
 
 ### 0.5.9 — szybkie wyciągnięcie i wycięcie importów SVG / DXF
 
