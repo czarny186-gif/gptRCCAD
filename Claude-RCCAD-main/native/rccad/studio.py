@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import math
+import time
 import uuid
 import cadquery as cq
 from dataclasses import replace
@@ -720,6 +721,13 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self._autosave_timer.setInterval(150000)
         self._autosave_timer.timeout.connect(self._autosave)
         self._autosave_timer.start()
+        self._last_input = time.monotonic()
+        self._idle_saving = False
+        self.idle_save_enabled = os.environ.get('RCCAD_IDLE_SAVE', '1') != '0'     # testy wyłączają (pliki projektów testowych)
+        self._idle_save_timer = QTimer(self)           # zapis projektu (już zapisanego na dysku) w tle, gdy nic się nie dzieje
+        self._idle_save_timer.setInterval(1000)
+        self._idle_save_timer.timeout.connect(self._idle_save)
+        self._idle_save_timer.start()
         self.hist_ghost = QPushButton('Pokaż wygaszone')
         self.hist_ghost.setObjectName('chip')
         self.hist_ghost.setCheckable(True)
@@ -1777,7 +1785,12 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
+    INPUT_EVENTS = (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove, QEvent.Wheel, QEvent.KeyPress, QEvent.KeyRelease,
+                    QEvent.MouseButtonDblClick)
+
     def eventFilter(self, obj, event):
+        if event.type() in self.INPUT_EVENTS:
+            self._last_input = time.monotonic()            # praca myszą / klawiaturą - zapis w tle czeka na bezczynność
         if not hasattr(self, '_dim_target'):
             return super().eventFilter(obj, event)
         if obj is self.dim_panel and event.type() == QEvent.Hide and self._dim_target is not None:
@@ -9290,6 +9303,45 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         work_item = _Work(work)
         work_item.signals.done.connect(lambda value, d=id(document): setattr(self, '_autosaved', (d, value)))
         work_item.signals.failed.connect(lambda message: None)
+        self._autosave_work = work_item
+        self.pool.start(work_item)
+
+    IDLE_SAVE_SECONDS = 4.0       # tyle sekund bez ruchu myszy i klawiatury, zanim zmieniony projekt zapisze się sam
+
+    def _idle_save(self):
+        """Projekt, który ma już plik na dysku, zapisuje się sam w tle po zmianach - dopiero gdy przez chwilę nie pracujesz
+        myszą ani klawiaturą (zapis nie przeszkadza w pracy). Zapisywane są zatwierdzone kroki; podczas operacji, przy
+        niezatwierdzonej zmianie historii i w edycji kroku zapis czeka."""
+        document = self.document
+        if self._idle_saving or document.path is None or not document.dirty or self.busy or document.pending is not None \
+                or self.step_editing or not getattr(self, 'idle_save_enabled', True):
+            return
+        if time.monotonic() - self._last_input < self.IDLE_SAVE_SECONDS or QApplication.mouseButtons() != Qt.NoButton:
+            return
+        path, revision = document.path, document._revision
+        snapshot = (list(document.states()), len(document._undo))
+        self._idle_saving = True
+
+        def work():
+            document.save(path, mark=False, snapshot=snapshot)
+            return revision
+
+        def done(saved):
+            self._idle_saving = False
+            if self.document is document and document.path == path and document._revision == saved:
+                document._saved_revision = saved          # w trakcie zapisu nic się nie zmieniło - projekt jest zapisany
+                document._view_dirty = False
+                self._autosave_path_for(document).unlink(missing_ok=True)
+                self._idle_saved_at = time.monotonic()
+
+        def failed(message):
+            self._idle_saving = False
+            self._last_input = time.monotonic() + 60     # błąd zapisu (np. plik zablokowany) - spróbuje ponownie za ok. minutę
+
+        work_item = _Work(work)
+        work_item.signals.done.connect(done)
+        work_item.signals.failed.connect(failed)
+        self._idle_work = work_item          # referencja: sygnały zadania muszą dożyć jego końca
         self.pool.start(work_item)
 
     # ---------- podgląd na żywo parametrów kroku, ponowne wskazanie elementu, zmienne projektu ----------

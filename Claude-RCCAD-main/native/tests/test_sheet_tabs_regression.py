@@ -1,5 +1,6 @@
 """Sheet/tab-wall regressions: edits, bend order, manufacturable corners and DXF."""
 import os
+os.environ.setdefault('RCCAD_IDLE_SAVE', '0')        # bez samoczynnego zapisu projektów w testach
 os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu
 import copy
 from dataclasses import replace

@@ -740,12 +740,16 @@ class Document:
             previous = ids
         return {key for key in introduced if key not in must}
 
-    def save(self, path, mark=True, compact=False):
+    def save(self, path, mark=True, compact=False, snapshot=None):
         """Zapisuje cały projekt razem z historią i wariantami. compact=True: lżejszy plik - część geometrii historii
-        jest odtwarzana z przepisów przy otwieraniu (otwieranie trwa dłużej)."""
+        jest odtwarzana z przepisów przy otwieraniu (otwieranie trwa dłużej). snapshot: (stany, bieżący krok) pobrane
+        wcześniej w wątku okna - zapis w tle nie czyta historii, którą w tym czasie zmienia praca w oknie."""
         path = Path(path)
-        states = self.states()
-        current = len(self._undo)
+        if snapshot is not None:
+            states, current = snapshot
+        else:
+            states = self.states()
+            current = len(self._undo)
         virtual = self._virtual_shapes(states, current) if compact else set()
         shapes, index, vindex = [], {}, {}
         metas, meta_index, entries, entry_index = [], {}, [], {}

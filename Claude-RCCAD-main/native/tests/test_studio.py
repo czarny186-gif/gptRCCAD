@@ -1,5 +1,6 @@
 """Okno Studio: układ jak w HTML oraz przepływ szkic → wyciągnięcie → Boolean / zaokrąglenie / lustro."""
 import os, faulthandler
+os.environ.setdefault('RCCAD_IDLE_SAVE', '0')        # bez samoczynnego zapisu projektów w testach
 os.environ.setdefault('RCCAD_HISTORY_HOLD', '0')      # starsze testy: zmiany w historii przeliczane od razu (bez „Zatwierdź zmianę”)
 DIAG=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w")
 # strażnik zawieszenia: włączany w setUp każdego testu okna i wyłączany w tearDown (nie liczy czasu innych modułów)
@@ -2051,6 +2052,25 @@ class StudioTests(unittest.TestCase):
         walls=[i for i,f in enumerate(F) if f.geomType()=='CYLINDER' and abs(f.Center().x+40)<25 and f.Center().z<-30]
         group=hist.feature_faces(shape,walls[0])
         self.assertTrue(group);self.assertTrue(set(walls)<=group);self.assertLessEqual(len(group),6)
+
+    def test_saved_project_saves_itself_in_background_when_idle(self):
+        """Zapisany projekt po zmianie zapisuje się sam w tle - ale dopiero gdy mysz i klawiatura nic nie robią."""
+        import tempfile, time as _t
+        from pathlib import Path
+        from rccad.document import Document
+        w=self.w
+        folder=tempfile.mkdtemp();path=Path(folder)/'p.rccadx'
+        w.idle_save_enabled=True;self.addCleanup(setattr,w,'idle_save_enabled',False)
+        a=Body('A',cq.Workplane().box(10,10,10).val()).prepared();w.document.commit([a]);w.document.save(path)
+        self.assertFalse(w.document.dirty)
+        b=Body('B',cq.Workplane().sphere(4).val()).prepared();w.document.commit([*w.document.bodies,b])
+        self.assertTrue(w.document.dirty)
+        w._last_input=_t.monotonic();w._idle_save();self.assertFalse(w._idle_saving)      # praca trwa - bez zapisu
+        w._last_input=_t.monotonic()-60;w._idle_save();self.assertTrue(w._idle_saving)
+        end=_t.time()+30
+        while w._idle_saving and _t.time()<end:QApplication.processEvents();_t.sleep(.01)
+        self.assertFalse(w.document.dirty)
+        self.assertEqual(sorted(x.name for x in Document.load(path).bodies),['A','B'])
 
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost

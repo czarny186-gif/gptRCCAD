@@ -1,13 +1,19 @@
-# RCCAD Desktop 0.5.12 — płynne Przesuń / Obróć otworów, obrót widoku bez blokady, okno Obiekty
+# RCCAD Desktop 0.5.13 — zapis w tle, gdy nie pracujesz
+
+- **Zapis w tle**: projekt, który ma już plik na dysku, po zmianie zapisuje się sam do swojego pliku - dopiero gdy przez ok. 4 s nie ruszasz myszą ani klawiaturą (zapis trwa ułamek sekundy i nie przeszkadza w pracy). Podczas trwającej operacji, przy niezatwierdzonej zmianie historii i w edycji kroku zapis czeka. Nowy projekt zapisujesz pierwszy raz sam (Zapisz) - od tego momentu działa zapis w tle.
+- **Naprawa autozapisu kopii** (co 2,5 min, nazwa.autosave.rccadx): program nie zapamiętywał, że kopia jest aktualna, i zapisywał ją za każdym razem od nowa.
+- **Przesuwanie folderu „Modół” w projekcie regulatora**: sprawdzone - przesunięcie 37 brył trwa ok. 1 s. Długie liczenie w wersji 0.5.11 i starszych było spowodowane rozpoznawaniem otworu pod kursorem w trybie Przesuń (do ok. 8 s na każde najechanie na obudowę) - naprawione w 0.5.12.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.12 — płynne Przesuń / Obróć otworów, obrót widoku bez blokady, okno Obiekty
 
 - **Przesuń / Obróć nie zawiesza się na złożonych bryłach**: w tym trybie program przy każdym najechaniu na nową ściankę sprawdza, czy to otwór. Przy otworach przechodzących do wnętrza (np. pudełko z otworami w ściankach) cała ściana wnętrza była brana za fazę otworu i sprawdzanie przechodziło przez setki ścianek - jedno najechanie trwało do 30-45 s, a pamięć wyników czyściła się co chwilę, więc liczyło się od nowa. Teraz: duża ściana z wieloma krawędziami nie jest uznawana za fazę, odrzucona ściana nie jest sprawdzana ponownie, topologia bryły i promienie są przygotowane raz, a grupa ścian otworu ma rozsądny limit. Przejazd kursorem po całym pudełku z płatkami, otworami, napisem i fasolkami: z ok. 300 s do ok. 6 s, a ponowny przejazd jest natychmiastowy.
 - **Otwór sprawdza się dopiero, gdy kursor się zatrzyma** (ok. 0,2 s) - przesuwanie kursora po bryle nie blokuje programu. Kliknięcie w otwór (także wycięty fasolką) zaznacza go od razu.
 - **Obrót widoku bez ograniczeń**: lewy przycisk myszy obraca widok dalej przez górę i dół (wcześniej zatrzymywał się po 180° na płaszczyźnie).
 - **Okno Obiekty**: przyciski Ukryj, Wyłącz i Usuń stoją tuż za nazwą z małym odstępem, który zależy od długości nazwy (dotyczy też nagłówków grup).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.11 — szybsze wybieranie wielu szkiców, poprawne wycinanie napisów
 

@@ -1,5 +1,6 @@
 """Zrzuty ekranu okna Studio (uruchamiane w CI, wynik trafia na gałąź ci-shots) — do porównania z wersją HTML."""
 import os, sys, time, traceback
+os.environ.setdefault('RCCAD_IDLE_SAVE', '0')        # bez samoczynnego zapisu projektów w testach
 from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QSurfaceFormat

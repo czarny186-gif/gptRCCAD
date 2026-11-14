@@ -225,7 +225,8 @@ TOPICS = [
         'Historia pamięta 999 kroków. Przy 950 krokach program ostrzega jeden raz; po przekroczeniu limitu najstarsze kroki są usuwane (też z komunikatem).',
         'Plik projektu (.rccadx) zawiera całą historię: geometria jest w jednej paczce, a opisy powtarzające się w wielu krokach są zapisane raz, więc nawet bardzo długie historie otwierają się poprawnie. Starsze pliki otwierają się jak dotąd.',
         'Plik → Zapisz kompaktowo… daje mniejszy plik: kroki, które program umie przeliczyć z przepisu (kołnierze, rozłożenie, przesunięcia…), zapisuje bez geometrii i odtwarza przy otwieraniu (otwarcie trwa wtedy chwilę dłużej). Co 10. krok i bieżący stan są zapisane w całości.',
-        'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu Plik → Otwórz autozapis.']),
+        'Autozapis co 2,5 minuty zapisuje kopię obok pliku projektu (nazwa.autosave.rccadx) - także przy otwartym narzędziu, np. Kołnierzu. Kopię otworzysz z menu Plik → Otwórz autozapis.',
+        'Zapis w tle: projekt, który ma już plik na dysku, po każdej zmianie zapisuje się sam do tego pliku - dopiero gdy przez ok. 4 sekundy nie ruszasz myszą ani klawiaturą, więc nie spowalnia pracy. Podczas trwającej operacji i przy niezatwierdzonej zmianie historii zapis czeka. Nowy projekt trzeba zapisać pierwszy raz samemu (Zapisz).']),
     ('one', 'Widok', 'Kostka i skróty', [
         'Bryła zaznacza się tylko kliknięciem lewym przyciskiem (ciepły niebieski kolor); ponowne kliknięcie odznacza. Wynik operacji nie zaznacza się sam.',
         'Widok jest domyślnie bez perspektywy (rzut równoległy) - bryły wyglądają jak na rysunku. Przycisk Perspektywa na dolnym pasku włącza widok z perspektywą (wybór zostaje zapamiętany).',
