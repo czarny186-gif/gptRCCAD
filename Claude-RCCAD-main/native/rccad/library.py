@@ -175,9 +175,10 @@ def load_bodies(kind, path):
     if suffix == '.svg':
         return [Body(f'{path.stem} {i + 1}' if i else path.stem, w, 'sketch', 'XY').prepared() for i, w in enumerate(kernel.svg_profiles(str(path), 'XY'))]
     from .colors import imported
+    from . import history as hist
     shapes = kernel.import_shapes(path)
-    return [b.prepared() for b in imported((Body(path.stem if i == 0 else f'{path.stem} {i + 1}', s, k)
-                                            for i, (s, k) in enumerate(shapes)), path.stem)]
+    return hist.prepared_many(imported((Body(path.stem if i == 0 else f'{path.stem} {i + 1}', s, k)
+                                        for i, (s, k) in enumerate(shapes)), path.stem), lenient=True)
 
 
 def export_item(kind, path, folder):

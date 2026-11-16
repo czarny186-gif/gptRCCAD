@@ -1133,12 +1133,89 @@ def mirror(shape, plane):
     return valid(shape.mirror(plane), bool(shape.Solids()))
 
 
+def instance_groups(shapes):
+    """Kształty pogrupowane według wspólnej geometrii (ta sama część w kilku miejscach - np. rezystor na płytce 38 razy):
+    [(indeks wzorca, [indeksy wystąpień])]. Wystąpienie różni się od wzorca tylko położeniem."""
+    groups = []
+    for i, shape in enumerate(shapes):
+        for model, members in groups:
+            if shape.wrapped.IsPartner(shapes[model].wrapped):
+                members.append(i)
+                break
+        else:
+            groups.append((i, [i]))
+    return groups
+
+
+def relative_matrix(shape, model):
+    """Macierz 3x4 przenosząca kształt-wzorzec (model) w położenie wystąpienia (shape) - obie mają wspólną geometrię."""
+    loc = shape.wrapped.Location().Multiplied(model.wrapped.Location().Inverted())
+    t = loc.Transformation()
+    return np.array([[t.Value(r, c) for c in range(1, 5)] for r in range(1, 4)], float)
+
+
+def placed_mesh(mesh, matrix):
+    """Siatka wzorca przeniesiona w położenie wystąpienia (bez ponownego siatkowania)."""
+    m = np.asarray(matrix, float)
+    rotation, shift = m[:3, :3], m[:3, 3]
+    vertices = (np.asarray(mesh.vertices, float) @ rotation.T + shift).astype(np.float32)
+    triangles = np.asarray(mesh.triangles)
+    if np.linalg.det(rotation) < 0 and len(triangles):
+        triangles = triangles[:, ::-1].copy()          # odbicie lustrzane odwraca kolejność wierzchołków trójkątów
+    edges = {key: (np.asarray(points, float) @ rotation.T + shift).astype(np.float32) for key, points in mesh.edges.items()}
+    center = tuple(np.asarray(mesh.center, float) @ rotation.T + shift)
+    return DisplayMesh(vertices, triangles, edges, center, mesh.size, mesh.fine, mesh.face_ids)
+
+
+def _step_parts(root):
+    """Bryły pliku STEP: każda część sprawdzana raz (wystąpienia tej samej części mają wspólną geometrię). Część uszkodzona
+    jest naprawiana, a gdy się nie da - zostaje taka, jak w pliku (widoczna), zamiast przerywać cały import."""
+    solids = root.Solids()
+    out = [None] * len(solids)
+    for model, members in instance_groups(solids):
+        rep = solids[model]
+        ok = False
+        try:
+            ok = not rep.wrapped.IsNull() and is_valid(rep) and rep.Volume() > 1e-8
+        except Exception:
+            ok = False
+        if not ok:
+            try:
+                fixed = rep.fix()
+                if is_valid(fixed) and fixed.Solids():
+                    rep_fixed = fixed
+                    for i in members:
+                        out[i] = rep_fixed if i == model else rep_fixed.moved(solids[i].wrapped.Location().Multiplied(rep.wrapped.Location().Inverted()))
+                    continue
+            except Exception:
+                pass
+        for i in members:
+            out[i] = solids[i]
+    return [s for s in out if s is not None and not s.wrapped.IsNull()]
+
+
+def _free_faces(root):
+    """Ściany pliku nienależące do żadnej bryły (modele powierzchniowe - np. obudowy elementów na płytce)."""
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
+    owners = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(root.wrapped, TopAbs_FACE, TopAbs_SOLID, owners)
+    return [cq.Face(owners.FindKey(i)) for i in range(1, owners.Extent() + 1) if owners.FindFromIndex(i).Size() == 0]
+
+
 def import_shapes(path):
     path = Path(path)
     try:
         if path.suffix.lower() in (".step", ".stp"):
             root = cq.importers.importStep(str(path)).val()
-            return [(valid(s), "solid") for s in root.Solids()]
+            out = [(s, "solid") for s in _step_parts(root)]
+            free = _free_faces(root)
+            if free:            # powierzchnie bez bryły - jeden obiekt do oglądania (jak STL)
+                out.append((cq.Compound.makeCompound(free), "mesh"))
+            if not out:
+                raise CadError("Plik STEP nie zawiera brył ani powierzchni.")
+            return out
         if path.suffix.lower() in (".brep", ".brp"):
             root = cq.importers.importBrep(str(path)).val()
             return [(valid(s), "solid") for s in root.Solids()]

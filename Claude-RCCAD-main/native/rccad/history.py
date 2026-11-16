@@ -1119,21 +1119,52 @@ def _boolean_changed(body, operation, tools):
     return body.changed(kernel.boolean(operation, body.shape, list(tools)))
 
 
-def prepared_many(bodies):
+def prepared_many(bodies, lenient=False):
     """Siatki wielu nowych obiektów naraz (np. szyk, wyciągnięcie wielu profili): w procesach liczących równolegle,
-    bez procesów - po kolei tutaj. W bloku deferred_mesh zostają bez siatek."""
+    bez procesów - po kolei tutaj. W bloku deferred_mesh zostają bez siatek. lenient=True (import plików): kształt, który
+    nie przechodzi sprawdzenia poprawności, dostaje siatkę tak jak jest (jest widoczny), zamiast przerywać całość."""
     bodies = list(bodies)
     if kernel.mesh_deferred() or not bodies:
         return bodies
     from . import workers
-    if len(bodies) >= 2 and workers.ready():
-        out = []
-        for b, (mesh, error) in zip(bodies, workers.mesh_many([(b.shape, b.kind == 'solid') for b in bodies])):
+    # ta sama część w wielu miejscach (np. import STEP płytki z elementami): siatka liczona raz, wystąpienia ją przesuwają
+    groups = kernel.instance_groups([b.shape for b in bodies]) if len(bodies) >= 8 else [(i, [i]) for i in range(len(bodies))]
+    models = [bodies[g[0]] for g in groups]
+    if len(models) >= 2 and workers.ready():
+        meshes = []
+        # import: duże części dostają najpierw zgrubną siatkę (od razu widać model), dokładną okno dolicza w tle
+        for b, (mesh, error) in zip(models, workers.mesh_many([(b.shape, b.kind == 'solid') for b in models], coarse=lenient)):
             if error is not None:
-                raise kernel.CadError(error)
-            out.append(replace(b, mesh=mesh))
-        return out
-    return [b.prepared() for b in bodies]
+                if not lenient:
+                    raise kernel.CadError(error)
+                mesh = _lenient_mesh(b.shape)
+            meshes.append(mesh)
+    else:
+        meshes = []
+        for b in models:
+            try:
+                meshes.append(b.prepared().mesh)
+            except Exception:
+                if not lenient:
+                    raise
+                meshes.append(_lenient_mesh(b.shape))
+    out = list(bodies)
+    for (model, members), mesh in zip(groups, meshes):
+        for i in members:
+            if mesh is None:
+                out[i] = None            # (tylko przy imporcie) kształtu nie da się nawet pokazać - pomijany
+            elif i == model:
+                out[i] = replace(bodies[i], mesh=mesh)
+            else:
+                out[i] = replace(bodies[i], mesh=kernel.placed_mesh(mesh, kernel.relative_matrix(bodies[i].shape, bodies[model].shape)))
+    return [b for b in out if b is not None]
+
+
+def _lenient_mesh(shape):
+    try:
+        return kernel.display_mesh(shape)
+    except Exception:
+        return None
 
 
 def _boxes_touch(box, other):

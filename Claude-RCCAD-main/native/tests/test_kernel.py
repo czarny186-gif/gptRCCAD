@@ -1,4 +1,6 @@
 import math
+import cadquery as cq
+import numpy as np
 from pathlib import Path
 import tempfile
 import unittest
@@ -302,6 +304,47 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(len(wires), 2)                       # kwadrat (z kopiami) i koło (z kopią)
         self.assertEqual(sorted(round(w.Length(), 2) for w in wires), [62.83, 160.0])
         self.assertTrue(all(w.IsClosed() for w in wires))
+
+    def test_step_assembly_with_repeated_parts_and_surfaces_imports(self):
+        """Złożenie STEP (jak płytka PCB z elementami): ta sama część w wielu miejscach, do tego sama powierzchnia bez bryły.
+        Import daje wszystkie wystąpienia, powierzchnie jako jeden obiekt, a siatka części liczy się raz."""
+        import tempfile, os
+        from rccad import history as hist
+        from rccad.document import Body
+        part = cq.Workplane().box(4, 2, 1).val()
+        assy = cq.Assembly()
+        for i in range(10):
+            assy.add(part, name=f'r{i}', loc=cq.Location(cq.Vector(i * 6, 0, 0), cq.Vector(0, 0, 1), 90 * (i % 2)))
+        assy.add(cq.Face.makePlane(20, 10, cq.Vector(30, 20, 0)), name='pow')
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'pcb.step')
+            assy.save(path)
+            shapes = k.import_shapes(path)
+        solids = [s for s, k in shapes if k == 'solid']
+        self.assertEqual(len(solids), 10)
+        self.assertEqual([k for _, k in shapes].count('mesh'), 1)
+        self.assertEqual(len(k.instance_groups(solids)), 1)
+        bodies = hist.prepared_many([Body(f'r{i}', s) for i, s in enumerate(solids)], lenient=True)
+        for b in bodies:                 # siatka przeniesiona z wzorca leży tam, gdzie bryła
+            box = b.shape.BoundingBox()
+            v = np.asarray(b.mesh.vertices)
+            self.assertTrue(np.allclose(v.min(0), [box.xmin, box.ymin, box.zmin], atol=1e-3))
+            self.assertTrue(np.allclose(v.max(0), [box.xmax, box.ymax, box.zmax], atol=1e-3))
+
+    def test_import_keeps_parts_whose_check_fails(self):
+        """Część, która nie przechodzi sprawdzenia poprawności, nie przerywa importu całego pliku."""
+        from unittest.mock import patch
+        from rccad import history as hist, workers
+        from rccad.document import Body
+        bodies = [Body(f'b{i}', cq.Workplane().box(1 + i, 1, 1).val()) for i in range(3)]
+        def broken(items, tolerance=.12, coarse=False):
+            return [(None, 'Nie udało się utworzyć poprawnej geometrii.')] * len(items)
+        with patch.object(workers, 'mesh_many', broken), patch.object(workers, 'ready', return_value=True):
+            with self.assertRaises(k.CadError):
+                hist.prepared_many(bodies)
+            out = hist.prepared_many(bodies, lenient=True)
+        self.assertEqual(len(out), 3)
+        self.assertTrue(all(b.mesh is not None for b in out))
 
     def test_dxf_sketch_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:

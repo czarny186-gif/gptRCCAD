@@ -10085,7 +10085,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             shapes = kernel.import_shapes(path)
             # wiele elementów pliku - razem w jednym folderze na liście obiektów, bryły w różnych kolorach
             return hist.prepared_many(imported((Body(Path(path).stem if i == 0 else f'{Path(path).stem} {i + 1}', s, kind)
-                                                for i, (s, kind) in enumerate(shapes)), Path(path).stem))
+                                                for i, (s, kind) in enumerate(shapes)), Path(path).stem), lenient=True)
 
         def add(bodies):
             if not bodies:
