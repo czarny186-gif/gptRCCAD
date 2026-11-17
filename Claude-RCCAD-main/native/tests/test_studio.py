@@ -2243,6 +2243,26 @@ class StudioTests(unittest.TestCase):
             bodies=hist.run_recipe(list(w.document.bodies),recipe)
         self.assertAlmostEqual(next(b for b in bodies if b.id==a.id).shape.BoundingBox().zmax,2,4)
 
+    def test_mirror_stl_reflects_mesh_across_picked_face(self):
+        """Odbicie lustrzane siatki STL: odbija się względem wskazanej ściany (wcześniej powstawała kopia w tym samym miejscu)."""
+        w=self.w
+        m=self._stl_body(cq.Workplane().box(10,6,4).translate((5,0,0)).val())      # x 0..10
+        w.document.commit([m]);w.refresh()
+        w.toggle_mode('mirror')
+        with patch.object(w,'pick_object',return_value=m.id):w.pick_mirror(5,5)
+        with patch.object(w.view,'pick_face',return_value=(m.id,np.array((1.0,0,0)),np.array((10.0,0,0)))):w.pick_mirror(5,5)
+        self.assertIsNotNone(w.mirror_frame)
+        w.update_mirror_preview();self.assertTrue(w.view.preview_items)
+        w.mir_keep.setChecked(True)
+        w.apply_mirror();self.wait()
+        meshes=[b for b in w.document.bodies if b.kind=='mesh']
+        self.assertEqual(len(meshes),2)
+        copy=next(b for b in meshes if b.id!=m.id)
+        bb=k.bounds(copy.shape)
+        self.assertAlmostEqual(bb.xmin,10,4);self.assertAlmostEqual(bb.xmax,20,4)        # po drugiej stronie ściany x=10
+        self.assertAlmostEqual(float(copy.mesh.vertices[:,0].min()),10,3)
+        self.assertAlmostEqual(k.bounds(w.document.get(m.id).shape).xmin,0,4)          # wzorzec bez zmian
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""

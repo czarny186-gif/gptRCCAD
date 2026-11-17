@@ -414,6 +414,12 @@ def mirror_plane(shape, normal, origin):
     if length < 1e-9:
         raise CadError("Nieprawidłowa płaszczyzna odbicia.")
     n /= length
+    if is_triangle_mesh(shape):        # siatka STL: odbite trójkąty (odwrócona kolejność wierzchołków - ściany dalej na zewnątrz)
+        from .meshbool import triangles_shape
+        vertices, tris = _stl_arrays(shape)
+        o = np.asarray(origin, float)
+        mirrored = vertices - 2.0 * ((vertices - o) @ n)[:, None] * n
+        return triangles_shape(mirrored, tris[:, ::-1])
     return valid(shape.mirror(tuple(float(x) for x in n), tuple(float(x) for x in origin)), bool(shape.Solids()))
 
 

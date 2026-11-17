@@ -1,12 +1,17 @@
-# RCCAD Desktop 0.5.20 — Różnica z STL, Połącz z siatkami, szybkie Dopasowanie i Wyrównanie
+# RCCAD Desktop 0.5.21 — odbicie lustrzane siatek STL
 
-- **Boolean → Różnica z STL** (nowa operacja): z bryły wycina się kształt siatki STL - ta część siatki, która wchodzi w bryłę. Tylko w tę stronę (siatka nie jest bryłą matematyczną, więc nie może być bazą). Opcja „Zachowaj siatkę STL” zostawia siatkę na polu roboczym. Siatka jest zamieniana w zamkniętą objętość (zamknięte części siatki - np. elementy złożenia - osobno, potem razem; otwarte części są pomijane z informacją) i przycinana do obszaru bryły. Gdy ten kawałek jest prosty (do 1500 płaskich ścian - np. kołek, wspornik, wydruk), staje się bryłą z płaskich ścian i wynik zostaje zwykłą bryłą. Gdy jest bardzo złożony (np. cała płytka z elementami), odejmowanie liczy się na siatkach (ok. 2 s, kolejne razy ok. 0,3 s) i wynik jest siatką - program o tym informuje. Podgląd wyniku przed zatwierdzeniem.
-- **Połącz** (Edycja) działa z siatkami STL: bryły zwykłe, ze STEP i siatki STL można połączyć nietrwale - zaznaczają się i przesuwają razem, a Rozłącz je rozdziela.
-- **Dopasowanie i Wyrównanie wielokrotnie szybsze**: podgląd i zatwierdzenie wysyłały całą bryłę do procesu liczącego, kopiowały ją i sprawdzały od nowa. Teraz liczona jest tylko macierz położenia: podgląd pokazuje gotową siatkę w nowym miejscu (natychmiast), a zatwierdzenie zmienia tylko położenie bryły (bez kopiowania geometrii i bez liczenia siatki od nowa).
+- **Odbicie lustrzane STL**: siatka odbija się względem wskazanej ściany (także ścianki innej siatki STL) - wcześniej powstawała tylko kopia w tym samym miejscu, bo siatka trafiała do procesu liczącego bez swoich trójkątów. Teraz trójkąty są odbijane bezpośrednio (300 tys. trójkątów ok. 0,5 s), ścianki zostają skierowane na zewnątrz, a podgląd pokazuje odbitą siatkę od razu. Opcja „Zachowaj oryginał” zostawia wzorzec.
+- Zawiera zmiany z 0.5.20: Boolean → Różnica z STL, Połącz z siatkami STL, szybkie Dopasowanie i Wyrównanie.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.20 — Różnica z STL, Połącz z siatkami, szybkie Dopasowanie i Wyrównanie
+
+- **Boolean → Różnica z STL** (nowa operacja): z bryły wycina się kształt siatki STL - ta część siatki, która wchodzi w bryłę. Tylko w tę stronę (siatka nie jest bryłą matematyczną, więc nie może być bazą). Opcja „Zachowaj siatkę STL” zostawia siatkę na polu roboczym. Siatka jest zamieniana w zamkniętą objętość (zamknięte części siatki - np. elementy złożenia - osobno, potem razem; otwarte części są pomijane z informacją) i przycinana do obszaru bryły. Gdy ten kawałek jest prosty (do 1500 płaskich ścian - np. kołek, wspornik, wydruk), staje się bryłą z płaskich ścian i wynik zostaje zwykłą bryłą. Gdy jest bardzo złożony (np. cała płytka z elementami), odejmowanie liczy się na siatkach (ok. 2 s, kolejne razy ok. 0,3 s) i wynik jest siatką - program o tym informuje. Podgląd wyniku przed zatwierdzeniem.
+- **Połącz** (Edycja) działa z siatkami STL: bryły zwykłe, ze STEP i siatki STL można połączyć nietrwale - zaznaczają się i przesuwają razem, a Rozłącz je rozdziela.
+- **Dopasowanie i Wyrównanie wielokrotnie szybsze**: podgląd i zatwierdzenie wysyłały całą bryłę do procesu liczącego, kopiowały ją i sprawdzały od nowa. Teraz liczona jest tylko macierz położenia: podgląd pokazuje gotową siatkę w nowym miejscu (natychmiast), a zatwierdzenie zmienia tylko położenie bryły (bez kopiowania geometrii i bez liczenia siatki od nowa).
 
 ### 0.5.19 — ścianki siatek STL: szkic, Dopasowanie, Wyrównanie, Kolor
 

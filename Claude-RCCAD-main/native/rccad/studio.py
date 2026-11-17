@@ -7284,7 +7284,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 self.toast('Kliknij bryłę lub element szkicu do odbicia.')
                 return
             self.mirror_id = bid
-            self._tint_targets(bid, ('solid', 'sketch'))
+            self._tint_targets(bid, ('solid', 'sketch', 'mesh'))
             self.update_mirror_status()
             return
         hit = self.view.pick_face(x, y)
@@ -7498,6 +7498,16 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         body = self.document.get(self.mirror_id)
         frame = self.mirror_frame
 
+        if body is not None and body.kind == 'mesh' and body.mesh is not None:
+            # siatka STL: podgląd to odbita gotowa siatka (natychmiast, bez procesów liczących)
+            n = np.asarray(frame[0], float)
+            n = n / max(np.linalg.norm(n), 1e-12)
+            o = np.asarray(frame[1], float)
+            reflect = np.eye(3) - 2.0 * np.outer(n, n)
+            matrix = np.column_stack([reflect, 2.0 * (o @ n) * n])
+            self.view.set_preview_mesh(kernel.placed_mesh(body.mesh, matrix), color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
+            return
+
         def compute():
             return hist.background(hist.mesh_of, kernel.mirror_plane, (body.shape, *frame), PREVIEW_TOL)
 
@@ -7518,14 +7528,16 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
 
         recipe = dict(type='mirror', id=body.id, normal=[float(c) for c in normal], origin=[float(c) for c in origin], keep=keep, join=join, out=uuid.uuid4().hex,
                       same_id=True)
-        targets = self._multi_targets(body.id, ('solid', 'sketch'))
-        if len(targets) > 1:          # kilka zaznaczonych: każdy odbity względem tej samej płaszczyzny
+        targets = self._multi_targets(body.id, ('solid', 'sketch', 'mesh'))
+        if len(targets) > 1 and not any(self.document.get(i).kind == 'mesh' for i in targets):    # kilka zaznaczonych: każdy odbity względem tej samej płaszczyzny
             steps = [dict(recipe, id=i, join=join and self.document.get(i).kind == 'solid', out=uuid.uuid4().hex) for i in targets]
             self._run_multi('Odbicie lustrzane', 'mirror', steps, [st['out'] if keep and not st['join'] else st['id'] for st in steps])
             return
         existing = list(self.document.bodies)
 
         def build():
+            if body.kind == 'mesh':           # siatka STL: odbicie trójkątów tutaj (procesy liczące nie dostają siatki)
+                return list(hist.run_mirror(existing, recipe))
             return list(hist.offloaded(hist.run_mirror, existing, recipe))
 
         def apply(new):
