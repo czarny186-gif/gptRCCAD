@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.5.18 — płynne przesuwanie dużych modeli STEP / STL, STL w Bibliotece, szybszy import
+# RCCAD Desktop 0.5.19 — ścianki siatek STL: szkic, Dopasowanie, Wyrównanie, Kolor
+
+- **Płaskie ścianki STL działają jak ściany bryły**: program rozpoznaje płaski obszar siatki pod kursorem (połączone trójkąty w jednej płaszczyźnie: normalna do 0,5°, odległość do 0,02% wielkości modelu) i buduje z jego obrysu prawdziwą płaską ścianę (z otworami). Na takiej ściance można postawić szkic (Szkic → kliknij ściankę), użyć Dopasowania i Wyrównania (Edycja) w obie strony - siatka do bryły i bryła do siatki - oraz wskazać ją jako płaszczyznę odbicia.
+- **Kolor**: siatki STL można kolorować tak jak bryły.
+- **Szybkość**: dane do wskazywania ścian liczą się raz na model (dla 300 tys. trójkątów ok. 0,4 s), potem wskazanie ścianki trwa zwykle kilka setnych sekundy, a ściana raz zbudowana jest zapamiętywana. Dopasowanie i Wyrównanie siatki tylko zmieniają jej położenie (trójkąty nie są kopiowane).
+- Ograniczenia siatki: ścianki zakrzywione (walce, zaokrąglenia) to w STL wiele małych płaskich trójkątów - wskazuje się wtedy pojedynczy płaski fragment. Operacje brył na samej siatce (wycięcie, zaokrąglenie, połączenie) nie są możliwe - do tego potrzebny jest model STEP.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.18 — płynne przesuwanie dużych modeli STEP / STL, STL w Bibliotece, szybszy import
 
 - **Przesuń / Obróć bez zacinania**: zatwierdzenie przesunięcia wysyłało cały model do procesu liczącego i z powrotem (dla STL z 300 tys. trójkątów odczyt wyniku trwał ok. 2,5 s), a potem liczyło siatkę każdej bryły od nowa. Teraz przesunięcie i obrót zmieniają tylko położenie kształtu (bez kopiowania geometrii), a gotowa siatka jest przesuwana: STL ok. 1 s zamiast 3 s, złożenie STEP z 810 częściami ok. 2 s.
 - **Przeciąganie złożeń w czasie rzeczywistym**: części z jednego folderu rysowane są razem (jedna paczka). Przy przeciąganiu paczka wypadała z rysowania i była rozbijana na setki osobnych elementów - obraz stał, a potem przeskakiwał. Teraz cała paczka przesuwa się jedną macierzą (np. 810 części = 2 elementy rysowania zamiast ok. 1600).
 - **STL do Biblioteki**: siatkę STL z pola roboczego można zapisać w Bibliotece obiektów (wcześniej przyjmowała tylko bryły) i wstawić z powrotem; eksport z Biblioteki zapisuje ją jako STL.
 - **Szybszy import**: STL ok. 2 razy szybciej (wspólne wierzchołki liczone sortowaniem liczb zamiast wierszy); STEP bez podwójnego sprawdzania części - poprawność sprawdzają równolegle procesy liczące, a uszkodzona część jest tam naprawiana (razem z wystąpieniami): złożenie E32R40T ok. 14 s zamiast 20 s na 2 rdzeniach (na komputerze z większą liczbą rdzeni szybciej).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.17 — szybki import dużych plików STL
 

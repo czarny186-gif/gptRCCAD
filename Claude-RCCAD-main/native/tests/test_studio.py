@@ -2136,6 +2136,52 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(len(back[0].mesh.triangles),len(mesh_body.mesh.triangles))
             self.assertEqual(library.export_item('object',path,Path(folder)/'eksport').suffix,'.stl')
 
+    def test_stl_faces_take_mate_align_sketch_and_color(self):
+        """Siatka STL: płaska zewnętrzna ścianka (trójkąty w jednej płaszczyźnie) działa jak ściana bryły - Dopasowanie,
+        Wyrównanie, szkic na ścianie i Kolor; wskazanie ściany jest szybkie."""
+        import tempfile, time as _t
+        from pathlib import Path
+        w=self.w
+        solid=cq.Workplane().box(30,20,10).faces('>Z').workplane().hole(6).val()          # płytka z otworem
+        with tempfile.TemporaryDirectory() as folder:
+            stl=Path(folder)/'p.stl';k.export_shapes([solid],stl)
+            mesh=Body('Siatka',k.read_stl(stl),'mesh').prepared()
+        block=Body('B',k.box(40,40,10).translate(cq.Vector(100,50,0))).prepared()
+        w.document.commit([mesh,block]);w.refresh()
+        start=_t.time();face,normal=k.face_at(mesh.shape,(0,0,1),(10,5,5))
+        self.assertLess(_t.time()-start,2.0)
+        self.assertAlmostEqual(face.Area(),30*20-math.pi*9,0)                   # górna ścianka z otworem (wielokąt z siatki)
+        self.assertEqual(len(face.Wires()),2);self.assertTrue(np.allclose(normal,(0,0,1)))
+        w.toggle_mode('mate')
+        self._mate_pick(mesh,(0,0,-1),(10,5,-5))                                 # spód siatki
+        self.assertEqual(w.mt_pick['moving']['id'],mesh.id)
+        self._mate_pick(block,(0,0,1),(120,70,10))                               # góra bryły B
+        w.apply_mate();self.wait()
+        moved=w.document.get(mesh.id)
+        bb=k.bounds(moved.shape)
+        self.assertAlmostEqual(bb.zmin,10,3);self.assertAlmostEqual((bb.xmin+bb.xmax)/2,120,3);self.assertAlmostEqual((bb.ymin+bb.ymax)/2,70,3)
+        self.assertEqual(moved.kind,'mesh');self.assertEqual(w.document.info['op']['type'],'mate')
+        self.assertAlmostEqual(float(moved.mesh.vertices[:,2].min()),10,3)          # siatka na ekranie razem z kształtem
+        # wyrównanie: góra siatki na wysokości góry bryły B (bez obrotu)
+        w.set_mode(None);w.toggle_mode('align')
+        self._mate_pick(moved,(0,0,1),(120,70,20))
+        self._mate_pick(block,(0,0,1),(110,60,10))
+        w.apply_mate();self.wait()
+        self.assertAlmostEqual(k.bounds(w.document.get(mesh.id).shape).zmax,10,3)
+        # szkic na ścianie siatki: płaszczyzna szkicu = górna ścianka
+        w.set_mode(None)
+        top=k.bounds(w.document.get(mesh.id).shape).zmax
+        hit=(mesh.id,np.array((0,0,1.0)),np.array((112,66,top)))
+        with patch.object(w.view,'pick_face',return_value=hit):
+            frame,face=w.pick_surface(5,5)
+        self.assertIsNotNone(frame)
+        self.assertAlmostEqual(float(np.asarray(frame.origin)[2]),top,3)
+        self.assertTrue(np.allclose(np.abs(np.asarray(frame.normal,float)),(0,0,1)))
+        # kolor siatki
+        w.set_mode(None);w.toggle_mode('color');w.co_current=(0.9,0.2,0.2)
+        with patch.object(w.view,'pick_body',return_value=mesh.id):w.pick_color(5,5)
+        self.assertIn(mesh.id,w.co_pending)
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""

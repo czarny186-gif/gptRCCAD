@@ -2357,6 +2357,8 @@ def run_tilt(bodies, recipe):
 def outward_normal(shape, face, normal=None):
     """Normalna płaskiej ściany skierowana na zewnątrz bryły."""
     n = _unit(normal if normal is not None else face.normalAt(face.Center()).toTuple())
+    if kernel.is_triangle_mesh(shape):
+        return n            # siatka STL: ściana zbudowana z trójkątów ma ich normalną (na zewnątrz modelu)
     c = np.array(face.Center().toTuple(), float)
     eps = 1e-3 * max(1.0, _scale(shape))
     try:
@@ -2419,6 +2421,8 @@ def apply_placement(shape, matrix):
         raise kernel.CadError('Nieprawidłowe przekształcenie bryły.')
     trsf = gp_Trsf()
     trsf.SetValues(*[float(R[i, j]) if j < 3 else float(M[i, 3]) for i in range(3) for j in range(4)])
+    if kernel.is_triangle_mesh(shape):
+        return shape.moved(cq.Location(trsf))       # siatka STL: zmiana położenia (trójkąty bez kopiowania)
     moved = cq.Shape.cast(BRepBuilderAPI_Transform(shape.wrapped, trsf, True).Shape())
     return kernel.valid(moved, bool(shape.Solids()))
 

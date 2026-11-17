@@ -1871,6 +1871,165 @@ def _face_index(shape):
     return faces,tree,size,low,high
 
 
+_MESH_TOPO = {}
+
+
+def _mesh_topology(shape):
+    """Trójkąty siatki STL w położeniu kształtu, ich normalne, płaszczyzny i sąsiedzi przez krawędź - liczone raz na kształt
+    (wskazywanie ścian siatki pyta o to przy każdym kliknięciu)."""
+    hit = _MESH_TOPO.get(id(shape))
+    if hit is not None and hit[0] is shape:
+        return hit[1]
+    vertices, tris = _stl_arrays(shape)
+    a, b, c = vertices[tris[:, 0]], vertices[tris[:, 1]], vertices[tris[:, 2]]
+    normals = np.cross(b - a, c - a)
+    area2 = np.linalg.norm(normals, axis=1)
+    normals = normals / np.maximum(area2, 1e-18)[:, None]
+    count = len(tris)
+    pairs = np.sort(np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]), axis=1)
+    owner = np.tile(np.arange(count), 3)
+    slot = np.repeat(np.arange(3), count)
+    order = np.lexsort((pairs[:, 1], pairs[:, 0]))
+    ps, ow, sl = pairs[order], owner[order], slot[order]
+    same = np.zeros(len(ps), bool)
+    same[1:] = (ps[1:] == ps[:-1]).all(axis=1)
+    neighbours = np.full((count, 3), -1, np.int64)
+    k = np.flatnonzero(same)                    # krawędź wspólna dwóch kolejnych trójkątów (rozmaitość)
+    k = k[(k + 1 >= len(ps)) | ~np.r_[same[1:], False][k]]
+    k = k[~same[k - 1]] if len(k) else k        # dokładnie dwa trójkąty na krawędzi
+    neighbours[ow[k], sl[k]] = ow[k - 1]
+    neighbours[ow[k - 1], sl[k - 1]] = ow[k]
+    topo = dict(vertices=vertices, tris=tris, normals=normals, area2=area2, offsets=(normals * a).sum(axis=1),
+                neighbours=neighbours, size=float(np.ptp(vertices, axis=0).max()) if len(vertices) else 1.0)
+    if len(_MESH_TOPO) > 6:
+        _MESH_TOPO.clear()
+    _MESH_TOPO[id(shape)] = (shape, topo)
+    return topo
+
+
+def mesh_region(shape, normal, point):
+    """Płaski obszar siatki STL pod wskazanym punktem: trójkąt w punkcie i wszystkie połączone z nim trójkąty leżące w tej
+    samej płaszczyźnie (normalna do 0,5°, odległość do 0,02% wielkości modelu). Zwraca (indeksy trójkątów, normalna)."""
+    topo = _mesh_topology(shape)
+    v, tris, normals = topo['vertices'], topo['tris'], topo['normals']
+    p = np.asarray(point, float)
+    n = np.asarray(normal, float)
+    n = n / max(np.linalg.norm(n), 1e-12)
+    tol = max(1e-4, 2e-4 * topo['size'])
+    a = v[tris[:, 0]]
+    dist = np.abs((normals * (p - a)).sum(axis=1))
+    near = np.flatnonzero((dist < tol * 5) & (np.abs(normals @ n) > .95) & (topo['area2'] > 0))
+    if not len(near):
+        raise CadError("Wskazana ściana nie jest płaska.")
+    e1, e2 = v[tris[near, 1]] - a[near], v[tris[near, 2]] - a[near]
+    w = p - a[near]
+    d00, d01, d11 = (e1 * e1).sum(1), (e1 * e2).sum(1), (e2 * e2).sum(1)
+    d20, d21 = (w * e1).sum(1), (w * e2).sum(1)
+    den = np.maximum(d00 * d11 - d01 * d01, 1e-30)
+    bv, bw = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
+    slack = 1e-6
+    inside = (bv >= -slack) & (bw >= -slack) & (bv + bw <= 1 + slack)
+    candidates = near[inside] if inside.any() else near[np.argsort(dist[near])[:1]]
+    seed = int(candidates[np.argmin(dist[candidates])])
+    n0, d0 = normals[seed], topo['offsets'][seed]
+    cos_tol = math.cos(math.radians(.5))
+    flat = (normals @ n0 > cos_tol) & (np.abs((normals * v[tris[:, 0]]).sum(1) - d0) < tol)
+    seen = np.zeros(len(tris), bool)
+    seen[seed] = True
+    frontier = np.array([seed])
+    nb = topo['neighbours']
+    while len(frontier):
+        cand = nb[frontier].ravel()
+        cand = cand[cand >= 0]
+        cand = cand[~seen[cand] & flat[cand]]
+        cand = np.unique(cand)
+        seen[cand] = True
+        frontier = cand
+    region = np.flatnonzero(seen)
+    return region, n0
+
+
+def _region_face(shape, region, normal):
+    """Płaska ściana (prawdziwa, OpenCascade) o obrysie obszaru siatki: krawędzie brzegu obszaru połączone w obwody, punkty
+    leżące na prostej pominięte; obwody wewnętrzne to otwory."""
+    topo = _mesh_topology(shape)
+    v, tris = topo['vertices'], topo['tris'][region]
+    edges = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+    key = np.sort(edges, axis=1)
+    _, inverse, counts = np.unique(key[:, 0] * (len(v) + 1) + key[:, 1], return_inverse=True, return_counts=True)
+    border = edges[counts[inverse] == 1]         # krawędź brzegu: tylko w jednym trójkącie obszaru (kierunek zgodny z trójkątem)
+    if not len(border):
+        raise CadError("Nie udało się wyznaczyć obrysu ściany.")
+    nxt = {}
+    for p, q in border.tolist():
+        nxt.setdefault(p, []).append(q)
+    loops, used = [], set()
+    for start in list(nxt):
+        for first in list(nxt[start]):
+            if (start, first) in used:
+                continue
+            loop, cur, prev = [start], first, start
+            used.add((start, first))
+            guard = 0
+            while cur != start and guard < len(border) + 2:
+                loop.append(cur)
+                options = [q for q in nxt.get(cur, []) if (cur, q) not in used]
+                if not options:
+                    break
+                prev, cur = cur, options[0]
+                used.add((prev, cur))
+                guard += 1
+            if cur == start and len(loop) >= 3:
+                loops.append(loop)
+    if not loops:
+        raise CadError("Nie udało się wyznaczyć obrysu ściany.")
+    n = np.asarray(normal, float)
+    x = np.cross(n, [0, 0, 1.0] if abs(n[2]) < .9 else [1.0, 0, 0])
+    x /= np.linalg.norm(x)
+    y = np.cross(n, x)
+
+    def simplify(points):
+        pts = np.asarray(points, float)
+        keep = []
+        for i in range(len(pts)):
+            a, b, c = pts[i - 1], pts[i], pts[(i + 1) % len(pts)]
+            if np.linalg.norm(np.cross(b - a, c - b)) > 1e-9 * max(1.0, np.linalg.norm(c - a) ** 2):
+                keep.append(b)
+        return np.asarray(keep if len(keep) >= 3 else pts)
+
+    shaped = []
+    for loop in loops:
+        pts = simplify(v[loop])
+        uv = np.stack([pts @ x, pts @ y], axis=1)
+        area = 0.5 * float(np.sum(uv[:, 0] * np.roll(uv[:, 1], -1) - np.roll(uv[:, 0], -1) * uv[:, 1]))
+        shaped.append((abs(area), pts))
+    shaped.sort(key=lambda t: -t[0])
+    wires = [cq.Wire.makePolygon([cq.Vector(*map(float, p)) for p in pts], close=True) for _, pts in shaped]
+    face = cq.Face.makeFromWires(wires[0], wires[1:])
+    if not face.isValid():
+        face = cq.Face.makeFromWires(wires[0])
+    if float(np.asarray(face.normalAt().toTuple()) @ n) < 0:
+        face = cq.Face(face.wrapped.Reversed())
+    return face
+
+
+_REGION_FACES = {}
+
+
+def mesh_face_at(shape, normal, point):
+    """(ściana, normalna) płaskiego obszaru siatki STL pod punktem - zbudowana raz na obszar."""
+    region, n0 = mesh_region(shape, normal, point)
+    key = (id(shape), int(region.min()), len(region))
+    hit = _REGION_FACES.get(key)
+    if hit is not None and hit[0] is shape:
+        return hit[1], hit[2]
+    face = _region_face(shape, region, n0)
+    if len(_REGION_FACES) > 64:
+        _REGION_FACES.clear()
+    _REGION_FACES[key] = (shape, face, np.asarray(n0, float))
+    return face, np.asarray(n0, float)
+
+
 def face_at(shape, normal, point, tol=1e-3, curved=False, face_hint=None):
     """Resolve an original CAD face using cached bounds and an optional display triangle hint.
 
@@ -1878,6 +2037,8 @@ def face_at(shape, normal, point, tol=1e-3, curved=False, face_hint=None):
     back to the original distance/normal tie breaking among nearby faces.
     """
     n=np.asarray(normal,dtype=float);n=n/np.linalg.norm(n)
+    if is_triangle_mesh(shape):           # siatka STL: płaski obszar trójkątów jako ściana
+        return mesh_face_at(shape,n,point)
     vertex=cq.Vertex.makeVertex(*[float(x) for x in point]);pv=cq.Vector(*[float(x) for x in point])
     faces,tree,size,_,_=_face_index(shape)
     if face_hint is not None and 0<=face_hint<len(faces):

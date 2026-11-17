@@ -2266,7 +2266,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                     pass
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
-        if body is not None and body.kind == 'solid':
+        if body is not None and body.kind in ('solid', 'mesh'):
             self._surface_hover_point = hit[2]
             try:
                 face, normal = self.view.face_at(body,hit, curved=True)
@@ -3590,7 +3590,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         face = None
-        if body is not None and body.kind == 'solid':
+        if body is not None and body.kind in ('solid', 'mesh'):
             try:
                 face, _ = self.view.face_at(body,hit, curved=True)
             except kernel.CadError:
@@ -7236,7 +7236,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             return
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
-        if body is None or body.kind != 'solid':
+        if body is None or body.kind not in ('solid', 'mesh'):
             self.toast('Kliknij ścianę, względem której ma nastąpić odbicie.')
             return
         try:
@@ -7323,7 +7323,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         zmienia jej ścianę, kliknięcie ściany innej bryły - ścianę docelową."""
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
-        if body is None or body.kind != 'solid':
+        if body is None or body.kind not in ('solid', 'mesh'):
             self.toast('Kliknij płaską ścianę bryły.')
             return
         try:

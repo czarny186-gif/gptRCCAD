@@ -198,12 +198,12 @@ class ColorTools:
             return
         bid = self.view.pick_body(x, y)
         body = self.document.get(bid) if bid else None
-        if body is None or body.kind != 'solid':
+        if body is None or body.kind not in ('solid', 'mesh'):        # bryły i siatki STL
             self.toast('Kliknij bryłę.')
             return
         for i in self._group_ids(body.id):        # szyk „jako jeden element” - cały razem
             b = self.document.get(i)
-            if b is not None and b.kind == 'solid':
+            if b is not None and b.kind in ('solid', 'mesh'):
                 self.co_pending[i] = self.co_current
         self._co_refresh()
 
