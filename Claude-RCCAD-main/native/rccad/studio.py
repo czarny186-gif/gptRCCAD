@@ -8744,7 +8744,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             existing = list(self.document.states()[j - 1][0])
 
         def build():
-            return hist.offloaded(hist.run_transform, existing, recipe)
+            return hist.run_transform(existing, recipe)      # zmiana położenia i przesunięcie siatek - bez procesów liczących
 
         def apply(bodies):
             self.view.clear_body_matrices()
@@ -10145,7 +10145,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                                 f'Kliknij obiekt, aby od razu go zapisać. Kilka naraz: zaznacz je (albo całą grupę) na liście Obiekty '
                                 f'albo klikaj z Shift, potem Zapisz.')
         self.lib_save.setEnabled(n > 0)
-        self.view.tints = {i: TINT_BASE for i in action['ids'] if (b := self.document.get(i)) is not None and b.kind == 'solid'}
+        self.view.tints = {i: TINT_BASE for i in action['ids'] if (b := self.document.get(i)) is not None and b.kind in ('solid', 'mesh')}
         self.lib_panel.adjustSize()
         self.lib_panel.move(18, 88 + TOOLS_TOP - 18)
         self.lib_panel.show()
@@ -10155,10 +10155,10 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
     def library_pick_add(self, ids):
         """Wybór do biblioteki: obiekty (także cała grupa) dochodzą do listy; ponownie - odchodzą."""
         action = self._lib_action
-        want = 'solid' if action['dialog'].kind == 'object' else 'sketch'
-        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == want]
+        want = ('solid', 'mesh') if action['dialog'].kind == 'object' else ('sketch',)       # obiekty: bryły i siatki STL
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind in want]
         if not ids:
-            self.toast('Ta pozycja nie zawiera ' + ('brył.' if want == 'solid' else 'szkiców.'))
+            self.toast('Ta pozycja nie zawiera ' + ('brył.' if 'solid' in want else 'szkiców.'))
             return
         if all(i in action['ids'] for i in ids):
             action['ids'] = [i for i in action['ids'] if i not in ids]
@@ -10301,9 +10301,9 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         if action['kind'] == 'pick':
             bid = self.pick_object(x, y)
             body = self.document.get(bid) if bid else None
-            want = 'solid' if dialog.kind == 'object' else 'sketch'
-            if body is None or body.kind != want:
-                self.toast('Kliknij ' + ('bryłę.' if want == 'solid' else 'szkic.') + ' (prawy przycisk albo Esc - anuluj)', 3000)
+            want = ('solid', 'mesh') if dialog.kind == 'object' else ('sketch',)        # obiekty: bryły i siatki STL
+            if body is None or body.kind not in want:
+                self.toast('Kliknij ' + ('bryłę.' if 'solid' in want else 'szkic.') + ' (prawy przycisk albo Esc - anuluj)', 3000)
                 return
             if shift or action['ids']:          # kilka obiektów: kliknięty dochodzi do listy, Zapisz zapisuje wszystkie
                 self.library_pick_add(self._group_ids(bid))

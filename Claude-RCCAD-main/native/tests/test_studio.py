@@ -2087,6 +2087,55 @@ class StudioTests(unittest.TestCase):
             while doc.warm_meshes(24) and n<10:n+=1
         self.assertLessEqual(n,2);self.assertEqual(sum(calls),len({id(b.shape) for s,_ in doc.states() for b in s if b.mesh is None}))
 
+    def test_moving_many_parts_moves_their_draw_batch_with_one_matrix(self):
+        """Przesuwanie złożenia (np. STEP z setkami części w jednym folderze): paczka rysowania przesuwa się w całości jedną
+        macierzą - wcześniej części wypadały z paczki i obraz najpierw stał, a potem przeskakiwał (setki osobnych elementów)."""
+        from PySide6.QtGui import QMatrix4x4
+        w=self.w
+        part=cq.Workplane().box(2,2,2).val()
+        bodies=[Body(f'p{i}',part.moved(cq.Location(cq.Vector(i*3,0,0))),folder='Złożenie').prepared() for i in range(30)]
+        w.document.commit(bodies);w.refresh()
+        v=w.view
+        self.assertTrue(any(len(sig)==30 for sig,*_ in v._solid_batches.values()))
+        m=QMatrix4x4();m.translate(10,0,0)
+        before=len(v.items)
+        v.set_body_matrices({b.id:m for b in bodies})
+        moving=[(k,it) for k,(sig,*it) in v._solid_batches.items() if isinstance(k,tuple) and k[0]=='moving']
+        self.assertEqual(len(moving),1)
+        self.assertAlmostEqual(moving[0][1][0].transform().data()[12],10.0,6)
+        self.assertLessEqual(len(v.items),before+2)               # bez setek osobnych elementów
+        m2=QMatrix4x4();m2.translate(20,0,0)
+        batch=moving[0][1][0]
+        v.set_body_matrices({b.id:m2 for b in bodies})            # kolejna klatka: ta sama paczka, nowa macierz
+        self.assertIs([it for k,(sig,*it) in v._solid_batches.items() if k[0]=='moving'][0][0],batch)
+        self.assertAlmostEqual(batch.transform().data()[12],20.0,6)
+        v.clear_body_matrices()
+        self.assertFalse(any(isinstance(k,tuple) and k[0]=='moving' for k in v._solid_batches))
+
+    def test_move_keeps_mesh_without_remeshing_and_stl_goes_to_library(self):
+        """Przesunięcie zmienia tylko położenie kształtu i przesuwa gotową siatkę (bez liczenia od nowa); siatka STL
+        z pola roboczego zapisuje się w Bibliotece i wstawia z powrotem."""
+        import tempfile
+        from pathlib import Path
+        from rccad import library
+        w=self.w
+        solid=cq.Workplane().box(30,20,5).faces('>Z').workplane().hole(6).val()
+        with tempfile.TemporaryDirectory() as folder:
+            stl=Path(folder)/'p.stl';k.export_shapes([solid],stl)
+            mesh_body=Body('p',k.read_stl(stl),'mesh').prepared()
+            w.document.commit([mesh_body]);w.refresh()
+            import rccad.document as rdoc
+            with patch.object(k,'display_mesh',side_effect=AssertionError('liczenie siatki od nowa')),patch.object(rdoc,'_mesh',side_effect=AssertionError('liczenie siatki od nowa')):
+                out=hist.run_transform(list(w.document.bodies),dict(type='transform',id=mesh_body.id,mode='move',v=[15,0,0]))
+            moved=next(b for b in out if b.id==mesh_body.id)
+            self.assertAlmostEqual(float(moved.mesh.vertices[:,0].min()),float(mesh_body.mesh.vertices[:,0].min())+15,4)
+            self.assertAlmostEqual(k.bounds(moved.shape).xmin,k.bounds(mesh_body.shape).xmin+15,4)
+            path=library.save_bodies([moved],Path(folder),'p')
+            back=library.load_bodies('object',path)
+            self.assertEqual([b.kind for b in back],['mesh'])
+            self.assertEqual(len(back[0].mesh.triangles),len(mesh_body.mesh.triangles))
+            self.assertEqual(library.export_item('object',path,Path(folder)/'eksport').suffix,'.stl')
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""

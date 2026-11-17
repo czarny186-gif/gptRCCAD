@@ -198,6 +198,8 @@ def export_item(kind, path, folder):
         return target
     bodies = load_bodies(kind, path)
     suffix = '.step' if kind == 'object' else '.dxf'
+    if kind == 'object' and bodies and all(kernel.is_triangle_mesh(b.shape) for b in bodies):
+        suffix = '.stl'             # siatka z pliku STL wraca do STL (STEP wymaga powierzchni bryły)
     target = unique(folder, path.stem, suffix)
     folder.mkdir(parents=True, exist_ok=True)
     kernel.export_shapes([b.shape for b in bodies], target)

@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.5.17 — szybki import dużych plików STL
+# RCCAD Desktop 0.5.18 — płynne przesuwanie dużych modeli STEP / STL, STL w Bibliotece, szybszy import
+
+- **Przesuń / Obróć bez zacinania**: zatwierdzenie przesunięcia wysyłało cały model do procesu liczącego i z powrotem (dla STL z 300 tys. trójkątów odczyt wyniku trwał ok. 2,5 s), a potem liczyło siatkę każdej bryły od nowa. Teraz przesunięcie i obrót zmieniają tylko położenie kształtu (bez kopiowania geometrii), a gotowa siatka jest przesuwana: STL ok. 1 s zamiast 3 s, złożenie STEP z 810 częściami ok. 2 s.
+- **Przeciąganie złożeń w czasie rzeczywistym**: części z jednego folderu rysowane są razem (jedna paczka). Przy przeciąganiu paczka wypadała z rysowania i była rozbijana na setki osobnych elementów - obraz stał, a potem przeskakiwał. Teraz cała paczka przesuwa się jedną macierzą (np. 810 części = 2 elementy rysowania zamiast ok. 1600).
+- **STL do Biblioteki**: siatkę STL z pola roboczego można zapisać w Bibliotece obiektów (wcześniej przyjmowała tylko bryły) i wstawić z powrotem; eksport z Biblioteki zapisuje ją jako STL.
+- **Szybszy import**: STL ok. 2 razy szybciej (wspólne wierzchołki liczone sortowaniem liczb zamiast wierszy); STEP bez podwójnego sprawdzania części - poprawność sprawdzają równolegle procesy liczące, a uszkodzona część jest tam naprawiana (razem z wystąpieniami): złożenie E32R40T ok. 14 s zamiast 20 s na 2 rdzeniach (na komputerze z większą liczbą rdzeni szybciej).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.17 — szybki import dużych plików STL
 
 - **Import STL nie zawiesza programu**: wcześniej każdy trójkąt pliku STL zamieniał się w osobną ścianę bryły (plik esp32_stl ma 309 654 trójkąty), a potem całość była sprawdzana i siatkowana od nowa - program wisiał. Teraz STL wczytuje się jako jedna siatka prosto z pliku: ok. 2 s dla tego pliku.
 - **Wygląd**: gładkie obszary cieniowane gładko, ostre krawędzie (powyżej 30°) i brzegi rysowane liniami jak krawędzie bryły.
 - **Praca z siatką**: Przesuń i Obróć działają (trójkąty nie są kopiowane ani liczone od nowa), zapis projektu zachowuje siatkę (projekt z tym plikiem ma ok. 2,5 MB), eksport do STL działa. Zapis siatki do STEP / DXF pokazuje czytelny komunikat (te formaty wymagają powierzchni bryły).
 - W oknie Obiekty siatki STL mają własną grupę „Siatki STL” (wcześniej trafiały do Szkiców).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.16 — widok szczegółu (lupa) na rysunku technicznym
 

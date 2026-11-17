@@ -66,7 +66,7 @@ class Body:
             from .sheetedit import placed_state
             self = replace(self, meta=dict(self.meta, sheet=placed_state(self.meta['sheet'], matrix)))
             if not (self.meta.get('ply') or {}):
-                return replace(self, shape=shape, mesh=_mesh(shape))
+                return replace(self, shape=shape, mesh=self._placed_mesh(shape, matrix))
         ply_meta = (self.meta or {}).get('ply') or {} if self.kind == 'solid' else {}
         if ply_meta.get('fold') or (ply_meta.get('tab') or {}).get('unfold'):
             from .plywood import fold_placed        # płyta pamięta rozłożenie / złożenie także po przesunięciu
@@ -75,10 +75,17 @@ class Body:
                 ply['fold'] = fold_placed(ply['fold'], matrix)
             if (ply.get('tab') or {}).get('unfold'):
                 ply['tab'] = dict(ply['tab'], unfold=fold_placed(ply['tab']['unfold'], matrix))
-            return replace(self, shape=shape, mesh=_mesh(shape), meta=dict(self.meta, ply=ply))
+            return replace(self, shape=shape, mesh=self._placed_mesh(shape, matrix), meta=dict(self.meta, ply=ply))
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
-            return replace(self, shape=shape, mesh=_mesh(shape))      # ruch nie jest edycją blachy
-        return self.changed(shape)
+            return replace(self, shape=shape, mesh=self._placed_mesh(shape, matrix))      # ruch nie jest edycją blachy
+        return self.changed(shape, mesh=self._placed_mesh(shape, matrix))
+
+    def _placed_mesh(self, shape, matrix):
+        """Siatka po sztywnym ruchu: gotowa siatka przesunięta macierzą (bez liczenia od nowa)."""
+        if self.mesh is None:
+            return _mesh(shape)
+        from .kernel import placed_mesh
+        return placed_mesh(self.mesh, matrix)
 
     def changed(self, shape, mesh=False):
         """Ta sama bryła z nowym kształtem. mesh: gotowa siatka (np. policzona w procesie liczącym); domyślnie liczona tutaj."""

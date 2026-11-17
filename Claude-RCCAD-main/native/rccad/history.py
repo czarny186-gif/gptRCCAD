@@ -1134,21 +1134,21 @@ def prepared_many(bodies, lenient=False):
     if len(models) >= 2 and workers.ready() and not any(local):
         meshes = []
         # import: duże części dostają najpierw zgrubną siatkę (od razu widać model), dokładną okno dolicza w tle
-        for b, (mesh, error) in zip(models, workers.mesh_many([(b.shape, b.kind == 'solid') for b in models], coarse=lenient)):
+        for k, (b, (mesh, error)) in enumerate(zip(models, workers.mesh_many([(b.shape, b.kind == 'solid') for b in models], coarse=lenient))):
             if error is not None:
                 if not lenient:
                     raise kernel.CadError(error)
-                mesh = _lenient_mesh(b.shape)
+                mesh = _repair_model(bodies, groups[k], b)
             meshes.append(mesh)
     else:
         meshes = []
-        for b in models:
+        for k, b in enumerate(models):
             try:
                 meshes.append(b.prepared().mesh)
             except Exception:
                 if not lenient:
                     raise
-                meshes.append(_lenient_mesh(b.shape))
+                meshes.append(_repair_model(bodies, groups[k], b))
     out = list(bodies)
     for (model, members), mesh in zip(groups, meshes):
         for i in members:
@@ -1159,6 +1159,23 @@ def prepared_many(bodies, lenient=False):
             else:
                 out[i] = replace(bodies[i], mesh=kernel.placed_mesh(mesh, kernel.relative_matrix(bodies[i].shape, bodies[model].shape)))
     return [b for b in out if b is not None]
+
+
+def _repair_model(bodies, group, model):
+    """(import) Część, która nie przeszła sprawdzenia: naprawiona - razem ze wszystkimi wystąpieniami - albo pokazana tak,
+    jak jest w pliku. Zwraca siatkę wzorca."""
+    fixed = kernel.repaired(model.shape) if model.kind == 'solid' else None
+    if fixed is None:
+        return _lenient_mesh(model.shape)
+    first, members = group
+    base = bodies[first].shape
+    for i in members:
+        relative = bodies[i].shape.wrapped.Location().Multiplied(base.wrapped.Location().Inverted())
+        bodies[i] = replace(bodies[i], shape=fixed if i == first else fixed.moved(relative))
+    try:
+        return kernel.display_mesh(fixed)
+    except Exception:
+        return _lenient_mesh(fixed)
 
 
 def _lenient_mesh(shape):

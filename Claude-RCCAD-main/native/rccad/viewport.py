@@ -781,18 +781,27 @@ class CadView(gl.GLViewWidget):
         self.set_body_matrices({bid:matrix})
 
     def set_body_matrices(self,matrices):
-        """Update a whole selection, rebuilding sketch batches just once."""
+        """Update a whole selection, rebuilding sketch batches just once. Paczki rysowania (np. setki części złożenia STEP)
+        przesuwają się w całości jedną macierzą - przebudowa tylko wtedy, gdy zmienia się zbiór przesuwanych brył."""
         for bid,matrix in matrices.items():
             if matrix is None:self._body_m.pop(bid,None)
             else:self._body_m[bid]=QMatrix4x4(matrix)
             self._apply_body_matrix(bid)
+        self._resync_moving()
         self._scene_revision+=1;self._sync_sketch_batches();self.section_caps.update_section();self.update()
+
+    def _resync_moving(self):
+        if frozenset(self._body_m)!=getattr(self,'_moving_snapshot',frozenset()) and self.bodies:
+            self.set_models(self.bodies,self.selected_bodies,self.selected_edges)
+        else:
+            self._apply_batch_matrices()
 
     def clear_body_matrices(self):
         self._scene_revision+=1
         for bid in list(self._body_m):
             self._body_m.pop(bid)
             self._apply_body_matrix(bid)
+        self._resync_moving()
         self._sync_sketch_batches()
         self.section_caps.update_section()
         self.update()
@@ -809,13 +818,15 @@ class CadView(gl.GLViewWidget):
         if self.section_plane is None and not self.xray:
             for body in self.bodies:
                 key=body.group or body.folder
-                if (key and body.kind=='solid' and body.visible and body.mesh is not None
-                        and body.id not in self._body_m and not self.selected_edges.get(body.id)
+                if (key and body.kind in ('solid','mesh') and body.visible and body.mesh is not None
+                        and not self.selected_edges.get(body.id)
                         and body.id not in self.tints):
                     rgba=self.solid_rgba(body)          # bryły różnych kolorów w osobnych paczkach rysowania
                     batch_key=(key,'picked') if body.id in self.selected_bodies else (key if body.color is None else (key,'color',rgba))
+                    if body.id in self._body_m:          # przesuwane razem (Przesuń / Obróć): paczka z jedną macierzą
+                        batch_key=('moving',batch_key)
                     groups.setdefault(batch_key,[]).append(body)
-        groups={key:members for key,members in groups.items() if len(members)>=24}
+        groups={key:members for key,members in groups.items() if len(members)>=24 and self._same_matrix(members)}
         old=self._solid_batches
         fresh={}
         for key,members in groups.items():
@@ -844,7 +855,23 @@ class CadView(gl.GLViewWidget):
         for previous in old.values():
             for item in previous[1:]:self.removeItem(item)
         self._solid_batches=fresh
+        self._moving_snapshot=frozenset(self._body_m)
+        self._apply_batch_matrices()
         return {bid for signature,*_ in fresh.values() for bid,_ in signature}
+
+    def _same_matrix(self,members):
+        """Paczka rysowania przesuwanych brył ma jedną macierz - wszystkie muszą ruszać się tak samo."""
+        mats=[self._body_m.get(b.id) for b in members]
+        if all(m is None for m in mats):return True
+        if any(m is None for m in mats):return False
+        first=tuple(mats[0].data())
+        return all(tuple(m.data())==first for m in mats[1:])
+
+    def _apply_batch_matrices(self):
+        for key,(signature,*items) in self._solid_batches.items():
+            m=self._body_m.get(signature[0][0]) if isinstance(key,tuple) and key and key[0]=='moving' and signature else None
+            for item in items:
+                item.resetTransform() if m is None else item.setTransform(m)
 
     def solid_rgba(self, body):
         """Kolor wypełnienia bryły: własny, domyślny projektu albo jasnoszary programu (szkice bez zmian)."""

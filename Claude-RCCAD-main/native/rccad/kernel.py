@@ -976,19 +976,15 @@ def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
     """center: punkt obrotu (domyślnie środek bryły; grupa obraca się wokół wspólnego środka)."""
     if not all(isfinite(float(v)) for v in (*translation, *rotation)):
         raise CadError("Współrzędne muszą być skończonymi liczbami.")
-    if is_triangle_mesh(shape):     # siatka STL: przesunięcie położenia - trójkąty zostają bez kopiowania
-        m = transform_matrix(shape, translation, rotation, center)
-        from OCP.gp import gp_Trsf
-        t = gp_Trsf()
-        t.SetValues(*[float(x) for x in m.ravel()])
-        return shape.moved(cq.Location(t))
-    center = tuple(float(c) for c in center) if center is not None else shape.Center().toTuple()
-    result = shape
-    for axis, angle in zip(((1, 0, 0), (0, 1, 0), (0, 0, 1)), rotation):
-        if angle:
-            end = tuple(center[i] + axis[i] for i in range(3))
-            result = result.rotate(center, end, float(angle))
-    return valid(result.translate(tuple(float(v) for v in translation)), bool(shape.Solids()))
+    # sztywny ruch = zmiana położenia kształtu: bez kopiowania geometrii i bez ponownego sprawdzania (ruch nie psuje bryły) -
+    # przesunięcie dużego modelu (STEP z setkami części, STL z setkami tysięcy trójkątów) jest natychmiastowe
+    if shape is None or shape.wrapped.IsNull():
+        raise CadError("Nie udało się utworzyć poprawnej geometrii. Model pozostaje bez zmian.")
+    m = transform_matrix(shape, translation, rotation, center)
+    from OCP.gp import gp_Trsf
+    t = gp_Trsf()
+    t.SetValues(*[float(x) for x in m.ravel()])
+    return shape.moved(cq.Location(t))
 
 
 def transform_matrix(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
@@ -1181,30 +1177,20 @@ def placed_mesh(mesh, matrix):
 
 
 def _step_parts(root):
-    """Bryły pliku STEP: każda część sprawdzana raz (wystąpienia tej samej części mają wspólną geometrię). Część uszkodzona
-    jest naprawiana, a gdy się nie da - zostaje taka, jak w pliku (widoczna), zamiast przerywać cały import."""
-    solids = root.Solids()
-    out = [None] * len(solids)
-    for model, members in instance_groups(solids):
-        rep = solids[model]
-        ok = False
-        try:
-            ok = not rep.wrapped.IsNull() and is_valid(rep) and rep.Volume() > 1e-8
-        except Exception:
-            ok = False
-        if not ok:
-            try:
-                fixed = rep.fix()
-                if is_valid(fixed) and fixed.Solids():
-                    rep_fixed = fixed
-                    for i in members:
-                        out[i] = rep_fixed if i == model else rep_fixed.moved(solids[i].wrapped.Location().Multiplied(rep.wrapped.Location().Inverted()))
-                    continue
-            except Exception:
-                pass
-        for i in members:
-            out[i] = solids[i]
-    return [s for s in out if s is not None and not s.wrapped.IsNull()]
+    """Bryły pliku STEP. Poprawność części sprawdzają równolegle procesy liczące przy siatkowaniu (prepared_many z lenient=True);
+    tam też część uszkodzona jest naprawiana albo zostaje taka, jak w pliku - bez sprawdzania wszystkiego dwa razy po kolei."""
+    return [s for s in root.Solids() if not s.wrapped.IsNull()]
+
+
+def repaired(shape):
+    """Naprawiona część (np. uszkodzona w pliku STEP) albo None, gdy naprawa się nie uda."""
+    try:
+        fixed = shape.fix()
+        if is_valid(fixed) and fixed.Solids():
+            return fixed
+    except Exception:
+        pass
+    return None
 
 
 def _free_faces(root):
@@ -1385,12 +1371,7 @@ SHARP_STL = float(np.cos(np.radians(30.0)))     # kąt między trójkątami, od 
 def triangle_mesh_display(shape):
     """Siatka do wyświetlania kształtu-siatki (STL): trójkąty z pliku, wierzchołki wspólne w obrębie gładkich obszarów
     (gładkie cieniowanie), rozdzielone na ostrych krawędziach, które są też rysowane liniami - jak krawędzie bryły."""
-    fast = _fast_triangles(shape)
-    if fast is None:
-        raise CadError("Kształt nie ma siatki trójkątów.")
-    vertices, triangles, _ = fast
-    vertices = np.asarray(vertices, np.float64)
-    tris = np.asarray(triangles, np.int64)
+    vertices, tris = _stl_arrays(shape)
     count = len(tris)
     e1, e2 = vertices[tris[:, 1]] - vertices[tris[:, 0]], vertices[tris[:, 2]] - vertices[tris[:, 0]]
     normals = np.cross(e1, e2)
@@ -1423,15 +1404,48 @@ def triangle_mesh_display(shape):
         if np.array_equal(nxt, label):
             break
         label = nxt
-    corners = np.stack([np.repeat(label, 3), tris.ravel()], axis=1)
-    keys, inverse = np.unique(corners, axis=0, return_inverse=True)
-    out_vertices = vertices[keys[:, 1]].astype(np.float32)
+    corner = np.repeat(label, 3).astype(np.int64) * len(vertices) + tris.ravel()     # (obszar, wierzchołek) jako jedna liczba
+    keys, inverse = np.unique(corner, return_inverse=True)
+    out_vertices = vertices[keys % len(vertices)].astype(np.float32)
     out_tris = inverse.reshape(-1, 3).astype(np.uint32)
     edges = _chain_segments(vertices, sharp_edges)
     box = bounds(shape)
     center = ((box.xmin + box.xmax) / 2, (box.ymin + box.ymax) / 2, (box.zmin + box.zmax) / 2)
     size = max(box.xlen, box.ylen, box.zlen, 1.0)
     return DisplayMesh(out_vertices, out_tris, edges, center, size, True, np.zeros(count, np.int32))
+
+
+def _stl_arrays(shape):
+    """Wierzchołki (wspólne) i trójkąty siatki kształtu: zapis binarnego STL w C++ i odczyt jednym ruchem; wspólne wierzchołki
+    przez sortowanie współrzędnych (lexsort na liczbach całkowitych - szybciej niż unikalne wiersze)."""
+    import os, tempfile, uuid
+    from OCP.StlAPI import StlAPI_Writer
+    path = os.path.join(tempfile.gettempdir(), f'rccad-{os.getpid()}-{uuid.uuid4().hex}.stl')
+    try:
+        writer = StlAPI_Writer()
+        writer.ASCIIMode = False
+        if not writer.Write(shape.wrapped, path):
+            raise CadError("Kształt nie ma siatki trójkątów.")
+        data = np.fromfile(path, dtype=np.uint8)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    count = int(np.frombuffer(data[80:84].tobytes(), dtype='<u4')[0]) if len(data) >= 84 else 0
+    if not count or len(data) < 84 + 50 * count:
+        raise CadError("Kształt nie ma siatki trójkątów.")
+    record = np.dtype([('n', '<f4', 3), ('v', '<f4', (3, 3)), ('a', '<u2')])
+    points = np.frombuffer(data[84:84 + 50 * count].tobytes(), dtype=record)['v'].reshape(-1, 3)
+    bits = np.ascontiguousarray(points).view(np.int32)
+    order = np.lexsort((bits[:, 2], bits[:, 1], bits[:, 0]))
+    sorted_bits = bits[order]
+    new = np.ones(len(order), bool)
+    new[1:] = (sorted_bits[1:] != sorted_bits[:-1]).any(axis=1)
+    ids = np.empty(len(order), np.int64)
+    ids[order] = np.cumsum(new) - 1
+    vertices = points[order[new]].astype(np.float64)
+    return vertices, ids.reshape(-1, 3)
 
 
 def _chain_segments(vertices, segments, limit=400000):
