@@ -276,3 +276,76 @@ class DrawingTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DetailViewTests(unittest.TestCase):
+    """Widok szczegółu (lupa): zaznaczenie koła myszą na rzucie, litera przy kole i pod powiększeniem, skala kółkiem myszy,
+    przesuwanie, a wymiary i pomiary w szczególe pokazują prawdziwe mm bryły."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_detail_view_with_mouse_scale_move_and_true_dimensions(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from rccad.drawing_window import DrawingWindow
+        import time
+        shape = (cq.Workplane().box(120, 60, 10).faces('>Z').workplane().pushPoints([(-40, 0), (40, 10)]).hole(8)
+                 .faces('>Z').workplane().center(40, -15).rect(6, 3).cutThruAll()).val()
+        w = DrawingWindow(shape, 'Płytka')
+        w.resize(1300, 820)
+        w.show()
+        end = time.time() + 60
+        while w.drawing is None and time.time() < end:
+            self.app.processEvents()
+            time.sleep(.02)
+        c = w.canvas
+        w._tool('detail')
+        start = c.to_screen(D.place_in(c.base, 'top', (40, -3))).toPoint()
+        edge = c.to_screen(D.place_in(c.base, 'top', (58, -3))).toPoint()
+        QTest.mousePress(c, Qt.LeftButton, Qt.NoModifier, start)
+        QTest.mouseMove(c, edge)
+        QTest.mouseRelease(c, Qt.LeftButton, Qt.NoModifier, edge)
+        self.assertEqual(len(c.details), 1)
+        det = c.details[0]
+        self.assertEqual(det['letter'], 'A')
+        self.assertAlmostEqual(det['r'], 18, delta=1.0)
+        self.assertIs(c.detail_placing, det)                       # przyklejony do kursora aż do kliknięcia
+        spot = c.to_screen(det['pos']).toPoint()
+        QTest.mouseMove(c, spot)
+        QTest.mouseClick(c, Qt.LeftButton, Qt.NoModifier, spot)
+        self.assertIsNone(c.detail_placing)
+        before = det['scale']
+        c.change_detail_scale(det, 1)
+        self.assertGreater(det['scale'], before)
+        texts = [p.text for p in c.composed().prims if isinstance(p, D.Label)]
+        self.assertIn('A', texts)                                  # litera przy kole na rzucie
+        self.assertIn(f"A ({D.scale_label(det['scale'])})", texts)   # litera i skala pod szczegółem
+        fs = [f for f in c.drawing.features if f['view'] == 'szczegół A']
+        circle = next(f for f in fs if f['kind'] == 'circle')
+        self.assertAlmostEqual(circle['r'], 4 * det['scale'], 3)   # otwór Ø8 w skali szczegółu
+        m = c._dim_of(circle)
+        m['off'] = D.default_offset(c.drawing, m)
+        side = next(f for f in fs if f['kind'] == 'line' and abs(abs(f['mdl'][0][1] - f['mdl'][1][1]) - 3) < 1e-6)
+        m2 = c._dim_of(side)
+        m2['off'] = D.default_offset(c.drawing, m2)
+        c.manual += [m, m2]
+        texts = [p.text for p in c.composed().prims if isinstance(p, D.Label)]
+        self.assertIn('Ø8', texts)
+        self.assertIn('3', texts)                                  # długość w mm bryły, nie w mm arkusza
+        fc = next(f for f in fs if f['kind'] == 'fcenter')
+        pair = (dict(view='szczegół A', kind='center', pt=tuple(circle['mdl'][0]), line=None, sheet=circle['c'], label=''),
+                dict(view='szczegół A', kind='fcenter', pt=tuple(fc['mdl']), line=None, sheet=fc['c'], label=''))
+        self.assertIn('25 mm', c.describe(pair))
+        old = tuple(det['pos'])                                     # przeciągnięcie szczegółu
+        a = c.to_screen(old).toPoint()
+        QTest.mousePress(c, Qt.LeftButton, Qt.NoModifier, a)
+        QTest.mouseMove(c, a + type(a)(30, 0))
+        QTest.mouseRelease(c, Qt.LeftButton, Qt.NoModifier, a + type(a)(30, 0))
+        self.assertGreater(det['pos'][0], old[0] + 1)
+        c._detail_hot = det                                         # Delete usuwa szczegół
+        QTest.keyClick(c, Qt.Key_Delete)
+        self.assertFalse(c.details)
+        self.assertNotIn('szczegół A', c.drawing.views)
+        w.close()

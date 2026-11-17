@@ -785,7 +785,7 @@ def manual_prims(d, m):
             dist = float(np.array(m['off'], float) @ n)
             dist = (2.5 if dist >= 0 else -2.5) if abs(dist) < 2.5 else dist
             A, B, value = a + n * dist, b + n * dist, length
-        return _dim_generic(a, b, A, B, ('R' if m.get('radial') and mode == 'a' else '') + fmt(value / d.scale))
+        return _dim_generic(a, b, A, B, ('R' if m.get('radial') and mode == 'a' else '') + fmt(value / view_scale(d, m['view'])))
     length = float(np.linalg.norm(b - a))
     if length < 1e-9:
         return []
@@ -793,7 +793,160 @@ def manual_prims(d, m):
     dist = float(np.array(m['off'], float) @ n)
     if abs(dist) < 2.5:
         dist = 2.5 if dist >= 0 else -2.5
-    return _dim_generic(a, b, a + n * dist, b + n * dist, fmt(length / d.scale))
+    return _dim_generic(a, b, a + n * dist, b + n * dist, fmt(length / view_scale(d, m['view'])))
+
+
+def view_scale(d, view):
+    """Skala rzutu na arkuszu (widok szczegółu ma własną, większą skalę niż arkusz)."""
+    v = d.views.get(view)
+    return float(v['map'][4]) if v else d.scale
+
+
+# ---------------------------------------------------------------------------
+# widok szczegółu (lupa): powiększony wycinek rzutu w kole, z literą przy zaznaczonym miejscu
+# ---------------------------------------------------------------------------
+DETAIL_SCALES = (100, 50, 20, 10, 5, 4, 2.5, 2, 1.5, 1, .5, .4, .25, .2, .1, .05, .02, .01)
+DETAIL_LETTERS = 'ABCDEFGHJKLMNPRSTUVWXYZ'      # bez I, O, Q (mylą się z cyframi)
+
+
+def scale_label(s):
+    return f'{s:g}:1' if s >= 1 else f'1:{1 / s:g}'
+
+
+def detail_letter(details):
+    used = {det.get('letter') for det in details}
+    for ch in DETAIL_LETTERS:
+        if ch not in used:
+            return ch
+    return f'D{len(details) + 1}'
+
+
+def detail_scales_above(base):
+    """Skale znormalizowane większe od skali arkusza (rosnąco) - do wyboru powiększenia szczegółu."""
+    return sorted(x for x in DETAIL_SCALES if x > base * 1.2 + 1e-12)
+
+
+def default_detail_scale(base, r_model, target=24.0):
+    """Skala, przy której koło szczegółu ma ok. target mm promienia na arkuszu (co najmniej 1,5 x skala arkusza)."""
+    options = detail_scales_above(base) or [base * 2]
+    want = target / max(r_model, 1e-9)
+    return min(options, key=lambda x: abs(math.log(x / want)))
+
+
+def _clip_segment(a, b, c, r):
+    """Część odcinka a-b leżąca w kole (c, r): (p, q, cały_w_środku) albo None."""
+    a, b, c = (np.asarray(x, float) for x in (a, b, c))
+    d = b - a
+    f = a - c
+    A = float(d @ d)
+    if A < 1e-18:
+        return (tuple(a), tuple(b), True) if float(f @ f) <= r * r else None
+    B, C = 2 * float(f @ d), float(f @ f) - r * r
+    disc = B * B - 4 * A * C
+    if disc <= 0:
+        return None
+    sq = math.sqrt(disc)
+    t0, t1 = max(0.0, (-B - sq) / (2 * A)), min(1.0, (-B + sq) / (2 * A))
+    if t1 <= t0:
+        return None
+    return tuple(a + d * t0), tuple(a + d * t1), t0 <= 1e-9 and t1 >= 1 - 1e-9
+
+
+def free_spot(d, radius, near, avoid=()):
+    """Wolne miejsce na arkuszu na koło o promieniu radius (mm arkusza), jak najbliżej punktu near: poza rzutami, tabelką
+    i innymi szczegółami."""
+    W, H = d.width, d.height
+    boxes = [tuple(v['bbox']) for v in d.views.values()]
+    boxes.append((W - 10 - 150, 10, W - 10, 10 + 30))                 # tabelka
+    boxes += [(x - rr, y - rr, x + rr, y + rr) for (x, y), rr in avoid]
+    best, score = None, 1e18
+    pad = radius + 9.0
+    for x in np.arange(20 + pad, W - 10 - pad + 1e-9, 4.0):
+        for y in np.arange(10 + pad, H - 10 - pad + 1e-9, 4.0):
+            if any(x + pad > b0 and x - pad < b2 and y + pad > b1 and y - pad < b3 for b0, b1, b2, b3 in boxes):
+                continue
+            dist = math.hypot(x - near[0], y - near[1])
+            if dist < score:
+                best, score = (float(x), float(y)), dist
+    return best or (W - 10 - pad, H - 10 - pad)
+
+
+def add_details(d, source, details, hidden=False):
+    """Rysunek z widokami szczegółu. det = dict(letter, view, c=(x, y) mm rzutu, r (mm bryły), scale (bezwzględna skala
+    szczegółu), pos=(x, y) środek szczegółu na arkuszu). Każdy szczegół jest zwykłym rzutem rysunku ('szczegół A'):
+    można go wymiarować i mierzyć jak inne rzuty, a wymiary pokazują prawdziwe mm bryły."""
+    import dataclasses
+    if not details:
+        return d
+    prims, views, features, snaps = list(d.prims), dict(d.views), list(d.features), list(d.snaps)
+    out = dataclasses.replace(d, prims=prims, views=views, features=features, snaps=snaps)
+    for det in details:
+        v = det['view']
+        if v not in d.views:
+            continue
+        g = source.view(v)
+        base = float(d.views[v]['map'][4])
+        s = float(det['scale'])
+        c, r = (float(det['c'][0]), float(det['c'][1])), float(det['r'])
+        pos = (float(det['pos'][0]), float(det['pos'][1]))
+        key = 'szczegół ' + det['letter']
+        place = lambda p, pos=pos, c=c, s=s: (pos[0] + (p[0] - c[0]) * s, pos[1] + (p[1] - c[1]) * s)
+        R = r * s
+        ring = [(pos[0] + R * math.cos(t), pos[1] + R * math.sin(t)) for t in np.linspace(0, 2 * math.pi, 97)]
+        prims.append(Poly(ring, 'thin', True))
+        groups = [(g.visible, 'visible')] + ([(g.hidden, 'hidden')] if hidden else [])
+        for lines, style in groups:
+            for pts in lines:
+                run = []
+                for i in range(len(pts) - 1):
+                    piece = _clip_segment(pts[i], pts[i + 1], c, r)
+                    if piece is None:
+                        if len(run) > 1:
+                            prims.append(Poly([place(q) for q in run], style))
+                        run = []
+                        continue
+                    p0, p1, whole = piece
+                    if not run:
+                        run = [p0]
+                    elif math.hypot(run[-1][0] - p0[0], run[-1][1] - p0[1]) > 1e-9:
+                        prims.append(Poly([place(q) for q in run], style))
+                        run = [p0]
+                    run.append(p1)
+                    if len(pts) == 2 and v != 'iso':
+                        f = dict(view=key, kind='line', mdl=(tuple(map(float, p0)), tuple(map(float, p1))), a=place(p0), b=place(p1))
+                        if not whole:
+                            f['partial'] = True           # ucięta brzegiem koła - do pomiaru „do krawędzi”, nie jako długość
+                        if style == 'hidden':
+                            f['hidden'] = True
+                        features.append(f)
+                        if whole:
+                            snaps += [place(p0), place(p1)]
+                if len(run) > 1:
+                    prims.append(Poly([place(q) for q in run], style))
+        if v != 'iso':
+            for circ in g.circles:
+                cc, rr = circ['c'], circ['r']
+                if math.hypot(cc[0] - c[0], cc[1] - c[1]) + rr <= r + 1e-9:
+                    cp = place(cc)
+                    features.append(dict(view=key, kind='circle', mdl=(cc, rr, circ['full'], circ['mid']), c=cp, r=rr * s,
+                                         full=circ['full'], mid=place(circ['mid'])))
+                    snaps.append(cp)
+                    if circ['full']:
+                        _centerlines(prims, cp, rr * s)
+            for fc in g.centers:
+                if math.hypot(fc[0] - c[0], fc[1] - c[1]) <= r:
+                    features.append(dict(view=key, kind='fcenter', mdl=fc, c=place(fc)))
+        # oznaczenie na rzucie: koło i litera, pod szczegółem: litera i skala
+        mc = place_in(d, v, c)
+        mr = r * base
+        prims.append(Poly([(mc[0] + mr * math.cos(t), mc[1] + mr * math.sin(t)) for t in np.linspace(0, 2 * math.pi, 73)], 'thin', True))
+        ang = math.radians(float(det.get('angle', 45.0)))
+        lx, ly = mc[0] + (mr + 3.2) * math.cos(ang), mc[1] + (mr + 3.2) * math.sin(ang)
+        prims.append(Label(lx, ly - 2.5, det['letter'], 5.0, 'c', bold=True))
+        prims.append(Label(pos[0], pos[1] - R - 8.0, f"{det['letter']} ({scale_label(s)})", 5.0, 'c', bold=True))
+        views[key] = dict(origin=pos, bbox=(pos[0] - R, pos[1] - R, pos[0] + R, pos[1] + R), map=(pos[0], pos[1], c[0], c[1], s),
+                          detail=det['letter'], source=v)
+    return out
 
 
 def compose(d, manual):

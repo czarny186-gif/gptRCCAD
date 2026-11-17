@@ -945,6 +945,12 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             st(ink, 2.6); p.drawLine(QPointF(42, 8), QPointF(42, 40))
             st(acc, 3.0); p.drawLine(QPointF(15, 22), QPointF(41, 22))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(41, 22), (33, 18), (33, 26)]))
+        elif name == 'detail':           # widok szczegółu: lupa nad fragmentem rysunku z literą
+            st(ink, 2.0); p.drawPolyline(poly([(4, 40), (12, 30), (18, 34), (24, 22)]))
+            fl(_circle(28, 20, 12), soft, ink, 2.6)
+            st(acc, 2.4); p.drawPolyline(poly([(19, 27), (26, 17), (31, 21), (37, 12)]))
+            st(ink, 4.0); p.drawLine(QPointF(37, 29), QPointF(45, 37))
+            p.setPen(pen(acc, 2.0)); f = QFont('Arial'); f.setPixelSize(13); f.setBold(True); p.setFont(f); p.drawText(QRectF(2, 2, 14, 16), Qt.AlignCenter, 'A')
         elif name == 'dim':
             st(ink, 2.4); p.drawRect(QRectF(10, 7, 28, 14)); p.setBrush(soft); p.drawEllipse(QPointF(24, 14), 3.5, 3.5)
             st(ink, 2.0); p.drawLine(QPointF(10, 24), QPointF(10, 40)); p.drawLine(QPointF(38, 24), QPointF(38, 40))

@@ -264,10 +264,23 @@ class Canvas(QWidget):
         self.text_style = dict(font='Arial', bold=False, italic=False)
         self._text_drag = None
         self._leader_drag = None
+        self.base = None             # rysunek z okna (bez szczegółów); self.drawing = base + widoki szczegółu
+        self.source = None
+        self.hidden = False
+        self.details = []            # widoki szczegółu (lupa): dict(letter, view, c, r, scale, pos)
+        self._detail_new = None      # koło szczegółu rysowane właśnie myszą
+        self._detail_drag = None     # przesuwanie szczegółu / jego koła na rzucie
+        self._detail_hot = None
+        self.detail_placing = None   # nowy szczegół „przyklejony” do kursora, aż do kliknięcia
 
     # --- dane ---
     def composed(self):
         return D.compose(self.drawing, self.manual) if self.drawing is not None else None
+
+    def _rebuild_details(self):
+        if self.base is None:
+            return
+        self.drawing = D.add_details(self.base, self.source, self.details, self.hidden) if self.source is not None else self.base
 
     def fit(self):
         if self.drawing is None:
@@ -279,7 +292,8 @@ class Canvas(QWidget):
 
     def set_drawing(self, d):
         first = self.drawing is None or (self.drawing.width, self.drawing.height) != (d.width, d.height)
-        self.drawing = d
+        self.base = d
+        self._rebuild_details()
         self.pairs, self.pending, self.hot, self.placing = [], None, None, None
         if first:
             self.fit()
@@ -311,7 +325,7 @@ class Canvas(QWidget):
         if best is not None:
             return best
         for f in self.drawing.features:
-            if f['kind'] == 'line':
+            if f['kind'] == 'line' and not f.get('partial'):      # krawędź ucięta brzegiem szczegółu nie ma prawdziwej długości
                 a, b = f['a'], f['b']
                 dx, dy = b[0] - a[0], b[1] - a[1]
                 ll = dx * dx + dy * dy
@@ -352,6 +366,8 @@ class Canvas(QWidget):
     def clear_dims(self):
         self.manual = []
         self.placing = None
+        self.details, self.detail_placing, self._detail_new, self._detail_drag = [], None, None, None
+        self._rebuild_details()
         self.manual_changed.emit()
         self.update()
 
@@ -359,6 +375,11 @@ class Canvas(QWidget):
     def wheelEvent(self, event):
         if self.drawing is None:
             return
+        if self.tool == 'detail':
+            det = self.detail_placing or (self._detail_at(self.to_sheet(event.position()))[0])
+            if det is not None:           # kółko nad szczegółem: powiększenie (skala) szczegółu
+                self.change_detail_scale(det, 1 if event.angleDelta().y() > 0 else -1)
+                return
         f = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         pos = event.position()
         new = max(0.05, min(40.0, self.zoom * f))
@@ -368,6 +389,13 @@ class Canvas(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
+        if self.tool == 'detail' and event.key() in (Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Escape):
+            det = self.detail_placing or self._detail_hot
+            if det is not None and (event.key() != Qt.Key_Escape or det is self.detail_placing):
+                self.remove_detail(det)
+            self._detail_new = None
+            self.update()
+            return
         if event.key() == Qt.Key_Escape:
             self.placing, self.pending = None, None
             self.update()
@@ -375,6 +403,131 @@ class Canvas(QWidget):
             self.undo_dim()
         else:
             super().keyPressEvent(event)
+
+    # --- widok szczegółu (lupa) ---
+    def _detail_at(self, sheet):
+        """(szczegół, część) pod kursorem: 'body' - powiększony wycinek, 'edge' / 'inside' - koło zaznaczenia na rzucie."""
+        d = self.drawing
+        tol = 7.0 / self.zoom
+        for det in reversed(self.details):
+            key = 'szczegół ' + det['letter']
+            if key in d.views:
+                x, y = d.views[key]['map'][:2]
+                if math.hypot(sheet[0] - x, sheet[1] - y) <= det['r'] * det['scale'] + tol:
+                    return det, 'body'
+            if det['view'] in d.views:
+                mc = D.place_in(d, det['view'], det['c'])
+                mr = det['r'] * D.view_scale(d, det['view'])
+                dist = math.hypot(sheet[0] - mc[0], sheet[1] - mc[1])
+                if abs(dist - mr) <= tol:
+                    return det, 'edge'
+                if dist < mr:
+                    return det, 'inside'
+        return None, None
+
+    def _source_view_at(self, sheet):
+        """Rzut (nie szczegół) pod kursorem - tylko na nim zaznacza się nowy szczegół."""
+        return D.view_at(self.base, sheet, pad=2.0) if self.base is not None else None
+
+    def change_detail_scale(self, det, step):
+        options = D.detail_scales_above(D.view_scale(self.base, det['view']))
+        if not options:
+            return
+        current = min(range(len(options)), key=lambda i: abs(math.log(options[i] / det['scale'])))
+        det['scale'] = options[max(0, min(len(options) - 1, current + step))]
+        self._rebuild_details()
+        self.info.emit(f"Szczegół {det['letter']}: skala {D.scale_label(det['scale'])}. Kółko myszy zmienia powiększenie, przeciągnij szczegół, aby go przesunąć.")
+        self.manual_changed.emit()
+        self.update()
+
+    def remove_detail(self, det):
+        if det in self.details:
+            self.details.remove(det)
+        if det is self.detail_placing:
+            self.detail_placing = None
+        self._detail_hot = None
+        self._rebuild_details()
+        self.manual_changed.emit()
+        self.info.emit(f"Usunięto szczegół {det['letter']}.")
+
+    def _finish_new_detail(self):
+        new, self._detail_new = self._detail_new, None
+        if new is None:
+            return
+        base = D.view_scale(self.base, new['view'])
+        if new['r'] * base < 2.0:
+            self.info.emit('Przeciągnij myszą od środka miejsca, które chcesz powiększyć – koło wyznacza obszar szczegółu.')
+            return
+        scale = D.default_detail_scale(base, new['r'])
+        det = dict(letter=D.detail_letter(self.details), view=new['view'], c=new['c'], r=new['r'], scale=scale, angle=45.0)
+        others = [(self.drawing.views['szczegół ' + x['letter']]['map'][:2], x['r'] * x['scale']) for x in self.details
+                  if 'szczegół ' + x['letter'] in self.drawing.views]
+        det['pos'] = D.free_spot(self.base, det['r'] * scale, D.place_in(self.base, det['view'], det['c']), others)
+        self.details.append(det)
+        self.detail_placing = det
+        self._rebuild_details()
+        self.info.emit(f"Szczegół {det['letter']} ({D.scale_label(scale)}): przesuń myszą w wybrane miejsce i kliknij. "
+                       'Kółko myszy zmienia powiększenie. Potem możesz go wymiarować i mierzyć jak zwykły rzut.')
+        self.manual_changed.emit()
+
+    def _detail_press(self, sheet):
+        if self.detail_placing is not None:
+            self.detail_placing['pos'] = tuple(sheet)
+            self.detail_placing = None
+            self._rebuild_details()
+            self.info.emit('Szczegół na miejscu. Przeciągnij go, aby przesunąć, kółkiem zmień powiększenie, Delete usuwa. '
+                           'Wymiary i pomiary dodasz narzędziami Wymiaruj, Odległość i Mierz.')
+            self.manual_changed.emit()
+            self.update()
+            return
+        det, part = self._detail_at(sheet)
+        if det is not None:
+            self._detail_drag = dict(det=det, part=part, start=tuple(sheet), pos=tuple(det['pos']), c=tuple(det['c']), r=det['r'])
+            return
+        view = self._source_view_at(sheet)
+        if view is None:
+            self.info.emit('Szczegół zaznaczasz na rzucie: wciśnij przycisk myszy w środku miejsca do powiększenia i przeciągnij, aby ustawić wielkość koła.')
+            return
+        self._detail_new = dict(view=view, c=D.model_of(self.base, view, sheet), r=0.0, start=tuple(sheet))
+
+    def _detail_move(self, sheet):
+        if self._detail_new is not None:
+            new = self._detail_new
+            new['r'] = math.hypot(sheet[0] - new['start'][0], sheet[1] - new['start'][1]) / D.view_scale(self.base, new['view'])
+            return
+        if self.detail_placing is not None:
+            self.detail_placing['pos'] = tuple(sheet)
+            self._rebuild_details()
+            return
+        drag = self._detail_drag
+        if drag is not None:
+            det = drag['det']
+            dx, dy = sheet[0] - drag['start'][0], sheet[1] - drag['start'][1]
+            base = D.view_scale(self.base, det['view'])
+            if drag['part'] == 'body':
+                det['pos'] = (drag['pos'][0] + dx, drag['pos'][1] + dy)
+            elif drag['part'] == 'inside':
+                det['c'] = (drag['c'][0] + dx / base, drag['c'][1] + dy / base)
+            else:
+                mc = D.place_in(self.base, det['view'], det['c'])
+                det['r'] = max(1.0 / base, math.hypot(sheet[0] - mc[0], sheet[1] - mc[1]) / base)
+            self._rebuild_details()
+            return
+        det, part = self._detail_at(sheet)
+        self._detail_hot = det
+        self.setCursor(Qt.SizeAllCursor if part in ('body', 'inside') else Qt.SizeFDiagCursor if part == 'edge' else Qt.CrossCursor)
+        if det is not None:
+            self.info.emit({'body': f"Szczegół {det['letter']} ({D.scale_label(det['scale'])}): przeciągnij, aby przesunąć, kółko myszy – powiększenie, Delete – usuń.",
+                            'inside': f"Koło szczegółu {det['letter']}: przeciągnij, aby przesunąć zaznaczone miejsce.",
+                            'edge': f"Koło szczegółu {det['letter']}: przeciągnij brzeg, aby zmienić wielkość zaznaczenia."}[part])
+
+    def _detail_release(self):
+        if self._detail_new is not None:
+            self._finish_new_detail()
+        elif self._detail_drag is not None:
+            self._detail_drag = None
+            self.manual_changed.emit()
+        self.update()
 
     # --- punkty odniesienia: tylko prawdziwa geometria bryły ---
     def ref_at(self, sheet):
@@ -399,7 +552,7 @@ class Canvas(QWidget):
                 if not f['full']:
                     consider(math.hypot(sheet[0] - f['mid'][0], sheet[1] - f['mid'][1]), tp,
                              dict(view=v, kind='end', pt=tuple(f['mdl'][3]), line=None, sheet=f['mid'], label='środek łuku'))
-            elif f['kind'] == 'line':
+            elif f['kind'] == 'line' and not f.get('partial'):
                 name = f.get('name', 'krawędź')
                 for key, idx in (('a', 0), ('b', 1)):
                     consider(math.hypot(sheet[0] - f[key][0], sheet[1] - f[key][1]), tp,
@@ -486,6 +639,9 @@ class Canvas(QWidget):
                 self.setCursor(Qt.ClosedHandCursor)
         elif self.tool == 'text':
             self._text_press(event.position(), sheet)
+        elif self.tool == 'detail':
+            self._detail_press(sheet)
+            self.update()
         elif self.tool == 'measure':
             for rect, index in self._label_rects:      # klik w gotowy pomiar zamienia go w wymiar do wyciągnięcia
                 if rect.contains(event.position()):
@@ -665,6 +821,8 @@ class Canvas(QWidget):
             else:
                 over_handle = self._handle_hit(event.position()) is not None
                 self.setCursor(Qt.PointingHandCursor if over_handle else Qt.SizeAllCursor if self._text_hit(event.position()) else Qt.IBeamCursor)
+        elif self.tool == 'detail':
+            self._detail_move(sheet)
         elif self.tool in ('measure', 'dist'):
             self.hover = self.ref_at(sheet)
             self.setCursor(Qt.CrossCursor if self.hover is not None else Qt.ForbiddenCursor)
@@ -680,6 +838,9 @@ class Canvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
+        if self.tool == 'detail' and event.button() == Qt.LeftButton and (self._detail_new is not None or self._detail_drag is not None):
+            self._detail_release()
+            return
         if self.tool == 'text' and event.button() == Qt.LeftButton and (self._leader_drag is not None or self._text_drag is not None):
             self._text_release()
             return
@@ -697,6 +858,10 @@ class Canvas(QWidget):
         self.tool = tool
         self.pending, self.hover, self.placing, self.hot = None, None, None, None
         self._text_drag = self._leader_drag = None
+        self._detail_new = self._detail_drag = self._detail_hot = None
+        if self.detail_placing is not None:      # zmiana narzędzia zostawia szczegół tam, gdzie jest
+            self.detail_placing = None
+            self._rebuild_details()
         self.setCursor(Qt.OpenHandCursor if tool == 'dim' else Qt.IBeamCursor if tool == 'text' else Qt.CrossCursor)
         self.update()
 
@@ -743,9 +908,12 @@ class Canvas(QWidget):
         for index, pair in enumerate(self.pairs):
             if pair[0]['view'] == pair[1]['view']:
                 a, b = self._pair_sheet(pair)
+                P, Q, _ = self._pair_points(*pair)
+                value = math.hypot(Q[0] - P[0], Q[1] - P[1])        # mm bryły (także w szczególe o innej skali)
             else:
                 a, b = pair[0]['sheet'], pair[1]['sheet']
-            self._measure_line(p, a, b, ORANGE, index=index)
+                value = None
+            self._measure_line(p, a, b, ORANGE, index=index, value=value)
         if self.tool == 'text':
             for m in self.manual:
                 if m['kind'] != 'text':
@@ -768,6 +936,8 @@ class Canvas(QWidget):
                 p.drawLine(QPointF(c.x() + 0.5, c.y() + 2.5), QPointF(c.x() + 3, c.y()))
             if self._leader_drag is not None and self.hover is not None:
                 self._dot(p, self.hover['sheet'], QColor('#1f9d55'))
+        if self.tool == 'detail':
+            self._paint_details(p)
         if self.tool in ('measure', 'dist'):
             p.setPen(QPen(QColor('#7fb2ea'), 1.6))
             for f in d.features:
@@ -778,13 +948,41 @@ class Canvas(QWidget):
             if self.pending is not None:
                 self._dot(p, self.pending['sheet'], ORANGE)
                 if self.hover is not None and self.placing is None:
+                    value = None
                     if self.hover['view'] == self.pending['view']:
                         P, Q = self._pair_sheet((self.pending, self.hover))
+                        M, N, _ = self._pair_points(self.pending, self.hover)
+                        value = math.hypot(N[0] - M[0], N[1] - M[1])
                     else:
                         P, Q = self.pending['sheet'], self.hover['sheet']
-                    self._measure_line(p, P, Q, ORANGE, dashed=True)
+                    self._measure_line(p, P, Q, ORANGE, dashed=True, value=value)
             if self.hover is not None and self.placing is None:
                 self._dot(p, self.hover['sheet'], QColor('#1f9d55'))
+
+    def _paint_details(self, p):
+        d = self.drawing
+        p.setBrush(Qt.NoBrush)
+        for det in self.details:
+            hot = det is self._detail_hot or det is self.detail_placing or (self._detail_drag or {}).get('det') is det
+            pen = QPen(ORANGE if hot else QColor('#7fb2ea'), 2.2 if hot else 1.4)
+            pen.setStyle(Qt.DashLine)
+            p.setPen(pen)
+            key = 'szczegół ' + det['letter']
+            if key in d.views:
+                x, y = d.views[key]['map'][:2]
+                p.drawEllipse(self.to_screen((x, y)), det['r'] * det['scale'] * self.zoom + 3, det['r'] * det['scale'] * self.zoom + 3)
+            if det['view'] in d.views:
+                mc = D.place_in(d, det['view'], det['c'])
+                mr = det['r'] * D.view_scale(d, det['view']) * self.zoom
+                p.drawEllipse(self.to_screen(mc), mr + 2, mr + 2)
+        new = self._detail_new
+        if new is not None and new['r'] > 0:
+            p.setPen(QPen(ORANGE, 2.2))
+            p.setBrush(QColor(240, 138, 0, 30))
+            c = self.to_screen(D.place_in(self.base, new['view'], new['c']))
+            rr = new['r'] * D.view_scale(self.base, new['view']) * self.zoom
+            p.drawEllipse(c, rr, rr)
+            p.setBrush(Qt.NoBrush)
 
     def _highlight(self, p, f):
         p.setBrush(Qt.NoBrush)
@@ -800,7 +998,7 @@ class Canvas(QWidget):
         p.setBrush(color)
         p.drawEllipse(self.to_screen(q), 4, 4)
 
-    def _measure_line(self, p, a, b, color, dashed=False, index=None):
+    def _measure_line(self, p, a, b, color, dashed=False, index=None, value=None):
         pen = QPen(color, 2)
         if dashed:
             pen.setStyle(Qt.DashLine)
@@ -809,7 +1007,7 @@ class Canvas(QWidget):
         p.drawLine(sa, sb)
         self._dot(p, a, color)
         self._dot(p, b, color)
-        text = D.fmt(math.hypot(b[0] - a[0], b[1] - a[1]) / self.drawing.scale) + ' mm'
+        text = D.fmt(value if value is not None else math.hypot(b[0] - a[0], b[1] - a[1]) / self.drawing.scale) + ' mm'
         mid = QPointF((sa.x() + sb.x()) / 2, (sa.y() + sb.y()) / 2)
         font = QFont('Arial', 10)
         font.setBold(True)
@@ -912,6 +1110,9 @@ class DrawingWindow(QMainWindow):
         self.dist_btn = _big('Odległość', 'dist', True, tip='Kliknij dwa elementy (np. środek otworu i krawędź) – wymiar między nimi wyciągniesz w bok.')
         self.text_btn = _big('Tekst', 'text', True, tip='Kliknij miejsce na arkuszu i wpisz tekst (Enter zatwierdza). Kliknięcie istniejącego tekstu pozwala go zmienić.')
         self.measure_btn = _big('Mierz', 'mdist', True, tip='Kliknij dwa punkty rysunku – wynik w mm bryły (nie trafia do pliku).')
+        self.detail_btn = _big('Szczegół', 'detail', True, tip='Lupa: na rzucie wciśnij przycisk w środku miejsca do powiększenia i przeciągnij – koło wyznacza obszar. '
+                               'Powiększony wycinek z literą (A, B…) postawisz w wybranym miejscu, kółkiem myszy zmienisz powiększenie, potem go wymiarujesz i zmierzysz.')
+        self.detail_btn.clicked.connect(lambda: self._tool('detail'))
         self.dim_btn.setChecked(True)
         self.dim_btn.clicked.connect(lambda: self._tool('dim'))
         self.measure_btn.clicked.connect(lambda: self._tool('measure'))
@@ -925,7 +1126,7 @@ class DrawingWindow(QMainWindow):
         self.clear_btn.clicked.connect(self._clear_all)
         self.fit_btn.clicked.connect(lambda: self.canvas.fit())
         self.save_btn.clicked.connect(self.save)
-        for b in (self.dim_btn, self.dist_btn, self.text_btn, self.measure_btn):
+        for b in (self.dim_btn, self.dist_btn, self.text_btn, self.measure_btn, self.detail_btn):
             bl.addWidget(b)
         sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setStyleSheet('color:#d3e0ec;'); bl.addWidget(sep)
         for b in (self.undo_btn, self.clear_btn, self.fit_btn):
@@ -1059,11 +1260,14 @@ class DrawingWindow(QMainWindow):
         self.measure_btn.setChecked(tool == 'measure')
         self.dist_btn.setChecked(tool == 'dist')
         self.text_btn.setChecked(tool == 'text')
+        self.detail_btn.setChecked(tool == 'detail')
         self.canvas.set_tool(tool)
         self.status.setText({'dim': 'Najedź na otwór lub krawędź – obok pokaże się wymiar do wyciągnięcia.',
                              'dist': 'Kliknij pierwszy element (środek otworu, koniec lub środek krawędzi, krawędź), potem drugi – np. krawędź.',
                              'text': 'Kliknij miejsce na arkuszu, wpisz tekst i naciśnij Enter. Kliknięcie istniejącego tekstu pozwala go zmienić.',
-                             'measure': 'Kliknij dwa elementy bryły (przyciągają się do środków otworów i krawędzi). Kliknięcie wyniku zamienia go w wymiar.'}[tool])
+                             'measure': 'Kliknij dwa elementy bryły (przyciągają się do środków otworów i krawędzi). Kliknięcie wyniku zamienia go w wymiar.',
+                             'detail': 'Szczegół (lupa): na rzucie wciśnij przycisk myszy w środku miejsca do powiększenia i przeciągnij – koło wyznacza obszar. '
+                                       'Potem przesuń powiększenie w wybrane miejsce i kliknij; kółko myszy zmienia skalę.'}[tool])
 
     def _clear_all(self):
         self.canvas.clear_dims()
@@ -1121,6 +1325,8 @@ class DrawingWindow(QMainWindow):
 
     def _done(self, ticket, drawing):
         self.drawing = drawing
+        self.canvas.source = self.source
+        self.canvas.hidden = self.opt['hidden'].isChecked()
         self.canvas.set_drawing(drawing)
         self.status.setText(f'Arkusz {drawing.sheet}, skala {drawing.scale_text}. Najedź na otwór lub krawędź i kliknij, aby wyciągnąć wymiar. Kółko – powiększenie, prawy przycisk – przesuwanie.')
         self._finish(ticket)
