@@ -1,14 +1,21 @@
-# RCCAD Desktop 0.5.16 — widok szczegółu (lupa) na rysunku technicznym
+# RCCAD Desktop 0.5.17 — szybki import dużych plików STL
+
+- **Import STL nie zawiesza programu**: wcześniej każdy trójkąt pliku STL zamieniał się w osobną ścianę bryły (plik esp32_stl ma 309 654 trójkąty), a potem całość była sprawdzana i siatkowana od nowa - program wisiał. Teraz STL wczytuje się jako jedna siatka prosto z pliku: ok. 2 s dla tego pliku.
+- **Wygląd**: gładkie obszary cieniowane gładko, ostre krawędzie (powyżej 30°) i brzegi rysowane liniami jak krawędzie bryły.
+- **Praca z siatką**: Przesuń i Obróć działają (trójkąty nie są kopiowane ani liczone od nowa), zapis projektu zachowuje siatkę (projekt z tym plikiem ma ok. 2,5 MB), eksport do STL działa. Zapis siatki do STEP / DXF pokazuje czytelny komunikat (te formaty wymagają powierzchni bryły).
+- W oknie Obiekty siatki STL mają własną grupę „Siatki STL” (wcześniej trafiały do Szkiców).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.16 — widok szczegółu (lupa) na rysunku technicznym
 
 - **Nowe narzędzie Szczegół** na pasku rysunku technicznego: na rzucie wciskasz przycisk myszy w środku miejsca do powiększenia i przeciągasz - koło wyznacza obszar. Powiększony wycinek dostaje kolejną literę (A, B, C… bez I, O, Q) i idzie za kursorem, aż klikniesz w wybranym miejscu arkusza (domyślnie stawiany jest w najbliższym wolnym miejscu).
 - **Oznaczenia**: przy kole na rzucie ta sama litera, pod szczegółem litera i skala, np. „A (5:1)”.
 - **Powiększenie myszą**: kółko myszy nad szczegółem zmienia skalę (znormalizowane: 1,5:1, 2:1, 2,5:1, 4:1, 5:1, 10:1…). Przeciągnięcie szczegółu przesuwa go, przeciągnięcie koła na rzucie przesuwa zaznaczone miejsce, a jego brzeg zmienia wielkość. Delete usuwa szczegół.
 - **Wymiary i pomiary w szczególe**: Wymiaruj, Odległość i Mierz działają w szczególe jak w zwykłym rzucie i pokazują prawdziwe mm bryły (z uwzględnieniem skali szczegółu). Krawędzie ucięte brzegiem koła można wskazać jako krawędź do pomiaru odległości, ale nie wymiaruje się ich długości.
 - Szczegóły trafiają do zapisu PDF / DXF / SVG / JPG.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.15 — import dużych złożeń STEP (np. płytka PCB z elementami)
 

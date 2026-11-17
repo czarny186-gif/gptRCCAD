@@ -346,6 +346,41 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(len(out), 3)
         self.assertTrue(all(b.mesh is not None for b in out))
 
+    def test_large_stl_loads_as_mesh_fast_and_moves(self):
+        """STL z setkami tysięcy trójkątów: jedna ściana z siatką z pliku (wcześniej każdy trójkąt stawał się ścianą bryły
+        i import zawieszał program). Siatka ma ostre krawędzie, przesuwa się i obraca, a zapis projektu ją zachowuje."""
+        import tempfile, os, time
+        from rccad.document import Body, Document
+        solid = cq.Workplane().box(40, 20, 6).faces('>Z').workplane().pushPoints([(-10, 0), (10, 0)]).hole(5).val()
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'p.stl')
+            k.export_shapes([solid], path)
+            start = time.time()
+            [(shape, kind)] = k.import_shapes(path)
+            self.assertEqual(kind, 'mesh')
+            self.assertTrue(k.is_triangle_mesh(shape))
+            self.assertEqual(len(shape.Faces()), 1)
+            mesh = k.display_mesh(shape)
+            self.assertLess(time.time() - start, 10)
+            self.assertGreater(len(mesh.triangles), 100)
+            self.assertGreaterEqual(len(mesh.edges), 4)                # ostre krawędzie (obrys, otwory) rysowane liniami
+            box = k.bounds(shape)
+            self.assertAlmostEqual(box.xlen, 40, 2)
+            moved = k.transform(shape, (25, 0, 0), (0, 0, 90))
+            mb = k.bounds(moved)
+            self.assertAlmostEqual(mb.xlen, 20, 2)
+            self.assertAlmostEqual((mb.xmin + mb.xmax) / 2, (box.xmin + box.xmax) / 2 + 25, 2)
+            self.assertEqual(len(k.display_mesh(moved).triangles), len(mesh.triangles))
+            doc = Document()
+            doc.commit([Body('p', moved, 'mesh').prepared()])
+            project = os.path.join(folder, 'p.rccadx')
+            doc.save(project)
+            loaded = Document.load(project).bodies[0]
+            self.assertEqual(loaded.kind, 'mesh')
+            self.assertEqual(len(loaded.prepared().mesh.triangles), len(mesh.triangles))
+            with self.assertRaises(k.CadError):
+                k.export_shapes([shape], os.path.join(folder, 'x.step'))
+
     def test_dxf_sketch_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'profile.dxf'

@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QSc
 
 from . import icons, shell_ui as ui
 
-GROUPS = (('sketch', 'Szkice', 'sketch'), ('text', 'Teksty', 'text'), ('solid', 'Bryły', 'solid'))
+GROUPS = (('sketch', 'Szkice', 'sketch'), ('text', 'Teksty', 'text'), ('solid', 'Bryły', 'solid'), ('mesh', 'Siatki STL', 'solid'))
 WIDTH = 292
 
 QSS = """
@@ -44,8 +44,8 @@ QFrame#objects QLabel#badge { background:#eef4fa; color:#5b7a93; border-radius:8
 
 
 def category(body):
-    if body.kind == 'solid':
-        return 'solid'
+    if body.kind in ('solid', 'mesh'):
+        return body.kind            # siatka z pliku STL: osobna grupa (to nie szkic)
     return 'text' if body.name.startswith('Tekst') else 'sketch'
 
 

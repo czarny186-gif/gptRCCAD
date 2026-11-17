@@ -111,6 +111,8 @@ def mesh_deferred():
 
 
 def valid(shape, solid=True):
+    if shape is not None and not shape.wrapped.IsNull() and not solid and is_triangle_mesh(shape):
+        return shape            # siatka z pliku STL: same trójkąty, bez powierzchni do sprawdzania
     if shape is None or shape.wrapped.IsNull() or not is_valid(shape):
         raise CadError("Nie udało się utworzyć poprawnej geometrii. Model pozostaje bez zmian.")
     if solid and (not shape.Solids() or shape.Volume() <= 1e-8):
@@ -140,6 +142,8 @@ def bounds(shape):
         return hit[1]
     box = Bnd_Box()
     BRepBndLib.AddOptimal_s(shape.wrapped, box, False, False)
+    if box.IsVoid():                 # sama siatka trójkątów (STL): wymiary z trójkątów
+        BRepBndLib.Add_s(shape.wrapped, box, True)
     result = cq.BoundBox(box)
     try:
         if len(_BOUNDS) > 4096:
@@ -972,6 +976,12 @@ def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
     """center: punkt obrotu (domyślnie środek bryły; grupa obraca się wokół wspólnego środka)."""
     if not all(isfinite(float(v)) for v in (*translation, *rotation)):
         raise CadError("Współrzędne muszą być skończonymi liczbami.")
+    if is_triangle_mesh(shape):     # siatka STL: przesunięcie położenia - trójkąty zostają bez kopiowania
+        m = transform_matrix(shape, translation, rotation, center)
+        from OCP.gp import gp_Trsf
+        t = gp_Trsf()
+        t.SetValues(*[float(x) for x in m.ravel()])
+        return shape.moved(cq.Location(t))
     center = tuple(float(c) for c in center) if center is not None else shape.Center().toTuple()
     result = shape
     for axis, angle in zip(((1, 0, 0), (0, 1, 0), (0, 0, 1)), rotation):
@@ -984,6 +994,9 @@ def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
 def transform_matrix(shape, translation=(0, 0, 0), rotation=(0, 0, 0), center=None):
     """Macierz 3x4 tego samego przekształcenia co transform(): obroty wokół osi X, Y, Z przez środek bryły (albo center)
     (kolejno), potem przesunięcie. Służy do przeniesienia razem z bryłą danych w niej zapisanych (np. przepisu blachy)."""
+    if center is None and is_triangle_mesh(shape):
+        box = bounds(shape)
+        center = ((box.xmin + box.xmax) / 2, (box.ymin + box.ymax) / 2, (box.zmin + box.zmax) / 2)
     c = np.array(center if center is not None else shape.Center().toTuple(), float)
     R = np.eye(3)
     for axis, angle in zip(np.eye(3), rotation):
@@ -1220,10 +1233,7 @@ def import_shapes(path):
             root = cq.importers.importBrep(str(path)).val()
             return [(valid(s), "solid") for s in root.Solids()]
         if path.suffix.lower() == ".stl":
-            shape = TopoDS_Shape()
-            if not StlAPI_Reader().Read(shape, str(path)):
-                raise CadError("Nie można odczytać pliku STL.")
-            return [(valid(cq.Shape.cast(shape), False), "mesh")]
+            return [(read_stl(path), "mesh")]
         if path.suffix.lower() == ".dxf":           # jednostki z nagłówka, splajny, bloki - jak w rysunku technicznym
             from .import2d import sketch_wires
             return [(w, "sketch") for w in sketch_wires(path)]
@@ -1242,6 +1252,8 @@ def export_shapes(shapes, path):
     fmt = formats.get(path.suffix.lower())
     if not fmt:
         raise CadError("Wybierz rozszerzenie STEP, STL, BREP lub DXF.")
+    if fmt in ("STEP", "DXF") and all(is_triangle_mesh(s) for s in shapes):
+        raise CadError("Siatkę z pliku STL zapiszesz jako STL (albo BREP) - STEP i DXF wymagają powierzchni bryły.")
     compound = shapes[0] if len(shapes) == 1 else cq.Compound.makeCompound(shapes)
     cq.exporters.export(compound, str(path), exportType=fmt, tolerance=.05, angularTolerance=.08)
 
@@ -1343,9 +1355,123 @@ def edge_points(edge, length=None):
     return np.asarray([(p.X(), p.Y(), p.Z()) for p in pts], dtype=np.float32)
 
 
+def read_stl(path):
+    """STL (binarny lub tekstowy) jako jedna ściana z gotową siatką trójkątów - bez zamiany każdego trójkąta w osobną ścianę
+    bryły (STL ze 300 tys. trójkątów budował się minutami i zawieszał program; tak wczytuje się w ułamek sekundy).
+    Siatka zapisuje się w projekcie razem z kształtem."""
+    from OCP.RWStl import RWStl
+    from OCP.TopoDS import TopoDS_Face
+    from OCP.BRep import BRep_Builder
+    tri = RWStl.ReadFile_s(str(path))
+    if tri is None or tri.NbTriangles() == 0:
+        raise CadError("Plik STL nie zawiera trójkątów.")
+    face = TopoDS_Face()
+    BRep_Builder().MakeFace(face, tri)
+    return cq.Shape.cast(face)
+
+
+def is_triangle_mesh(shape):
+    """Kształt z samą siatką trójkątów (import STL) - ściany bez powierzchni matematycznej."""
+    try:
+        faces = shape.Faces()
+        return bool(faces) and all(BRep_Tool.Surface_s(f.wrapped) is None for f in faces[:4])
+    except Exception:
+        return False
+
+
+SHARP_STL = float(np.cos(np.radians(30.0)))     # kąt między trójkątami, od którego STL ma ostrą krawędź (rysowaną linią)
+
+
+def triangle_mesh_display(shape):
+    """Siatka do wyświetlania kształtu-siatki (STL): trójkąty z pliku, wierzchołki wspólne w obrębie gładkich obszarów
+    (gładkie cieniowanie), rozdzielone na ostrych krawędziach, które są też rysowane liniami - jak krawędzie bryły."""
+    fast = _fast_triangles(shape)
+    if fast is None:
+        raise CadError("Kształt nie ma siatki trójkątów.")
+    vertices, triangles, _ = fast
+    vertices = np.asarray(vertices, np.float64)
+    tris = np.asarray(triangles, np.int64)
+    count = len(tris)
+    e1, e2 = vertices[tris[:, 1]] - vertices[tris[:, 0]], vertices[tris[:, 2]] - vertices[tris[:, 0]]
+    normals = np.cross(e1, e2)
+    normals /= np.maximum(np.linalg.norm(normals, axis=1), 1e-18)[:, None]
+    pairs = np.sort(np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]), axis=1)
+    owner = np.tile(np.arange(count), 3)
+    order = np.lexsort((pairs[:, 1], pairs[:, 0]))
+    pairs, owner = pairs[order], owner[order]
+    new = np.ones(len(pairs), bool)
+    new[1:] = (pairs[1:] != pairs[:-1]).any(axis=1)
+    group = np.cumsum(new) - 1
+    sizes = np.bincount(group)
+    starts = np.flatnonzero(new)
+    two = sizes[group[starts]] == 2
+    first = starts[two]
+    a, b = owner[first], owner[first + 1]
+    smooth = (normals[a] * normals[b]).sum(axis=1) >= SHARP_STL
+    sharp_edges = np.concatenate([pairs[first[~smooth]], pairs[starts[sizes != 2]]])
+    # gładkie obszary: trójkąty połączone gładkimi krawędziami (łączenie etykiet z przeskakiwaniem wskaźników)
+    sa, sb = a[smooth], b[smooth]
+    label = np.arange(count)
+    for _ in range(200):
+        low = np.minimum(label[sa], label[sb])
+        nxt = label.copy()
+        np.minimum.at(nxt, sa, low)
+        np.minimum.at(nxt, sb, low)
+        np.minimum.at(nxt, label, nxt)
+        for _ in range(4):
+            nxt = nxt[nxt]
+        if np.array_equal(nxt, label):
+            break
+        label = nxt
+    corners = np.stack([np.repeat(label, 3), tris.ravel()], axis=1)
+    keys, inverse = np.unique(corners, axis=0, return_inverse=True)
+    out_vertices = vertices[keys[:, 1]].astype(np.float32)
+    out_tris = inverse.reshape(-1, 3).astype(np.uint32)
+    edges = _chain_segments(vertices, sharp_edges)
+    box = bounds(shape)
+    center = ((box.xmin + box.xmax) / 2, (box.ymin + box.ymax) / 2, (box.zmin + box.zmax) / 2)
+    size = max(box.xlen, box.ylen, box.zlen, 1.0)
+    return DisplayMesh(out_vertices, out_tris, edges, center, size, True, np.zeros(count, np.int32))
+
+
+def _chain_segments(vertices, segments, limit=400000):
+    """Odcinki (pary indeksów wierzchołków) połączone w łamane - krawędzie do rysowania."""
+    if not len(segments) or len(segments) > limit:
+        return {}
+    adjacent = {}
+    for i, (p, q) in enumerate(segments.tolist()):
+        adjacent.setdefault(p, []).append(i)
+        adjacent.setdefault(q, []).append(i)
+    used = np.zeros(len(segments), bool)
+    chains = {}
+    seg = segments.tolist()
+    for start in range(len(seg)):
+        if used[start]:
+            continue
+        used[start] = True
+        line = list(seg[start])
+        for forward in (True, False):
+            while True:
+                end = line[-1] if forward else line[0]
+                nxt = next((j for j in adjacent[end] if not used[j]), None) if len(adjacent[end]) == 2 else None
+                if nxt is None:
+                    break
+                used[nxt] = True
+                p, q = seg[nxt]
+                other = q if p == end else p
+                if forward:
+                    line.append(other)
+                else:
+                    line.insert(0, other)
+        chains[len(chains)] = vertices[line].astype(np.float32)
+    return chains
+
+
 def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
     """Siatka do wyświetlania. angular domyślnie: dokładna dla zwykłej tolerancji, rzadsza dla podglądów (tolerancja >= .25).
     coarse=True: zgrubna siatka (fine=False) - pokazana od razu, dokładna przychodzi później."""
+    if is_triangle_mesh(shape):
+        return triangle_mesh_display(shape)
     if coarse:
         tolerance, angular = COARSE
     elif angular is None:

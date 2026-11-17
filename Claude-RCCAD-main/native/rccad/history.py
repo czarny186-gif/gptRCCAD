@@ -1130,7 +1130,8 @@ def prepared_many(bodies, lenient=False):
     # ta sama część w wielu miejscach (np. import STEP płytki z elementami): siatka liczona raz, wystąpienia ją przesuwają
     groups = kernel.instance_groups([b.shape for b in bodies]) if len(bodies) >= 8 else [(i, [i]) for i in range(len(bodies))]
     models = [bodies[g[0]] for g in groups]
-    if len(models) >= 2 and workers.ready():
+    local = [b.kind == 'mesh' and kernel.is_triangle_mesh(b.shape) for b in models]    # STL: siatka z pliku, bez procesów liczących
+    if len(models) >= 2 and workers.ready() and not any(local):
         meshes = []
         # import: duże części dostają najpierw zgrubną siatkę (od razu widać model), dokładną okno dolicza w tle
         for b, (mesh, error) in zip(models, workers.mesh_many([(b.shape, b.kind == 'solid') for b in models], coarse=lenient)):
