@@ -1,13 +1,19 @@
-# RCCAD Desktop 0.5.19 — ścianki siatek STL: szkic, Dopasowanie, Wyrównanie, Kolor
+# RCCAD Desktop 0.5.20 — Różnica z STL, Połącz z siatkami, szybkie Dopasowanie i Wyrównanie
+
+- **Boolean → Różnica z STL** (nowa operacja): z bryły wycina się kształt siatki STL - ta część siatki, która wchodzi w bryłę. Tylko w tę stronę (siatka nie jest bryłą matematyczną, więc nie może być bazą). Opcja „Zachowaj siatkę STL” zostawia siatkę na polu roboczym. Siatka jest zamieniana w zamkniętą objętość (zamknięte części siatki - np. elementy złożenia - osobno, potem razem; otwarte części są pomijane z informacją) i przycinana do obszaru bryły. Gdy ten kawałek jest prosty (do 1500 płaskich ścian - np. kołek, wspornik, wydruk), staje się bryłą z płaskich ścian i wynik zostaje zwykłą bryłą. Gdy jest bardzo złożony (np. cała płytka z elementami), odejmowanie liczy się na siatkach (ok. 2 s, kolejne razy ok. 0,3 s) i wynik jest siatką - program o tym informuje. Podgląd wyniku przed zatwierdzeniem.
+- **Połącz** (Edycja) działa z siatkami STL: bryły zwykłe, ze STEP i siatki STL można połączyć nietrwale - zaznaczają się i przesuwają razem, a Rozłącz je rozdziela.
+- **Dopasowanie i Wyrównanie wielokrotnie szybsze**: podgląd i zatwierdzenie wysyłały całą bryłę do procesu liczącego, kopiowały ją i sprawdzały od nowa. Teraz liczona jest tylko macierz położenia: podgląd pokazuje gotową siatkę w nowym miejscu (natychmiast), a zatwierdzenie zmienia tylko położenie bryły (bez kopiowania geometrii i bez liczenia siatki od nowa).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.19 — ścianki siatek STL: szkic, Dopasowanie, Wyrównanie, Kolor
 
 - **Płaskie ścianki STL działają jak ściany bryły**: program rozpoznaje płaski obszar siatki pod kursorem (połączone trójkąty w jednej płaszczyźnie: normalna do 0,5°, odległość do 0,02% wielkości modelu) i buduje z jego obrysu prawdziwą płaską ścianę (z otworami). Na takiej ściance można postawić szkic (Szkic → kliknij ściankę), użyć Dopasowania i Wyrównania (Edycja) w obie strony - siatka do bryły i bryła do siatki - oraz wskazać ją jako płaszczyznę odbicia.
 - **Kolor**: siatki STL można kolorować tak jak bryły.
 - **Szybkość**: dane do wskazywania ścian liczą się raz na model (dla 300 tys. trójkątów ok. 0,4 s), potem wskazanie ścianki trwa zwykle kilka setnych sekundy, a ściana raz zbudowana jest zapamiętywana. Dopasowanie i Wyrównanie siatki tylko zmieniają jej położenie (trójkąty nie są kopiowane).
 - Ograniczenia siatki: ścianki zakrzywione (walce, zaokrąglenia) to w STL wiele małych płaskich trójkątów - wskazuje się wtedy pojedynczy płaski fragment. Operacje brył na samej siatce (wycięcie, zaokrąglenie, połączenie) nie są możliwe - do tego potrzebny jest model STEP.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.18 — płynne przesuwanie dużych modeli STEP / STL, STL w Bibliotece, szybszy import
 

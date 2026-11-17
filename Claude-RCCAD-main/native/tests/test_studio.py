@@ -2182,6 +2182,67 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_body',return_value=mesh.id):w.pick_color(5,5)
         self.assertIn(mesh.id,w.co_pending)
 
+    def _stl_body(self,shape,name='Siatka'):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'s.stl';k.export_shapes([shape],path)
+            return Body(name,k.read_stl(path),'mesh').prepared()
+
+    def test_boolean_difference_with_stl_cuts_mesh_shape_out_of_solid(self):
+        """Boolean → Różnica z STL: z bryły wycina się kształt siatki STL (część wchodząca w bryłę). Prosta siatka daje bryłę
+        (BREP), bardzo złożona - wynik siatką; siatkę można zachować. Tylko w tę stronę (siatka nie jest bazą)."""
+        from rccad import meshbool
+        w=self.w
+        block=Body('Blok',k.box(40,40,20)).prepared()
+        pin=self._stl_body(cq.Workplane().cylinder(30,8).translate((0,0,10)).val(),'Kołek')
+        w.document.commit([block,pin]);w.refresh()
+        w.toggle_mode('bool');w.bool_op.setCurrentIndex(3)
+        self.assertEqual(w.bool_op.currentData(),'stlcut');self.assertEqual(w.bool_keep.text(),'Zachowaj siatkę STL')
+        with patch.object(w.view,'pick_body',return_value=pin.id):w.pick_bool(5,5)
+        self.assertEqual(w.bool_ids,[])                                  # siatka nie może być bazą
+        with patch.object(w.view,'pick_body',return_value=block.id):w.pick_bool(5,5)
+        with patch.object(w.view,'pick_body',return_value=pin.id):w.pick_bool(5,5)
+        self.assertEqual(w.bool_ids,[block.id,pin.id])
+        w.bool_keep.setChecked(True)
+        w.apply_bool();self.wait()
+        out=w.document.get(block.id)
+        self.assertEqual(out.kind,'solid')
+        exact=k.box(40,40,20).cut(cq.Workplane().cylinder(30,8).translate((0,0,10)).val()).Volume()
+        self.assertAlmostEqual(out.shape.Volume(),exact,delta=exact*0.002)   # wielokątna siatka walca - prawie dokładnie
+        self.assertTrue(out.shape.isValid())
+        self.assertIsNotNone(w.document.get(pin.id))                    # siatka zachowana
+        self.assertEqual(w.document.info['op']['op'],'stlcut')
+        # siatka bardzo złożona (tu: wymuszony limit ścian) - wynik siatką, siatka-narzędzie usunięta
+        w.undo();self.wait()
+        with patch.object(meshbool,'BREP_FACES',3):
+            recipe=dict(type='bool',op='stlcut',base=block.id,tools=[pin.id],keep=False)
+            bodies=hist.run_bool(list(w.document.bodies),recipe)
+        res=next(b for b in bodies if b.id==block.id)
+        self.assertEqual(res.kind,'mesh');self.assertTrue(k.is_triangle_mesh(res.shape))
+        self.assertIsNone(next((b for b in bodies if b.id==pin.id),None))
+        self.assertAlmostEqual(k.bounds(res.shape).zmax,20,3);self.assertGreater(len(res.mesh.triangles),20)
+
+    def test_link_and_fast_mate_work_with_stl(self):
+        """Połącz łączy (nietrwale) bryłę z siatką STL; Dopasowanie liczy tylko położenie - bez kopiowania bryły."""
+        w=self.w
+        a=Body('A',k.box(10,10,10)).prepared()
+        m=self._stl_body(cq.Workplane().box(8,8,4).translate((30,0,0)).val())
+        w.document.commit([a,m]);w.refresh()
+        w.toggle_mode('link')
+        w.lk_add([a.id]);w.lk_add([m.id])
+        w.apply_link();self.wait()
+        self.assertTrue(hist.link_of(w.document.get(m.id)))
+        self.assertEqual(set(w._group_ids(a.id)),{a.id,m.id})
+        w.set_mode(None)
+        from OCP import BRepBuilderAPI
+        with patch.object(BRepBuilderAPI,'BRepBuilderAPI_Transform',side_effect=AssertionError('kopiowanie bryły')):
+            recipe=dict(type='mate',mode='align',id=a.id,target=m.id,
+                        face=hist.face_ref(*k.face_at(w.document.get(a.id).shape,(0,0,1),(5,5,10)),(5,5,10),a.shape),
+                        tface=hist.face_ref(*k.face_at(w.document.get(m.id).shape,(0,0,1),(30,0,2)),(30,0,2),m.shape))
+            bodies=hist.run_recipe(list(w.document.bodies),recipe)
+        self.assertAlmostEqual(next(b for b in bodies if b.id==a.id).shape.BoundingBox().zmax,2,4)
+
     def test_history_cancel_restores_project_from_before_entering_history(self):
         """„Anuluj” na pasku historii: cofa wszystkie zmiany ostatniego wejścia do historii; wygasa po nowych zmianach wprost
         w projekcie, a Cofnij do miejsca zmiany włącza go znowu."""

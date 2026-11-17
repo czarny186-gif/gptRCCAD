@@ -2421,21 +2421,18 @@ def apply_placement(shape, matrix):
         raise kernel.CadError('Nieprawidłowe przekształcenie bryły.')
     trsf = gp_Trsf()
     trsf.SetValues(*[float(R[i, j]) if j < 3 else float(M[i, 3]) for i in range(3) for j in range(4)])
-    if kernel.is_triangle_mesh(shape):
-        return shape.moved(cq.Location(trsf))       # siatka STL: zmiana położenia (trójkąty bez kopiowania)
-    moved = cq.Shape.cast(BRepBuilderAPI_Transform(shape.wrapped, trsf, True).Shape())
-    return kernel.valid(moved, bool(shape.Solids()))
+    return shape.moved(cq.Location(trsf))      # sztywny ruch: nowe położenie bez kopiowania geometrii (natychmiast, także STL)
 
 
-def run_mate(bodies, recipe):
-    """Dopasowanie / Wyrównanie: przesuwana bryła ustawiana względem ściany innej bryły (ściany odszukiwane na nowo, więc krok
-    przeżywa zmianę wcześniejszych kroków)."""
+def mate_matrix(bodies, recipe):
+    """(bryła, macierz 3x4) Dopasowania / Wyrównania - samo położenie, bez zmiany kształtu (podgląd i krok liczą to samo)."""
     if recipe.get('plane'):          # ściana kładzie się na jednej z trzech płaszczyzn (odległość 0 od jej powierzchni)
         body = _body(bodies, recipe['id'])
         face, _ = match_face(body.shape, recipe['face'])
         frame = kernel.frame_of(recipe['plane'])
         n, o = _unit(np.array(frame.normal, float)), np.array(frame.origin, float)
-        side = 1.0 if float((np.array(body.shape.Center().toTuple(), float) - o) @ n) >= -1e-9 else -1.0    # bryła zostaje po swojej stronie
+        centre = kernel.bounds(body.shape).center if kernel.is_triangle_mesh(body.shape) else body.shape.Center()
+        side = 1.0 if float((np.array(centre.toTuple(), float) - o) @ n) >= -1e-9 else -1.0    # bryła zostaje po swojej stronie
         ca = np.array(face.Center().toTuple(), float)
         spot = ca - float((ca - o) @ n) * n
 
@@ -2443,15 +2440,20 @@ def run_mate(bodies, recipe):
             def Center(self):
                 return type('P', (), {'toTuple': lambda _s: tuple(float(c) for c in spot)})()
 
-        matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), _Spot(), side * n, float(recipe.get('spin', 0.0)))
-        return _replace(bodies, body.placed(apply_placement(body.shape, matrix), matrix))
+        return body, placement(recipe['mode'], face, outward_normal(body.shape, face), _Spot(), side * n, float(recipe.get('spin', 0.0)))
     body, target = _body(bodies, recipe['id']), _body(bodies, recipe['target'])
     if body.id == target.id:
         raise kernel.CadError('Wybierz ściany dwóch różnych brył.')
     face, _ = match_face(body.shape, recipe['face'])
     tface, _ = match_face(target.shape, recipe['tface'])
-    matrix = placement(recipe['mode'], face, outward_normal(body.shape, face), tface, outward_normal(target.shape, tface),
-                       float(recipe.get('spin', 0.0)))
+    return body, placement(recipe['mode'], face, outward_normal(body.shape, face), tface, outward_normal(target.shape, tface),
+                           float(recipe.get('spin', 0.0)))
+
+
+def run_mate(bodies, recipe):
+    """Dopasowanie / Wyrównanie: przesuwana bryła ustawiana względem ściany innej bryły (ściany odszukiwane na nowo, więc krok
+    przeżywa zmianę wcześniejszych kroków). Sztywny ruch: zmienia się położenie kształtu, a siatka jest przesuwana."""
+    body, matrix = mate_matrix(bodies, recipe)
     return _replace(bodies, body.placed(apply_placement(body.shape, matrix), matrix))
 
 
@@ -2514,7 +2516,31 @@ def run_split(bodies, recipe):
     return out
 
 
+def run_stlcut(bodies, recipe):
+    """Różnica z STL: bryła bazowa minus kształt siatek STL (narzędzia). Wynik bryłą, a gdy siatka była bardzo złożona -
+    siatką. keep: siatki STL zostają na polu roboczym."""
+    from . import meshbool
+    base = _body(bodies, recipe['base'])
+    if base.kind != 'solid':
+        raise kernel.CadError('Wycinać siatką STL można tylko w bryle.')
+    shape, kind, skipped = base.shape, 'solid', 0
+    for identifier in recipe['tools']:
+        tool = _body(bodies, identifier)
+        if kind == 'mesh':
+            raise kernel.CadError('Po pierwszym wycięciu bryła stała się siatką - kolejną siatką STL wytnij w osobnej operacji.')
+        shape, kind, missing = meshbool.subtract(shape, tool.shape)
+        skipped += missing
+    if kind == 'mesh':
+        result = replace(base, shape=shape, kind='mesh', mesh=kernel.display_mesh(shape), meta={'stlcut': {'skipped': skipped}}, threads=())
+    else:
+        result = replace(base.changed(shape), meta=dict(base.changed(shape).meta or {}, stlcut={'skipped': skipped}) if skipped else base.changed(shape).meta)
+    gone = set(recipe['tools'])
+    return [result if b.id == base.id else b for b in bodies if recipe.get('keep') or b.id not in gone]
+
+
 def run_bool(bodies, recipe):
+    if recipe.get('op') == 'stlcut':
+        return run_stlcut(bodies, recipe)
     bases = [i for i in (recipe.get('bases') or ()) if i != recipe['base']]
     if bases and recipe['op'] != 'union':
         # baza to połączone bryły (Edycja → Połącz): każda z nich jest cięta / przecinana tymi samymi narzędziami

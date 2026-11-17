@@ -64,10 +64,10 @@ class LinkTools:
         """Bryły wskazywane razem z klikniętą: przy łączeniu - jej grupa / wcześniejsze połączenie, przy rozłączaniu -
         całe połączenie (pusta lista, gdy bryła nie jest połączona)."""
         body = self.document.get(bid) if bid else None
-        if body is None or body.kind != 'solid':
+        if body is None or body.kind not in ('solid', 'mesh'):
             return []
         if self._lk_joining():
-            return [i for i in self._group_ids(bid) if (b := self.document.get(i)) is not None and b.kind == 'solid']
+            return [i for i in self._group_ids(bid) if (b := self.document.get(i)) is not None and b.kind in ('solid', 'mesh')]
         link = hist.link_of(body)
         return [b.id for b in self.document.bodies if link and hist.link_of(b) == link]
 
@@ -117,7 +117,7 @@ class LinkTools:
         self.lk_add(ids)
 
     def lk_add(self, ids, toggle=False):
-        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind in ('solid', 'mesh')]
         if not self._lk_joining():
             ids = [j for i in ids for j in self._lk_unit(i)]
         if not ids:

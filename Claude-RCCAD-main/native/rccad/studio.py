@@ -1352,15 +1352,18 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         self._drawing_windows = []
 
         # --- boolean ---
-        self.bool_panel, lay = self._panel(312, 'Boolean / CSG', 'x_bool', 'Łączenie, odejmowanie, część wspólna', plain=True)
-        self.bool_op = ui.Segmented([('Suma', 'union', 'union'), ('Różnica', 'subtract', 'subtract'), ('Część wspólna', 'intersect', 'common')], 36)
+        self.bool_panel, lay = self._panel(380, 'Boolean / CSG', 'x_bool', 'Łączenie, odejmowanie, część wspólna, wycinanie siatką STL', plain=True)
+        self.bool_op = ui.Segmented([('Suma', 'union', 'union'), ('Różnica', 'subtract', 'subtract'), ('Część wspólna', 'intersect', 'common'),
+                                     ('Różnica z STL', 'stlcut', 'subtract')], 36)
+        self.bool_op._buttons[3].setToolTip('Bryła minus kształt siatki STL (wycina tę część siatki, która wchodzi w bryłę). '
+                                            'Tylko w tę stronę - siatka nie jest bryłą matematyczną.')
         self._field(lay, 'Operacja', self.bool_op)
         self.bool_status = _label('', 'status')
         lay.addWidget(self.bool_status)
         self.bool_keep = QCheckBox('Zachowaj bryły-narzędzia')
         lay.addWidget(self.bool_keep)
         self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_bool, lambda: self.set_mode(None))
-        self.bool_op.currentIndexChanged.connect(lambda *_: self._timers['bool'].start())
+        self.bool_op.currentIndexChanged.connect(lambda *_: self._bool_op_changed())
 
         # --- edytuj bryłę ---
         self.mod_panel, lay = self._panel(312, 'Edytuj bryłę', 'x_mod', 'Zaokrąglenie i fazowanie krawędzi', plain=True)
@@ -6542,9 +6545,36 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
     # =====================================================================
     # boolean
     # =====================================================================
+    def _bool_op_changed(self):
+        stl = self.bool_op.currentData() == 'stlcut'
+        self.bool_keep.setText('Zachowaj siatkę STL' if stl else 'Zachowaj bryły-narzędzia')
+        if stl:              # różnica z STL: baza - bryła, narzędzia - siatki STL
+            first = self.bool_ids[:1] if self.bool_ids and self.document.get(self.bool_ids[0]) is not None \
+                and self.document.get(self.bool_ids[0]).kind == 'solid' else []
+            self.bool_ids = first + [i for i in self.bool_ids[1:] if (b := self.document.get(i)) is not None and b.kind == 'mesh']
+        else:
+            self.bool_ids = [i for i in self.bool_ids if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        self.update_bool_status()
+
     def pick_bool(self, x, y):
         bid = self.view.pick_body(x, y)
         body = self.document.get(bid) if bid else None
+        if self.bool_op.currentData() == 'stlcut':
+            if body is None or body.kind not in ('solid', 'mesh'):
+                self.toast('Kliknij bryłę, a potem siatkę STL, którą ma zostać wycięta.')
+                return
+            if not self.bool_ids and body.kind != 'solid':
+                self.toast('Najpierw kliknij bryłę, w której ma powstać wycięcie (siatką STL nie da się wycinać w siatce).')
+                return
+            if self.bool_ids and body.kind != 'mesh' and bid not in self.bool_ids:
+                self.toast('Narzędziem jest siatka STL - kliknij obiekt z grupy „Siatki STL”.')
+                return
+            if bid in self.bool_ids:
+                self.bool_ids = [i for i in self.bool_ids if i != bid]
+            else:
+                self.bool_ids.append(bid)
+            self.update_bool_status()
+            return
         if body is None or body.kind != 'solid':
             self.toast('Kliknij bryłę (nie szkic).')
             return
@@ -6558,7 +6588,8 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
     def _bool_add(self, ids):
         """Boolean włączony + klik w grupę / obiekt na liście Obiekty: wszystkie jej bryły trafiają do operacji
         (pierwsza jako baza, gdy nic nie było wybrane); ponowny klik tej samej grupy je odznacza."""
-        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        kinds = ('solid', 'mesh') if self.bool_op.currentData() == 'stlcut' and self.bool_ids else ('solid',)
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind in kinds]
         if not ids:
             self.toast('Ta pozycja nie zawiera brył.')
             return
@@ -6571,12 +6602,13 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
     def update_bool_status(self):
         self.view.tints = {bid: (TINT_BASE if i == 0 else TINT_TOOL) for i, bid in enumerate(self.bool_ids)}
         names = [self.document.get(i).name for i in self.bool_ids if self.document.get(i)]
+        stl = self.bool_op.currentData() == 'stlcut'
         if not names:
-            text = 'Kliknij bryłę bazową.'
+            text = 'Kliknij bryłę, w której ma powstać wycięcie.' if stl else 'Kliknij bryłę bazową.'
         elif len(names) == 1:
-            text = f'Baza: {names[0]}\nKliknij bryłę-narzędzie.'
+            text = f'Baza: {names[0]}\n' + ('Kliknij siatkę STL - wytnie się jej kształt (część wchodząca w bryłę).' if stl else 'Kliknij bryłę-narzędzie.')
         else:
-            text = f'Baza: {names[0]}\nNarzędzia: {", ".join(names[1:])}'
+            text = f'Baza: {names[0]}\n' + ('Siatki STL' if stl else 'Narzędzia') + f': {", ".join(names[1:])}'
         self.bool_status.setText(text)
         self.refresh()
         self._timers['bool'].start()
@@ -6593,6 +6625,17 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         ids = tuple(self.bool_ids)
 
         def compute():
+            if op == 'stlcut':           # siatki STL nie idą do procesów liczących - liczone tutaj (objętość siatki z pamięci)
+                from . import meshbool
+                try:
+                    shape = base.shape
+                    for t in tools:
+                        shape, kind, _ = meshbool.subtract(shape, t.shape) if kernel.is_triangle_mesh(t.shape) else (shape, 'solid', 0)
+                        if kind == 'mesh':
+                            break
+                    return kernel.display_mesh(shape, PREVIEW_TOL), None
+                except kernel.CadError as exc:
+                    return None, str(exc)
             return hist.background(hist.mesh_of, kernel.boolean, (op, base.shape, [t.shape for t in tools]), PREVIEW_TOL)
 
         def show(mesh, error):
@@ -6628,12 +6671,22 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         existing = list(self.document.bodies)
 
         def build():
+            if op == 'stlcut':          # siatki STL liczone tutaj (nie przesyła się ich do procesów liczących)
+                return list(hist.run_bool(existing, recipe))
             return list(hist.offloaded(hist.run_bool, existing, recipe))
 
         def apply(new):
             self.document.pending_op = recipe
             self.document.commit(new)
             self._tool_select([base.id])
+            if op == 'stlcut':
+                result = self.document.get(base.id)
+                note = (result.meta or {}).get('stlcut') if result is not None else None
+                if result is not None and result.kind == 'mesh':
+                    self.toast('Wycięto kształt siatki STL. Siatka była bardzo złożona, więc wynik jest siatką (jak STL) - '
+                               'dalej można ją przesuwać, dopasowywać i kolorować.', 8000)
+                elif note and note.get('skipped'):
+                    self.toast(f"Wycięto kształt siatki STL. Pominięto otwarte części siatki: {note['skipped']}.", 6000)
 
         self.view.set_preview_mesh(None)
         def again():
@@ -7387,19 +7440,20 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
         bodies = tuple(self.document.bodies)
         mode = self.mode
 
-        def compute():
-            return hist.background(hist.recipe_body_mesh, hist.light(bodies), recipe, PREVIEW_TOL)
-
-        def show(mesh, error):
-            if self.mode != mode:
-                return
-            if error:
-                self.view.set_preview_mesh(None)
-                self.mt_status[mode].setText(error)
-                return
-            self.view.set_preview_mesh(mesh, color=(.3, .8, .5, .5), line_color=(.05, .4, .2, 1), width=2)
-
-        self.run_preview('mate', compute, show)
+        # podgląd: sama macierz położenia i gotowa siatka bryły przesunięta w nowe miejsce (bez liczenia bryły od nowa)
+        try:
+            body, matrix = hist.mate_matrix(bodies, recipe)
+            if body.mesh is None:
+                raise kernel.CadError('Brak siatki obiektu.')
+            mesh = kernel.placed_mesh(body.mesh, matrix)
+        except kernel.CadError as exc:
+            self.view.set_preview_mesh(None)
+            self.mt_status[mode].setText(str(exc))
+            return
+        except Exception:
+            self.view.set_preview_mesh(None)
+            return
+        self.view.set_preview_mesh(mesh, color=(.3, .8, .5, .5), line_color=(.05, .4, .2, 1), width=2)
 
     def apply_mate(self):
         if self.busy or self.mode not in ('mate', 'align'):
@@ -7417,7 +7471,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             self._tool_select([recipe['id']])
 
         self.view.set_preview_mesh(None)
-        self.run_operation(label, lambda: hist.offloaded(hist.run_recipe, existing, recipe), apply, after=lambda: self.set_mode(None))
+        self.run_operation(label, lambda: hist.run_recipe(existing, recipe), apply, after=lambda: self.set_mode(None))   # sam ruch - bez procesów liczących
 
     def update_mirror_status(self):
         body = self.document.get(self.mirror_id) if self.mirror_id else None
