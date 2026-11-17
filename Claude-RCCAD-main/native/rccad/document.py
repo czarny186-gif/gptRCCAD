@@ -82,8 +82,8 @@ class Body:
 
     def _placed_mesh(self, shape, matrix):
         """Siatka po sztywnym ruchu: gotowa siatka przesunięta macierzą (bez liczenia od nowa)."""
-        if self.mesh is None:
-            return _mesh(shape)
+        if self.mesh is None or mesh_deferred():
+            return _mesh(shape)          # w bloku deferred_mesh (przeliczanie historii): bez siatek, jak przy innych krokach
         from .kernel import placed_mesh
         return placed_mesh(self.mesh, matrix)
 
