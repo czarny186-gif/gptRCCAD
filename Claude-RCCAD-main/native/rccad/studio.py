@@ -6630,9 +6630,8 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
                 try:
                     shape = base.shape
                     for t in tools:
-                        shape, kind, _ = meshbool.subtract(shape, t.shape) if kernel.is_triangle_mesh(t.shape) else (shape, 'solid', 0)
-                        if kind == 'mesh':
-                            break
+                        if kernel.is_triangle_mesh(t.shape):
+                            shape, _, _ = meshbool.subtract(shape, t.shape)
                     return kernel.display_mesh(shape, PREVIEW_TOL), None
                 except kernel.CadError as exc:
                     return None, str(exc)
@@ -6682,10 +6681,7 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             if op == 'stlcut':
                 result = self.document.get(base.id)
                 note = (result.meta or {}).get('stlcut') if result is not None else None
-                if result is not None and result.kind == 'mesh':
-                    self.toast('Wycięto kształt siatki STL. Siatka była bardzo złożona, więc wynik jest siatką (jak STL) - '
-                               'dalej można ją przesuwać, dopasowywać i kolorować.', 8000)
-                elif note and note.get('skipped'):
+                if note and note.get('skipped'):
                     self.toast(f"Wycięto kształt siatki STL. Pominięto otwarte części siatki: {note['skipped']}.", 6000)
 
         self.view.set_preview_mesh(None)

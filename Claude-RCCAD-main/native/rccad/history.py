@@ -2517,8 +2517,8 @@ def run_split(bodies, recipe):
 
 
 def run_stlcut(bodies, recipe):
-    """Różnica z STL: bryła bazowa minus kształt siatek STL (narzędzia). Wynik bryłą, a gdy siatka była bardzo złożona -
-    siatką. keep: siatki STL zostają na polu roboczym."""
+    """Różnica z STL: bryła bazowa minus kształt siatek STL (narzędzia). Wynik zawsze bryłą matematyczną (BREP).
+    keep: siatki STL zostają na polu roboczym."""
     from . import meshbool
     base = _body(bodies, recipe['base'])
     if base.kind != 'solid':
@@ -2526,14 +2526,10 @@ def run_stlcut(bodies, recipe):
     shape, kind, skipped = base.shape, 'solid', 0
     for identifier in recipe['tools']:
         tool = _body(bodies, identifier)
-        if kind == 'mesh':
-            raise kernel.CadError('Po pierwszym wycięciu bryła stała się siatką - kolejną siatką STL wytnij w osobnej operacji.')
         shape, kind, missing = meshbool.subtract(shape, tool.shape)
         skipped += missing
-    if kind == 'mesh':
-        result = replace(base, shape=shape, kind='mesh', mesh=kernel.display_mesh(shape), meta={'stlcut': {'skipped': skipped}}, threads=())
-    else:
-        result = replace(base.changed(shape), meta=dict(base.changed(shape).meta or {}, stlcut={'skipped': skipped}) if skipped else base.changed(shape).meta)
+    changed = base.changed(shape)          # wynik zawsze bryłą (BREP) - dalej działają na niej wszystkie operacje
+    result = replace(changed, meta=dict(changed.meta or {}, stlcut={'skipped': skipped})) if skipped else changed
     gone = set(recipe['tools'])
     return [result if b.id == base.id else b for b in bodies if recipe.get('keep') or b.id not in gone]
 

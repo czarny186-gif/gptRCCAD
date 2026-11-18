@@ -1,11 +1,16 @@
-# RCCAD Desktop 0.5.21 — odbicie lustrzane siatek STL
+# RCCAD Desktop 0.5.22 — Różnica z STL zawsze daje bryłę matematyczną
 
-- **Odbicie lustrzane STL**: siatka odbija się względem wskazanej ściany (także ścianki innej siatki STL) - wcześniej powstawała tylko kopia w tym samym miejscu, bo siatka trafiała do procesu liczącego bez swoich trójkątów. Teraz trójkąty są odbijane bezpośrednio (300 tys. trójkątów ok. 0,5 s), ścianki zostają skierowane na zewnątrz, a podgląd pokazuje odbitą siatkę od razu. Opcja „Zachowaj oryginał” zostawia wzorzec.
-- Zawiera zmiany z 0.5.20: Boolean → Różnica z STL, Połącz z siatkami STL, szybkie Dopasowanie i Wyrównanie.
+- **Naprawa Różnicy z STL**: przy złożonej siatce (np. płytka z elementami) bryła po wycięciu zamieniała się w siatkę i traciła wszystkie możliwości bryły. Teraz wynik zawsze zostaje bryłą matematyczną (BREP) - tylko bez materiału, który wyciął kształt STL - i działają na niej wszystkie operacje programu.
+- **Jak to działa**: siatka jest przycinana do kształtu bryły (poszerzonego minimalnie o ok. 0,05 mm, żeby ściany siatki nie leżały dokładnie na ścianach bryły) - zostaje tylko to, co naprawdę wchodzi w bryłę (w przykładzie z płytką esp32: ok. 2900 z 309 tys. trójkątów). Ten kawałek jest zamieniany w bryłę z płaskich ścian i odejmowany zwykłą operacją logiczną. Płytka esp32 i płyta 80 x 50 mm: ok. 5,5 s za pierwszym razem, ok. 3,5 s kolejne (wynik poprawny, objętość zgodna co do 0,001 mm³).
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.21 — odbicie lustrzane siatek STL
+
+- **Odbicie lustrzane STL**: siatka odbija się względem wskazanej ściany (także ścianki innej siatki STL) - wcześniej powstawała tylko kopia w tym samym miejscu, bo siatka trafiała do procesu liczącego bez swoich trójkątów. Teraz trójkąty są odbijane bezpośrednio (300 tys. trójkątów ok. 0,5 s), ścianki zostają skierowane na zewnątrz, a podgląd pokazuje odbitą siatkę od razu. Opcja „Zachowaj oryginał” zostawia wzorzec.
+- Zawiera zmiany z 0.5.20: Boolean → Różnica z STL, Połącz z siatkami STL, szybkie Dopasowanie i Wyrównanie.
 
 ### 0.5.20 — Różnica z STL, Połącz z siatkami, szybkie Dopasowanie i Wyrównanie
 

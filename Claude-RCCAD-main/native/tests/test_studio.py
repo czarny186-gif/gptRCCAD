@@ -2192,7 +2192,6 @@ class StudioTests(unittest.TestCase):
     def test_boolean_difference_with_stl_cuts_mesh_shape_out_of_solid(self):
         """Boolean → Różnica z STL: z bryły wycina się kształt siatki STL (część wchodząca w bryłę). Prosta siatka daje bryłę
         (BREP), bardzo złożona - wynik siatką; siatkę można zachować. Tylko w tę stronę (siatka nie jest bazą)."""
-        from rccad import meshbool
         w=self.w
         block=Body('Blok',k.box(40,40,20)).prepared()
         pin=self._stl_body(cq.Workplane().cylinder(30,8).translate((0,0,10)).val(),'Kołek')
@@ -2213,15 +2212,19 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(out.shape.isValid())
         self.assertIsNotNone(w.document.get(pin.id))                    # siatka zachowana
         self.assertEqual(w.document.info['op']['op'],'stlcut')
-        # siatka bardzo złożona (tu: wymuszony limit ścian) - wynik siatką, siatka-narzędzie usunięta
+        # złożenie kilku części siatki (np. elementy na płytce) - wynik nadal bryłą matematyczną, siatka usunięta
         w.undo();self.wait()
-        with patch.object(meshbool,'BREP_FACES',3):
-            recipe=dict(type='bool',op='stlcut',base=block.id,tools=[pin.id],keep=False)
-            bodies=hist.run_bool(list(w.document.bodies),recipe)
+        parts=cq.Workplane().pushPoints([(-12,-12),(12,12),(12,-12)]).box(6,6,30).val()
+        many=self._stl_body(parts,'Złożenie')
+        w.document.commit([*w.document.bodies,many]);w.refresh()
+        recipe=dict(type='bool',op='stlcut',base=block.id,tools=[many.id],keep=False)
+        bodies=hist.run_bool(list(w.document.bodies),recipe)
         res=next(b for b in bodies if b.id==block.id)
-        self.assertEqual(res.kind,'mesh');self.assertTrue(k.is_triangle_mesh(res.shape))
-        self.assertIsNone(next((b for b in bodies if b.id==pin.id),None))
-        self.assertAlmostEqual(k.bounds(res.shape).zmax,20,3);self.assertGreater(len(res.mesh.triangles),20)
+        self.assertEqual(res.kind,'solid');self.assertTrue(res.shape.isValid());self.assertFalse(k.is_triangle_mesh(res.shape))
+        self.assertAlmostEqual(res.shape.Volume(),k.box(40,40,20).cut(parts).Volume(),delta=1e-3)
+        self.assertIsNone(next((b for b in bodies if b.id==many.id),None))
+        f,n=k.face_at(res.shape,(0,0,1),(2,2,20))                        # zwykłe ściany bryły - dalej działają operacje
+        self.assertTrue(np.allclose(n,(0,0,1)))
 
     def test_link_and_fast_mate_work_with_stl(self):
         """Połącz łączy (nietrwale) bryłę z siatką STL; Dopasowanie liczy tylko położenie - bez kopiowania bryły."""
