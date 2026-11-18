@@ -1559,12 +1559,8 @@ def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
         if found is not None and found.Size():
             if found.Size() <= 2:              # First/Last zamiast iteracji listy w Pythonie (ta jest bardzo wolna)
                 items = [found.First()] + ([found.Last()] if found.Size() == 2 else [])
-            else:
-                from OCP.TopTools import TopTools_ListIteratorOfListOfShape
-                items, it = [], TopTools_ListIteratorOfListOfShape(found)
-                while it.More():
-                    items.append(it.Value())
-                    it.Next()
+            else:                              # rzadko (krawędź wspólna dla więcej niż dwóch ścian)
+                items = list(found)
             for f in items:
                 if not any(f.IsSame(o) for o in seen):
                     seen.append(f)
