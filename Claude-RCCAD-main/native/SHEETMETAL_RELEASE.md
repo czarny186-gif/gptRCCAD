@@ -1,11 +1,19 @@
-# RCCAD Desktop 0.5.22 — Różnica z STL zawsze daje bryłę matematyczną
+# RCCAD Desktop 0.5.23 — szybka Różnica z STL
 
-- **Naprawa Różnicy z STL**: przy złożonej siatce (np. płytka z elementami) bryła po wycięciu zamieniała się w siatkę i traciła wszystkie możliwości bryły. Teraz wynik zawsze zostaje bryłą matematyczną (BREP) - tylko bez materiału, który wyciął kształt STL - i działają na niej wszystkie operacje programu.
-- **Jak to działa**: siatka jest przycinana do kształtu bryły (poszerzonego minimalnie o ok. 0,05 mm, żeby ściany siatki nie leżały dokładnie na ścianach bryły) - zostaje tylko to, co naprawdę wchodzi w bryłę (w przykładzie z płytką esp32: ok. 2900 z 309 tys. trójkątów). Ten kawałek jest zamieniany w bryłę z płaskich ścian i odejmowany zwykłą operacją logiczną. Płytka esp32 i płyta 80 x 50 mm: ok. 5,5 s za pierwszym razem, ok. 3,5 s kolejne (wynik poprawny, objętość zgodna co do 0,001 mm³).
+- **Szybsze wycinanie STL**: popiersie STL w bryle z projektu bl_d: ok. 4 s zamiast ok. 27 s (na 2 rdzeniach; na większej liczbie rdzeni szybciej). Wynik dalej jest bryłą matematyczną.
+- **Podgląd od razu**: podgląd Różnicy z STL liczony samą operacją na siatkach (ok. 0,1 s zamiast ok. 12 s). Bryła jest budowana tylko raz, przy Zastosuj, a gotowy wynik zostaje zapamiętany - ponowne liczenie tej samej pary nie trwa.
+- **Liczy się kształt, nie każdy trójkąt**: część siatki wchodząca w bryłę jest upraszczana z dokładnością 0,05 mm (mniej niż dokładność druku) - w przykładzie 6754 zamiast 11 140 trójkątów. Bryła z siatki powstaje od razu ze wspólnych krawędzi (0,4 s zamiast 7,6 s zszywania), a operacja logiczna liczy się równolegle na wszystkich rdzeniach.
+- **Bez siatki linii na wyniku**: krawędzie między prawie płaskimi trójkątami nie są rysowane (jak przy samym STL) - ostre krawędzie zostają.
+- **Szybsze wyświetlanie brył z wieloma ściankami** (każdych, nie tylko po STL): przygotowanie krawędzi do rysowania dla bryły z 6600 ściankami 0,4 s zamiast 2,5 s.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.22 — Różnica z STL zawsze daje bryłę matematyczną
+
+- **Naprawa Różnicy z STL**: przy złożonej siatce (np. płytka z elementami) bryła po wycięciu zamieniała się w siatkę i traciła wszystkie możliwości bryły. Teraz wynik zawsze zostaje bryłą matematyczną (BREP) - tylko bez materiału, który wyciął kształt STL - i działają na niej wszystkie operacje programu.
+- **Jak to działa**: siatka jest przycinana do kształtu bryły (poszerzonego minimalnie o ok. 0,05 mm, żeby ściany siatki nie leżały dokładnie na ścianach bryły) - zostaje tylko to, co naprawdę wchodzi w bryłę (w przykładzie z płytką esp32: ok. 2900 z 309 tys. trójkątów). Ten kawałek jest zamieniany w bryłę z płaskich ścian i odejmowany zwykłą operacją logiczną. Płytka esp32 i płyta 80 x 50 mm: ok. 5,5 s za pierwszym razem, ok. 3,5 s kolejne (wynik poprawny, objętość zgodna co do 0,001 mm³).
 
 ### 0.5.21 — odbicie lustrzane siatek STL
 

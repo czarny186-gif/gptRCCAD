@@ -2226,6 +2226,27 @@ class StudioTests(unittest.TestCase):
         f,n=k.face_at(res.shape,(0,0,1),(2,2,20))                        # zwykłe ściany bryły - dalej działają operacje
         self.assertTrue(np.allclose(n,(0,0,1)))
 
+    def test_stl_cut_is_fast_preview_cached_and_smooth_edges_hidden(self):
+        """Różnica z STL: podgląd samą operacją na siatkach (bez bryły), wynik zapamiętany (Zastosuj nie liczy drugi raz),
+        bryła z siatki budowana bez zszywania, a krawędzie między prawie płaskimi trójkątami nie są rysowane."""
+        from rccad import meshbool
+        import time
+        block=k.box(40,40,20)
+        ball=self._stl_body(cq.Workplane().sphere(12).translate((0,0,10)).val(),'Kula')
+        mesh=meshbool.preview_mesh(block,ball.shape)
+        self.assertGreater(len(mesh.triangles),100)
+        cut,kind,_=meshbool.subtract(block,ball.shape)
+        self.assertEqual(kind,'solid');self.assertTrue(cut.isValid());self.assertFalse(k.is_triangle_mesh(cut))
+        exact=k.box(40,40,20).cut(cq.Workplane().sphere(12).translate((0,0,10)).val()).Volume()
+        self.assertAlmostEqual(cut.Volume(),exact,delta=exact*0.01)
+        t=time.perf_counter();again=meshbool.subtract(block,ball.shape)[0]
+        self.assertIs(again,cut);self.assertLess(time.perf_counter()-t,.05)          # z pamięci
+        shown=k.display_mesh(cut)
+        self.assertLess(len(shown.edges),len(cut.Edges())/3)              # gładka kula bez siatki linii (ostre krawędzie zostają)
+        self.assertGreaterEqual(len(shown.edges),12)
+        tool=meshbool._shell_solid(*meshbool._arrays(meshbool._manifold().Manifold.cube((2,2,2))))
+        self.assertTrue(tool.isValid());self.assertAlmostEqual(tool.Volume(),8,places=6)
+
     def test_link_and_fast_mate_work_with_stl(self):
         """Połącz łączy (nietrwale) bryłę z siatką STL; Dopasowanie liczy tylko położenie - bez kopiowania bryły."""
         w=self.w

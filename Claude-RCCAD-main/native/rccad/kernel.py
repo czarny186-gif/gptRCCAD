@@ -1487,6 +1487,31 @@ def _chain_segments(vertices, segments, limit=400000):
     return chains
 
 
+def _edge_count(face):
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+    from OCP.TopAbs import TopAbs_EDGE
+    found = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(face, TopAbs_EDGE, found)
+    return found.Extent()
+
+
+def _plane_normal(face):
+    """Normalna (na zewnątrz) płaskiej ściany albo None."""
+    try:
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_Plane
+        from OCP.TopAbs import TopAbs_REVERSED
+        surface = BRepAdaptor_Surface(face.wrapped, False)
+        if surface.GetType() != GeomAbs_Plane:
+            return None
+        d = surface.Plane().Axis().Direction()
+        n = np.array((d.X(), d.Y(), d.Z()))
+        return -n if face.wrapped.Orientation() == TopAbs_REVERSED else n
+    except Exception:
+        return None
+
+
 def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
     """Siatka do wyświetlania. angular domyślnie: dokładna dla zwykłej tolerancji, rzadsza dla podglądów (tolerancja >= .25).
     coarse=True: zgrubna siatka (fine=False) - pokazana od razu, dokładna przychodzi później."""
@@ -1509,19 +1534,50 @@ def display_mesh(shape, tolerance=.12, angular=None, coarse=False):
         triangles = np.asarray(triangles, dtype=np.uint32).reshape(-1, 3)
     else:
         vertices, triangles, face_ids = fast
-    edge_faces = {}
-    faces = shape.Faces()
-    for face in faces:
-        for edge in face.Edges():
-            edge_faces.setdefault(edge.hashCode(), []).append(face)
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopoDS import TopoDS
+    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)   # krawędź -> ściany, jednym ruchem w C++
+    many = ancestors.Extent() > 300
+    normals = {}                  # płaskie ściany trójkątne (bryła z siatki STL): normalna
+
+    def triangle_normal(face):
+        key = hash(face)
+        if key not in normals:
+            normal = None
+            if _edge_count(face) == 3:
+                normal = _plane_normal(cq.Face(face))
+            normals[key] = normal
+        return normals[key]
+
     edges = {}
     for i, edge in enumerate(shape.Edges()):
-        adjacent = edge_faces.get(edge.hashCode(), [])
-        if len(adjacent) == 1 and BRep_Tool.IsClosed_s(edge.wrapped, adjacent[0].wrapped):
+        found = ancestors.FindFromKey(edge.wrapped) if ancestors.Contains(edge.wrapped) else None
+        adjacent, seen = [], []
+        if found is not None and found.Size():
+            if found.Size() <= 2:              # First/Last zamiast iteracji listy w Pythonie (ta jest bardzo wolna)
+                items = [found.First()] + ([found.Last()] if found.Size() == 2 else [])
+            else:
+                from OCP.TopTools import TopTools_ListIteratorOfListOfShape
+                items, it = [], TopTools_ListIteratorOfListOfShape(found)
+                while it.More():
+                    items.append(it.Value())
+                    it.Next()
+            for f in items:
+                if not any(f.IsSame(o) for o in seen):
+                    seen.append(f)
+                    adjacent.append(TopoDS.Face_s(f))
+        if len(adjacent) == 1 and BRep_Tool.IsClosed_s(edge.wrapped, adjacent[0]):
             continue  # Periodic seam of a cylinder/torus is not a physical edge.
+        if len(adjacent) == 2 and many:
+            na, nb = triangle_normal(adjacent[0]), triangle_normal(adjacent[1])
+            if na is not None and nb is not None and float(np.dot(na, nb)) >= SHARP_STL:
+                continue  # krawędź między prawie płaskimi trójkątami (kształt z STL) - jak w samym STL, bez linii
         if len(adjacent) == 2:
             try:
-                if BRep_Tool.Continuity_s(edge.wrapped, adjacent[0].wrapped, adjacent[1].wrapped) != GeomAbs_C0:
+                if BRep_Tool.Continuity_s(edge.wrapped, adjacent[0], adjacent[1]) != GeomAbs_C0:
                     continue  # Do not draw/pick smooth fillet seams as sharp edges.
             except Exception:
                 pass

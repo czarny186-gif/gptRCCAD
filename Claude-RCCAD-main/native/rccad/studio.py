@@ -6628,10 +6628,12 @@ class StudioWindow(StepEditTools, TiltTools, LinkTools, SectionTools, ScaleTools
             if op == 'stlcut':           # siatki STL nie idą do procesów liczących - liczone tutaj (objętość siatki z pamięci)
                 from . import meshbool
                 try:
+                    meshes = [t.shape for t in tools if kernel.is_triangle_mesh(t.shape)]
+                    if len(meshes) == 1:         # podgląd samą operacją na siatkach - od razu, bryła liczona przy Zastosuj
+                        return meshbool.preview_mesh(base.shape, meshes[0]), None
                     shape = base.shape
-                    for t in tools:
-                        if kernel.is_triangle_mesh(t.shape):
-                            shape, _, _ = meshbool.subtract(shape, t.shape)
+                    for m in meshes:
+                        shape, _, _ = meshbool.subtract(shape, m)
                     return kernel.display_mesh(shape, PREVIEW_TOL), None
                 except kernel.CadError as exc:
                     return None, str(exc)
