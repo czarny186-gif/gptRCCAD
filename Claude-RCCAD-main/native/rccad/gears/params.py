@@ -22,6 +22,7 @@ KIND_TITLES = {'spur_ext': 'Proste zewnętrzne', 'helical_ext': 'Skośne zewnęt
 HANDS = ('right', 'left')
 
 HA, HF = 1.0, 1.25        # wysokość głowy i stopy zarysu odniesienia (w modułach)
+RHO = .38                 # promień zaokrąglenia wierzchołka zębatki-narzędzia (w modułach, ISO 53 zarys A)
 
 # granice pól: (najmniej, najwięcej) - poza nimi błąd
 LIMITS = dict(module=(.05, 100.0), teeth=(5, 1000), pressure=(10.0, 35.0), helix=(.5, 45.0), width=(.01, 1e4),
@@ -117,9 +118,29 @@ def derived(p: GearParams):
     rim = float(p.rim_diameter)
     if p.internal and rim <= 0:
         rim = df + 2 * 2.5 * m                 # wieniec dobrany sam: 2,5 modułu materiału pod stopami
-    return dict(mt=mt, alpha_t=math.degrees(alpha_t), d=d, db=db, da=da, df=df, pitch=math.pi * m,
-                height=abs(da - df) / 2, s=s_t, s_a=s_a, z_v=z_v, z_min=z_min, rim=rim,
+    p_t = math.pi * mt
+    # dokładne podcięcie przy obtaczaniu zębatką (koło zewnętrzne): dolny koniec prostego boku zębatki (pod zaokrągleniem
+    # wierzchołka) nie może schodzić poniżej punktu granicznego linii przyporu (głębokość r·sin²αt pod linią toczną)
+    rho = rack_rho(p)
+    straight = HF * m - x * m - rho * (1 - math.sin(alpha_t))
+    x_min = HF - rho * (1 - math.sin(alpha_t)) / m - (d / 2) * math.sin(alpha_t) ** 2 / m
+    return dict(mn=m, mt=mt, alpha_n=float(p.pressure), alpha_t=math.degrees(alpha_t), beta=p.beta, d=d, db=db, da=da, df=df,
+                pitch=math.pi * m, pn=math.pi * m, pt=p_t, pb=p_t * math.cos(alpha_t), height=abs(da - df) / 2,
+                s=s_t, s_n=s_n, e=p_t - s_t, s_b=db * (s_t / d + sign * inv(alpha_t)), s_a=s_a, z_v=z_v, z_min=z_min, rim=rim,
+                rho=rho, x_min=x_min, undercut=(not p.internal) and straight > (d / 2) * math.sin(alpha_t) ** 2 + 1e-12,
                 lead=(math.pi * d / math.tan(beta)) if beta else None)
+
+
+def rack_rho(p: GearParams):
+    """Promień zaokrąglenia wierzchołka zębatki-narzędzia (mm): 0,38·m, zmniejszony, gdy nie mieści się w zębie zębatki."""
+    m, x = float(p.module), float(p.shift)
+    beta = math.radians(p.beta)
+    alpha_t = math.atan(math.tan(math.radians(float(p.pressure))) / math.cos(beta))
+    mt = m / math.cos(beta)
+    s_t = (m * (math.pi / 2 + 2 * x * math.tan(math.radians(float(p.pressure)))) - float(p.backlash) / 2) / math.cos(beta)
+    v_tip = (x - HF) * m
+    room = (math.pi * mt / 2 - s_t / 2 + v_tip * math.tan(alpha_t)) / (1 / math.cos(alpha_t) - math.tan(alpha_t))
+    return max(0.0, min(RHO * m, room))
 
 
 def _limit(checks, name, value, title, unit=''):

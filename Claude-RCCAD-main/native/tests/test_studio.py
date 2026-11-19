@@ -2936,6 +2936,8 @@ class StudioTests(unittest.TestCase):
         self.assertIn('Parametry poprawne',w.gr_status.text());self.assertTrue(w.gr_apply_btn.isEnabled())
         self.assertFalse(w.gr_helix_box.isVisible());self.assertFalse(w.gr_hub_box.isVisible());self.assertFalse(w.gr_int_box.isVisible())
         self.assertIn('40.000',w.gr_info.text())                                    # d = m·z = 2·20
+        self.assertIn('Podziałka p: <b>6.283',w.gr_info.text());self.assertIn('Podcięcie stopy: <b>brak',w.gr_info.text())
+        self.assertIsNotNone(w.gr_profile)                                          # zarys zęba z silnika (etap 2)
         w.gr_kind.setCurrentIndex(1)                                                 # skośne: kąt i kierunek widoczne
         self.assertTrue(w.gr_helix_box.isVisible());w.gr_hand.setCurrentIndex(1)
         p=w.gear_params();self.assertEqual((p.kind,p.hand,p.helix),('helical_ext','left',15.0))
@@ -2944,6 +2946,7 @@ class StudioTests(unittest.TestCase):
         w.gr_fields['helix'].setValue(20);self.assertEqual(w.gr_fields['helix'].styleSheet(),'');self.assertTrue(w.gr_apply_btn.isEnabled())
         w.gr_fields['teeth'].setValue(10)                                            # ostrzeżenie (podcięcie): pomarańczowo, Zastosuj dalej działa
         self.assertIn('#e2a23a',w.gr_fields['teeth'].styleSheet());self.assertTrue(w.gr_apply_btn.isEnabled());self.assertIn('Podcięcie',w.gr_status.text())
+        self.assertIn('Podcięcie stopy: <b style',w.gr_info.text());self.assertTrue(w.gr_profile.undercut)
         w.gr_fields['teeth'].setValue(20)
         w.gr_hub.setChecked(True);self.assertTrue(w.gr_hub_box.isVisible())
         w.gr_fields['bore'].setValue(25);self.assertIn('#e5484d',w.gr_fields['hub_diameter'].styleSheet())   # piasta węższa niż otwór

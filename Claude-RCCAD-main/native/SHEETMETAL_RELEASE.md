@@ -1,13 +1,22 @@
-# RCCAD Desktop 0.5.24 — Przekładnie: koła walcowe (etap 1)
+# RCCAD Desktop 0.5.25 — Przekładnie: silnik kół walcowych (etap 2)
+
+- **Wymiary koła**: średnice podziałowa, zasadnicza, głów i stóp, podziałki normalna, czołowa i zasadnicza, grubość zęba (normalna, czołowa, na kole zasadniczym), wrąb, korekcja zarysu; przy zębach skośnych moduł normalny i czołowy oraz czołowy kąt przyporu.
+- **Prawdziwy zarys ewolwentowy w Open CASCADE**: boki - ewolwenta okręgu zasadniczego (krzywa B-spline przez punkty ze wzoru, z dokładnymi stycznymi; odchyłka poniżej 0,000001 mm), wierzchołek i dno wrębu - dokładne łuki okręgów głów i stóp.
+- **Połączenie stopy zęba z obtaczania**: przejście do dna wrębu to trochoida - obwiednia zaokrąglenia zębatki-narzędzia ISO 53 (stopa 1,25·m, zaokrąglenie 0,38·m), styczna do ewolwenty. Koło wewnętrzne: łuk styczny do ewolwenty i okręgu stóp.
+- **Wykrywanie podcięcia z geometrii**: przy podcięciu trochoida wcina się w ewolwentę i zarys przechodzi przez ich przecięcie (jak przy prawdziwym nacinaniu); program podaje najmniejszą korekcję, która usuwa podcięcie. Wykrywa też zaostrzony ząb, zachodzące na siebie przejścia stóp, brak ewolwenty i inne niepoprawne parametry.
+- Panel Koła walcowe pokazuje dodatkowo podziałkę, grubość zęba i podcięcie stopy. Bryła koła 3D - w kolejnym etapie.
+- Zarys sprawdzony niezależną symulacją nacinania zębatką (różnica pola zęba poniżej 0,01%).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.24 — Przekładnie: koła walcowe (etap 1)
 
 - **Nowa zakładka Przekładnie → Koła walcowe**: panel z wyborem rodzaju uzębienia (proste zewnętrzne, skośne zewnętrzne, proste wewnętrzne, skośne wewnętrzne) i polami: moduł, liczba zębów, kąt przyporu, kąt pochylenia i kierunek skrętu (tylko zęby skośne), szerokość koła, korekcja zarysu, luz międzyzębny, średnica otworu i piasta (koło zewnętrzne) albo średnica wieńca (koło wewnętrzne).
 - **Walidacja na bieżąco**: błędne pole ma czerwoną ramkę, ostrzeżenie pomarańczową; pod polami wymiary koła (średnice podziałowa, głów, stóp, zasadnicza, wysokość zęba) i opis błędów - m.in. podcięcie stopy, zaostrzony ząb, za mało zębów koła wewnętrznego, za duży otwór, piasta węższa niż otwór.
 - **Podgląd, Zastosuj, Anuluj**: na tym etapie sprawdzają parametry (bryła koła - w kolejnym etapie); Anuluj przywraca pola sprzed otwarcia. Narzędzie można dodać do Ulubionych, opis jest w Pomocy.
 - Obliczenia są w osobnym silniku `rccad/gears` (bez interfejsu) - ten sam posłuży później przekładniom planetarnym i zębatkowym.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.23 — szybka Różnica z STL
 

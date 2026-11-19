@@ -3,6 +3,8 @@
 Mixin okna Studio - tylko interfejs. Obliczenia i sprawdzanie parametrów są w niezależnym silniku rccad.gears
 (bez Qt), który później posłuży też przekładniom planetarnym i zębatkowym.
 
+Etap 2: wymiary i zarys zęba liczy silnik (gears.check: walidacja + zarys ewolwentowy z obtaczania), panel pokazuje
+podziałkę, grubość zęba i podcięcie stopy.
 Etap 1: panel z rodzajem uzębienia (proste / skośne, zewnętrzne / wewnętrzne), polami parametrów i walidacją na bieżąco
 (błędne pole obramowane na czerwono, ostrzeżenie na pomarańczowo, wymiary koła w ramce). Podgląd, Zastosuj i Anuluj
 sprawdzają parametry - bryła koła powstaje dopiero w kolejnym etapie."""
@@ -184,7 +186,7 @@ class GearTools:
         self.gr_ext_box.setVisible(not p.internal)
         self.gr_int_box.setVisible(p.internal)
         self.gr_hub_box.setVisible(not p.internal and p.hub)
-        self.gr_checks = gears.validate(p)
+        self.gr_checks, self.gr_profile = gears.check(p)       # walidacja liczbowa i próba zbudowania zarysu zęba
         worst = {}
         for c in self.gr_checks:
             if c.field and worst.get(c.field) != 'error':
@@ -223,9 +225,15 @@ class GearTools:
                 ('Średnica zasadnicza d<sub>b</sub>', g['db']), ('Wysokość zęba h', g['height'])]
         if p.helical:
             rows.insert(1, ('Moduł czołowy m<sub>t</sub>', g['mt']))
+        rows += [('Podziałka czołowa p<sub>t</sub>' if p.helical else 'Podziałka p', g['pt']),
+                 ('Grubość zęba s (na d)', g['s'])]
         if p.internal:
             rows.append(('Średnica wieńca', g['rim']))
         text = '<br>'.join(f'{name}: <b>{value:.3f} mm</b>' for name, value in rows)
+        prof = getattr(self, 'gr_profile', None)
+        if prof is not None and not p.internal:
+            text += ('<br>Podcięcie stopy: <b style="color:#9a6512;">tak</b> (bez podcięcia: korekcja x ≥ '
+                     f'{g["x_min"]:.3f})' if prof.undercut else '<br>Podcięcie stopy: <b>brak</b>')
         self.gr_info.setText(text)
 
     # ---------- wejście / przyciski ----------
