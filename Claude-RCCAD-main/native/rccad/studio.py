@@ -39,6 +39,7 @@ from .matchsize_ui import MatchSizeTools
 from .stepedit_ui import StepEditTools
 from .tilt_ui import TiltTools
 from .gear_ui import GearTools
+from .gearpair_ui import GearPairTools
 from .link_ui import LinkTools
 from .sectionview import SectionTools
 from PySide6.QtWidgets import QSizePolicy
@@ -201,7 +202,7 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
-        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear'],
+        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear', 'gearpair'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
@@ -215,7 +216,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -497,6 +498,7 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools,
                  ('ply_unfold', ui.style_icon('ply_unfold', 38), 'Rozłóż płyty — pudełko / mebel ze sklejki płasko, płyta obok płyty'),
                  ('ply_fold', ui.style_icon('ply_fold', 38), 'Złóż płyty — rozłożone płyty z powrotem w pudełko / mebel'),
                  ('gear', ui.style_icon('gear', 38), 'Koła walcowe — parametryczne koło zębate: proste lub skośne, zewnętrzne lub wewnętrzne'),
+                 ('gearpair', ui.style_icon('gearpair', 38), 'Para kół walcowych — dwa koła w zazębieniu: liczba zębów albo przełożenie, odległość osi, korekcja'),
                  ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
                  ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii'),
                  ('mdist', ui.style_icon('mdist', 38), 'Pomiar odległości między dwoma punktami'),
@@ -1725,9 +1727,10 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools,
         self._build_matchsize_panel()
         self._build_tilt_panel()
         self._build_gear_panel()
+        self._build_gearpair_panel()
         self._build_link_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.gear_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.gear_panel, self.gearpair_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1776,7 +1779,7 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools,
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.gear_panel, self.link_panel):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.gear_panel, self.gearpair_panel, self.link_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1822,7 +1825,7 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools,
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'tilt': self.apply_tilt, 'gear': self.apply_gear, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'tilt': self.apply_tilt, 'gear': self.apply_gear, 'gearpair': self.apply_gearpair, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -2121,6 +2124,8 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools,
             self._tilt_enter()
         elif mode == 'gear':
             self._gear_enter()
+        elif mode == 'gearpair':
+            self._gearpair_enter()
         elif mode == 'link':
             self._link_enter()
         elif mode == 'thread':

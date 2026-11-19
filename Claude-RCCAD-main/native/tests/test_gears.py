@@ -114,7 +114,7 @@ class GearValidationTests(unittest.TestCase):
         self.assertEqual(GearParams.from_dict({'teeth': 19.6}).teeth, 20)
 
     def test_engine_does_not_import_qt_or_occ(self):
-        code = ('import sys; sys.path.insert(0, "."); import rccad.gears, rccad.gears.preview; '
+        code = ('import sys; sys.path.insert(0, "."); import rccad.gears, rccad.gears.preview, rccad.gears.pair; '
                 'print(any(m.startswith(("PySide6", "OCP", "cadquery")) for m in sys.modules))')
         out = subprocess.run([sys.executable, '-c', code], cwd=os.path.join(os.path.dirname(__file__), '..'),
                              capture_output=True, text=True, timeout=120)
@@ -662,6 +662,154 @@ class GearRebuildTests(unittest.TestCase):
         renamed = [type(new)(**{**new.__dict__, 'name': 'Napęd'})]
         out = hist.run_gear(renamed, dict(type='gear', params=GearParams(teeth=25, bore=8).to_dict(), replace='g1'))
         self.assertEqual(out[0].name, 'Napęd')                                    # własna nazwa zostaje
+
+
+PAIR_CASES = {
+    'standard': dict(teeth1=20, teeth2=40),
+    'undercut_pinion': dict(teeth1=12, teeth2=40),
+    'given_center': dict(teeth1=20, teeth2=40, center=61),
+    'ratio': dict(teeth1=17, by_ratio=True, ratio=2.5),
+    'helical': dict(teeth1=18, teeth2=36, helix=20, hand='left'),
+    'ring': dict(kind='internal', teeth1=20, teeth2=60),
+    'ring_helical': dict(kind='internal', teeth1=18, teeth2=72, helix=15, center=57),
+}
+
+
+class GearPairTests(unittest.TestCase):
+    """Etap 6: para kół - przełożenie, odległość osi, korekcje, kierunki skrętu, położenie w zazębieniu, kontrola."""
+
+    @classmethod
+    def setUpClass(cls):
+        from rccad.gears import pair
+        cls.pair = pair
+
+    def solve(self, **kw):
+        return self.pair.solve(self.pair.PairParams(**kw))
+
+    def test_ratio_teeth_and_hands(self):
+        r = self.solve(**PAIR_CASES['ratio'])
+        self.assertEqual(r.z2, 42)                                         # 2,5 · 17 = 42,5 -> 42
+        self.assertAlmostEqual(r.ratio, 42 / 17)
+        self.assertEqual([c.field for c in r.checks if c.level == 'warning'], [])
+        far = self.solve(teeth1=17, by_ratio=True, ratio=2.53)
+        self.assertEqual(far.z2, 43)
+        r = self.solve(**PAIR_CASES['helical'])
+        self.assertEqual((r.gear1.hand, r.gear2.hand, r.gear1.kind, r.gear2.kind), ('left', 'right', 'helical_ext', 'helical_ext'))
+        r = self.solve(**PAIR_CASES['ring_helical'])
+        self.assertEqual((r.gear1.hand, r.gear2.hand, r.gear2.kind), ('right', 'right', 'helical_int'))
+        r = self.solve(**PAIR_CASES['ring'])
+        self.assertEqual((r.gear1.kind, r.gear2.kind), ('spur_ext', 'spur_int'))
+
+    def test_standard_pair_numbers(self):
+        r = self.solve(**PAIR_CASES['standard'], backlash=0)
+        self.assertTrue(r.ok, r.checks)
+        self.assertAlmostEqual(r.center, 60)
+        self.assertAlmostEqual(r.alpha_w, 20)
+        rb1, rb2 = 20 * math.cos(math.radians(20)), 40 * math.cos(math.radians(20))
+        eps = (math.sqrt(22 ** 2 - rb1 ** 2) + math.sqrt(42 ** 2 - rb2 ** 2) - 60 * math.sin(math.radians(20))) / (2 * math.pi * math.cos(math.radians(20)))
+        self.assertAlmostEqual(r.contact_ratio, eps)
+        self.assertAlmostEqual(r.clearance1, .5)                            # 0,25·m
+        np.testing.assert_allclose(np.array(r.place2)[:, 3], (60, 0, 0))
+        h = self.solve(**PAIR_CASES['helical'])
+        self.assertAlmostEqual(h.center, 2 * (18 + 36) / 2 / math.cos(math.radians(20)))
+        self.assertAlmostEqual(h.overlap_ratio, 10 * math.sin(math.radians(20)) / (2 * math.pi))
+
+    def test_profile_shift_choices(self):
+        r = self.solve(**PAIR_CASES['undercut_pinion'])                  # P-0: zębnik bez podcięcia, odległość bez zmian
+        self.assertTrue(r.ok, r.checks)
+        self.assertAlmostEqual(r.gear1.shift, -r.gear2.shift)
+        self.assertGreater(r.gear1.shift, 0)
+        self.assertFalse(derived(r.gear1)['undercut'])
+        self.assertAlmostEqual(r.center, r.center0)
+        r = self.solve(**PAIR_CASES['given_center'])
+        self.assertAlmostEqual(r.center, 61)
+        a0, at = 60, math.radians(20)
+        self.assertAlmostEqual(math.cos(math.radians(r.alpha_w)), a0 * math.cos(at) / 61)
+        sum_x = (gears.inv(math.radians(r.alpha_w)) - gears.inv(at)) * 60 / (2 * math.tan(at))
+        self.assertAlmostEqual(r.gear1.shift + r.gear2.shift, sum_x, places=5)     # wzór na sumę korekcji (ISO 21771)
+        r = self.solve(**PAIR_CASES['ring'])                               # wieniec: korekcja usuwająca interferencję
+        self.assertTrue(r.ok, r.checks)
+        self.assertGreater(r.gear2.shift, 0)
+
+    def mesh_gap(self, r):
+        """Najmniejszy odstęp zarysów obu kół w strefie zazębienia na przekrojach z = 0, b/2, b (zęby skośne: przekroje
+        obrócone o skręt) - zarysy krzywymi Open CASCADE, w wyliczonych położeniach. Ujemny - zarysy się przecinają."""
+        import cadquery as cq
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        from rccad.gears import occ
+        a, width = r.center, r.params.width
+        rw1 = a * r.gear1.teeth / (r.z2 - r.gear1.teeth if r.params.internal else r.z2 + r.gear1.teeth)
+        pitch = np.array((a + rw1, 0.0) if r.params.internal else (rw1, 0.0))
+        worst = None
+        for z in (0.0, width / 2, width):
+            near = []
+            for g, place in ((r.gear1, r.place1), (r.gear2, r.place2)):
+                wire = occ.outline_wire(g).rotate(cq.Vector(), cq.Vector(0, 0, 1), math.degrees(occ.twist_angle(g) * z / width))
+                M = np.asarray(place, float)
+                edges = []
+                for e in wire.Edges():
+                    pts = np.array([v.toTuple()[:2] for v in e.positions(np.linspace(0, 1, 5))]) @ M[:2, :2].T + M[:2, 3]
+                    if np.min(np.linalg.norm(pts - pitch, axis=1)) < 4 * r.params.module:
+                        edges.append(e)
+                trsf = cq.Matrix([[*M[0, :3], M[0, 3]], [*M[1, :3], M[1, 3]], [*M[2, :3], z]])
+                near.append(cq.Compound.makeCompound(edges).transformGeometry(trsf))
+            gap = BRepExtrema_DistShapeShape(near[0].wrapped, near[1].wrapped).Value()
+            worst = gap if worst is None else min(worst, gap)
+        return worst
+
+    def test_gears_mesh_with_the_set_backlash(self):
+        """Zarysy obu kół w wyliczonych położeniach: odstęp boków z każdej strony zęba = j·cos α / 2 (ząb pośrodku wrębu),
+        także dla zębów skośnych na całej szerokości (kierunki skrętu) i dla wieńca."""
+        for name, kw in PAIR_CASES.items():
+            r = self.solve(**kw, backlash=.1)
+            self.assertTrue(r.ok, (name, r.checks))
+            beta = math.radians(r.params.helix)
+            alpha_t = math.atan(math.tan(math.radians(20)) / math.cos(beta))
+            beta_b = math.atan(math.tan(beta) * math.cos(alpha_t))         # w przekroju czołowym odstęp większy o 1 / cos βb
+            self.assertAlmostEqual(self.mesh_gap(r), .1 * math.cos(math.radians(20)) / 2 / math.cos(beta_b), delta=2e-4, msg=name)
+        r = self.solve(**PAIR_CASES['standard'], backlash=0)               # bez luzu: zęby się stykają
+        self.assertLess(self.mesh_gap(r), 1e-5)
+        wrong = self.solve(**PAIR_CASES['helical'], backlash=.1)            # ten sam kierunek skrętu w parze zewnętrznej - kolizja
+        wrong.gear2.hand = wrong.gear1.hand
+        self.assertLess(self.mesh_gap(wrong), 1e-6)
+
+    def test_solids_of_a_pair_do_not_overlap(self):
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        from rccad import history as hist
+        r = self.solve(**PAIR_CASES['ring'], backlash=.1)
+        s1 = hist.apply_placement(hist.gear_shape(r.gear1), np.array(r.place1))
+        s2 = hist.apply_placement(hist.gear_shape(r.gear2), np.array(r.place2))
+        self.assertGreater(BRepExtrema_DistShapeShape(s1.wrapped, s2.wrapped).Value(), .04)
+
+    def test_interference_and_other_checks(self):
+        r = self.solve(kind='internal', teeth1=20, teeth2=60, auto_shift=False)
+        self.assertIn('Interferencja', ' '.join(c.message for c in r.checks if c.level == 'error'))
+        r = self.solve(teeth1=12, teeth2=40, auto_shift=False)               # bez korekcji: podcięcie zębnika, interferencja
+        self.assertTrue(any(c.level == 'error' and 'Interferencja' in c.message for c in r.checks))
+        self.assertTrue(any('Podcięcie' in c.message for c in r.checks))
+        r = self.solve(teeth1=20, teeth2=40, center=63, auto_shift=False, shift1=.5)
+        self.assertTrue(any(c.level == 'warning' and 'luz wierzchołkowy' in c.message.lower() for c in r.checks))
+        r = self.solve(teeth1=20, teeth2=40, center=64, auto_shift=False, shift1=.5)
+        self.assertTrue(any(c.level == 'error' and 'uderzają' in c.message for c in r.checks))
+        r = self.solve(kind='internal', teeth1=20, teeth2=26)
+        self.assertTrue(any(c.level == 'warning' and 'różnica liczby zębów' in c.message for c in r.checks))
+        with self.assertRaises(gears.GearError):
+            self.solve(teeth1=20, teeth2=40, center=90)
+        with self.assertRaises(gears.GearError):
+            self.solve(kind='internal', teeth1=20, teeth2=21)
+
+    def test_history_step_creates_both_gears(self):
+        from rccad import history as hist
+        params = self.pair.PairParams(**PAIR_CASES['ring']).to_dict()
+        out = hist.run_gear_pair([], dict(type='gear_pair', params=params, out=['p', 'r']))
+        self.assertEqual([b.id for b in out], ['p', 'r'])
+        self.assertEqual(out[0].folder, 'Para kół z20/z60')
+        self.assertEqual(out[1].name, 'Wieniec z60 m2')
+        self.assertEqual(out[0].meta['gear_pair']['role'], 1)
+        self.assertEqual(hist.reads(dict(type='gear_pair', params=params, out=['p', 'r']), out), set())
+        r = self.pair.solve(self.pair.PairParams(**PAIR_CASES['ring']))
+        c = out[0].shape.Center()
+        self.assertAlmostEqual(math.hypot(c.x, c.y), r.center, places=5)      # zębnik w odległości osi od środka wieńca
 
 
 if __name__ == '__main__':

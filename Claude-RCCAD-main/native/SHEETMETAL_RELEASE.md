@@ -1,13 +1,23 @@
-# RCCAD Desktop 0.5.28 — Przekładnie: podgląd na żywo i edycja kół (etap 5)
+# RCCAD Desktop 0.5.29 — Przekładnie: para kół walcowych (etap 6)
+
+- **Nowe narzędzie Przekładnie → Para kół walcowych**: para zewnętrzna albo koło z wieńcem. Liczba zębów obu kół albo przełożenie (liczba zębów koła 2 dobiera się sama), moduł, kąt przyporu, kąt pochylenia, szerokość, luz, odległość osi, otwory.
+- **Zazębienie liczone samo**: przełożenie, odległość osi (dobrana sama albo wpisana), toczny kąt przyporu, korekcje zarysu (najmniejsze bez podcięcia i interferencji; przy wpisanej odległości osi - dobrane do niej), kierunki skrętu (para zewnętrzna - przeciwne, z wieńcem - ten sam). Koła ustawiają się w zazębieniu (ząb naprzeciw wrębu), w jednej grupie listy obiektów.
+- **Kontrola**: interferencja (głowa jednego koła poniżej ewolwenty drugiego), podcięcie, zaostrzenie, wskaźnik przyporu, luz wierzchołkowy, różnica liczby zębów wieńca. Ramka: przełożenie, odległość osi, kąt przyporu tocznego, wskaźniki przyporu i wymiary obu kół.
+- **Pola zależne**: zmiana liczby zębów koła 1 aktualizuje koło 2 (tryb przełożenia) albo przełożenie (tryb liczby zębów); kierunek skrętu koła 2 wynika z koła 1.
+- **Podgląd na żywo, Podgląd dokładny, Zastosuj** jak przy jednym kole; dwuklik w koło pary albo Edytuj na kroku otwiera okno pary - zmiana przebudowuje oba koła.
+- Sprawdzone geometrią: zarysy obu kół w zazębieniu nie przecinają się, a odstęp boków równa się zadanemu luzowi (dla zębów skośnych na całej szerokości, także z wieńcem).
+- Szybsze liczenie zarysu koła wewnętrznego (2 ms zamiast 84 ms).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.28 — Przekładnie: podgląd na żywo i edycja kół (etap 5)
 
 - **Podgląd na żywo**: po otwarciu okna Koła walcowe zielony podgląd widać od razu i odświeża się przy każdej zmianie modułu, liczby zębów, szerokości i innych pól - szybki podgląd (siatka z silnika, 10-80 ms także przy 200 zębach). Przycisk Podgląd pokazuje dokładną bryłę B-Rep; Zastosuj tworzy dokładną bryłę.
 - **Edycja kół**: dwuklik w koło w widoku albo Edytuj / dwuklik na kroku „Koło zębate” w historii otwiera generator z zapisanymi parametrami. Zmiana zastępuje krok; dalsze kroki (np. przesunięcie) zostają. Koło wstawione z biblioteki przebudowuje się w tym samym miejscu (położenie koła zapamiętywane przy przesuwaniu, obracaniu, dopasowaniu).
 - **Parametry w projekcie i bibliotece**: zostają po zapisie i ponownym otwarciu.
 - **Przebudowa tylko zmienionych kół**: gotowe bryły kół są pamiętane według parametrów - przeliczanie historii nie buduje drugi raz kół, których parametry się nie zmieniły.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.27 — Przekładnie: zęby skośne i koła wewnętrzne (etap 4)
 

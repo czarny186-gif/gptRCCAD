@@ -226,17 +226,25 @@ def _internal(p: GearParams) -> ToothProfile:
         return np.array((R * math.cos(t), R * math.sin(t)))
 
     def nearest(center, lo, hi):
-        """Najbliższy punkt boku (ewolwenty) do punktu: złoty podział w promieniu."""
-        f = lambda R: float(np.hypot(*(flank_xy(R) - center)))
+        """Najbliższy punkt boku (ewolwenty) do punktu: złoty podział w promieniu (zwykła arytmetyka - wywoływane tysiące razy)."""
+        cx, cy = float(center[0]), float(center[1])
+
+        def f(R):
+            t = theta_tooth(R)
+            return math.hypot(R * math.cos(t) - cx, R * math.sin(t) - cy)
         a, b = lo, hi
         k = (math.sqrt(5) - 1) / 2
         c, d = b - k * (b - a), a + k * (b - a)
-        for _ in range(90):
-            if f(c) < f(d):
-                b = d
+        fc, fd = f(c), f(d)
+        for _ in range(64):                        # 0,618^64 - poniżej dokładności liczb zmiennoprzecinkowych
+            if fc < fd:
+                b, d, fd = d, c, fc
+                c = b - k * (b - a)
+                fc = f(c)
             else:
-                a = c
-            c, d = b - k * (b - a), a + k * (b - a)
+                a, c, fc = c, d, fd
+                d = a + k * (b - a)
+                fd = f(d)
         R = .5 * (a + b)
         return R, f(R)
 
@@ -252,7 +260,7 @@ def _internal(p: GearParams) -> ToothProfile:
         lo, hi = theta_tooth(rc), half_pitch           # środek na boku (odległość 0) ... na środku wrębu
         if gap(hi) < 0:                                # łuk nie mieści się we wrębie - mniejszy promień
             return None
-        return _bisect(gap, lo, hi)
+        return _bisect(gap, lo, hi, 56)
 
     rho = .38 * m
     gamma = fit(rho)

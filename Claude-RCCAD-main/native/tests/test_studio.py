@@ -3111,6 +3111,50 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(w.mode,'gear');self.assertEqual(w.gear_params().teeth,26)
             w.cancel_gear();self.wait()
 
+    def test_gear_pair_tool_dependent_fields_apply_and_edit(self):
+        """Para kół walcowych (etap 6): pola zależne (przełożenie / liczba zębów, kierunek koła 2), kontrola na bieżąco,
+        Zastosuj - dwa koła w zazębieniu (krok 'gear_pair'), dwuklik w koło pary - edycja kroku, przebudowa obu kół."""
+        import rccad.studio as st
+        from rccad.gears import occ
+        w=self.w
+        self.assertEqual(TABS['Przekładnie'],['gear','gearpair']);self.assertIn('gearpair',st.FAVORITE_TOOLS)
+        w.tools['gearpair'].click();self.preview()
+        self.assertEqual(w.mode,'gearpair');self.assertTrue(w.gearpair_panel.isVisible());self.assertTrue(w.view.preview_items)
+        self.assertIn('poprawnie',w.gp_status.text());self.assertAlmostEqual(w.gp_fields['ratio'].value(),2)
+        w.gp_fields['teeth2'].setValue(50);self.assertAlmostEqual(w.gp_fields['ratio'].value(),2.5)        # przełożenie z liczby zębów
+        w.gp_by.setCurrentIndex(1);w.gp_fields['ratio'].setValue(3);self.assertEqual(w.gp_fields['teeth2'].value(),60)
+        w.gp_fields['teeth1'].setValue(18);self.assertEqual(w.gp_fields['teeth2'].value(),54)             # zmiana koła 1 -> koło 2
+        self.assertFalse(w.gp_fields['teeth2'].isEnabled())
+        w.gp_fields['helix'].setValue(20);self.assertTrue(w.gp_hand_box.isVisible());self.assertIn('lewy',w.gp_hand2.text())
+        w.gp_kind.setCurrentIndex(1);self.assertIn('prawy',w.gp_hand2.text())                             # wieniec: ten sam kierunek
+        self.assertTrue(w.gp_int_box.isVisible());self.assertFalse(w.gp_ext_box.isVisible())
+        w.gp_auto.setChecked(False);self.assertTrue(w.gp_shift_box.isVisible())
+        self.assertIn('Interferencja',w.gp_status.text());self.assertFalse(w.gp_apply_btn.isEnabled())   # wieniec bez korekcji
+        w.gp_auto.setChecked(True);self.assertTrue(w.gp_apply_btn.isEnabled())
+        self.assertIn('Koło 2: z <b>54</b>',w.gp_info.text())
+        w.set_gearpair_params(dict(kind='external',teeth1=20,teeth2=40,module=2,width=10,backlash=.1,bore1=8,bore2=12))
+        steps=w.document.history_length
+        w.apply_gearpair();self.wait()
+        self.assertIsNone(w.mode);self.assertEqual(w.document.history_length,steps+1)
+        self.assertEqual(w.document.info['op']['type'],'gear_pair')
+        a,b=[w.document.get(i) for i in w.selected]
+        self.assertEqual((a.meta['gear']['teeth'],b.meta['gear']['teeth']),(20,40));self.assertEqual(a.folder,b.folder)
+        for body in (a,b):
+            self.assertTrue(occ.solid_report(body.shape)['ok'])
+        zs=lambda body:np.array(body.shape.Center().toTuple())
+        self.assertAlmostEqual(np.linalg.norm(zs(a)[:2]-zs(b)[:2]),60,places=3)
+        # dwuklik w koło 2: okno pary z wartościami; zmiana liczby zębów koła 1 przebudowuje oba koła
+        with patch.object(w.view,'pick_face',return_value=(b.id,np.array((0,0,1.0)),zs(b))):
+            w.view_double_clicked(5,5)
+        self.preview()
+        self.assertEqual(w.mode,'gearpair');self.assertEqual(w.gearpair_params().teeth1,20);self.assertIsNotNone(w._gp_editing())
+        w.gp_fields['teeth1'].setValue(30);w.apply_gearpair();self.wait();self.app.processEvents();self.wait()
+        a,b=w.document.get(a.id),w.document.get(b.id)
+        self.assertEqual(a.meta['gear']['teeth'],30);self.assertAlmostEqual(np.linalg.norm(zs(a)[:2]-zs(b)[:2]),70,places=3)
+        self.assertEqual([(i.get('op') or {}).get('type') for _,i in w.document.states()].count('gear_pair'),1)
+        w.undo();self.wait();self.app.processEvents();self.wait()
+        self.assertEqual(w.document.get(a.id).meta['gear']['teeth'],20)
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

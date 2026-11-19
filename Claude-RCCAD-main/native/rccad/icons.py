@@ -323,6 +323,30 @@ def _draw_gear(p, kind, ink, acc, soft, pen):
     """Koła walcowe: narzędzie / nagłówek (koło z otworem i osią), rodzaje uzębienia (przód koła + pasek zębów prostych
     albo skośnych z boku), kierunek skrętu, uzębienie (zbliżenie zębów) i korpus (otwór i piasta)."""
     p.setBrush(soft); p.setPen(pen(ink, 2.3))
+    if kind in ('pair', 'gp_ext'):                    # para zewnętrzna: dwa koła w zazębieniu
+        p.drawPath(_gear_path(16, 30, 9.5, 13.5, 9))
+        p.setBrush(QColor(acc) if kind == 'pair' else soft); p.setPen(pen(ink, 2.1))
+        p.drawPath(_gear_path(33.5, 15, 7, 10.5, 8, .2))
+        p.setBrush(Qt.NoBrush); p.setPen(pen(acc if kind != 'pair' else ink, 2.2))
+        p.drawEllipse(QPointF(16, 30), 3.5, 3.5)
+        p.drawEllipse(QPointF(33.5, 15), 2.6, 2.6)
+        return
+    if kind == 'gp_int':                               # koło z wieńcem
+        ring = QPainterPath(); ring.addEllipse(QPointF(24, 24), 21, 21)
+        p.drawPath(ring.subtracted(_gear_path(24, 24, 17.5, 14, 14)))
+        p.setBrush(QColor(acc)); p.setPen(pen(ink, 2.0))
+        p.drawPath(_gear_path(30, 24, 5.5, 8.5, 7))
+        return
+    if kind in ('byteeth', 'byratio'):
+        p.drawPath(_gear_path(17, 24, 9, 13, 9))
+        p.setPen(pen(acc, 2.4)); p.setBrush(Qt.NoBrush)
+        if kind == 'byteeth':
+            f = QFont('Arial'); f.setPixelSize(14); f.setBold(True); p.setFont(f)
+            p.drawText(QRectF(28, 14, 20, 20), Qt.AlignCenter, 'z')
+        else:
+            p.drawLine(QPointF(32, 30), QPointF(44, 16)); p.drawText(QRectF(28, 26, 18, 18), Qt.AlignCenter, '')
+            p.drawEllipse(QPointF(33, 17), 2.4, 2.4); p.drawEllipse(QPointF(43, 29), 2.4, 2.4)
+        return
     if kind in ('tool', 'body'):
         p.drawPath(_gear_path(24, 24, 15, 20.5, 10))
         p.setBrush(QColor('#ffffff') if kind == 'body' else Qt.NoBrush); p.setPen(pen(acc, 3.0 if kind == 'tool' else 2.6))
@@ -486,8 +510,9 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_tilt':
         _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
-    elif kind == 'x_gear' or kind.startswith('gr_'):
-        _draw_gear(p, {'x_gear': 'tool', 'gr_rh': 'rh', 'gr_lh': 'lh', 'gr_teeth': 'teeth', 'gr_body': 'body'}.get(kind, kind[3:]),
+    elif kind in ('x_gear', 'x_gearpair') or kind.startswith('gr_') or kind.startswith('gp_'):
+        _draw_gear(p, {'x_gear': 'tool', 'x_gearpair': 'pair', 'gr_rh': 'rh', 'gr_lh': 'lh', 'gr_teeth': 'teeth', 'gr_body': 'body',
+                       'gp_ext': 'gp_ext', 'gp_int': 'gp_int', 'gp_byteeth': 'byteeth', 'gp_byratio': 'byratio'}.get(kind, kind[3:]),
                    INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('x_link', 'lk_join', 'lk_split'):
         _draw_link(p, INK, ORANGE, QColor(BLUE_SOFT), pen, 'split' if kind == 'lk_split' else None)
@@ -1028,6 +1053,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_tilt(p, ink, acc, soft, pen)
         elif name == 'gear':
             _draw_gear(p, 'tool', ink, acc, soft, pen)
+        elif name == 'gearpair':
+            _draw_gear(p, 'pair', ink, acc, soft, pen)
         elif name == 'link':
             _draw_link(p, ink, acc, soft, pen)
         elif name == 'color':

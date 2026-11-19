@@ -426,10 +426,10 @@ class GearTools:
         self._gr_entry = self.gear_params()
 
     def gear_step_index(self, body_id):
-        """Numer kroku historii, który utworzył koło (krok 'gear' z tym identyfikatorem w 'out') albo None."""
+        """Numer kroku historii, który utworzył koło (krok 'gear' albo para kół 'gear_pair' z tym identyfikatorem w 'out')."""
         for index, (_, info) in enumerate(self.document.states()):
             op = info.get('op') or {}
-            if op.get('type') == 'gear' and body_id in (op.get('out') or ()):
+            if op.get('type') in ('gear', 'gear_pair') and body_id in (op.get('out') or ()):
                 return index
         return None
 
