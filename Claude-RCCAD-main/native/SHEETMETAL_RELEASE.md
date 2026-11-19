@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.5.25 — Przekładnie: silnik kół walcowych (etap 2)
+# RCCAD Desktop 0.5.26 — Przekładnie: pełne koła o zębach prostych (etap 3)
+
+- **Koła walcowe jako bryły B-Rep**: Zastosuj tworzy koło o zębach prostych (zewnętrzne albo wewnętrzne - wieniec) jako zwykłą bryłę - krok historii „Koło zębate” z parametrami. Dwuklik w krok otwiera okno z wartościami; zmiana zastępuje krok, dalsze kroki (np. przesunięcie) zostają. Koło działa z cofaniem, zapisem projektu, biblioteką i eksportem STEP.
+- **Szerokość, otwór, piasta i rowek wpustowy**: rowek wg DIN 6885-1 dobierany do średnicy otworu (albo własne wymiary), przez koło i piastę.
+- **Wydajność**: wszystkie zęby, otwór i rowek powstają jednym wyciągnięciem przekroju - bez operacji logicznych; piasta węższa niż stopy zębów doklejana zszyciem (też bez operacji logicznych), szersza - jedną sumą. Koło z 20 zębami: ok. 0,15 s, ze 150-200 zębami i piastą: 2-3 s (w tle).
+- **Kontrola bryły**: każde koło jest sprawdzane - poprawność (BRepCheck), jedna bryła z jedną zamkniętą powłoką (szczelność: każda krawędź między dwiema ścianami), orientacja na zewnątrz. STEP po zapisie i odczycie: ta sama objętość i liczba ścian.
+- **Podgląd** liczy się w tle i odświeża sam przy zmianie pól. Zęby skośne - w kolejnym etapie.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.25 — Przekładnie: silnik kół walcowych (etap 2)
 
 - **Wymiary koła**: średnice podziałowa, zasadnicza, głów i stóp, podziałki normalna, czołowa i zasadnicza, grubość zęba (normalna, czołowa, na kole zasadniczym), wrąb, korekcja zarysu; przy zębach skośnych moduł normalny i czołowy oraz czołowy kąt przyporu.
 - **Prawdziwy zarys ewolwentowy w Open CASCADE**: boki - ewolwenta okręgu zasadniczego (krzywa B-spline przez punkty ze wzoru, z dokładnymi stycznymi; odchyłka poniżej 0,000001 mm), wierzchołek i dno wrębu - dokładne łuki okręgów głów i stóp.
@@ -6,10 +18,6 @@
 - **Wykrywanie podcięcia z geometrii**: przy podcięciu trochoida wcina się w ewolwentę i zarys przechodzi przez ich przecięcie (jak przy prawdziwym nacinaniu); program podaje najmniejszą korekcję, która usuwa podcięcie. Wykrywa też zaostrzony ząb, zachodzące na siebie przejścia stóp, brak ewolwenty i inne niepoprawne parametry.
 - Panel Koła walcowe pokazuje dodatkowo podziałkę, grubość zęba i podcięcie stopy. Bryła koła 3D - w kolejnym etapie.
 - Zarys sprawdzony niezależną symulacją nacinania zębatką (różnica pola zęba poniżej 0,01%).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.24 — Przekładnie: koła walcowe (etap 1)
 

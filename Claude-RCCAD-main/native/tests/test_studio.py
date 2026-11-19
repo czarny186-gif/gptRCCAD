@@ -2920,7 +2920,7 @@ class StudioTests(unittest.TestCase):
 
     def test_gear_panel_kinds_fields_validation_and_cancel(self):
         """Przekładnie → Koła walcowe (etap 1): panel z rodzajem uzębienia i polami, walidacja na bieżąco, Podgląd / Zastosuj /
-        Anuluj bez tworzenia brył i bez kroku historii; Anuluj przywraca pola sprzed otwarcia."""
+        Anuluj bez kroku historii; Anuluj przywraca pola sprzed otwarcia."""
         import rccad.studio as st
         from rccad import help as hp
         w=self.w
@@ -2955,19 +2955,77 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(w.gr_int_box.isVisible());self.assertFalse(w.gr_ext_box.isVisible());self.assertFalse(w.gr_helix_box.isVisible())
         self.assertIn('error',[c.level for c in w.gr_checks])                       # 20 zębów bez korekcji: za mało dla koła wewnętrznego
         w.gr_fields['teeth'].setValue(60);self.assertTrue(w.gr_apply_btn.isEnabled());self.assertIn('Średnica wieńca',w.gr_info.text())
-        # Zastosuj / Podgląd / Enter: bez brył i bez kroku historii
+        # Anuluj: pola wracają do stanu sprzed otwarcia, narzędzie się zamyka, model bez zmian (Zastosuj - test etapu 3)
         bodies,steps=len(w.document.bodies),w.document.history_length
-        w.preview_gear();w.apply_gear()
-        QTest.keyClick(w,Qt.Key_Return)
-        self.assertEqual((len(w.document.bodies),w.document.history_length),(bodies,steps))
-        self.assertEqual(w.gear_params().teeth,60)
-        # Anuluj: pola wracają do stanu sprzed otwarcia (tu: po Zastosuj), narzędzie się zamyka
         w.gr_fields['module'].setValue(3);w.gr_kind.setCurrentIndex(0)
         w.gr_cancel_btn.click()
         self.assertIsNone(w.mode);self.assertFalse(w.gear_panel.isVisible())
-        p=w.gear_params();self.assertEqual((p.kind,p.module,p.teeth),('spur_int',2.0,60))
+        self.assertEqual((len(w.document.bodies),w.document.history_length),(bodies,steps))
+        p=w.gear_params();self.assertEqual((p.kind,p.module,p.teeth),('spur_ext',2.0,20))       # wartości z chwili otwarcia
         w.set_gear_params(dict(kind='helical_int',module=1.5,teeth=48,helix=20,hand='left'))
         self.assertEqual(w.gr_kind.currentData(),'helical_int');self.assertEqual(w.gr_hand.currentData(),'left');self.assertAlmostEqual(w.gr_fields['module'].value(),1.5)
+
+    def test_gear_apply_creates_solid_step_edit_save_and_library(self):
+        """Koła walcowe (etap 3): Podgląd w tle, Zastosuj - bryła B-Rep i krok historii 'gear'; cofnięcie, edycja kroku
+        dwuklikiem (ta sama bryła), przeliczenie dalszych kroków, zapis / odczyt projektu i biblioteka."""
+        from rccad import library
+        from rccad.gears import occ
+        w=self.w
+        w.tools['gear'].click()
+        w.set_gear_params(dict(kind='spur_ext',module=2,teeth=20,width=10,bore=10,keyway=True,hub=True,hub_diameter=24,hub_length=8))
+        self.assertIn('rowek 3×1.4',w.gr_step3.value.text())
+        w.preview_gear();self.preview()
+        self.assertTrue(w.gr_previewing);self.assertTrue(w.view.preview_items)
+        w.gr_fields['teeth'].setValue(24);w._gr_timer.stop();w._gr_preview();self.preview()   # podgląd odświeża się po zmianie
+        self.assertTrue(w.view.preview_items)
+        steps=w.document.history_length
+        w.apply_gear();self.wait()
+        self.assertIsNone(w.mode);self.assertEqual(w.document.history_length,steps+1)
+        self.assertEqual(w.document.info['op']['type'],'gear')
+        gear=[b for b in w.document.bodies if (b.meta or {}).get('gear')]
+        self.assertEqual(len(gear),1);gear=gear[0]
+        self.assertEqual(gear.name,'Koło z24 m2');self.assertEqual(gear.kind,'solid');self.assertEqual(w.selected,[gear.id])
+        self.assertTrue(occ.solid_report(gear.shape)['ok'])
+        self.assertEqual(gear.meta['gear']['teeth'],24);self.assertIsNotNone(gear.mesh)
+        # dalszy krok na kole: przesunięcie
+        move=dict(type='transform',id=gear.id,mode='move',v=[30.0,0.0,0.0])
+        w.document.pending_op=move
+        w.document.commit(hist.run_transform(list(w.document.bodies),move))
+        self.assertAlmostEqual(k.bounds(w.document.get(gear.id).shape).xmax,30+26,places=5)
+        # edycja kroku koła dwuklikiem: okno z wartościami, Zastosuj zastępuje krok (ta sama bryła), przesunięcie zostaje
+        index=next(i for i,(_,info) in enumerate(w.document.states()) if (info.get('op') or {}).get('type')=='gear')
+        w.history_edit(index);self.preview()
+        self.assertEqual(w.mode,'gear');self.assertEqual(w.gear_params().teeth,24);self.assertTrue(w.gr_keyway.isChecked())
+        w.gr_fields['teeth'].setValue(30);w.apply_gear();self.wait();self.app.processEvents();self.wait()
+        body=w.document.get(gear.id)
+        self.assertIsNotNone(body);self.assertEqual(body.meta['gear']['teeth'],30);self.assertEqual(body.name,'Koło z30 m2')
+        self.assertAlmostEqual(k.bounds(body.shape).xmax,30+32,places=5)                        # z = 30: r_a = 32, przesunięte o 30
+        self.assertEqual(len([b for b in w.document.bodies if (b.meta or {}).get('gear')]),1)
+        # zapis i odczyt projektu
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'kola.rccadx'
+            w.document.save(path)
+            back=Document.load(path)
+            again=back.get(gear.id)
+            self.assertIsNotNone(again);self.assertEqual(again.meta['gear']['teeth'],30)
+            self.assertAlmostEqual(again.shape.Volume(),body.shape.Volume(),delta=1e-6*body.shape.Volume())
+            self.assertEqual([(i.get('op') or {}).get('type') for _,i in back.states()].count('gear'),1)
+            # biblioteka elementów
+            item=library.save_bodies([body],Path(folder),'kolo')
+            loaded=library.load_bodies('object',item)
+            self.assertEqual(len(loaded),1);self.assertTrue(occ.solid_report(loaded[0].shape)['ok'])
+        # cofnięcie usuwa koło
+        def undo():
+            w.undo();self.wait();self.app.processEvents();self.wait()
+        undo();self.assertEqual(w.document.get(gear.id).meta['gear']['teeth'],24)               # cofnięta edycja kroku
+        undo();self.assertAlmostEqual(k.bounds(w.document.get(gear.id).shape).xmax,26,places=5)  # cofnięte przesunięcie
+        undo();self.assertIsNone(w.document.get(gear.id))                                          # cofnięte dodanie koła
+        # zęby skośne: jeszcze bez bryły (kolejny etap)
+        w.tools['gear'].click();w.gr_kind.setCurrentIndex(1)
+        before=len(w.document.bodies);w.apply_gear();self.wait()
+        self.assertEqual(len(w.document.bodies),before);self.assertIn('skośnych',w.gr_status.text())
+        w.cancel_gear()
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

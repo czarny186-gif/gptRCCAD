@@ -24,10 +24,39 @@ HANDS = ('right', 'left')
 HA, HF = 1.0, 1.25        # wysokość głowy i stopy zarysu odniesienia (w modułach)
 RHO = .38                 # promień zaokrąglenia wierzchołka zębatki-narzędzia (w modułach, ISO 53 zarys A)
 
+# DIN 6885-1 (wpust pryzmatyczny): średnica wałka do (włącznie) -> szerokość b, głębokość rowka w piaście t2
+KEYWAYS = ((8, 2, 1.0), (10, 3, 1.4), (12, 4, 1.8), (17, 5, 2.3), (22, 6, 2.8), (30, 8, 3.3), (38, 10, 3.3), (44, 12, 3.3),
+           (50, 14, 3.8), (58, 16, 4.3), (65, 18, 4.4), (75, 20, 4.9), (85, 22, 5.4), (95, 25, 5.4), (110, 28, 6.4),
+           (130, 32, 7.4), (150, 36, 8.4))
+KEYWAY_MIN_BORE = 6.0
+
+
+def keyway_standard(bore):
+    """(b, t2) rowka wpustowego wg DIN 6885-1 dla otworu o średnicy bore albo None (poza tablicą: 6 ... 150 mm)."""
+    if bore < KEYWAY_MIN_BORE - 1e-9:
+        return None
+    for limit, width, depth in KEYWAYS:
+        if bore <= limit + 1e-9:
+            return float(width), float(depth)
+    return None
+
+
+def keyway_size(p):
+    """(b, t2) użyte dla koła: pola wpisane albo wartości z normy (pole 0). None, gdy brak rowka."""
+    if p.internal or not p.keyway or p.bore <= 0:
+        return None
+    std = keyway_standard(float(p.bore)) or (None, None)
+    width = float(p.key_width) if p.key_width > 0 else std[0]
+    depth = float(p.key_depth) if p.key_depth > 0 else std[1]
+    if width is None or depth is None:
+        return None
+    return width, depth
+
+
 # granice pól: (najmniej, najwięcej) - poza nimi błąd
 LIMITS = dict(module=(.05, 100.0), teeth=(5, 1000), pressure=(10.0, 35.0), helix=(.5, 45.0), width=(.01, 1e4),
               shift=(-1.0, 1.5), backlash=(0.0, None), bore=(0.0, 1e5), hub_diameter=(0.0, 1e5), hub_length=(0.0, 1e4),
-              rim_diameter=(0.0, 1e5))
+              rim_diameter=(0.0, 1e5), key_width=(0.0, 1e4), key_depth=(0.0, 1e4))
 
 
 @dataclass
@@ -46,6 +75,9 @@ class GearParams:
     hub_diameter: float = 0.0
     hub_length: float = 0.0      # wysunięcie piasty poza wieniec
     rim_diameter: float = 0.0    # koło wewnętrzne: średnica zewnętrzna wieńca, 0 = dobrana sama
+    keyway: bool = False         # koło zewnętrzne z otworem: rowek wpustowy w otworze (przez koło i piastę)
+    key_width: float = 0.0       # szerokość rowka b, 0 = wg DIN 6885-1 dla średnicy otworu
+    key_depth: float = 0.0       # głębokość rowka w piaście t2 (od powierzchni otworu), 0 = wg DIN 6885-1
 
     @property
     def internal(self):
@@ -70,6 +102,7 @@ class GearParams:
         params = cls(**values)
         params.teeth = int(round(params.teeth))
         params.hub = bool(params.hub)
+        params.keyway = bool(params.keyway)
         return params
 
 
@@ -212,6 +245,29 @@ def validate(p: GearParams):
             checks.append(Check('error', 'bore', f'Otwór za duży: wieniec pod zębami cieńszy niż moduł. Najwięcej {max(g["df"] - 2 * m, 0):.2f} mm.'))
         elif wall < 2.5 * m - 1e-9:
             checks.append(Check('warning', 'bore', 'Cienki wieniec między otworem a stopami zębów (mniej niż 2,5·m).'))
+    if p.keyway:
+        if p.bore <= 0:
+            checks.append(Check('error', 'bore', 'Rowek wpustowy wymaga otworu - wpisz średnicę otworu.'))
+            return checks
+        if not (_limit(checks, 'key_width', p.key_width, 'Szerokość rowka', ' mm') and
+                _limit(checks, 'key_depth', p.key_depth, 'Głębokość rowka', ' mm')):
+            return checks
+        size = keyway_size(p)
+        if size is None:
+            field = 'key_width' if p.key_width <= 0 else 'key_depth'
+            checks.append(Check('error', field, f'Rowek wg DIN 6885 tylko dla otworów {KEYWAY_MIN_BORE:g} ... 150 mm - wpisz szerokość i głębokość rowka.'))
+            return checks
+        width, depth = size
+        if width >= .8 * p.bore:
+            checks.append(Check('error', 'key_width', f'Rowek za szeroki dla otworu: najwięcej {.8 * p.bore:.2f} mm.'))
+        top = p.bore / 2 + depth                       # dno rowka (odległość od osi)
+        wall = g['df'] / 2 - top
+        if wall < m - 1e-9:
+            checks.append(Check('error', 'key_depth', f'Rowek sięga pod stopy zębów: zostaje {max(wall, 0):.2f} mm materiału (co najmniej moduł).'))
+        elif wall < 2 * m - 1e-9:
+            checks.append(Check('warning', 'key_depth', 'Cienki materiał między rowkiem wpustowym a stopami zębów (mniej niż 2·m).'))
+        if p.hub and p.hub_diameter / 2 - top < 1 - 1e-9 and p.hub_diameter > p.bore:
+            checks.append(Check('error', 'key_depth', 'Rowek wpustowy przebija ściankę piasty - zwiększ średnicę piasty.'))
     if p.hub:
         if not (_limit(checks, 'hub_diameter', p.hub_diameter, 'Średnica piasty', ' mm') and
                 _limit(checks, 'hub_length', p.hub_length, 'Długość piasty', ' mm')):

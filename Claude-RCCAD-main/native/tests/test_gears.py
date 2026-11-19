@@ -336,5 +336,122 @@ class GearOccTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - start, 10)
 
 
+class GearSolidTests(unittest.TestCase):
+    """Etap 3: pełna bryła koła o zębach prostych - poprawność, szczelność, objętość, otwór, piasta, rowek, STEP."""
+
+    @classmethod
+    def setUpClass(cls):
+        from rccad.gears import occ
+        cls.occ = occ
+
+    def check(self, p):
+        solid = self.occ.gear_solid(p)
+        report = self.occ.solid_report(solid)
+        self.assertTrue(report['ok'], report)
+        self.assertEqual(solid.ShapeType(), 'Solid')
+        return solid
+
+    def section_area(self, p):
+        return self.occ.section_face(p).Area()
+
+    def test_plain_gear_is_one_prism_with_exact_volume_and_diameters(self):
+        p = GearParams(module=2, teeth=20, width=12)
+        solid = self.check(p)
+        self.assertAlmostEqual(solid.Volume(), self.section_area(p) * 12, delta=1e-6 * solid.Volume())
+        bb = solid.BoundingBox()
+        self.assertAlmostEqual(bb.zmin, 0, places=6)                        # pudełko OCC poszerzone o tolerancję 1e-7
+        self.assertAlmostEqual(bb.zmax, 12, places=6)
+        self.assertAlmostEqual(bb.xmax, 22, places=6)                     # pierwszy ząb na +X: wierzchołek na r_a
+        self.assertEqual(len(solid.Faces()), 20 * 6 + 2)                    # 5 ścian zęba + dno wrębu, dwie płaskie
+
+    def test_bore_keyway_and_hub(self):
+        base = dict(module=2, teeth=20, width=10)
+        bore = self.check(GearParams(bore=10, **base))
+        self.assertAlmostEqual(bore.Volume(), self.section_area(GearParams(**base)) * 10 - math.pi * 25 * 10, delta=1e-6 * bore.Volume())
+        key = self.check(GearParams(bore=10, keyway=True, **base))
+        b, t2 = gears.keyway_standard(10)
+        self.assertEqual((b, t2), (3.0, 1.4))
+        x0 = math.sqrt(25 - 1.5 ** 2)
+        segment = 25 * math.asin(1.5 / 5) - 1.5 * x0                         # odcinek koła pod rowkiem
+        key_area = 3 * (5 + t2 - x0) - segment
+        self.assertAlmostEqual(bore.Volume() - key.Volume(), key_area * 10, delta=1e-6 * bore.Volume())
+        self.assertAlmostEqual(key.BoundingBox().xmax, 22, places=6)
+        hub = self.check(GearParams(bore=10, keyway=True, hub=True, hub_diameter=24, hub_length=8, **base))
+        ring = math.pi * (12 ** 2 - 5 ** 2) - key_area
+        self.assertAlmostEqual(hub.Volume() - key.Volume(), ring * 8, delta=1e-6 * hub.Volume())
+        self.assertAlmostEqual(hub.BoundingBox().zmax, 18, places=6)
+        bores = [f for f in hub.Faces() if f.geomType() == 'CYLINDER' and abs(f._geomAdaptor().Cylinder().Radius() - 5) < 1e-9]
+        self.assertEqual(len(bores), 1)                                       # otwór przez wieniec i piastę - jedna ściana
+        self.assertAlmostEqual(bores[0].BoundingBox().zmax - bores[0].BoundingBox().zmin, 18, places=6)
+
+    def test_wide_hub_covering_the_teeth_uses_one_union(self):
+        p = GearParams(module=2, teeth=20, bore=10, hub=True, hub_diameter=40, hub_length=5)
+        solid = self.check(p)
+        teeth = self.section_area(GearParams(module=2, teeth=20)) * 10 - math.pi * 25 * 10
+        self.assertAlmostEqual(solid.Volume(), teeth + math.pi * (400 - 25) * 5, delta=1e-6 * solid.Volume())
+
+    def test_internal_spur_gear_ring(self):
+        p = GearParams(kind='spur_int', module=2, teeth=60, width=15, rim_diameter=140)
+        solid = self.check(p)
+        self.assertAlmostEqual(solid.Volume(), self.section_area(p) * 15, delta=1e-6 * solid.Volume())
+        self.assertAlmostEqual(solid.BoundingBox().xmax, 70, places=6)
+
+    def test_undercut_and_many_teeth(self):
+        self.check(GearParams(module=2, teeth=8, bore=4))
+        import time
+        start = time.perf_counter()
+        self.check(GearParams(module=1, teeth=150, bore=20, keyway=True, hub=True, hub_diameter=40, hub_length=10))
+        self.assertLess(time.perf_counter() - start, 15)
+
+    def test_no_boolean_per_tooth(self):
+        """Zęby i otwór powstają bez operacji logicznych; piasta węższa niż stopy - też bez nich (zszycie)."""
+        from unittest.mock import patch
+        import OCP.BRepAlgoAPI as algo
+        calls = []
+        real = algo.BRepAlgoAPI_Fuse
+        with patch.object(algo, 'BRepAlgoAPI_Fuse', side_effect=lambda *a: calls.append(1) or real(*a)):
+            self.check(GearParams(module=2, teeth=40, bore=10, keyway=True, hub=True, hub_diameter=24, hub_length=8))
+            self.assertEqual(calls, [])
+            self.check(GearParams(module=2, teeth=20, bore=10, hub=True, hub_diameter=40, hub_length=5))
+            self.assertEqual(len(calls), 1)                                   # piasta szersza niż stopy: jedna suma
+
+    def test_reversed_solid_is_rejected(self):
+        solid = self.check(GearParams(module=2, teeth=20))
+        import cadquery as cq
+        reversed_solid = cq.Shape.cast(solid.wrapped.Reversed())
+        self.assertFalse(self.occ.solid_report(reversed_solid)['ok'])
+
+    def test_helical_is_not_built_yet(self):
+        with self.assertRaises(gears.GearError):
+            self.occ.gear_solid(GearParams(kind='helical_ext', teeth=20))
+
+    def test_step_export_round_trip(self):
+        import tempfile
+        from rccad import kernel
+        p = GearParams(module=1.5, teeth=24, width=8, bore=8, keyway=True, hub=True, hub_diameter=16, hub_length=6)
+        solid = self.check(p)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'kolo.step')
+            kernel.export_shapes([solid], path)
+            back = kernel.import_shapes(path)
+        self.assertEqual([kind for _, kind in back], ['solid'])
+        shape = back[0][0]
+        self.assertTrue(self.occ.solid_report(shape)['ok'])
+        self.assertAlmostEqual(shape.Volume(), solid.Volume(), delta=1e-6 * solid.Volume())
+        self.assertEqual(len(shape.Faces()), len(solid.Faces()))
+
+    def test_keyway_validation(self):
+        self.assertIn(('error', 'bore'), levels(validate(GearParams(keyway=True))))
+        self.assertIn(('error', 'key_width'), levels(validate(GearParams(bore=4, keyway=True))))      # poza tablicą DIN
+        self.assertEqual(validate(GearParams(bore=4, keyway=True, key_width=1.5, key_depth=.8)), [])
+        self.assertIn(('error', 'key_depth'), levels(validate(GearParams(module=2, teeth=20, bore=20, keyway=True, key_depth=6))))
+        self.assertIn(('error', 'key_width'), levels(validate(GearParams(module=2, teeth=20, bore=10, keyway=True, key_width=9))))
+        self.assertIn(('error', 'key_depth'), levels(validate(GearParams(module=2, teeth=30, bore=10, keyway=True, hub=True,
+                                                                         hub_diameter=13, hub_length=5))))
+        self.assertEqual(gears.keyway_standard(30), (8.0, 3.3))
+        self.assertEqual(gears.keyway_standard(30.5), (10.0, 3.3))
+        self.assertIsNone(gears.keyway_standard(200))
+
+
 if __name__ == '__main__':
     unittest.main()

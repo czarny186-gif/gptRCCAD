@@ -78,7 +78,10 @@ class Body:
             return replace(self, shape=shape, mesh=self._placed_mesh(shape, matrix), meta=dict(self.meta, ply=ply))
         if self.kind == 'solid' and self.meta and self.meta.get('sheet'):
             return replace(self, shape=shape, mesh=self._placed_mesh(shape, matrix))      # ruch nie jest edycją blachy
-        return self.changed(shape, mesh=self._placed_mesh(shape, matrix))
+        moved = self.changed(shape, mesh=self._placed_mesh(shape, matrix))
+        if self.kind == 'solid' and self.meta and self.meta.get('gear'):
+            moved = replace(moved, meta=dict(moved.meta or {}, gear=self.meta['gear']))  # przesunięte koło zębate - te same zęby
+        return moved
 
     def _placed_mesh(self, shape, matrix):
         """Siatka po sztywnym ruchu: gotowa siatka przesunięta macierzą (bez liczenia od nowa)."""

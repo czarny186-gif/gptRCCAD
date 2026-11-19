@@ -9,8 +9,10 @@ później przekładniom planetarnym i zębatkowym.
   occ.py      zarys jako krzywe Open CASCADE (zarys zęba, zarys koła, przekrój czołowy) - import osobno:
               from rccad.gears import occ  (pakiet sam nie wczytuje Open CASCADE)
 """
-from .params import (GearParams, Check, KINDS, KIND_TITLES, HANDS, LIMITS, derived, validate, inv, rack_rho)
+from .params import (GearParams, Check, KINDS, KIND_TITLES, HANDS, LIMITS, derived, validate, inv, rack_rho,
+                     keyway_standard, keyway_size)
 from .profile import GearError, ToothProfile, profile, check, outline_points, polygon_area
 
 __all__ = ['GearParams', 'Check', 'KINDS', 'KIND_TITLES', 'HANDS', 'LIMITS', 'derived', 'validate', 'inv', 'rack_rho',
+           'keyway_standard', 'keyway_size',
            'GearError', 'ToothProfile', 'profile', 'check', 'outline_points', 'polygon_area']
