@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.5.27 — Przekładnie: zęby skośne i koła wewnętrzne (etap 4)
+# RCCAD Desktop 0.5.28 — Przekładnie: podgląd na żywo i edycja kół (etap 5)
+
+- **Podgląd na żywo**: po otwarciu okna Koła walcowe zielony podgląd widać od razu i odświeża się przy każdej zmianie modułu, liczby zębów, szerokości i innych pól - szybki podgląd (siatka z silnika, 10-80 ms także przy 200 zębach). Przycisk Podgląd pokazuje dokładną bryłę B-Rep; Zastosuj tworzy dokładną bryłę.
+- **Edycja kół**: dwuklik w koło w widoku albo Edytuj / dwuklik na kroku „Koło zębate” w historii otwiera generator z zapisanymi parametrami. Zmiana zastępuje krok; dalsze kroki (np. przesunięcie) zostają. Koło wstawione z biblioteki przebudowuje się w tym samym miejscu (położenie koła zapamiętywane przy przesuwaniu, obracaniu, dopasowaniu).
+- **Parametry w projekcie i bibliotece**: zostają po zapisie i ponownym otwarciu.
+- **Przebudowa tylko zmienionych kół**: gotowe bryły kół są pamiętane według parametrów - przeliczanie historii nie buduje drugi raz kół, których parametry się nie zmieniły.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.27 — Przekładnie: zęby skośne i koła wewnętrzne (etap 4)
 
 - **Zęby skośne - prawdziwa geometria śrubowa**: przekrój czołowy (dokładna ewolwenta) przeciągany wzdłuż osi z obrotem prowadzonym linią śrubową o skoku zęba L = π·d / tg β; boki zębów to ewolwentowe powierzchnie śrubowe (odchyłka od wzoru poniżej 0,00001 mm). Regulowany kąt pochylenia i kierunek skrętu (prawy / lewy). Ramka pokazuje skok linii zęba i skręt na szerokości.
 - **Wszystkie cztery rodzaje uzębienia jako bryły B-Rep**: proste i skośne, zewnętrzne i wewnętrzne. Otwór, rowek wpustowy i piasta - proste także w kole skośnym.
 - **Koło wewnętrzne**: średnica zewnętrzna pierścienia; kontrola grubości obręczy wg ISO 6336-3 (ostrzeżenie poniżej 1,2 wysokości zęba, błąd poniżej modułu); średnica dobrana sama daje pełną nośność. Ramka pokazuje grubość obręczy.
 - **Bez operacji logicznych**: boki zębów jednym przeciągnięciem, dno i obrócona góra, otwór i piasta - zszyte w jedną szczelną powłokę. Każda bryła sprawdzana (poprawność, szczelność, orientacja); STEP po zapisie i odczycie - ta sama objętość i liczba ścian dla wszystkich rodzajów.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.26 — Przekładnie: pełne koła o zębach prostych (etap 3)
 

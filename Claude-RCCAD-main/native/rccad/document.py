@@ -80,7 +80,15 @@ class Body:
             return replace(self, shape=shape, mesh=self._placed_mesh(shape, matrix))      # ruch nie jest edycją blachy
         moved = self.changed(shape, mesh=self._placed_mesh(shape, matrix))
         if self.kind == 'solid' and self.meta and self.meta.get('gear'):
-            moved = replace(moved, meta=dict(moved.meta or {}, gear=self.meta['gear']))  # przesunięte koło zębate - te same zęby
+            # przesunięte koło zębate - te same zęby; położenie względem koła z generatora (oś Z w początku układu) złożone
+            # z kolejnych ruchów, żeby po edycji parametrów nowe koło stanęło w tym samym miejscu
+            old = np.eye(4)
+            if self.meta.get('gear_place'):
+                old[:3, :4] = np.asarray(self.meta['gear_place'], float)
+            m = np.eye(4)
+            m[:3, :4] = np.asarray(matrix, float)[:3, :4]
+            place = (m @ old)[:3, :4]
+            moved = replace(moved, meta=dict(moved.meta or {}, gear=self.meta['gear'], gear_place=[[float(c) for c in row] for row in place]))
         return moved
 
     def _placed_mesh(self, shape, matrix):

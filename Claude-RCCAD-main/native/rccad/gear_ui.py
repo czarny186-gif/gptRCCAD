@@ -6,6 +6,10 @@ Mixin okna Studio - tylko interfejs. Obliczenia i sprawdzanie parametrów są w 
 Etap 3: Podgląd liczy w tle bryłę koła o zębach prostych (zielony podgląd odświeża się przy zmianie pól), Zastosuj
 dodaje ją jako krok historii 'gear' (przepis = parametry; dwuklik w krok otwiera to okno z wartościami). Rowek wpustowy
 wg DIN 6885 (pola 0 = wartości z normy).
+Etap 5: podgląd na żywo - po otwarciu okna każda zmiana pól od razu odświeża szybki podgląd (siatka z silnika,
+gears.preview, kilkadziesiąt ms); Podgląd pokazuje dokładną bryłę B-Rep, Zastosuj ją tworzy. Dwuklik w koło (widok)
+albo Edytuj w historii otwiera okno z zapisanymi parametrami: koło z krokiem tworzącym - edycja tego kroku; koło bez
+niego (np. z biblioteki) - przebudowa w tym samym miejscu (krok 'gear' z 'replace').
 Etap 4: także zęby skośne (zewnętrzne i wewnętrzne) - ramka pokazuje skok linii zęba i skręt na szerokości; koło
 wewnętrzne - grubość obręczy (kontrola wg ISO 6336-3).
 Etap 2: wymiary i zarys zęba liczy silnik (gears.check: walidacja + zarys ewolwentowy z obtaczania), panel pokazuje
@@ -17,6 +21,8 @@ from __future__ import annotations
 
 import math
 import uuid
+
+import numpy as np
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QVBoxLayout
@@ -154,6 +160,9 @@ class GearTools:
         self.gr_info.setTextFormat(Qt.RichText)
         self.gr_info.setStyleSheet(READOUT)
         lay.addWidget(self.gr_info)
+        self.gr_note = _label('', 'small')
+        self.gr_note.setWordWrap(True)
+        lay.addWidget(self.gr_note)
         self.gr_status = _label('', 'status')
         self.gr_status.setWordWrap(True)
         self.gr_status.setTextFormat(Qt.RichText)
@@ -163,7 +172,7 @@ class GearTools:
         row.setSpacing(6)
         self.gr_preview_btn, self.gr_apply_btn, self.gr_cancel_btn = QPushButton('Podgląd'), QPushButton('Zastosuj'), QPushButton('Anuluj')
         self.gr_apply_btn.setObjectName('primary')
-        self.gr_preview_btn.setToolTip('Pokazuje bryłę koła w widoku (zielony podgląd) - potem odświeża się sam przy zmianie pól.')
+        self.gr_preview_btn.setToolTip('Dokładny podgląd: bryła B-Rep koła (jak po Zastosuj). Na żywo przy zmianie pól widać szybki podgląd.')
         self.gr_apply_btn.setToolTip('Tworzy koło zębate jako nową bryłę (Enter) - krok historii, można cofnąć i edytować dwuklikiem.')
         self.gr_cancel_btn.setToolTip('Zamyka narzędzie bez zmian - pola wracają do wartości sprzed otwarcia.')
         self.gr_preview_btn.clicked.connect(lambda _=False: self.preview_gear())
@@ -176,10 +185,12 @@ class GearTools:
         self.gr_hand.currentIndexChanged.connect(lambda *_: self._gr_changed())
         self._gr_entry = None
         self.gr_checks = []
-        self.gr_previewing = False                    # po Podglądzie podgląd odświeża się przy każdej zmianie pól
+        self.gr_previewing = False                    # podgląd na żywo włączony (okno otwarte)
+        self.gr_exact = False                         # w widoku dokładna bryła B-Rep (Podgląd), nie szybka siatka
+        self._gr_replace = None                       # przebudowa istniejącego koła bez kroku tworzącego: id i położenie
         self._gr_timer = QTimer(self)
         self._gr_timer.setSingleShot(True)
-        self._gr_timer.setInterval(250)
+        self._gr_timer.setInterval(60)
         self._gr_timer.timeout.connect(self._gr_preview)
         self._gr_changed()
 
@@ -242,10 +253,12 @@ class GearTools:
         self.gr_preview_btn.setEnabled(not errors)
         self.gr_apply_btn.setEnabled(not errors)
         if getattr(self, 'gr_previewing', False) and self.mode == 'gear':
+            self.gr_exact = False
             if errors:
                 self.view.set_preview_mesh(None)
+                self.gr_note.setText('')
             else:
-                self._gr_timer.start()
+                self._gr_timer.start()                # szybki podgląd po krótkiej przerwie we wpisywaniu
 
     def _gr_body_text(self, p):
         if p.internal:
@@ -285,10 +298,15 @@ class GearTools:
     def _gear_enter(self):
         self.gear_panel.show()
         self._gr_entry = self.gear_params()          # Anuluj przywraca pola sprzed otwarcia
-        self.gr_previewing = False
+        self._gr_replace = None
+        self.gr_previewing = True                     # podgląd na żywo od razu
+        self.gr_exact = False
         self._gr_changed()
+        self._gr_timer.stop()
+        self._gr_preview()                            # pierwszy podgląd bez czekania
         self.view.setCursor(Qt.ArrowCursor)
-        self.hint('Koła walcowe: wybierz rodzaj uzębienia i wpisz parametry. Podgląd pokazuje koło, Zastosuj dodaje je do modelu.')
+        self.hint('Koła walcowe: wybierz rodzaj uzębienia i wpisz parametry - podgląd odświeża się od razu. '
+                  'Podgląd pokazuje dokładną bryłę, Zastosuj dodaje koło do modelu.')
 
     def _gr_valid(self):
         self._gr_changed()
@@ -298,15 +316,43 @@ class GearTools:
             return False
         return True
 
+    def _gr_place(self):
+        """Macierz 3x4 położenia przebudowywanego koła (albo None - koło z generatora w początku układu)."""
+        place = (self._gr_replace or {}).get('place')
+        return np.asarray(place, float) if place else None
+
+    def _gr_show(self, mesh, exact):
+        place = self._gr_place()
+        if place is not None:
+            mesh = kernel.placed_mesh(mesh, place)
+        self.view.set_preview_mesh(mesh, **PREVIEW_COLOR)
+        self.gr_exact = exact
+        self.gr_note.setText('Podgląd: dokładna bryła B-Rep.' if exact else
+                             'Podgląd szybki (siatka) - dokładna bryła B-Rep powstaje po Zastosuj; przycisk Podgląd pokazuje ją od razu.')
+
     def preview_gear(self):
-        """Podgląd bryły koła (w tle); dalej odświeża się sam przy zmianie pól, aż do Zastosuj / Anuluj."""
+        """Dokładny podgląd: bryła B-Rep koła (w tle). Kolejna zmiana pól wraca do szybkiego podglądu."""
         if not self._gr_valid():
             return
         self.gr_previewing = True
         self._gr_timer.stop()
-        self._gr_preview()
+        params = self.gear_params()
+
+        def compute():
+            return kernel.display_mesh(hist.gear_shape(params), .1)
+
+        def show(mesh, error):
+            if self.mode != 'gear' or self.gear_params() != params:
+                return
+            if error or mesh is None:
+                self.toast(error or 'Nie udało się zbudować koła.')
+                return
+            self._gr_show(mesh, True)
+
+        self.run_preview('gear', compute, show)
 
     def _gr_preview(self):
+        """Szybki podgląd na żywo (siatka z silnika - kilkadziesiąt ms), bez bryły B-Rep."""
         if self.mode != 'gear' or not self.gr_previewing:
             return
         params = self.gear_params()
@@ -314,17 +360,17 @@ class GearTools:
             return
 
         def compute():
-            from .gears import occ
-            return kernel.display_mesh(occ.gear_solid(params), .1)
+            from .gears import preview
+            from .meshbool import triangles_shape
+            return kernel.triangle_mesh_display(triangles_shape(*preview.mesh_arrays(params)))
 
         def show(mesh, error):
-            if self.mode != 'gear' or not self.gr_previewing or self.gear_params() != params:
+            if self.mode != 'gear' or not self.gr_previewing or self.gear_params() != params or self.gr_exact:
                 return
             if error or mesh is None:
                 self.view.set_preview_mesh(None)
-                self.toast(error or 'Nie udało się zbudować koła.')
                 return
-            self.view.set_preview_mesh(mesh, **PREVIEW_COLOR)
+            self._gr_show(mesh, False)
 
         self.run_preview('gear', compute, show)
 
@@ -338,8 +384,15 @@ class GearTools:
             return
         params = self.gear_params()
         editing = self._gr_editing()
-        ids = list((editing or {}).get('out') or ()) or [uuid.uuid4().hex]
-        recipe = dict(type='gear', params=params.to_dict(), name=hist.gear_name(params), out=ids[:1])
+        replace_id = (self._gr_replace or {}).get('id')
+        if replace_id:                                # przebudowa istniejącego koła w tym samym miejscu
+            recipe = dict(type='gear', params=params.to_dict(), name=hist.gear_name(params), replace=replace_id)
+            if self._gr_place() is not None:
+                recipe['place'] = self._gr_replace['place']
+            ids = [replace_id]
+        else:
+            ids = list((editing or {}).get('out') or ()) or [uuid.uuid4().hex]
+            recipe = dict(type='gear', params=params.to_dict(), name=hist.gear_name(params), out=ids[:1])
         existing = list(self.document.bodies)
 
         def build():
@@ -366,7 +419,34 @@ class GearTools:
         self.set_mode(None)
 
     def _step_fill_gear(self, recipe):
-        """Edycja kroku historii (dwuklik): okno z parametrami koła; Zastosuj zastępuje krok (ta sama bryła)."""
+        """Edycja kroku historii (dwuklik / Edytuj): okno z parametrami koła; Zastosuj zastępuje krok (ta sama bryła)."""
+        if recipe.get('replace'):
+            self._gr_replace = dict(id=recipe['replace'], place=recipe.get('place'))
         self.set_gear_params(recipe['params'])
         self._gr_entry = self.gear_params()
-        self.preview_gear()
+
+    def gear_step_index(self, body_id):
+        """Numer kroku historii, który utworzył koło (krok 'gear' z tym identyfikatorem w 'out') albo None."""
+        for index, (_, info) in enumerate(self.document.states()):
+            op = info.get('op') or {}
+            if op.get('type') == 'gear' and body_id in (op.get('out') or ()):
+                return index
+        return None
+
+    def edit_gear(self, body_id):
+        """Dwuklik w koło: generator z zapisanymi parametrami. Koło z krokiem tworzącym - edycja tego kroku (dalsze kroki,
+        np. przesunięcie, zostają); bez niego (np. wstawione z biblioteki) - przebudowa koła w tym samym miejscu."""
+        body = self.document.get(body_id)
+        params = ((body.meta or {}).get('gear') if body is not None else None)
+        if params is None or self.busy:
+            return False
+        index = self.gear_step_index(body_id)
+        if index is not None:
+            self.history_edit(index)
+            return True
+        self.set_mode('gear')
+        self._gr_replace = dict(id=body_id, place=(body.meta or {}).get('gear_place'))
+        self.set_gear_params(params)
+        self._gr_entry = self.gear_params()
+        self.toast(f'Edycja koła {body.name}: zmień parametry i kliknij Zastosuj - koło zostanie przebudowane w tym samym miejscu.', 6000)
+        return True

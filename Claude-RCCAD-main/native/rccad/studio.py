@@ -6795,7 +6795,14 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, LinkTools, SectionTools,
         return out
 
     def view_double_clicked(self, x, y):
-        """Podwójne kliknięcie ściany w trybie edycji bryły: podświetla ścianę i zaznacza wszystkie jej krawędzie (zaokrąglenie / faza na okrągło)."""
+        """Podwójne kliknięcie ściany w trybie edycji bryły: podświetla ścianę i zaznacza wszystkie jej krawędzie (zaokrąglenie / faza na okrągło).
+        Bez narzędzia: dwuklik w koło zębate otwiera generator z jego parametrami."""
+        if not self.busy and self.mode is None:
+            hit = self.view.pick_face(x, y)
+            body = self.document.get(hit[0]) if hit else None
+            if body is not None and body.kind == 'solid' and (body.meta or {}).get('gear'):
+                self.edit_gear(body.id)
+            return
         if self.busy or self.mode != 'mod':
             return
         hit = self.view.pick_face(x, y)

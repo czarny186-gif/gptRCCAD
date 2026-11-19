@@ -2993,17 +2993,50 @@ def gear_name(params):
     return f'{"Wieniec" if params.internal else "Koło"} z{params.teeth} m{float(params.module):g}'
 
 
-def run_gear(bodies, recipe):
-    """Koło zębate walcowe z parametrów (Przekładnie → Koła walcowe): nowa bryła B-Rep (silnik rccad.gears), oś Z,
-    wieniec od z = 0, pierwszy ząb na osi +X - potem położenie jak każdej bryły (Przesuń / Obróć, Dopasowanie).
-    Parametry zostają w meta['gear'] bryły (dalsze etapy: pary kół, edycja)."""
-    from .gears import GearError, GearParams
+_GEAR_SHAPES = {}          # parametry koła (JSON) -> bryła: niezmienione koła nie są budowane drugi raz (przeliczanie historii)
+
+
+def gear_shape(params):
+    """Bryła koła z generatora (oś Z w początku układu) - z pamięci, gdy te same parametry były już liczone."""
+    from .gears import GearError
     from .gears import occ as gear_occ
+    key = json.dumps(params.to_dict(), sort_keys=True)
+    shape = _GEAR_SHAPES.get(key)
+    if shape is None:
+        try:
+            shape = gear_occ.gear_solid(params)
+        except GearError as exc:
+            raise kernel.CadError(str(exc)) from None
+        if len(_GEAR_SHAPES) >= 24:
+            _GEAR_SHAPES.pop(next(iter(_GEAR_SHAPES)))
+        _GEAR_SHAPES[key] = shape
+    return shape
+
+
+def run_gear(bodies, recipe):
+    """Koło zębate walcowe z parametrów (Przekładnie → Koła walcowe): bryła B-Rep (silnik rccad.gears), oś Z,
+    wieniec od z = 0, pierwszy ząb na osi +X - potem położenie jak każdej bryły (Przesuń / Obróć, Dopasowanie).
+    Parametry zostają w meta['gear'] bryły, położenie względem koła z generatora w meta['gear_place'].
+    recipe['replace']: przebudowa istniejącego koła (np. wstawionego z biblioteki, bez kroku tworzącego) - nowa bryła
+    w tym samym położeniu (recipe['place']), z tym samym identyfikatorem, nazwą, kolorem i grupą."""
+    from .gears import GearParams
     params = GearParams.from_dict(recipe['params'])
-    try:
-        shape = gear_occ.gear_solid(params)
-    except GearError as exc:
-        raise kernel.CadError(str(exc)) from None
+    shape = gear_shape(params)
+    target = recipe.get('replace')
+    if target:
+        body = _body(bodies, target)
+        place = recipe.get('place')
+        if place:
+            shape = apply_placement(shape, np.asarray(place, float))
+        old = (body.meta or {}).get('gear')
+        name = body.name
+        if old is not None and name == gear_name(GearParams.from_dict(old)):
+            name = recipe.get('name') or gear_name(params)       # nazwa nadana przez generator - idzie za parametrami
+        meta = {k: v for k, v in (body.meta or {}).items() if k not in ('gear', 'gear_place')}
+        meta['gear'] = params.to_dict()
+        if place:
+            meta['gear_place'] = [[float(c) for c in row] for row in np.asarray(place, float)[:3, :4]]
+        return _replace(bodies, replace(body, name=name, shape=shape, meta=meta, threads=()).prepared())
     ids = list(recipe.get('out') or ())
     body = Body(recipe.get('name') or gear_name(params), shape, 'solid', id=ids[0] if ids else uuid.uuid4().hex,
                 meta={'gear': params.to_dict()}).prepared()
@@ -4035,7 +4068,9 @@ def reads(recipe, current):
         return {recipe['id']}
     if kind == 'trim':
         return {recipe['id']} | sketches
-    if kind in ('text', 'gear'):
+    if kind == 'gear':
+        return {recipe['replace']} if recipe.get('replace') else set()
+    if kind == 'text':
         return set()
     if kind == 'ply_panel':
         ids = set(recipe.get('spent', ()))

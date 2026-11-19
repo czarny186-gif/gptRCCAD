@@ -3037,6 +3037,80 @@ class StudioTests(unittest.TestCase):
         ring=w.document.get(w.selected[0])
         self.assertEqual(ring.name,'Wieniec z60 m2');self.assertTrue(occ.solid_report(ring.shape)['ok'])
 
+    def test_gear_live_preview_double_click_library_and_reopen(self):
+        """Koła walcowe (etap 5): szybki podgląd na żywo od otwarcia, Podgląd - dokładna bryła; dwuklik w koło otwiera
+        generator z parametrami (edycja kroku tworzącego); koło z biblioteki - przebudowa w tym samym miejscu; parametry
+        zostają po zapisie i ponownym otwarciu projektu."""
+        from rccad import library
+        from rccad.gears import occ
+        import tempfile
+        w=self.w
+        w.tools['gear'].click();self.preview()
+        self.assertTrue(w.view.preview_items);self.assertFalse(w.gr_exact);self.assertIn('szybki',w.gr_note.text())   # od razu, bez Podglądu
+        w.gr_fields['teeth'].setValue(31);w._gr_timer.stop();w._gr_preview();self.preview()
+        self.assertTrue(w.view.preview_items);self.assertFalse(w.gr_exact)
+        w.preview_gear();self.preview();self.assertTrue(w.gr_exact);self.assertIn('dokładna',w.gr_note.text())
+        w.gr_fields['module'].setValue(1.5);self.assertFalse(w.gr_exact)                       # zmiana pola: znów szybki podgląd
+        w.set_gear_params(dict(kind='helical_ext',module=2,teeth=22,width=10,helix=15,bore=8))
+        w.apply_gear();self.wait()
+        gid=w.selected[0];self.assertEqual(w.document.get(gid).meta['gear']['teeth'],22)
+        # dwuklik w koło w widoku (bez narzędzia): edycja kroku tworzącego z zapisanymi parametrami
+        with patch.object(w.view,'pick_face',return_value=(gid,np.array((0,0,1.0)),np.array((0,0,10.0)))):
+            w.view_double_clicked(5,5)
+        self.preview()
+        self.assertEqual(w.mode,'gear');self.assertEqual(w.gear_params().teeth,22);self.assertEqual(w.gear_params().kind,'helical_ext')
+        self.assertIsNotNone(w._gr_editing());self.assertIsNone(w._gr_replace)
+        w.gr_fields['teeth'].setValue(26);w.apply_gear();self.wait();self.app.processEvents();self.wait()
+        self.assertEqual(w.document.get(gid).meta['gear']['teeth'],26)
+        self.assertEqual([(i.get('op') or {}).get('type') for _,i in w.document.states()].count('gear'),1)        # krok zastąpiony
+        # dwuklik w zwykłą bryłę nic nie otwiera
+        box=Body('Pudło',k.box(5,5,5)).prepared();w.document.commit([*w.document.bodies,box])
+        with patch.object(w.view,'pick_face',return_value=(box.id,np.array((0,0,1.0)),np.array((0,0,5.0)))):
+            w.view_double_clicked(5,5)
+        self.assertIsNone(w.mode)
+        with tempfile.TemporaryDirectory() as folder:
+            # biblioteka: parametry koła zostają; wstawione koło (bez kroku tworzącego) - przebudowa w tym samym miejscu
+            item=library.save_bodies([w.document.get(gid)],Path(folder),'kolo')
+            loaded=library.load_bodies('object',item)
+            self.assertEqual(loaded[0].meta['gear']['teeth'],26)
+            before={b.id for b in w.document.bodies}
+            rot=np.eye(3);w._library_insert(dict(bodies=loaded,name='kolo'),rot,np.array((80.0,0,0)));self.wait()
+            lib_id=next(b.id for b in w.document.bodies if b.id not in before);inserted=w.document.get(lib_id)
+            w.set_mode(None)
+            self.assertEqual(inserted.meta['gear']['teeth'],26);self.assertIsNotNone(inserted.meta.get('gear_place'))
+            centre=np.array(inserted.shape.Center().toTuple())
+            with patch.object(w.view,'pick_face',return_value=(lib_id,np.array((0,0,1.0)),centre)):
+                w.view_double_clicked(5,5)
+            self.preview()
+            self.assertEqual(w.mode,'gear');self.assertEqual(w._gr_replace['id'],lib_id);self.assertEqual(w.gear_params().teeth,26)
+            self.assertTrue(w.view.preview_items)
+            steps=w.document.history_length
+            w.gr_fields['width'].setValue(14);w.apply_gear();self.wait()
+            rebuilt=w.document.get(lib_id)
+            self.assertEqual(rebuilt.meta['gear']['width'],14.0);self.assertEqual(w.document.history_length,steps+1)
+            self.assertTrue(occ.solid_report(rebuilt.shape)['ok'])
+            bb=rebuilt.shape.BoundingBox();self.assertAlmostEqual((bb.xmin+bb.xmax)/2,80+(k.bounds(w.document.get(gid).shape).xmin+k.bounds(w.document.get(gid).shape).xmax)/2,places=3)
+            zs=[v.Z for v in rebuilt.shape.Vertices()];self.assertAlmostEqual(max(zs)-min(zs),14,places=6)   # pudełko B-spline jest luźne
+            self.assertEqual(len([b for b in w.document.bodies if (b.meta or {}).get('gear')]),2)
+            # dwuklik w krok przebudowy (Edytuj w historii): to samo okno, przebudowa dalej w tym samym miejscu
+            index=len(w.document.states())-1
+            w.history_edit(index);self.preview()
+            self.assertEqual(w.mode,'gear');self.assertEqual(w._gr_replace['id'],lib_id);self.assertAlmostEqual(w.gr_fields['width'].value(),14)
+            w.cancel_gear();self.wait();self.app.processEvents();self.wait()
+            # zapis i ponowne otwarcie projektu: parametry i krok - dwuklik dalej otwiera generator
+            path=Path(folder)/'kola.rccadx';w.document.save(path)
+            w.open_path(path);self.wait()
+            for _ in range(50):
+                self.app.processEvents();time.sleep(.01)
+            self.wait()
+            again=w.document.get(gid);self.assertEqual(again.meta['gear']['teeth'],26)
+            self.assertEqual(w.document.get(lib_id).meta['gear']['width'],14.0)
+            with patch.object(w.view,'pick_face',return_value=(gid,np.array((0,0,1.0)),np.array((0,0,10.0)))):
+                w.view_double_clicked(5,5)
+            self.preview()
+            self.assertEqual(w.mode,'gear');self.assertEqual(w.gear_params().teeth,26)
+            w.cancel_gear();self.wait()
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

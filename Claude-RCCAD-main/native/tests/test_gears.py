@@ -114,7 +114,7 @@ class GearValidationTests(unittest.TestCase):
         self.assertEqual(GearParams.from_dict({'teeth': 19.6}).teeth, 20)
 
     def test_engine_does_not_import_qt_or_occ(self):
-        code = ('import sys; sys.path.insert(0, "."); import rccad.gears; '
+        code = ('import sys; sys.path.insert(0, "."); import rccad.gears, rccad.gears.preview; '
                 'print(any(m.startswith(("PySide6", "OCP", "cadquery")) for m in sys.modules))')
         out = subprocess.run([sys.executable, '-c', code], cwd=os.path.join(os.path.dirname(__file__), '..'),
                              capture_output=True, text=True, timeout=120)
@@ -576,6 +576,92 @@ class GearKindsTests(unittest.TestCase):
                 self.assertTrue(self.occ.solid_report(shape)['ok'], kind)
                 self.assertAlmostEqual(shape.Volume() / solid.Volume(), 1, places=6, msg=kind)
                 self.assertEqual(len(shape.Faces()), len(solid.Faces()), kind)
+
+
+class GearPreviewTests(unittest.TestCase):
+    """Etap 5: szybki podgląd (siatka z silnika) - ten sam kształt co bryła B-Rep, liczony wielokrotnie szybciej."""
+
+    @classmethod
+    def setUpClass(cls):
+        from rccad.gears import occ, preview
+        cls.occ, cls.preview = occ, preview
+
+    def test_preview_matches_the_exact_solid_for_every_kind(self):
+        import manifold3d as mf
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        from OCP.gp import gp_Pnt
+        for kind, kw in KIND_CASES.items():
+            p = GearParams(**kw)
+            v, t = self.preview.mesh_arrays(p)
+            mesh = mf.Manifold(mf.Mesh(vert_properties=v.astype(np.float32), tri_verts=t.astype(np.uint32)))
+            solid = self.occ.gear_solid(p)
+            self.assertLess(abs(mesh.volume() / solid.Volume() - 1), 5e-3, kind)
+            shell = solid.Shells()[0].wrapped
+            g = derived(p)
+            lo, hi = sorted((g['da'] / 2, g['df'] / 2))
+            R = np.hypot(v[:, 0], v[:, 1])
+            teeth = (R > lo - 1e-6) & (R < hi + 1e-6)                        # wierzchołki zarysu zębów (nie okręgi otworu / piasty)
+            for z in (0.0, p.width):                                        # dno i góra (skręt) leżą na bryle
+                ring = v[(np.abs(v[:, 2] - z) < 1e-6) & teeth][::25][:60]
+                self.assertGreater(len(ring), 10)
+                worst = max(BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(*map(float, q))).Vertex(), shell).Value()
+                            for q in ring)
+                self.assertLess(worst, 1e-3, (kind, z))
+
+    def test_preview_is_fast(self):
+        import time
+        for kw in (dict(teeth=200, module=1, bore=20, keyway=True, hub=True, hub_diameter=40, hub_length=10),
+                   dict(kind='helical_ext', teeth=40, helix=30, width=40), dict(kind='helical_int', teeth=120, helix=20)):
+            start = time.perf_counter()
+            self.preview.mesh_arrays(GearParams(**kw))
+            self.assertLess(time.perf_counter() - start, .5, kw)
+
+    def test_fewer_outline_points_keep_curve_ends(self):
+        p = GearParams(teeth=20)
+        dense, sparse = gears.outline_points(p), gears.outline_points(p, 5)
+        self.assertLess(len(sparse), len(dense) / 3)
+        R = np.hypot(*sparse.T)
+        g = derived(p)
+        self.assertAlmostEqual(R.max(), g['da'] / 2, places=9)
+        self.assertAlmostEqual(R.min(), g['df'] / 2, places=9)
+
+
+class GearRebuildTests(unittest.TestCase):
+    """Etap 5: krok historii 'gear' - pamięć brył (przebudowa tylko zmienionych kół), przebudowa koła bez kroku tworzącego,
+    położenie koła zapamiętane przy ruchu sztywnym."""
+
+    def test_unchanged_gear_is_not_rebuilt(self):
+        from rccad import history as hist
+        import time
+        p = GearParams(kind='helical_ext', teeth=37, helix=21, width=11)
+        first = hist.gear_shape(p)
+        start = time.perf_counter()
+        again = hist.gear_shape(GearParams.from_dict(p.to_dict()))
+        self.assertIs(again, first)
+        self.assertLess(time.perf_counter() - start, .01)
+        self.assertIsNot(hist.gear_shape(GearParams(kind='helical_ext', teeth=38, helix=21, width=11)), first)
+
+    def test_placement_is_tracked_and_rebuild_keeps_it(self):
+        from rccad import history as hist, kernel
+        bodies = hist.run_gear([], dict(type='gear', params=GearParams(teeth=20, bore=8).to_dict(), out=['g1']))
+        bodies = hist.run_transform(bodies, dict(type='transform', id='g1', mode='move', v=[40.0, 5.0, 3.0]))
+        bodies = hist.run_transform(bodies, dict(type='transform', id='g1', mode='rotate', v=[90.0, 0.0, 0.0]))
+        body = bodies[0]
+        place = np.asarray(body.meta['gear_place'], float)
+        expected = hist.apply_placement(hist.gear_shape(GearParams(teeth=20, bore=8)), place)
+        self.assertAlmostEqual(expected.Volume(), body.shape.Volume(), delta=1e-6 * body.shape.Volume())
+        np.testing.assert_allclose(np.array(expected.Center().toTuple()), np.array(body.shape.Center().toTuple()), atol=1e-6)
+        out = hist.run_gear(bodies, dict(type='gear', params=GearParams(teeth=30, bore=8).to_dict(), replace='g1',
+                                         place=body.meta['gear_place']))
+        new = out[0]
+        self.assertEqual((new.id, new.name, new.meta['gear']['teeth']), ('g1', 'Koło z30 m2', 30))
+        np.testing.assert_allclose(np.array(new.shape.Center().toTuple()), np.array(body.shape.Center().toTuple()), atol=1e-6)
+        self.assertEqual(hist.reads(dict(type='gear', params={}, replace='g1'), out), {'g1'})
+        self.assertEqual(hist.reads(dict(type='gear', params={}, out=['g2']), out), set())
+        renamed = [type(new)(**{**new.__dict__, 'name': 'Napęd'})]
+        out = hist.run_gear(renamed, dict(type='gear', params=GearParams(teeth=25, bore=8).to_dict(), replace='g1'))
+        self.assertEqual(out[0].name, 'Napęd')                                    # własna nazwa zostaje
 
 
 if __name__ == '__main__':

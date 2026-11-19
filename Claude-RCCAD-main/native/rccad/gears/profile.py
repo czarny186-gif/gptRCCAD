@@ -279,7 +279,14 @@ def outline_points(params: GearParams, samples=SAMPLES):
     """Gęsty zamknięty zarys całego koła (punkty) - do kontroli i pola przekroju; kolejność przeciwna do wskazówek zegara."""
     prof = profile(params)
     z = prof.teeth
-    lower_flank, lower_fil = prof.mirrored(prof.flank), prof.mirrored(prof.fillet)
+
+    def pick(points):            # mniej punktów niż w zarysie (szybki podgląd): co któryś, z oboma końcami
+        if samples >= len(points):
+            return points
+        return points[np.unique(np.round(np.linspace(0, len(points) - 1, max(samples, 2))).astype(int))]
+    flank = pick(prof.flank)
+    fillet = prof.fillet if prof.fillet_kind == 'arc' else pick(prof.fillet)
+    lower_flank, lower_fil = prof.mirrored(flank), prof.mirrored(fillet)
     if prof.fillet_kind == 'arc':
         cx, cy = prof.fillet_center
         def arc(pts, center):
@@ -291,9 +298,9 @@ def outline_points(params: GearParams, samples=SAMPLES):
         up_fil = arc(prof.fillet, (cx, cy))
         low_fil = arc(lower_fil, (cx, -cy))
     else:
-        up_fil, low_fil = prof.fillet, lower_fil
+        up_fil, low_fil = fillet, lower_fil
     tip = _xy(np.full(samples, prof.ra), np.linspace(-prof.tip_angle, prof.tip_angle, samples))
-    tooth = np.vstack((low_fil, lower_flank[1:], tip[1:], prof.flank[::-1][1:], up_fil[::-1][1:]))
+    tooth = np.vstack((low_fil, lower_flank[1:], tip[1:], flank[::-1][1:], up_fil[::-1][1:]))
     # tooth: od dolnego początku przejścia (dno wrębu) przez głowę do górnego początku przejścia
     gap = 2 * math.pi / z - 2 * prof.root_angle
     root = _xy(np.full(samples, prof.rf), prof.root_angle + gap * np.linspace(0, 1, samples))
