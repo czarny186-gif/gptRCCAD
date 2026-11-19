@@ -5,7 +5,9 @@ Mixin okna Studio - tylko interfejs. Obliczenia i sprawdzanie parametrów są w 
 
 Etap 3: Podgląd liczy w tle bryłę koła o zębach prostych (zielony podgląd odświeża się przy zmianie pól), Zastosuj
 dodaje ją jako krok historii 'gear' (przepis = parametry; dwuklik w krok otwiera to okno z wartościami). Rowek wpustowy
-wg DIN 6885 (pola 0 = wartości z normy). Zęby skośne - w kolejnym etapie.
+wg DIN 6885 (pola 0 = wartości z normy).
+Etap 4: także zęby skośne (zewnętrzne i wewnętrzne) - ramka pokazuje skok linii zęba i skręt na szerokości; koło
+wewnętrzne - grubość obręczy (kontrola wg ISO 6336-3).
 Etap 2: wymiary i zarys zęba liczy silnik (gears.check: walidacja + zarys ewolwentowy z obtaczania), panel pokazuje
 podziałkę, grubość zęba i podcięcie stopy.
 Etap 1: panel z rodzajem uzębienia (proste / skośne, zewnętrzne / wewnętrzne), polami parametrów i walidacją na bieżąco
@@ -13,6 +15,7 @@ Etap 1: panel z rodzajem uzębienia (proste / skośne, zewnętrzne / wewnętrzne
 sprawdzają parametry - bryła koła powstaje dopiero w kolejnym etapie."""
 from __future__ import annotations
 
+import math
 import uuid
 
 from PySide6.QtCore import QTimer, Qt
@@ -29,7 +32,6 @@ FIELD_STYLE = ('QDoubleSpinBox{{background:#fff;border:1.8px solid {0};border-ra
 LEVEL_COLORS = {'error': '#e5484d', 'warning': '#e2a23a'}
 READOUT = ('QLabel#readout{background:#f3f6fa;border:1.4px solid #d6e0ea;border-radius:8px;padding:7px 10px;'
            'font-weight:600;color:#27415a;}')
-HELICAL_LATER = 'Koła o zębach skośnych powstaną w kolejnym etapie budowy modułu - teraz program sprawdza ich parametry.'
 PREVIEW_COLOR = dict(color=(.3, .75, .5, .55), line_color=(.05, .4, .2, 1), width=2)
 
 
@@ -239,10 +241,8 @@ class GearTools:
         self.gr_step3.set_state('active' if body_error else 'done', self._gr_body_text(p))
         self.gr_preview_btn.setEnabled(not errors)
         self.gr_apply_btn.setEnabled(not errors)
-        if p.helical and not errors:
-            self.gr_status.setText(self.gr_status.text() + f'<br><span style="color:#9a6512;">⚠ {HELICAL_LATER}</span>')
         if getattr(self, 'gr_previewing', False) and self.mode == 'gear':
-            if errors or p.helical:
+            if errors:
                 self.view.set_preview_mesh(None)
             else:
                 self._gr_timer.start()
@@ -267,8 +267,14 @@ class GearTools:
         rows += [('Podziałka czołowa p<sub>t</sub>' if p.helical else 'Podziałka p', g['pt']),
                  ('Grubość zęba s (na d)', g['s'])]
         if p.internal:
-            rows.append(('Średnica wieńca', g['rim']))
+            rows += [('Średnica wieńca', g['rim']), ('Grubość obręczy s<sub>R</sub>', g['rim_thickness'])]
+        if p.helical:
+            from .gears import occ
+            rows.append(('Skok linii zęba L', occ.lead(p)))
         text = '<br>'.join(f'{name}: <b>{value:.3f} mm</b>' for name, value in rows)
+        if p.helical:
+            from .gears import occ
+            text += f'<br>Skręt zęba na szerokości: <b>{abs(math.degrees(occ.twist_angle(p))):.2f}°</b> ({"prawy" if p.hand == "right" else "lewy"})'
         prof = getattr(self, 'gr_profile', None)
         if prof is not None and not p.internal:
             text += ('<br>Podcięcie stopy: <b style="color:#9a6512;">tak</b> (bez podcięcia: korekcja x ≥ '
@@ -290,9 +296,6 @@ class GearTools:
         if errors:
             self.toast(errors[0].message)
             return False
-        if self.gear_params().helical:
-            self.toast(HELICAL_LATER, 5000)
-            return False
         return True
 
     def preview_gear(self):
@@ -307,7 +310,7 @@ class GearTools:
         if self.mode != 'gear' or not self.gr_previewing:
             return
         params = self.gear_params()
-        if [c for c in self.gr_checks if c.level == 'error'] or params.helical:
+        if [c for c in self.gr_checks if c.level == 'error']:
             return
 
         def compute():

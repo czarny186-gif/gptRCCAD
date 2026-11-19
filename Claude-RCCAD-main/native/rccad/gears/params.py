@@ -23,6 +23,7 @@ HANDS = ('right', 'left')
 
 HA, HF = 1.0, 1.25        # wysokość głowy i stopy zarysu odniesienia (w modułach)
 RHO = .38                 # promień zaokrąglenia wierzchołka zębatki-narzędzia (w modułach, ISO 53 zarys A)
+RIM_RATIO = 1.2           # obręcz koła wewnętrznego / wysokość zęba, od której obręcz nie osłabia zęba (ISO 6336-3: Y_B = 1)
 
 # DIN 6885-1 (wpust pryzmatyczny): średnica wałka do (włącznie) -> szerokość b, głębokość rowka w piaście t2
 KEYWAYS = ((8, 2, 1.0), (10, 3, 1.4), (12, 4, 1.8), (17, 5, 2.3), (22, 6, 2.8), (30, 8, 3.3), (38, 10, 3.3), (44, 12, 3.3),
@@ -150,7 +151,7 @@ def derived(p: GearParams):
     z_min = 2 * (HA - x) / math.sin(alpha_n) ** 2 * 5 / 6      # praktyczna granica podcięcia (DIN 3960: 5/6 granicy teoretycznej)
     rim = float(p.rim_diameter)
     if p.internal and rim <= 0:
-        rim = df + 2 * 2.5 * m                 # wieniec dobrany sam: 2,5 modułu materiału pod stopami
+        rim = df + 2 * RIM_RATIO * abs(da - df) / 2      # wieniec dobrany sam: obręcz 1,2 wysokości zęba (ISO 6336-3)
     p_t = math.pi * mt
     # dokładne podcięcie przy obtaczaniu zębatką (koło zewnętrzne): dolny koniec prostego boku zębatki (pod zaokrągleniem
     # wierzchołka) nie może schodzić poniżej punktu granicznego linii przyporu (głębokość r·sin²αt pod linią toczną)
@@ -160,7 +161,7 @@ def derived(p: GearParams):
     return dict(mn=m, mt=mt, alpha_n=float(p.pressure), alpha_t=math.degrees(alpha_t), beta=p.beta, d=d, db=db, da=da, df=df,
                 pitch=math.pi * m, pn=math.pi * m, pt=p_t, pb=p_t * math.cos(alpha_t), height=abs(da - df) / 2,
                 s=s_t, s_n=s_n, e=p_t - s_t, s_b=db * (s_t / d + sign * inv(alpha_t)), s_a=s_a, z_v=z_v, z_min=z_min, rim=rim,
-                rho=rho, x_min=x_min, undercut=(not p.internal) and straight > (d / 2) * math.sin(alpha_t) ** 2 + 1e-12,
+                rho=rho, x_min=x_min, rim_thickness=(rim - df) / 2 if p.internal else None, undercut=(not p.internal) and straight > (d / 2) * math.sin(alpha_t) ** 2 + 1e-12,
                 lead=(math.pi * d / math.tan(beta)) if beta else None)
 
 
@@ -231,11 +232,14 @@ def validate(p: GearParams):
     if p.internal:
         if not _limit(checks, 'rim_diameter', p.rim_diameter, 'Średnica wieńca', ' mm'):
             return checks
-        wall = (g['rim'] - g['df']) / 2
+        wall = g['rim_thickness']
+        need = RIM_RATIO * g['height']
         if wall < m - 1e-9:
-            checks.append(Check('error', 'rim_diameter', f'Wieniec za cienki pod stopami zębów: średnica zewnętrzna co najmniej {g["df"] + 2 * m:.2f} mm.'))
-        elif wall < 2.5 * m - 1e-9:
-            checks.append(Check('warning', 'rim_diameter', 'Cienki wieniec pod stopami zębów (mniej niż 2,5·m).'))
+            checks.append(Check('error', 'rim_diameter', f'Obręcz za cienka pod stopami zębów ({max(wall, 0):.2f} mm, co najmniej moduł): '
+                                                         f'średnica zewnętrzna co najmniej {g["df"] + 2 * m:.2f} mm.'))
+        elif wall < need - 1e-9:
+            checks.append(Check('warning', 'rim_diameter', f'Cienka obręcz: {wall:.2f} mm - mniej niż 1,2 wysokości zęba ({need:.2f} mm, '
+                                                           f'ISO 6336-3); zęby będą słabsze. Pełna nośność od Ø{g["df"] + 2 * need:.2f} mm.'))
         return checks
     if not _limit(checks, 'bore', p.bore, 'Średnica otworu', ' mm'):
         return checks

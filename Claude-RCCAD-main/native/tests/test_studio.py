@@ -3021,11 +3021,21 @@ class StudioTests(unittest.TestCase):
         undo();self.assertEqual(w.document.get(gear.id).meta['gear']['teeth'],24)               # cofnięta edycja kroku
         undo();self.assertAlmostEqual(k.bounds(w.document.get(gear.id).shape).xmax,26,places=5)  # cofnięte przesunięcie
         undo();self.assertIsNone(w.document.get(gear.id))                                          # cofnięte dodanie koła
-        # zęby skośne: jeszcze bez bryły (kolejny etap)
-        w.tools['gear'].click();w.gr_kind.setCurrentIndex(1)
+        # etap 4: zęby skośne (zewnętrzne i wewnętrzne) - podgląd i bryła, ramka: skok linii zęba, skręt, obręcz
+        w.tools['gear'].click()
+        w.set_gear_params(dict(kind='helical_ext',module=2,teeth=20,width=12,helix=20,hand='left',bore=8))
+        self.assertIn('Skok linii zęba',w.gr_info.text());self.assertIn('(lewy)',w.gr_info.text())
+        w.preview_gear();self.preview();self.assertTrue(w.view.preview_items)
         before=len(w.document.bodies);w.apply_gear();self.wait()
-        self.assertEqual(len(w.document.bodies),before);self.assertIn('skośnych',w.gr_status.text())
-        w.cancel_gear()
+        self.assertEqual(len(w.document.bodies),before+1)
+        helical=w.document.get(w.selected[0])
+        self.assertEqual(helical.meta['gear']['kind'],'helical_ext');self.assertTrue(occ.solid_report(helical.shape)['ok'])
+        w.tools['gear'].click()
+        w.set_gear_params(dict(kind='helical_int',module=2,teeth=60,width=10,helix=15,hand='right'))
+        self.assertIn('Grubość obręczy',w.gr_info.text())
+        w.apply_gear();self.wait()
+        ring=w.document.get(w.selected[0])
+        self.assertEqual(ring.name,'Wieniec z60 m2');self.assertTrue(occ.solid_report(ring.shape)['ok'])
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

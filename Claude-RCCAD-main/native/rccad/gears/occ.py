@@ -5,6 +5,7 @@ Ewolwenta i trochoida stopy: krzywe B-spline (GeomAPI_Interpolate) przechodzące
 dokładne łuki (Geom_Circle). Kolejne krawędzie mają wspólne końce, więc zarys jest zamkniętym, poprawnym konturem.
 
 Etap 2: zarys zęba i zarys 2D całego koła.
+Etap 4: zęby skośne - boki zębów przeciągnięte śrubowo (obrót przekroju o skok linii zęba), także koła wewnętrzne.
 Etap 3: bryła koła o zębach prostych (gear_solid) - przekrój czołowy z otworem i rowkiem wpustowym wyciągnięty jednym
 ruchem (zęby i otwór bez operacji logicznych), piasta dołączona jedną sumą; sprawdzenie poprawności i szczelności."""
 from __future__ import annotations
@@ -232,33 +233,56 @@ def solid_report(shape):
     return report
 
 
-def _full_cylinder(face, radius):
-    """Pełna ściana walcowa o promieniu radius na osi Z (obwód piasty) - nie łuki stóp i głów zębów (te leżą poza osią)."""
-    if face.geomType() != 'CYLINDER':
-        return False
-    if abs(face._geomAdaptor().Cylinder().Radius() - radius) > 1e-7:
-        return False
-    c = face.Center()
-    return math.hypot(c.x, c.y) < 1e-6 * max(1.0, radius)
+def twist_angle(params: GearParams):
+    """Kąt obrotu przekroju czołowego na całej szerokości koła (rad): 2·b·tg β / d; prawy skręt - dodatni (przeciwnie
+    do wskazówek zegara patrząc od +Z, jak prawoskrętna linia śrubowa), lewy - ujemny. Zęby proste: 0."""
+    if not params.helical:
+        return 0.0
+    d = derived(params)['d']
+    angle = 2 * float(params.width) * math.tan(math.radians(params.beta)) / d
+    return angle if params.hand == 'right' else -angle
 
 
-def _sewn_with_hub(outline, bore, width, hub_radius, hub_length):
-    """Koło z piastą bez operacji logicznych: wieniec (zarys zębów z otworem na obwód piasty), rdzeń pod wieńcem
-    i piasta - trzy wyciągnięcia, wspólne ściany usunięte, reszta zszyta w jedną powłokę."""
+def lead(params: GearParams):
+    """Skok linii śrubowej zęba na średnicy podziałowej L = π·d / tg β (mm); zęby proste - None."""
+    if not params.helical:
+        return None
+    return math.pi * derived(params)['d'] / math.tan(math.radians(params.beta))
+
+
+def _lateral(wire, z0, height, params=None):
+    """Ściany boczne konturu od z0 do z0 + height: proste wyciągnięcie albo (params skośne) przeciągnięcie śrubowe -
+    przekrój obraca się wzdłuż osi zgodnie z pomocniczą linią śrubową o skoku zęba (BRepOffsetAPI_MakePipeShell),
+    więc boki zębów są ewolwentowymi powierzchniami śrubowymi."""
+    if z0:
+        wire = wire.translate(cq.Vector(0, 0, z0))
+    if params is None or not params.helical:
+        return cq.Shape.cast(BRepPrimAPI_MakePrism(wire.wrapped, gp_Vec(0, 0, float(height))).Shape()).Faces()
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+    spine = cq.Wire.assembleEdges([cq.Edge.makeLine(cq.Vector(0, 0, z0), cq.Vector(0, 0, z0 + height))])
+    helix = cq.Wire.makeHelix(lead(params), float(height), 1.0, cq.Vector(0, 0, z0), cq.Vector(0, 0, 1),
+                              lefthand=params.hand != 'right')
+    pipe = BRepOffsetAPI_MakePipeShell(spine.wrapped)
+    pipe.SetMode(helix.wrapped, False)               # obrót przekroju prowadzi linia śrubowa (bez równoważności łukowej)
+    pipe.SetTolerance(1e-6, 1e-6, 1e-4)
+    pipe.Add(wire.wrapped, False, False)
+    pipe.Build()
+    if not pipe.IsDone():
+        raise GearError('Nie udało się zbudować śrubowych boków zębów.')
+    return cq.Shape.cast(pipe.Shape()).Faces()
+
+
+def _rotated_wire(wire, angle):
+    return wire if not angle else wire.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), math.degrees(angle))
+
+
+def _sew(faces, tolerance=1e-5):
+    """Ściany zszyte w jedną zamkniętą powłokę i bryłę zorientowaną na zewnątrz albo None."""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
     from OCP.BRepLib import BRepLib
     from OCP.TopAbs import TopAbs_SHELL
     from OCP.TopExp import TopExp_Explorer
-    hub = _circle(hub_radius)
-    holes = [bore] if bore is not None else []
-    rim = _prism(plane_face(outline, [hub]), 0.0, width)
-    core = _prism(plane_face(hub, holes), 0.0, width)
-    boss = _prism(plane_face(hub, holes, width), 0.0, hub_length)
-    top = lambda f: f.geomType() == 'PLANE' and abs(f.Center().z - width) < 1e-7
-    faces = [f for f in rim.Faces() if not _full_cylinder(f, hub_radius)]
-    faces += [f for f in core.Faces() if not (_full_cylinder(f, hub_radius) or top(f))]
-    faces += [f for f in boss.Faces() if not top(f)]
-    sewing = BRepBuilderAPI_Sewing(1e-6)
+    sewing = BRepBuilderAPI_Sewing(tolerance)
     for f in faces:
         sewing.Add(f.wrapped)
     sewing.Perform()
@@ -270,39 +294,61 @@ def _sewn_with_hub(outline, bore, width, hub_radius, hub_length):
     if explorer.More():                              # więcej niż jedna powłoka - zszycie się nie udało
         return None
     solid = cq.Shape.cast(BRepBuilderAPI_MakeSolid(shell).Solid())
-    if not _outward(solid):                          # ściany z wyciągnięć są zorientowane na zewnątrz - to tylko zabezpieczenie
+    if not _outward(solid):                          # ściany są zorientowane na zewnątrz - to tylko zabezpieczenie
         raw = solid.wrapped
         BRepLib.OrientClosedSolid_s(raw)
         solid = cq.Shape.cast(raw)
-    return solid.clean()                             # dno wieńca i rdzenia, otwór przez wieniec i piastę: jedne ściany              # dno wieńca i rdzenia, otwór przez wieniec i piastę: jedne ściany
+    return solid
 
 
 def gear_solid(params: GearParams) -> cq.Solid:
-    """Bryła koła walcowego o zębach prostych: oś Z, wieniec od z = 0 do z = szerokość, pierwszy ząb na osi +X,
-    piasta (koło zewnętrzne) po stronie +Z. Wyjątek GearError, gdy bryła nie jest poprawna i szczelna.
-    Zęby, otwór i rowek wpustowy powstają jednym wyciągnięciem przekroju - bez operacji logicznych; piasta węższa niż
-    stopy zębów - zszycie trzech wyciągnięć, szersza - jedna suma."""
-    if params.helical:
-        raise GearError('Koła o zębach skośnych - w kolejnym etapie budowy modułu.')
+    """Bryła koła walcowego (zęby proste lub skośne, zewnętrzne lub wewnętrzne): oś Z, wieniec od z = 0 do z = szerokość,
+    pierwszy ząb (w przekroju z = 0) na osi +X, piasta (koło zewnętrzne) po stronie +Z. Wyjątek GearError, gdy bryła
+    nie jest poprawna i szczelna.
+
+    Bez operacji logicznych: boki wszystkich zębów jednym wyciągnięciem (zęby proste) albo jednym przeciągnięciem
+    śrubowym (skośne), dno - przekrój z otworem, góra - przekrój obrócony o kąt skrętu, otwór z rowkiem i piasta -
+    proste wyciągnięcia; wszystko zszyte w jedną powłokę. Piasta szersza niż stopy zębów - jedna suma."""
     prof = profile(params)                           # walidacja parametrów i zarysu (GearError z opisem)
     width = float(params.width)
     outline = outline_wire(params)
-    shape = None
+    if not params.helical and not params.internal and not (params.hub and params.hub_length > 0):
+        bore = bore_wire(params)                     # zęby proste bez piasty: jedno wyciągnięcie przekroju z otworem
+        shape = _prism(plane_face(outline, [bore] if bore is not None else []), 0.0, width)
+        if not solid_report(shape)['ok']:
+            raise GearError('Bryła koła nie jest poprawna lub szczelna - zmień parametry.')
+        return shape
+    top_outline = _rotated_wire(outline, twist_angle(params))
+    faces = _lateral(outline, 0.0, width, params)    # boki zębów
+    wide_hub = None
     if params.internal:
-        rim = derived(params)['rim'] / 2
-        shape = _prism(plane_face(_circle(rim), [outline]), 0.0, width)
+        rim = _circle(derived(params)['rim'] / 2)
+        faces += _lateral(rim, 0.0, width)
+        faces += [plane_face(rim, [outline]), plane_face(rim, [top_outline], width)]
     else:
         bore = bore_wire(params)
         holes = [bore] if bore is not None else []
         hub = params.hub and params.hub_length > 0
-        hub_radius = float(params.hub_diameter) / 2
-        if hub and hub_radius < prof.rf - 1e-3:
-            shape = _sewn_with_hub(outline, bore, width, hub_radius, float(params.hub_length))
-        if shape is None:
-            shape = _prism(plane_face(outline, holes), 0.0, width)       # wszystkie zęby, otwór i rowek naraz
+        hub_radius, hub_length = float(params.hub_diameter) / 2, float(params.hub_length)
+        faces.append(plane_face(outline, holes))      # dno
+        height = width
+        if hub and hub_radius < prof.rf - 1e-3:      # piasta wewnątrz stóp zębów: góra wieńca jako pierścień wokół piasty
+            hub_circle = _circle(hub_radius)
+            faces.append(plane_face(top_outline, [hub_circle], width))
+            faces += _lateral(hub_circle, width, hub_length)
+            faces.append(plane_face(hub_circle, holes, width + hub_length))
+            height = width + hub_length
+        else:
+            faces.append(plane_face(top_outline, holes, width))
             if hub:
-                boss = _prism(plane_face(_circle(hub_radius), holes, width), 0.0, float(params.hub_length))
-                shape = _fuse(shape, boss)           # piasta szersza niż stopy zębów: jedna suma
+                wide_hub = _prism(plane_face(_circle(hub_radius), holes, width), 0.0, hub_length)
+        if bore is not None:
+            faces += _lateral(bore, 0.0, height)       # otwór z rowkiem przez wieniec i piastę - proste ściany
+    shape = _sew(faces)
+    if shape is None:
+        raise GearError('Nie udało się zszyć bryły koła - zmień parametry.')
+    if wide_hub is not None:
+        shape = _fuse(shape, wide_hub)               # piasta szersza niż stopy zębów: jedna suma
     solids = shape.Solids()
     if len(solids) == 1:
         shape = solids[0]

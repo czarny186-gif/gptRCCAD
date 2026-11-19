@@ -1,14 +1,21 @@
-# RCCAD Desktop 0.5.26 — Przekładnie: pełne koła o zębach prostych (etap 3)
+# RCCAD Desktop 0.5.27 — Przekładnie: zęby skośne i koła wewnętrzne (etap 4)
+
+- **Zęby skośne - prawdziwa geometria śrubowa**: przekrój czołowy (dokładna ewolwenta) przeciągany wzdłuż osi z obrotem prowadzonym linią śrubową o skoku zęba L = π·d / tg β; boki zębów to ewolwentowe powierzchnie śrubowe (odchyłka od wzoru poniżej 0,00001 mm). Regulowany kąt pochylenia i kierunek skrętu (prawy / lewy). Ramka pokazuje skok linii zęba i skręt na szerokości.
+- **Wszystkie cztery rodzaje uzębienia jako bryły B-Rep**: proste i skośne, zewnętrzne i wewnętrzne. Otwór, rowek wpustowy i piasta - proste także w kole skośnym.
+- **Koło wewnętrzne**: średnica zewnętrzna pierścienia; kontrola grubości obręczy wg ISO 6336-3 (ostrzeżenie poniżej 1,2 wysokości zęba, błąd poniżej modułu); średnica dobrana sama daje pełną nośność. Ramka pokazuje grubość obręczy.
+- **Bez operacji logicznych**: boki zębów jednym przeciągnięciem, dno i obrócona góra, otwór i piasta - zszyte w jedną szczelną powłokę. Każda bryła sprawdzana (poprawność, szczelność, orientacja); STEP po zapisie i odczycie - ta sama objętość i liczba ścian dla wszystkich rodzajów.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.26 — Przekładnie: pełne koła o zębach prostych (etap 3)
 
 - **Koła walcowe jako bryły B-Rep**: Zastosuj tworzy koło o zębach prostych (zewnętrzne albo wewnętrzne - wieniec) jako zwykłą bryłę - krok historii „Koło zębate” z parametrami. Dwuklik w krok otwiera okno z wartościami; zmiana zastępuje krok, dalsze kroki (np. przesunięcie) zostają. Koło działa z cofaniem, zapisem projektu, biblioteką i eksportem STEP.
 - **Szerokość, otwór, piasta i rowek wpustowy**: rowek wg DIN 6885-1 dobierany do średnicy otworu (albo własne wymiary), przez koło i piastę.
 - **Wydajność**: wszystkie zęby, otwór i rowek powstają jednym wyciągnięciem przekroju - bez operacji logicznych; piasta węższa niż stopy zębów doklejana zszyciem (też bez operacji logicznych), szersza - jedną sumą. Koło z 20 zębami: ok. 0,15 s, ze 150-200 zębami i piastą: 2-3 s (w tle).
 - **Kontrola bryły**: każde koło jest sprawdzane - poprawność (BRepCheck), jedna bryła z jedną zamkniętą powłoką (szczelność: każda krawędź między dwiema ścianami), orientacja na zewnątrz. STEP po zapisie i odczycie: ta sama objętość i liczba ścian.
 - **Podgląd** liczy się w tle i odświeża sam przy zmianie pól. Zęby skośne - w kolejnym etapie.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.25 — Przekładnie: silnik kół walcowych (etap 2)
 

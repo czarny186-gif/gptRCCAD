@@ -49,7 +49,8 @@ class GearDimensionTests(unittest.TestCase):
         self.assertAlmostEqual(g['d'], 120)
         self.assertAlmostEqual(g['da'], 116)
         self.assertAlmostEqual(g['df'], 125)
-        self.assertAlmostEqual(g['rim'], 125 + 10)                    # wieniec dobrany sam: 2,5·m pod stopami
+        self.assertAlmostEqual(g['rim'], 125 + 2 * 1.2 * 4.5)          # wieniec dobrany sam: obręcz 1,2·h (ISO 6336-3)
+        self.assertAlmostEqual(g['rim_thickness'], 1.2 * 4.5)
         self.assertAlmostEqual(derived(GearParams(kind='spur_int', module=2, teeth=60, rim_diameter=150))['rim'], 150)
 
 
@@ -421,9 +422,6 @@ class GearSolidTests(unittest.TestCase):
         reversed_solid = cq.Shape.cast(solid.wrapped.Reversed())
         self.assertFalse(self.occ.solid_report(reversed_solid)['ok'])
 
-    def test_helical_is_not_built_yet(self):
-        with self.assertRaises(gears.GearError):
-            self.occ.gear_solid(GearParams(kind='helical_ext', teeth=20))
 
     def test_step_export_round_trip(self):
         import tempfile
@@ -451,6 +449,133 @@ class GearSolidTests(unittest.TestCase):
         self.assertEqual(gears.keyway_standard(30), (8.0, 3.3))
         self.assertEqual(gears.keyway_standard(30.5), (10.0, 3.3))
         self.assertIsNone(gears.keyway_standard(200))
+
+
+KIND_CASES = {
+    'spur_ext': dict(kind='spur_ext', module=2, teeth=20, width=12, bore=10, keyway=True, hub=True, hub_diameter=24, hub_length=6),
+    'helical_ext': dict(kind='helical_ext', module=2, teeth=20, width=16, helix=20, hand='right', bore=10, keyway=True,
+                        hub=True, hub_diameter=24, hub_length=6),
+    'spur_int': dict(kind='spur_int', module=2, teeth=60, width=12, rim_diameter=140),
+    'helical_int': dict(kind='helical_int', module=1.5, teeth=56, width=14, helix=15, hand='left', shift=.2, rim_diameter=100),
+}
+
+
+class GearKindsTests(unittest.TestCase):
+    """Etap 4: wszystkie cztery rodzaje uzębienia - bryła B-Rep, dokładne boki (ewolwenta / ewolwentowa powierzchnia
+    śrubowa), objętość, kierunek skrętu, obręcz koła wewnętrznego, STEP."""
+
+    @classmethod
+    def setUpClass(cls):
+        from rccad.gears import occ
+        cls.occ = occ
+        cls.solids = {kind: occ.gear_solid(GearParams(**kw)) for kind, kw in KIND_CASES.items()}
+
+    def flank_distance(self, solid, p, angle_sign=1.0):
+        """Największa odległość punktów dokładnego boku zęba (przekrój czołowy obrócony o kąt skrętu na wysokości z) od bryły."""
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        from OCP.gp import gp_Pnt
+        prof, twist, width = gears.profile(p), self.occ.twist_angle(p) * angle_sign, p.width
+        worst = 0.0
+        shell = solid.Shells()[0].wrapped
+        for z in np.linspace(0, width, 5):
+            a = twist * z / width
+            for x, y in list(prof.flank[::6]) + list(gears.ToothProfile.mirrored(prof.flank)[::6]):
+                X, Y = x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)
+                dist = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(X, Y, z)).Vertex(), shell)
+                worst = max(worst, dist.Value())
+        return worst
+
+    def test_all_kinds_are_valid_closed_solids(self):
+        for kind, solid in self.solids.items():
+            report = self.occ.solid_report(solid)
+            self.assertTrue(report['ok'], (kind, report))
+            self.assertEqual(solid.ShapeType(), 'Solid', kind)
+            for face in solid.Faces():                                       # B-Rep z powierzchni, nie siatka trójkątów
+                self.assertNotEqual(face.geomType(), 'OTHER', kind)
+
+    def test_volume_is_section_times_width(self):
+        """Skręt przekroju nie zmienia objętości: wieniec = przekrój czołowy × szerokość (+ piasta, - otwór z rowkiem)."""
+        for kind, kw in KIND_CASES.items():
+            p = GearParams(**kw)
+            volume = self.occ.section_face(p).Area() * p.width
+            if not p.internal:
+                bore = self.occ.plane_face(self.occ.bore_wire(p)).Area()
+                volume += -bore * p.width + (math.pi * (p.hub_diameter / 2) ** 2 - bore) * p.hub_length
+            self.assertAlmostEqual(self.solids[kind].Volume() / volume, 1, places=5, msg=kind)
+
+    def test_flanks_are_exact_involute_helicoids(self):
+        for kind, kw in KIND_CASES.items():
+            p = GearParams(**kw)
+            self.assertLess(self.flank_distance(self.solids[kind], p), 1e-5, kind)
+
+    def test_hand_of_helix(self):
+        for kind in ('helical_ext', 'helical_int'):
+            p = GearParams(**KIND_CASES[kind])
+            self.assertGreater(self.flank_distance(self.solids[kind], p, -1.0), 1e-2, kind)   # przeciwny skręt - nie ta bryła
+        right = GearParams(**dict(KIND_CASES['helical_ext'], hand='right'))
+        left = GearParams(**dict(KIND_CASES['helical_ext'], hand='left'))
+        self.assertGreater(self.occ.twist_angle(right), 0)
+        self.assertAlmostEqual(self.occ.twist_angle(left), -self.occ.twist_angle(right))
+        self.assertEqual(self.occ.twist_angle(GearParams(**KIND_CASES['spur_ext'])), 0)
+
+    def test_lead_and_twist(self):
+        p = GearParams(kind='helical_ext', module=3, teeth=31, helix=18, width=40)
+        d = 31 * 3 / math.cos(math.radians(18))
+        L = math.pi * d / math.tan(math.radians(18))
+        self.assertAlmostEqual(self.occ.lead(p), L)
+        self.assertAlmostEqual(self.occ.twist_angle(p), 2 * math.pi * 40 / L)
+        self.assertIsNone(self.occ.lead(GearParams()))
+
+    def test_tip_and_root_diameters(self):
+        for kind, kw in KIND_CASES.items():
+            p = GearParams(**kw)
+            g = derived(p)
+            bb = self.solids[kind].BoundingBox()
+            outer = g['rim'] if p.internal else g['da']
+            self.assertLess(abs(max(bb.xmax, bb.ymax, -bb.xmin, -bb.ymin) - outer / 2), 1e-3, kind)
+            self.assertAlmostEqual(bb.zmin, 0, places=6)
+
+    def test_straight_bore_and_keyway_in_helical_gear_without_booleans(self):
+        from unittest.mock import patch
+        import OCP.BRepAlgoAPI as algo
+        solid = self.solids['helical_ext']
+        bores = [f for f in solid.Faces() if f.geomType() == 'CYLINDER' and abs(f._geomAdaptor().Cylinder().Radius() - 5) < 1e-9]
+        self.assertEqual(len(bores), 1)                                      # otwór prosty przez wieniec i piastę
+        self.assertAlmostEqual(bores[0].BoundingBox().zmax - bores[0].BoundingBox().zmin, 22, places=6)
+        keyway = [f for f in solid.Faces() if f.geomType() == 'PLANE' and abs(f.normalAt(f.Center()).z) < 1e-9
+                  and abs(abs(f.normalAt(f.Center()).y) - 1) < 1e-9]
+        self.assertEqual(len(keyway), 2)                                      # boki rowka - płaskie, równoległe do osi
+        calls = []
+        real = algo.BRepAlgoAPI_Fuse
+        with patch.object(algo, 'BRepAlgoAPI_Fuse', side_effect=lambda *a: calls.append(1) or real(*a)):
+            self.occ.gear_solid(GearParams(**KIND_CASES['helical_ext']))
+            self.occ.gear_solid(GearParams(**KIND_CASES['helical_int']))
+        self.assertEqual(calls, [])
+
+    def test_internal_rim_thickness_control(self):
+        base = dict(kind='helical_int', module=2, teeth=60, helix=15)
+        g = derived(GearParams(**base))
+        need = 1.2 * g['height']
+        self.assertIn(('error', 'rim_diameter'), levels(validate(GearParams(rim_diameter=g['df'] + 1.5 * 2, **base))))
+        self.assertIn(('warning', 'rim_diameter'), levels(validate(GearParams(rim_diameter=g['df'] + 2 * need - .1, **base))))
+        self.assertEqual(validate(GearParams(rim_diameter=g['df'] + 2 * need + .1, **base)), [])
+        self.assertEqual(validate(GearParams(**base)), [])                    # dobrany sam - pełna nośność
+        self.assertAlmostEqual(derived(GearParams(**base))['rim_thickness'], need)
+
+    def test_step_export_of_every_kind(self):
+        import tempfile
+        from rccad import kernel
+        with tempfile.TemporaryDirectory() as folder:
+            for kind, solid in self.solids.items():
+                path = os.path.join(folder, f'{kind}.step')
+                kernel.export_shapes([solid], path)
+                back = kernel.import_shapes(path)
+                self.assertEqual([k for _, k in back], ['solid'], kind)
+                shape = back[0][0]
+                self.assertTrue(self.occ.solid_report(shape)['ok'], kind)
+                self.assertAlmostEqual(shape.Volume() / solid.Volume(), 1, places=6, msg=kind)
+                self.assertEqual(len(shape.Faces()), len(solid.Faces()), kind)
 
 
 if __name__ == '__main__':
