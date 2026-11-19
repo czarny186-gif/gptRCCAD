@@ -1,14 +1,21 @@
-# RCCAD Desktop 0.5.23 — szybka Różnica z STL
+# RCCAD Desktop 0.5.24 — Przekładnie: koła walcowe (etap 1)
+
+- **Nowa zakładka Przekładnie → Koła walcowe**: panel z wyborem rodzaju uzębienia (proste zewnętrzne, skośne zewnętrzne, proste wewnętrzne, skośne wewnętrzne) i polami: moduł, liczba zębów, kąt przyporu, kąt pochylenia i kierunek skrętu (tylko zęby skośne), szerokość koła, korekcja zarysu, luz międzyzębny, średnica otworu i piasta (koło zewnętrzne) albo średnica wieńca (koło wewnętrzne).
+- **Walidacja na bieżąco**: błędne pole ma czerwoną ramkę, ostrzeżenie pomarańczową; pod polami wymiary koła (średnice podziałowa, głów, stóp, zasadnicza, wysokość zęba) i opis błędów - m.in. podcięcie stopy, zaostrzony ząb, za mało zębów koła wewnętrznego, za duży otwór, piasta węższa niż otwór.
+- **Podgląd, Zastosuj, Anuluj**: na tym etapie sprawdzają parametry (bryła koła - w kolejnym etapie); Anuluj przywraca pola sprzed otwarcia. Narzędzie można dodać do Ulubionych, opis jest w Pomocy.
+- Obliczenia są w osobnym silniku `rccad/gears` (bez interfejsu) - ten sam posłuży później przekładniom planetarnym i zębatkowym.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.23 — szybka Różnica z STL
 
 - **Szybsze wycinanie STL**: popiersie STL w bryle z projektu bl_d: ok. 4 s zamiast ok. 27 s (na 2 rdzeniach; na większej liczbie rdzeni szybciej). Wynik dalej jest bryłą matematyczną.
 - **Podgląd od razu**: podgląd Różnicy z STL liczony samą operacją na siatkach (ok. 0,1 s zamiast ok. 12 s). Bryła jest budowana tylko raz, przy Zastosuj, a gotowy wynik zostaje zapamiętany - ponowne liczenie tej samej pary nie trwa.
 - **Liczy się kształt, nie każdy trójkąt**: część siatki wchodząca w bryłę jest upraszczana z dokładnością 0,05 mm (mniej niż dokładność druku) - w przykładzie 6754 zamiast 11 140 trójkątów. Bryła z siatki powstaje od razu ze wspólnych krawędzi (0,4 s zamiast 7,6 s zszywania), a operacja logiczna liczy się równolegle na wszystkich rdzeniach.
 - **Bez siatki linii na wyniku**: krawędzie między prawie płaskimi trójkątami nie są rysowane (jak przy samym STL) - ostre krawędzie zostają.
 - **Szybsze wyświetlanie brył z wieloma ściankami** (każdych, nie tylko po STL): przygotowanie krawędzi do rysowania dla bryły z 6600 ściankami 0,4 s zamiast 2,5 s.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.22 — Różnica z STL zawsze daje bryłę matematyczną
 

@@ -305,6 +305,61 @@ def _draw_tilt(p, ink, acc, soft, pen):
     p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(41, 4), QPointF(36, 11), QPointF(46, 11)]))
 
 
+def _gear_path(cx, cy, root, tip, z, phase=0.0):
+    """Zarys koła zębatego (zęby trapezowe) - tip > root: zęby na zewnątrz, tip < root: zęby do środka (wieniec)."""
+    path = QPainterPath()
+    step = 2 * math.pi / z
+    points = []
+    for i in range(z):
+        a = phase + i * step
+        for da, r in ((-.27, root), (-.13, tip), (.13, tip), (.27, root)):
+            points.append(QPointF(cx + r * math.cos(a + da * step * 2), cy + r * math.sin(a + da * step * 2)))
+    path.addPolygon(QPolygonF(points + points[:1]))
+    path.closeSubpath()
+    return path
+
+
+def _draw_gear(p, kind, ink, acc, soft, pen):
+    """Koła walcowe: narzędzie / nagłówek (koło z otworem i osią), rodzaje uzębienia (przód koła + pasek zębów prostych
+    albo skośnych z boku), kierunek skrętu, uzębienie (zbliżenie zębów) i korpus (otwór i piasta)."""
+    p.setBrush(soft); p.setPen(pen(ink, 2.3))
+    if kind in ('tool', 'body'):
+        p.drawPath(_gear_path(24, 24, 15, 20.5, 10))
+        p.setBrush(QColor('#ffffff') if kind == 'body' else Qt.NoBrush); p.setPen(pen(acc, 3.0 if kind == 'tool' else 2.6))
+        p.drawEllipse(QPointF(24, 24), 6.5, 6.5)
+        if kind == 'body':
+            p.setPen(pen(ink, 2.0)); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 10.5, 10.5)
+        return
+    if kind == 'teeth':
+        outline = QPainterPath(); outline.moveTo(3, 40)
+        for x in (3, 15, 27, 39):
+            outline.lineTo(x, 30); outline.lineTo(x + 3.5, 14); outline.lineTo(x + 8.5, 14); outline.lineTo(x + 12, 30)
+        outline.lineTo(45, 30); outline.lineTo(45, 40); outline.closeSubpath()
+        p.drawPath(outline)
+        dash = pen(acc, 2.4); dash.setStyle(Qt.DashLine); dash.setDashPattern([2.2, 1.5]); p.setPen(dash)
+        p.drawLine(QPointF(2, 23), QPointF(46, 23))
+        return
+    if kind in ('rh', 'lh'):
+        p.drawRoundedRect(QRectF(13, 5, 22, 38), 3, 3)
+        p.setPen(pen(acc, 2.6))
+        slope = 5 if kind == 'rh' else -5
+        for y in (12, 20, 28, 36):
+            p.drawLine(QPointF(15, y + slope), QPointF(33, y - slope))
+        return
+    internal, helical = kind.endswith('_int'), kind.startswith('helical')
+    if internal:
+        ring = QPainterPath(); ring.addEllipse(QPointF(19, 24), 17, 17)
+        ring = ring.subtracted(_gear_path(19, 24, 13.5, 9.5, 9))
+        p.drawPath(ring)
+    else:
+        p.drawPath(_gear_path(19, 24, 12, 17, 9))
+        p.setBrush(QColor('#ffffff')); p.setPen(pen(ink, 1.8)); p.drawEllipse(QPointF(19, 24), 4, 4)
+    p.setBrush(soft); p.setPen(pen(ink, 2.0)); p.drawRoundedRect(QRectF(39, 7, 7, 34), 2, 2)
+    p.setPen(pen(acc, 2.2))
+    for y in (12, 19, 26, 33, 40):
+        p.drawLine(QPointF(39.5, y - (3 if helical else 0) - 2), QPointF(45.5, y + (3 if helical else 0) - 2))
+
+
 def _draw_link(p, ink, acc, soft, pen, action=None):
     """Połącz: dwie osobne kostki (widoczna szczelina styku) spięte pomarańczowym ogniwem; Rozłącz - ogniwo rozpięte."""
     p.setBrush(soft); p.setPen(pen(ink, 2.4))
@@ -431,6 +486,9 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_tilt':
         _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind == 'x_gear' or kind.startswith('gr_'):
+        _draw_gear(p, {'x_gear': 'tool', 'gr_rh': 'rh', 'gr_lh': 'lh', 'gr_teeth': 'teeth', 'gr_body': 'body'}.get(kind, kind[3:]),
+                   INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('x_link', 'lk_join', 'lk_split'):
         _draw_link(p, INK, ORANGE, QColor(BLUE_SOFT), pen, 'split' if kind == 'lk_split' else None)
     elif kind=='x_section':
@@ -968,6 +1026,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_matchsize(p, ink, acc, soft, pen)
         elif name == 'tilt':
             _draw_tilt(p, ink, acc, soft, pen)
+        elif name == 'gear':
+            _draw_gear(p, 'tool', ink, acc, soft, pen)
         elif name == 'link':
             _draw_link(p, ink, acc, soft, pen)
         elif name == 'color':

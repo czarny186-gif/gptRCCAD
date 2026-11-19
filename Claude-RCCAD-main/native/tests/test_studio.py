@@ -2918,6 +2918,54 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(k.point_state(sh,(-5,0,0)),'out');self.assertEqual(k.point_state(sh,(10,0,0)),'in')
             w.set_mode(None)
 
+    def test_gear_panel_kinds_fields_validation_and_cancel(self):
+        """Przekładnie → Koła walcowe (etap 1): panel z rodzajem uzębienia i polami, walidacja na bieżąco, Podgląd / Zastosuj /
+        Anuluj bez tworzenia brył i bez kroku historii; Anuluj przywraca pola sprzed otwarcia."""
+        import rccad.studio as st
+        from rccad import help as hp
+        w=self.w
+        self.assertEqual(TABS['Przekładnie'],['gear']);self.assertIn('gear',st.FAVORITE_TOOLS)
+        from PySide6.QtTest import QTest
+        self.assertTrue(any(entry[0]=='t_gear' for entry in hp.TOPICS))
+        w.tools['gear'].click();self.assertEqual(w.mode,'gear');self.assertEqual(w._tab,'Przekładnie');self.assertTrue(w.gear_panel.isVisible())
+        self.assertEqual([b.text() for b in w.gr_kind._buttons],['Proste zewnętrzne','Skośne zewnętrzne','Proste wewnętrzne','Skośne wewnętrzne'])
+        for name in ('module','teeth','pressure','helix','width','shift','backlash','bore','hub_diameter','hub_length','rim_diameter'):
+            self.assertIn(name,w.gr_fields)
+        self.assertEqual([b.text() for b in (w.gr_preview_btn,w.gr_apply_btn,w.gr_cancel_btn)],['Podgląd','Zastosuj','Anuluj'])
+        # domyślnie: proste zewnętrzne, poprawne; kąt pochylenia i kierunek ukryte, piasta wyłączona
+        self.assertIn('Parametry poprawne',w.gr_status.text());self.assertTrue(w.gr_apply_btn.isEnabled())
+        self.assertFalse(w.gr_helix_box.isVisible());self.assertFalse(w.gr_hub_box.isVisible());self.assertFalse(w.gr_int_box.isVisible())
+        self.assertIn('40.000',w.gr_info.text())                                    # d = m·z = 2·20
+        w.gr_kind.setCurrentIndex(1)                                                 # skośne: kąt i kierunek widoczne
+        self.assertTrue(w.gr_helix_box.isVisible());w.gr_hand.setCurrentIndex(1)
+        p=w.gear_params();self.assertEqual((p.kind,p.hand,p.helix),('helical_ext','left',15.0))
+        w.gr_fields['helix'].setValue(60)                                            # błąd: czerwona ramka, bez Zastosuj
+        self.assertIn('#e5484d',w.gr_fields['helix'].styleSheet());self.assertFalse(w.gr_apply_btn.isEnabled());self.assertIn('Kąt pochylenia',w.gr_status.text())
+        w.gr_fields['helix'].setValue(20);self.assertEqual(w.gr_fields['helix'].styleSheet(),'');self.assertTrue(w.gr_apply_btn.isEnabled())
+        w.gr_fields['teeth'].setValue(10)                                            # ostrzeżenie (podcięcie): pomarańczowo, Zastosuj dalej działa
+        self.assertIn('#e2a23a',w.gr_fields['teeth'].styleSheet());self.assertTrue(w.gr_apply_btn.isEnabled());self.assertIn('Podcięcie',w.gr_status.text())
+        w.gr_fields['teeth'].setValue(20)
+        w.gr_hub.setChecked(True);self.assertTrue(w.gr_hub_box.isVisible())
+        w.gr_fields['bore'].setValue(25);self.assertIn('#e5484d',w.gr_fields['hub_diameter'].styleSheet())   # piasta węższa niż otwór
+        w.gr_fields['bore'].setValue(10);self.assertEqual(w.gr_fields['hub_diameter'].styleSheet(),'')
+        w.gr_kind.setCurrentIndex(2)                                                 # wewnętrzne: wieniec zamiast otworu i piasty
+        self.assertTrue(w.gr_int_box.isVisible());self.assertFalse(w.gr_ext_box.isVisible());self.assertFalse(w.gr_helix_box.isVisible())
+        self.assertIn('error',[c.level for c in w.gr_checks])                       # 20 zębów bez korekcji: za mało dla koła wewnętrznego
+        w.gr_fields['teeth'].setValue(60);self.assertTrue(w.gr_apply_btn.isEnabled());self.assertIn('Średnica wieńca',w.gr_info.text())
+        # Zastosuj / Podgląd / Enter: bez brył i bez kroku historii
+        bodies,steps=len(w.document.bodies),w.document.history_length
+        w.preview_gear();w.apply_gear()
+        QTest.keyClick(w,Qt.Key_Return)
+        self.assertEqual((len(w.document.bodies),w.document.history_length),(bodies,steps))
+        self.assertEqual(w.gear_params().teeth,60)
+        # Anuluj: pola wracają do stanu sprzed otwarcia (tu: po Zastosuj), narzędzie się zamyka
+        w.gr_fields['module'].setValue(3);w.gr_kind.setCurrentIndex(0)
+        w.gr_cancel_btn.click()
+        self.assertIsNone(w.mode);self.assertFalse(w.gear_panel.isVisible())
+        p=w.gear_params();self.assertEqual((p.kind,p.module,p.teeth),('spur_int',2.0,60))
+        w.set_gear_params(dict(kind='helical_int',module=1.5,teeth=48,helix=20,hand='left'))
+        self.assertEqual(w.gr_kind.currentData(),'helical_int');self.assertEqual(w.gr_hand.currentData(),'left');self.assertAlmostEqual(w.gr_fields['module'].value(),1.5)
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()
