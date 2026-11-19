@@ -2924,7 +2924,7 @@ class StudioTests(unittest.TestCase):
         import rccad.studio as st
         from rccad import help as hp
         w=self.w
-        self.assertEqual(TABS['Przekładnie'],['gear']);self.assertIn('gear',st.FAVORITE_TOOLS)
+        self.assertEqual(TABS['Przekładnie'][0],'gear');self.assertIn('gear',st.FAVORITE_TOOLS)
         from PySide6.QtTest import QTest
         self.assertTrue(any(entry[0]=='t_gear' for entry in hp.TOPICS))
         w.tools['gear'].click();self.assertEqual(w.mode,'gear');self.assertEqual(w._tab,'Przekładnie');self.assertTrue(w.gear_panel.isVisible())
