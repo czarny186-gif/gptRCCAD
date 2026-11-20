@@ -1,14 +1,22 @@
-# RCCAD Desktop 0.5.32 — Zaokrąglenie i faza narożników szkicu
+# RCCAD Desktop 0.5.33 — TWIST: skręcanie brył (etap 1)
+
+- **Nowe narzędzie w zakładce Edycja: TWIST – Skręcanie brył** (przycisk z ikoną obok Pochylenia ścianki; można je też dodać do Ulubionych).
+- Panel w stylu programu: krok „Bryła”, kąt skręcenia w stopniach (domyślnie 90°), oś X / Y / Z, stan wyboru, Zastosuj / Anuluj.
+- Bryłę wybiera zwykłe zaznaczenie: zaznaczona przed włączeniem narzędzia albo kliknięta na polu roboczym (podświetlenie pod kursorem jak w innych narzędziach). Szkice są pomijane.
+- Enter = Zastosuj, Esc = Anuluj (także gdy kursor stoi w polu kąta).
+- Etap 1: bez deformacji geometrii - Zastosuj sprawdza wybór i parametry, model i historia zostają bez zmian.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.32 — Zaokrąglenie i faza narożników szkicu
 
 - **Nowe narzędzie w zakładce Szkic (obok Ofsetu): Zaokrąglenie / faza narożników** - działa jak Edycja → Zaokrąglij / Fazuj, tylko na liniach szkicu. Okienko: Zaokrąglij / Fazuj, promień albo odległość fazy (z obrazkiem), stan wyboru, Zastosuj / Zamknij.
 - **Wybór narożników**: kliknięcie narożnika (miejsca, gdzie spotykają się dwie linie) dodaje go - pomarańczowa kropka; ponowne kliknięcie albo Shift + klik odznacza; dwuklik w linię zaznacza wszystkie narożniki kształtu. Narożnik pod kursorem podświetla się. Można wybierać narożniki kilku kształtów naraz.
 - **Podgląd na żywo** (pomarańczowa przerywana linia) i **pomarańczowa strzałka** przy ostatnio klikniętym narożniku - przeciąganie zmienia promień / fazę. Za duży promień - komunikat w okienku zamiast podglądu.
 - **Enter / Zastosuj** zmienia kształt szkicu (ten sam szkic, ta sama nazwa) - krok historii „Zaokrąglenie szkicu” albo „Fazowanie szkicu” (cofanie, edycja kroku, zapis projektu). Esc czyści wybór. Działa na prostokątach, wielokątach i łamanych (otwartych i zamkniętych, także z łukami), w każdej płaszczyźnie i na ścianach brył; zaokrąglony kształt wyciąga się jak każdy szkic.
 - Szkic zmieniony wcześniej w historii (np. inny wymiar prostokąta) - zaokrąglenie trafia w ten sam narożnik.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.31 — Przekładnie: integracja i optymalizacja (etap 8)
 

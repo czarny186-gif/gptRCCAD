@@ -65,6 +65,10 @@ TOPICS = [
         'Zakładka Edycja → Pochylenie ścianki. Kliknij płaską ścianę bryły - podświetli się na pomarańczowo, a przy jej czterech bokach pojawią się strzałki.',
         'Pociągnij strzałkę: ten bok ściany wysuwa się na zewnątrz albo chowa w bryłę, a przeciwległy bok zostaje na miejscu - ściana się pochyla, a reszta bryły rozciąga się do nowej płaszczyzny. Można pociągnąć kilka strzałek (pochylenie w dwóch kierunkach). Wartości można też wpisać w polach; pod nimi widać kąty pochylenia.',
         'Zielony podgląd pokazuje nową bryłę. Zastosuj (Enter) zapisuje krok historii (dwuklik w krok otwiera go ponownie), Zamknij zamyka narzędzie bez zmian.']),
+    ('t_twist', 'TWIST – Skręcanie brył', 'Skręcenie bryły wokół osi (zakładka Edycja)', [
+        'Zakładka Edycja → TWIST. Bryłę zaznaczoną przed włączeniem narzędzia program bierze sam; inną wybierasz kliknięciem na polu roboczym (podświetla się jak każde zaznaczenie). Działa na bryłach z RCCAD i zaimportowanych z plików STEP.',
+        'W okienku ustaw kąt skręcenia w stopniach (domyślnie 90°, ujemny - w drugą stronę) i oś skręcenia X, Y albo Z. Enter albo Zastosuj zatwierdza, Esc albo Anuluj zamyka narzędzie bez zmian.',
+        'Wersja wstępna (etap 1): okno, wybór bryły i parametrów. Samo skręcanie geometrii dochodzi w kolejnych wersjach - na razie Zastosuj nie zmienia modelu.']),
     ('t_gear', 'Koła walcowe', 'Parametryczne koło zębate (zakładka Przekładnie)', [
         'Zakładka Przekładnie → Koła walcowe. Wybierz rodzaj uzębienia: proste lub skośne, zewnętrzne (zwykłe koło) albo wewnętrzne (wieniec z zębami do środka).',
         'Wpisz moduł, liczbę zębów, kąt przyporu (zwykle 20°), szerokość koła, korekcję zarysu i luz międzyzębny. Przy zębach skośnych także kąt pochylenia i kierunek skrętu (prawy / lewy). Koło zewnętrzne ma średnicę otworu (0 = bez otworu) i opcjonalną piastę, koło wewnętrzne - średnicę zewnętrzną wieńca (0 = dobrana sama).',

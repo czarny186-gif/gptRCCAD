@@ -3294,6 +3294,44 @@ class StudioTests(unittest.TestCase):
             w._gs_tick();self.assertFalse(w.gs_running);self.assertIsNone(w.gs_sim);self.assertFalse(w.view._body_m)
             w.set_mode(None)
 
+    # TWIST etap 1: przycisk w zakładce Edycja, panel, wybór bryły istniejącym zaznaczeniem, kąt 90° i oś X / Y / Z, Enter / Esc
+    def test_twist_stage1_panel_selection_enter_and_escape(self):
+        import rccad.studio as st
+        w=self.w
+        self.assertIn('twist',st.TABS['Edycja']);self.assertEqual(st.TAB_OF['twist'],'Edycja');self.assertIn('twist',st.FAVORITE_TOOLS)
+        self.assertTrue(w._tool_name('twist').startswith('TWIST'))
+        a=Body('A',k.box(10,10,30)).prepared();b=Body('B',k.box(5,5,5)).prepared()
+        sk=Body('Szkic',k.sketch('rectangle','XY',4,4),'sketch','XY').prepared()
+        w.document.commit([a,b,sk]);w.refresh();self.app.processEvents()
+        before=[x.shape for x in w.document.bodies];steps=len(w.document.states())
+        w.selected=[a.id];w.tools['twist'].click();self.app.processEvents()
+        self.assertEqual(w.mode,'twist');self.assertEqual(w._tab,'Edycja');self.assertTrue(w.twist_panel.isVisible())
+        self.assertTrue(w.tools['twist'].isChecked())
+        self.assertEqual(w.tx_id,a.id);self.assertEqual(w.selected,[a.id])                  # bryła zaznaczona wcześniej
+        self.assertEqual(w.tx_angle.value(),90.0);self.assertEqual(w.tx_axis._data,['X','Y','Z']);self.assertEqual(w.tx_axis.currentData(),'Z')
+        self.assertIn('90° wokół osi Z',w.tx_status.text())
+        with patch.object(w.view,'pick_body',return_value=b.id):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.tx_id,b.id);self.assertEqual(w.selected,[b.id])                  # kliknięcie wybiera inną bryłę
+        with patch.object(w.view,'pick_body',return_value=sk.id):w.pick_twist(5,5)
+        self.assertEqual(w.tx_id,b.id)                                                       # szkic to nie bryła
+        with patch.object(w.view,'pick_body',return_value=None):w.pick_twist(5,5)
+        self.assertEqual(w.tx_id,b.id)
+        w.tx_axis.setCurrentIndex(0);w.tx_angle.setValue(-45);self.assertEqual(w.twist_params(),dict(id=b.id,angle=-45.0,axis='X'))
+        self.assertIn('-45° wokół osi X',w.tx_status.text())
+        w.tx_angle.setValue(0);self.assertIn('różny od zera',w.tx_status.text())
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.assertEqual(w.mode,'twist')   # błędny kąt: zostaje otwarte
+        w.tx_angle.setValue(120)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.app.processEvents()
+        self.assertIsNone(w.mode);self.assertFalse(w.twist_panel.isVisible())
+        self.assertEqual(len(w.document.states()),steps)                                     # etap 1: bez deformacji i bez kroku historii
+        self.assertTrue(all(x.shape is y for x,y in zip(w.document.bodies,before)))
+        w.toggle_mode('twist');self.assertEqual(w.mode,'twist');self.assertEqual(w.tx_angle.value(),90.0);self.assertEqual(w.tx_axis.currentData(),'Z')
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier))
+        self.assertIsNone(w.mode);self.assertFalse(w.twist_panel.isVisible());self.assertEqual(len(w.document.states()),steps)
+        w.toggle_mode('twist');w.cancel_twist();self.assertIsNone(w.mode)
+        w.toggle_mode('twist');self.assertTrue(w.eventFilter(w.tx_angle,QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier)))   # Esc w polu kąta
+        self.assertIsNone(w.mode);self.assertEqual(len(w.document.states()),steps)
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

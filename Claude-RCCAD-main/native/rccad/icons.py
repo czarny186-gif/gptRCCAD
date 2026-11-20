@@ -305,6 +305,17 @@ def _draw_tilt(p, ink, acc, soft, pen):
     p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(41, 4), QPointF(36, 11), QPointF(46, 11)]))
 
 
+def _draw_twist(p, ink, acc, soft, pen):
+    """TWIST: pionowa belka skręcona wokół osi (boki jak taśma) i pomarańczowa strzałka obrotu wokół osi."""
+    band = QPainterPath(); band.moveTo(14, 42); band.cubicTo(14, 30, 30, 22, 30, 8); band.lineTo(36, 8); band.cubicTo(36, 22, 22, 30, 24, 42); band.closeSubpath()
+    back = QPainterPath(); back.moveTo(24, 42); back.lineTo(34, 42); back.cubicTo(34, 30, 18, 20, 20, 8); back.lineTo(30, 8)
+    p.setBrush(soft); p.setPen(pen(ink, 2.2)); p.drawPath(band)
+    p.setBrush(Qt.NoBrush); p.setPen(pen(ink, 2.0)); p.drawPath(back)
+    dash = pen(ink, 1.4); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(25, 3), QPointF(25, 46))
+    p.setPen(pen(acc, 3.0)); p.drawArc(QRectF(8, 15, 34, 12), 200 * 16, 220 * 16)
+    p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(44, 18), QPointF(36, 16), QPointF(41, 24)]))
+
+
 def _gear_path(cx, cy, root, tip, z, phase=0.0):
     """Zarys koła zębatego (zęby trapezowe) - tip > root: zęby na zewnątrz, tip < root: zęby do środka (wieniec)."""
     path = QPainterPath()
@@ -525,6 +536,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_tilt':
         _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind == 'x_twist':
+        _draw_twist(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind in ('tw_x', 'tw_y', 'tw_z'):
+        color = {'tw_x': '#e5484d', 'tw_y': '#2fa56d', 'tw_z': '#3b82f6'}[kind]
+        p.setPen(pen(color, 3.2)); p.drawLine(QPointF(24, 40), QPointF(24, 12))
+        p.setBrush(QColor(color)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(24, 5), QPointF(18, 14), QPointF(30, 14)]))
+        p.setPen(pen(ORANGE, 2.6)); p.setBrush(Qt.NoBrush); p.drawArc(QRectF(10, 22, 28, 10), 200 * 16, 240 * 16)
     elif kind in ('x_gear', 'x_gearpair', 'x_gearsim') or kind.startswith('gr_') or kind.startswith('gp_') or kind.startswith('gs_'):
         _draw_gear(p, {'x_gear': 'tool', 'x_gearpair': 'pair', 'gr_rh': 'rh', 'gr_lh': 'lh', 'gr_teeth': 'teeth', 'gr_body': 'body',
                        'gp_ext': 'gp_ext', 'gp_int': 'gp_int', 'gp_byteeth': 'byteeth', 'gp_byratio': 'byratio',
@@ -1074,6 +1092,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_matchsize(p, ink, acc, soft, pen)
         elif name == 'tilt':
             _draw_tilt(p, ink, acc, soft, pen)
+        elif name == 'twist':
+            _draw_twist(p, ink, acc, soft, pen)
         elif name == 'gear':
             _draw_gear(p, 'tool', ink, acc, soft, pen)
         elif name == 'gearpair':
