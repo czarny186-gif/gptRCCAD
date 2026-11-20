@@ -7,7 +7,8 @@ Oś = (punkt, kierunek jednostkowy). Źródła osi:
 - 'points' - prosta przez dwa wskazane punkty,
 - 'edge'   - prosta krawędź B-Rep,
 - 'cyl'    - oś powierzchni walcowej.
-Kąt dodatni = obrót prawoskrętny wokół kierunku osi (kciuk prawej dłoni wzdłuż osi)."""
+Kąt dodatni = obrót prawoskrętny wokół kierunku osi (kciuk prawej dłoni wzdłuż osi).
+Matematyka samego skręcania punktów: rccad/twist_math.py (bez Open CASCADE); field() łączy ją z osią i zasięgiem bryły."""
 from __future__ import annotations
 
 import numpy as np
@@ -133,3 +134,23 @@ def ring_basis(axis):
     e1 = np.cross(axis, (0, 0, 1.0) if abs(axis[2]) < .9 else (1.0, 0, 0))
     e1 /= np.linalg.norm(e1)
     return e1, np.cross(axis, e1)
+
+
+def axial_extent(shape, origin, direction, tolerance=.05):
+    """(t_min, t_max) bryły wzdłuż osi - z siatki Open CASCADE (łuki i powierzchnie, nie tylko wierzchołki)."""
+    vertices, _ = shape.tessellate(tolerance)
+    pts = np.array([v.toTuple() for v in vertices] or [v.toTuple() for v in shape.Vertices()], float)
+    t0, t1, _ = extent(pts, origin, direction)
+    return t0, t1
+
+
+def field(spec, shape, angle, range_from=0.0, range_to=1.0, kind='linear', power=2.0):
+    """Pole skręcenia (rccad.twist_math.TwistField) dla bryły: oś z opisu spec (jak resolve), zakres jako część
+    długości bryły wzdłuż osi. Łączy geometrię Open CASCADE (oś, zasięg) z czystą matematyką deformacji."""
+    from . import twist_math
+    origin, direction = resolve(spec, shape)
+    t0, t1 = axial_extent(shape, origin, direction)
+    try:
+        return twist_math.field_for_extent(origin, direction, angle, t0, t1, range_from, range_to, kind, power)
+    except twist_math.TwistParamError as exc:
+        raise kernel.CadError(str(exc)) from None

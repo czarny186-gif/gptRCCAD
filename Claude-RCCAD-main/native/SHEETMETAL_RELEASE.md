@@ -1,14 +1,23 @@
-# RCCAD Desktop 0.5.34 — TWIST: oś skręcenia i manipulator (etap 2)
+# RCCAD Desktop 0.5.35 — TWIST: silnik matematyczny skręcania (etap 3)
+
+- **Nowy moduł obliczeń skręcania** (`rccad/twist_math.py`, sam numpy - oddzielony od Open CASCADE i od okna): obrót punktów wokół dowolnej osi 3D o kąt zależny od położenia wzdłuż osi, theta(t) = kąt · f((t - t0) / L). Dla osi Z: x' = x·cos θ - y·sin θ, y' = x·sin θ + y·cos θ, z' = z.
+- Kąt dodatni i ujemny, kąty powyżej 360° (do 100 obrotów), skręcanie całej długości bryły albo tylko wybranego zakresu - przed zakresem bez obrotu, za nim pełny kąt, na granicach ciągle.
+- Rozkłady: liniowy, płynny Smoothstep (łagodny początek i koniec), progresywny (narasta ku końcowi; wykładnik > 1).
+- Walidacja parametrów z komunikatami po polsku (zerowa oś, kąt nieskończony / za duży, zakres o zerowej długości lub odwrócony, nieznany rozkład).
+- Połączenie z osią bryły z etapu 2 (oś i długość bryły wzdłuż osi z Open CASCADE).
+- Bryły, okno TWIST i projekty bez zmian - deformacja brył dochodzi w kolejnym etapie.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.34 — TWIST: oś skręcenia i manipulator (etap 2)
 
 - **Oś skręcenia widoczna w 3D**: pomarańczowa linia przez całą bryłę ze strzałką kierunku.
 - **Wybór osi** (krok „Oś skręcenia”): Globalna X / Y / Z przez środek bryły (domyślnie Z), Lokalna - własne osie bryły (główne osie bezwładności Open CASCADE przez środek masy, obracają się razem z bryłą), 2 punkty (narożnik, punkt krawędzi albo powierzchni), Krawędź (prosta krawędź B-Rep), Walec (oś powierzchni walcowej - otwór, wałek). Wskazywany element podświetla się pod kursorem.
 - **Odwróć kierunek osi** - zmienia zwrot osi (kąt dodatni = obrót prawoskrętny wokół strzałki osi).
 - **Manipulator obrotowy** (pierścień z systemu uchwytów programu) przy końcu bryły: łuk ze strzałką pokazuje kierunek i wartość skręcenia, przeciąganie pierścienia zmienia kąt.
 - Nadal bez deformacji geometrii - Zastosuj sprawdza wybór, oś i kąt, model i historia zostają bez zmian.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.33 — TWIST: skręcanie brył (etap 1)
 
