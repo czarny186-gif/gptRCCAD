@@ -227,13 +227,57 @@ class Overlay2D(QWidget):
         p.setBrush(Qt.NoBrush)
         p.setPen(halo)
         p.drawPolyline(poly)
-        pen = QPen(self._qc(h['color'], 255 if hot else 225), 5.5 if hot else 4)
+        sweep = h.get('sweep')
+        pen = QPen(self._qc(h['color'], 255 if hot else 225) if sweep is None else self._qc(h['color'], 110), (5.5 if hot else 4) if sweep is None else 3)
         pen.setCapStyle(Qt.RoundCap)
         p.setPen(pen)
         p.drawPolyline(poly)
+        if sweep is not None:
+            self._draw_sweep(p, v, h, c, axis, radius, e1, e2, float(sweep), hot)
         tip = v.project_one(h['tip'])
         if tip is not None:
             self._badge(p, tip, h['color'], h.get('label'), 10 + (2 if hot else 0))
+            if h.get('text'):
+                font = QFont('Segoe UI')
+                font.setBold(True)
+                font.setPixelSize(13)
+                p.setFont(font)
+                rect = QRectF(tip[0] + 14, tip[1] - 22, 90, 20)
+                p.setPen(QPen(QColor(255, 255, 255, 230), 4))
+                p.setBrush(QColor(255, 255, 255, 215))
+                width = p.fontMetrics().horizontalAdvance(h['text']) + 12
+                p.drawRoundedRect(QRectF(rect.x(), rect.y(), width, 20), 6, 6)
+                p.setPen(self._qc(h['color']).darker(135))
+                p.drawText(QRectF(rect.x(), rect.y(), width, 20), Qt.AlignCenter, h['text'])
+
+    def _draw_sweep(self, p, v, h, c, axis, radius, e1, e2, sweep, hot):
+        """Łuk wartości na pierścieniu (np. kąt skręcenia TWIST): od kąta 0 do sweep, ze strzałką kierunku na końcu."""
+        if abs(sweep) < 1e-9:
+            return
+        shown = max(-2 * np.pi, min(2 * np.pi, sweep))
+        angles = np.linspace(0.0, shown, max(8, int(abs(shown) / (2 * np.pi) * 96) + 2))
+        pts = np.array([c + radius * (np.cos(a) * e1 + np.sin(a) * e2) for a in angles])
+        xy, _, _ = v.project_points(pts)
+        if not np.isfinite(xy).all():
+            return
+        arc = QPolygonF([QPointF(float(a), float(b)) for a, b in xy])
+        pen = QPen(self._qc(h['color']), 6.5 if hot else 5.2)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPolyline(arc)
+        end, before = xy[-1], xy[-2]
+        dx, dy = end[0] - before[0], end[1] - before[1]
+        length = math.hypot(dx, dy)
+        if length > 1e-6:
+            ux, uy = dx / length, dy / length
+            head = 15 + (2 if hot else 0)
+            tri = QPolygonF([QPointF(end[0] + ux * head * .6, end[1] + uy * head * .6),
+                             QPointF(end[0] - ux * head * .5 - uy * head * .5, end[1] - uy * head * .5 + ux * head * .5),
+                             QPointF(end[0] - ux * head * .5 + uy * head * .5, end[1] - uy * head * .5 - ux * head * .5)])
+            p.setPen(QPen(QColor('#ffffff'), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setBrush(self._qc(h['color']))
+            p.drawPolygon(tri)
 
     def _badge(self, p, xy, color, label, r):
         p.setPen(QPen(QColor('#ffffff'), 2.4))

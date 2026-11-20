@@ -1,14 +1,22 @@
-# RCCAD Desktop 0.5.33 — TWIST: skręcanie brył (etap 1)
+# RCCAD Desktop 0.5.34 — TWIST: oś skręcenia i manipulator (etap 2)
+
+- **Oś skręcenia widoczna w 3D**: pomarańczowa linia przez całą bryłę ze strzałką kierunku.
+- **Wybór osi** (krok „Oś skręcenia”): Globalna X / Y / Z przez środek bryły (domyślnie Z), Lokalna - własne osie bryły (główne osie bezwładności Open CASCADE przez środek masy, obracają się razem z bryłą), 2 punkty (narożnik, punkt krawędzi albo powierzchni), Krawędź (prosta krawędź B-Rep), Walec (oś powierzchni walcowej - otwór, wałek). Wskazywany element podświetla się pod kursorem.
+- **Odwróć kierunek osi** - zmienia zwrot osi (kąt dodatni = obrót prawoskrętny wokół strzałki osi).
+- **Manipulator obrotowy** (pierścień z systemu uchwytów programu) przy końcu bryły: łuk ze strzałką pokazuje kierunek i wartość skręcenia, przeciąganie pierścienia zmienia kąt.
+- Nadal bez deformacji geometrii - Zastosuj sprawdza wybór, oś i kąt, model i historia zostają bez zmian.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.33 — TWIST: skręcanie brył (etap 1)
 
 - **Nowe narzędzie w zakładce Edycja: TWIST – Skręcanie brył** (przycisk z ikoną obok Pochylenia ścianki; można je też dodać do Ulubionych).
 - Panel w stylu programu: krok „Bryła”, kąt skręcenia w stopniach (domyślnie 90°), oś X / Y / Z, stan wyboru, Zastosuj / Anuluj.
 - Bryłę wybiera zwykłe zaznaczenie: zaznaczona przed włączeniem narzędzia albo kliknięta na polu roboczym (podświetlenie pod kursorem jak w innych narzędziach). Szkice są pomijane.
 - Enter = Zastosuj, Esc = Anuluj (także gdy kursor stoi w polu kąta).
 - Etap 1: bez deformacji geometrii - Zastosuj sprawdza wybór i parametry, model i historia zostają bez zmian.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.32 — Zaokrąglenie i faza narożników szkicu
 

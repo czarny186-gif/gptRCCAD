@@ -538,6 +538,30 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_twist':
         _draw_twist(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
+    elif kind in ('tw_global', 'tw_local'):
+        local = kind == 'tw_local'
+        if local:
+            p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawPolygon(QPolygonF([QPointF(10, 30), QPointF(26, 40), QPointF(40, 26), QPointF(24, 16)]))
+        o = QPointF(24, 30) if local else QPointF(16, 32)
+        ends = ((40, 22), (30, 8), (10, 40)) if local else ((42, 32), (16, 6), (5, 42))
+        for (ex, ey), color in zip(ends, ('#e5484d', '#2fa56d', '#3b82f6')):
+            p.setPen(pen(color, 3.0)); p.drawLine(o, QPointF(ex, ey))
+            p.setBrush(QColor(color)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(ex, ey), 3, 3)
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(o, 3.4, 3.4)
+    elif kind == 'tw_points':
+        p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(8, 40), QPointF(40, 8))
+        for x, y in ((14, 34), (34, 14)):
+            p.setBrush(QColor(BLUE)); p.setPen(pen('#ffffff', 2.0)); p.drawEllipse(QPointF(x, y), 5.5, 5.5)
+    elif kind == 'tw_edge':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawPolygon(QPolygonF([QPointF(8, 18), QPointF(28, 18), QPointF(28, 42), QPointF(8, 42)]))
+        p.drawPolygon(QPolygonF([QPointF(8, 18), QPointF(18, 8), QPointF(38, 8), QPointF(28, 18)]))
+        p.drawPolygon(QPolygonF([QPointF(28, 18), QPointF(38, 8), QPointF(38, 32), QPointF(28, 42)]))
+        p.setPen(pen(ORANGE, 4.0)); p.drawLine(QPointF(28, 18), QPointF(28, 42))
+    elif kind == 'tw_cyl':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2))
+        body = QPainterPath(); body.moveTo(12, 12); body.lineTo(12, 36); body.arcTo(QRectF(12, 30, 24, 12), 180, 180); body.lineTo(36, 12); body.closeSubpath()
+        p.drawPath(body); p.drawEllipse(QRectF(12, 6, 24, 12))
+        dash = pen(ORANGE, 2.6); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(24, 2), QPointF(24, 46))
     elif kind in ('tw_x', 'tw_y', 'tw_z'):
         color = {'tw_x': '#e5484d', 'tw_y': '#2fa56d', 'tw_z': '#3b82f6'}[kind]
         p.setPen(pen(color, 3.2)); p.drawLine(QPointF(24, 40), QPointF(24, 12))

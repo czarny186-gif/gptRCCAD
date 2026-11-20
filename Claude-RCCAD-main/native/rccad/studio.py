@@ -3760,7 +3760,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                 self._hover_extrude(x, y, layer=True)      # kolejny profil: kliknięcie go doda (Shift - odznaczy)
             elif self.mode in MEASURE_MODES:
                 self._measure_hover(x,y)
-            elif self.mode in ('sheetpick', 'plyfoldpick', 'scale', 'color', 'twist') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
+            elif self.mode == 'twist':
+                self.twist_hover(x, y)
+            elif self.mode in ('sheetpick', 'plyfoldpick', 'scale', 'color') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
                 self._hover_shell_solid(x, y)
             elif self.mode == 'matchsize':
                 self._mz_hover(x, y)
@@ -8868,6 +8870,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self.scale_handle_dragged(hid, delta)
         elif hid.startswith('tl') and self.mode == 'tilt':
             self.tilt_handle_dragged(hid, delta)
+        elif hid == 'tx' and self.mode == 'twist':
+            self.twist_handle_dragged(delta)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -8897,6 +8901,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self._off_place_handle()
         elif hid == 'sf':
             self._sf_place_handle()
+        elif hid == 'tx':
+            self._tx_place_ring()
         elif hid == 'mod':
             self._place_mod_handle()
         elif hid == 'split':

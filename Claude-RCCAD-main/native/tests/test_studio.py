@@ -3309,15 +3309,15 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(w.tools['twist'].isChecked())
         self.assertEqual(w.tx_id,a.id);self.assertEqual(w.selected,[a.id])                  # bryła zaznaczona wcześniej
         self.assertEqual(w.tx_angle.value(),90.0);self.assertEqual(w.tx_axis._data,['X','Y','Z']);self.assertEqual(w.tx_axis.currentData(),'Z')
-        self.assertIn('90° wokół osi Z',w.tx_status.text())
+        self.assertIn('90° · Globalna Z',w.tx_status.text())
         with patch.object(w.view,'pick_body',return_value=b.id):w.view_clicked(5,5,False,False)
         self.assertEqual(w.tx_id,b.id);self.assertEqual(w.selected,[b.id])                  # kliknięcie wybiera inną bryłę
         with patch.object(w.view,'pick_body',return_value=sk.id):w.pick_twist(5,5)
         self.assertEqual(w.tx_id,b.id)                                                       # szkic to nie bryła
         with patch.object(w.view,'pick_body',return_value=None):w.pick_twist(5,5)
         self.assertEqual(w.tx_id,b.id)
-        w.tx_axis.setCurrentIndex(0);w.tx_angle.setValue(-45);self.assertEqual(w.twist_params(),dict(id=b.id,angle=-45.0,axis='X'))
-        self.assertIn('-45° wokół osi X',w.tx_status.text())
+        w.tx_axis.setCurrentIndex(0);w.tx_angle.setValue(-45);p=w.twist_params();self.assertEqual((p['id'],p['angle'],p['axis']),(b.id,-45.0,'X'))
+        self.assertIn('-45° · Globalna X',w.tx_status.text())
         w.tx_angle.setValue(0);self.assertIn('różny od zera',w.tx_status.text())
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.assertEqual(w.mode,'twist')   # błędny kąt: zostaje otwarte
         w.tx_angle.setValue(120)
@@ -3331,6 +3331,70 @@ class StudioTests(unittest.TestCase):
         w.toggle_mode('twist');w.cancel_twist();self.assertIsNone(w.mode)
         w.toggle_mode('twist');self.assertTrue(w.eventFilter(w.tx_angle,QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier)))   # Esc w polu kąta
         self.assertIsNone(w.mode);self.assertEqual(len(w.document.states()),steps)
+
+    # TWIST etap 2: oś w 3D (globalna, lokalna, 2 punkty, krawędź, walec), odwrócenie, manipulator obrotowy - bez deformacji
+    def test_twist_stage2_axes_reverse_and_ring_manipulator(self):
+        from rccad import twist as tw
+        w=self.w
+        shape=cq.Workplane().box(20,30,60).faces('>Z').workplane().hole(8).val().translate(cq.Vector(0,0,30))
+        a=Body('A',shape).prepared();w.document.commit([a]);w.refresh();self.app.processEvents()
+        steps=len(w.document.states())
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents()
+        # domyślnie: globalna Z przez środek bryły, linia osi i pierścień przy górnym końcu
+        self.assertEqual(w.tx_kind.currentData(),'global')
+        o,d=w.twist_axis();np.testing.assert_allclose(o,(0,0,30),atol=1e-9);np.testing.assert_allclose(d,(0,0,1),atol=1e-12)
+        self.assertTrue(w.view.selection_items)                                             # oś widoczna w 3D
+        h=w.view.handles[0];self.assertEqual((h['id'],h['kind']),('tx','ring'))
+        c,ax,r=h['ring'];np.testing.assert_allclose(c,(0,0,60),atol=1e-6);np.testing.assert_allclose(ax,(0,0,1));self.assertGreater(r,math.hypot(10,15))
+        self.assertAlmostEqual(h['sweep'],math.pi/2);self.assertEqual(h['text'],'90°')
+        e1,e2=tw.ring_basis(ax);np.testing.assert_allclose(h['tip'],c+r*e2,atol=1e-9)          # łuk kończy się na kącie 90°
+        # przeciąganie pierścienia: kąt rośnie o łuk/promień
+        w.handle_dragged('tx',r*math.radians(30));self.assertAlmostEqual(w.tx_angle.value(),120.0)
+        w.handle_dragged('tx',-r*math.radians(150));w.handle_released('tx');self.assertAlmostEqual(w.tx_angle.value(),-60.0)
+        h=w.view.handles[0];self.assertAlmostEqual(h['sweep'],math.radians(-60));self.assertEqual(h['text'],'-60°')
+        # osie globalne X / Y i odwrócenie kierunku
+        w.tx_axis.setCurrentIndex(0);o,d=w.twist_axis();np.testing.assert_allclose(d,(1,0,0));np.testing.assert_allclose(w.view.handles[0]['ring'][0],(10,0,30),atol=1e-6)
+        w.tx_reverse.setChecked(True);o,d=w.twist_axis();np.testing.assert_allclose(d,(-1,0,0));np.testing.assert_allclose(w.view.handles[0]['ring'][0],(-10,0,30),atol=1e-6)
+        self.assertIn('odwrócona',w.tx_step2.value.text());w.tx_reverse.setChecked(False)
+        # lokalna oś bryły obróconej o 30° wokół Z - idzie razem z bryłą
+        turned=k.transform(a.shape,(0,0,0),(0,0,30));w.document.commit([replace(a,shape=turned,mesh=k.display_mesh(turned))]);w._tx_set(a.id)
+        w.tx_kind.setCurrentIndex(1);w.tx_axis.setCurrentIndex(0);o,d=w.twist_axis()
+        np.testing.assert_allclose(d,(math.cos(math.radians(30)),math.sin(math.radians(30)),0),atol=1e-6)
+        self.assertTrue(w.tx_axis.isVisible() or not w.isVisible());self.assertEqual(w.tx_axis_label.text(),'Oś lokalna bryły')
+        body=w.document.get(a.id)
+        # krawędź: prosta krawędź B-Rep; łuk odrzucony
+        w.tx_kind.setCurrentIndex(3);self.assertIsNone(w.twist_axis());self.assertIn('prostą krawędź',w.tx_status.text())
+        self.assertFalse(w.tx_axis.isVisibleTo(w.twist_panel))
+        line=next(i for i,e in enumerate(body.shape.Edges()) if e.geomType()=='LINE' and abs(e.tangentAt(.5).z)>.99)
+        circle=next(i for i,e in enumerate(body.shape.Edges()) if e.geomType()=='CIRCLE')
+        with patch.object(w.view,'nearest_edge',return_value=(a.id,circle)):w.pick_twist(5,5)
+        self.assertIsNone(w.twist_axis())
+        with patch.object(w.view,'nearest_edge',return_value=(a.id,line)):w.pick_twist(5,5)
+        o,d=w.twist_axis();e=body.shape.Edges()[line];self.assertAlmostEqual(abs(d[2]),1,9)
+        self.assertLess(e.distance(cq.Vertex.makeVertex(*o)),1e-9);self.assertIn('Krawędź',w.tx_step2.value.text())
+        self.assertEqual(w.tx_id,a.id)                                                       # kliknięcie wskazało oś, nie inną bryłę
+        # walec: oś otworu
+        w.tx_kind.setCurrentIndex(4);self.assertIsNone(w.twist_axis())
+        hole=next(f for f in body.shape.Faces() if f.geomType()=='CYLINDER')
+        flat=next(f for f in body.shape.Faces() if f.geomType()=='PLANE')
+        with patch.object(w,'_tx_face_at',return_value=flat):w.pick_twist(5,5)
+        self.assertIsNone(w.twist_axis())
+        with patch.object(w,'_tx_face_at',return_value=hole):w.pick_twist(5,5)
+        o,d=w.twist_axis();self.assertAlmostEqual(abs(d[2]),1,9);np.testing.assert_allclose(o[:2],(0,0),atol=1e-6);self.assertIn('R 4',w.tx_step2.value.text())
+        # dwa punkty
+        w.tx_kind.setCurrentIndex(2);self.assertIn('pierwszy punkt',w.tx_status.text())
+        with patch.object(w,'_tx_point_at',return_value=np.array([0.,0.,0.])):w.pick_twist(5,5)
+        self.assertIn('drugi punkt',w.tx_status.text());self.assertEqual(len(w.view.sel_vertices),1)
+        with patch.object(w,'_tx_point_at',return_value=np.array([0.,0.,0.])):w.pick_twist(5,5)
+        self.assertEqual(len(w.tx_points),1)                                                  # ten sam punkt - odrzucony
+        with patch.object(w,'_tx_point_at',return_value=np.array([3.,4.,0.])):w.pick_twist(5,5)
+        o,d=w.twist_axis();np.testing.assert_allclose(d,(.6,.8,0),atol=1e-12);np.testing.assert_allclose(o,(0,0,0))
+        p=w.twist_params();self.assertEqual(p['kind'],'points');np.testing.assert_allclose(p['direction'],(.6,.8,0))
+        # Zastosuj: bez deformacji i bez kroku historii
+        shape_before=w.document.get(a.id).shape;steps=len(w.document.states())
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.app.processEvents()
+        self.assertIsNone(w.mode);self.assertEqual(w.view.handles,[]);self.assertFalse(w.view.selection_items)
+        self.assertIs(w.document.get(a.id).shape,shape_before);self.assertEqual(len(w.document.states()),steps)
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
