@@ -7,19 +7,28 @@ lokalna oś bryły (główne osie bezwładności), przez dwa punkty, wzdłuż pr
 odwrócenie kierunku; manipulator obrotowy (pierścień z istniejącego systemu uchwytów widoku) przy końcu bryły - łuk
 pokazuje kierunek i wartość skręcenia, przeciąganie zmienia kąt.
 
-Deformacja geometrii jeszcze nie jest wykonywana: Zastosuj sprawdza wybór i parametry, model zostaje bez zmian.
-Geometria osi: rccad/twist.py."""
+Etap 4: szybki podgląd skręcenia na KOPII siatki wyświetlania (rccad/twist_preview.py + silnik rccad/twist_math.py).
+Oryginał jest na czas podglądu tylko ukryty w widoku (istniejący mechanizm podmiany override), bryła B-Rep i jej siatka
+w projekcie się nie zmieniają. Kąt z pola i z pierścienia odświeża podgląd (zmiany zbierane do jednej klatki).
+Anuluj / Esc / zmiana narzędzia przywracają oryginalny widok.
+
+Deformacja geometrii B-Rep jeszcze nie jest wykonywana: Zastosuj sprawdza wybór i parametry, model zostaje bez zmian -
+siatka podglądu nigdy nie trafia do projektu. Geometria osi: rccad/twist.py."""
 from __future__ import annotations
 
 import math
 
 import numpy as np
-from PySide6.QtCore import Qt
+from dataclasses import replace
+
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QCheckBox
 
 from . import kernel
 from . import shell_ui as ui
 from . import twist as tw
+from . import twist_math as tm
+from . import twist_preview as tp
 
 TWIST_AXES = (('X', 'X', 'tw_x'), ('Y', 'Y', 'tw_y'), ('Z', 'Z', 'tw_z'))
 TWIST_KINDS = (('Globalna', 'global', 'tw_global'), ('Lokalna', 'local', 'tw_local'), ('2 punkty', 'points', 'tw_points'),
@@ -30,6 +39,7 @@ KIND_HINTS = {'global': 'Oś X / Y / Z układu globalnego przez środek bryły.'
               'edge': 'Kliknij prostą krawędź - oś biegnie wzdłuż niej.',
               'cyl': 'Kliknij powierzchnię walcową (otwór, wałek) - oś walca.'}
 RING_COLOR = (.94, .6, .13, 1)
+PREVIEW_COLOR, PREVIEW_LINE = (.3, .75, .5, .8), (.05, .4, .2, 1)
 AXIS_LINE = (.94, .42, .05, 1)
 
 
@@ -73,6 +83,10 @@ class TwistTools:
         self.tx_points = []           # punkty wskazane w trybie „2 punkty”
         self.tx_line = None           # oś wskazana krawędzią / walcem: dict(p, d, label)
         self._tx_cache = {}
+        self._tx_timer = QTimer(self)               # zmiany kąta (pole, przeciąganie pierścienia) - jeden podgląd na klatkę
+        self._tx_timer.setSingleShot(True)
+        self._tx_timer.setInterval(0)
+        self._tx_timer.timeout.connect(self._tx_preview)
         self.tx_angle.valueChanged.connect(lambda *_: self._tx_angle_changed())
         self.tx_axis.currentIndexChanged.connect(lambda *_: self._tx_refresh())
         self.tx_reverse.toggled.connect(lambda *_: self._tx_refresh())
@@ -274,11 +288,13 @@ class TwistTools:
     def _tx_angle_changed(self):
         self._tx_status()
         self._tx_place_ring()
+        self._tx_timer.start()
 
     def _tx_refresh(self):
         self._tx_status()
         self._tx_show_axis()
         self._tx_place_ring()
+        self._tx_timer.start()
 
     def _tx_status(self):
         error = self._tx_check()
@@ -368,6 +384,52 @@ class TwistTools:
             self._hv = self.tx_angle.value()
         self.tx_angle.setValue(round(self._hv + math.degrees(delta / ring[2]), 1))
 
+    # ---------- szybki podgląd skręcenia (kopia siatki wyświetlania) ----------
+    def _tx_field(self):
+        """Pole skręcenia podglądu (cała długość bryły wzdłuż osi, rozkład liniowy) albo None."""
+        geo = self._tx_geometry()
+        if geo is None or self._tx_check() is not None:
+            return None
+        origin, direction, t0, t1, _ = geo
+        try:
+            return tm.field_for_extent(origin, direction, self.tx_angle.value(), t0, t1)
+        except tm.TwistParamError:
+            return None
+
+    def _tx_preview(self):
+        """Podgląd: pocięta kopia siatki (pamięć podręczna dla bryły, osi i liczby warstw) obrócona polem skręcenia.
+        Oryginał ukryty tylko w widoku; przy błędzie parametrów - oryginalny widok."""
+        if self.mode != 'twist':
+            return
+        body = self._tx_solid(self.tx_id)
+        field = self._tx_field() if body is not None and body.mesh is not None and len(body.mesh.triangles) else None
+        if field is None:
+            self._tx_preview_clear()
+            return
+        mesh = body.mesh
+        layers = tp.layer_count(field.angle, field.kind, field.power, len(mesh.triangles))
+        key = (id(mesh), field.origin, field.direction, field.start, field.end, layers)
+        hit = self._tx_cache.get('sliced')
+        if hit is None or hit[0] != key:
+            sliced = tp.SlicedMesh(mesh.vertices, mesh.triangles, mesh.edges, field.origin, field.direction,
+                                   tp.cut_planes(field.start, field.end, layers))
+            hit = self._tx_cache['sliced'] = (key, sliced)
+        vertices, edges = hit[1].twisted(field)
+        preview = kernel.DisplayMesh(vertices.astype(np.float32), hit[1].triangles.astype(np.uint32),
+                                     {k: e.astype(np.float32) for k, e in edges.items()}, mesh.center, mesh.size)
+        self.twist_preview_mesh = preview
+        self.view.set_preview_mesh(preview, color=PREVIEW_COLOR, line_color=PREVIEW_LINE, width=1.6)
+        if self.override.get(body.id) is None or set(self.override) != {body.id}:
+            self.override = {body.id: replace(body, visible=False)}     # oryginał ukryty tylko w widoku
+            self.refresh()
+
+    def _tx_preview_clear(self):
+        self.twist_preview_mesh = None
+        self.view.set_preview_mesh(None)
+        if self.override:
+            self.override = {}
+            self.refresh()
+
     # ---------- zatwierdzenie / anulowanie ----------
     def apply_twist(self):
         if self.busy or self.mode != 'twist':
@@ -376,10 +438,12 @@ class TwistTools:
         if error:
             self.toast(error)
             return
-        # etapy 1-2: bez deformacji geometrii - model zostaje bez zmian
+        # etapy 1-4: bez deformacji geometrii B-Rep - model zostaje bez zmian, siatka podglądu nie jest zapisywana
+        self._tx_timer.stop()
         p = self.twist_params()
         self.toast(f'TWIST: {p["angle"]:g}° wokół osi. Skręcanie geometrii zostanie dodane w kolejnym etapie - model bez zmian.')
         self.set_mode(None)
 
     def cancel_twist(self):
-        self.set_mode(None)
+        self._tx_timer.stop()
+        self.set_mode(None)          # set_mode czyści podgląd i podmianę widoku (override), refresh pokazuje oryginał

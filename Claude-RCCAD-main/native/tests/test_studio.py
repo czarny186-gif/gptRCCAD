@@ -3396,6 +3396,55 @@ class StudioTests(unittest.TestCase):
         self.assertIsNone(w.mode);self.assertEqual(w.view.handles,[]);self.assertFalse(w.view.selection_items)
         self.assertIs(w.document.get(a.id).shape,shape_before);self.assertEqual(len(w.document.states()),steps)
 
+    # TWIST etap 4: szybki podgląd na kopii siatki - kąt z pola i pierścienia, Anuluj / Esc przywracają widok, nic nie trafia do projektu
+    def test_twist_stage4_live_preview_on_mesh_copy(self):
+        w=self.w
+        shape=cq.Workplane().box(20,30,80).faces('>Z').workplane().hole(8).val().translate(cq.Vector(0,0,40))
+        a=Body('A',shape).prepared();b=Body('B',k.box(5,5,5)).prepared();w.document.commit([a,b]);w.refresh();self.app.processEvents()
+        body=w.document.get(a.id);mesh0,shape0=body.mesh,body.shape;verts0=mesh0.vertices.copy();steps=len(w.document.states())
+        def visible(bid):return next(x for x in w.view.bodies if x.id==bid).visible
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents()
+        prev=w.twist_preview_mesh;self.assertIsNotNone(prev);self.assertTrue(w.view.preview_items)
+        self.assertFalse(visible(a.id));self.assertTrue(visible(b.id))                         # oryginał ukryty tylko w widoku
+        self.assertGreater(len(prev.triangles),len(mesh0.triangles))
+        for want in ((-15,10,80),(15,-10,80),(10,15,0),(-10,-15,0)):                         # górne rogi po 90° wokół Z przez środek, dolne bez zmian
+            self.assertLess(float(np.min(np.linalg.norm(prev.vertices-want,axis=1))),1e-4,want)
+        self.assertGreater(float(np.min(np.linalg.norm(prev.vertices-(10,15,80),axis=1))),1.0)
+        # dokładny kąt w polu liczbowym
+        w.tx_angle.setValue(37.5);self.app.processEvents()
+        p=w.twist_preview_mesh;r=np.radians(37.5)
+        corner=p.vertices[np.argmin(np.linalg.norm(p.vertices-(10*np.cos(r)-15*np.sin(r),10*np.sin(r)+15*np.cos(r),80),axis=1))]
+        np.testing.assert_allclose(corner,(10*np.cos(r)-15*np.sin(r),10*np.sin(r)+15*np.cos(r),80),atol=1e-4)
+        # przeciąganie pierścienia odświeża podgląd (jedna aktualizacja na klatkę)
+        ring=w.view.handles[0]['ring'][2];before=w.twist_preview_mesh
+        w.handle_dragged('tx',ring*np.radians(52.5));self.app.processEvents()
+        self.assertAlmostEqual(w.tx_angle.value(),90.0);self.assertIsNot(w.twist_preview_mesh,before)
+        w.handle_dragged('tx',ring*np.radians(90.0));self.app.processEvents();w.handle_released('tx')
+        self.assertAlmostEqual(w.tx_angle.value(),127.5)
+        # zmiana osi i błędny kąt
+        w.tx_axis.setCurrentIndex(0);self.app.processEvents();self.assertIsNotNone(w.twist_preview_mesh)
+        w.tx_angle.setValue(0);self.app.processEvents()
+        self.assertIsNone(w.twist_preview_mesh)
+        self.assertTrue(visible(a.id));self.assertEqual(w.override,{})                          # bez podglądu: oryginał
+        w.tx_angle.setValue(200);self.app.processEvents();self.assertFalse(visible(a.id))
+        # oryginał w projekcie nietknięty
+        body=w.document.get(a.id);self.assertIs(body.mesh,mesh0);self.assertIs(body.shape,shape0);np.testing.assert_array_equal(body.mesh.vertices,verts0)
+        # Esc - oryginalny widok
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.app.processEvents()
+        self.assertIsNone(w.mode);self.assertTrue(visible(a.id));self.assertFalse(w.view.preview_items);self.assertEqual(w.override,{})
+        # Anuluj
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents();self.assertFalse(visible(a.id))
+        w.cancel_twist();self.app.processEvents();self.assertTrue(visible(a.id));self.assertFalse(w.view.preview_items)
+        # Zastosuj: podgląd nie staje się bryłą
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents()
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.app.processEvents()
+        self.assertIsNone(w.mode);self.assertTrue(visible(a.id));self.assertFalse(w.view.preview_items)
+        body=w.document.get(a.id);self.assertIs(body.shape,shape0);self.assertIs(body.mesh,mesh0);self.assertEqual(len(w.document.states()),steps)
+        self.assertEqual(len(w.document.bodies),2)
+        path=Path(tempfile.mkdtemp())/'tw.rccadx';w.document.save(path)
+        loaded=Document.load(path).get(a.id);self.assertAlmostEqual(loaded.shape.Volume(),shape0.Volume(),6)
+        np.testing.assert_allclose(k.bounds(loaded.shape).xlen,20,atol=1e-6)
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

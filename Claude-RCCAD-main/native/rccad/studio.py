@@ -9202,7 +9202,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             bodies = [replace(b, visible=False) if b.id in self.hidden_ids else b for b in bodies]
         shown = {*self.selected, self._obj_hover} if self._obj_hover else set(self.selected)
         if shown:      # obiekt wskazany na liście jest widoczny i podświetlony, także gdy był ukryty albo wygaszony (np. szkic użyty w wyciągnięciu)
-            bodies = [replace(b, visible=True) if (b.id in shown and not b.visible) else b for b in bodies]
+            bodies = [replace(b, visible=True) if (b.id in shown and not b.visible and b.id not in self.override) else b for b in bodies]
         stale = {b.id for b in bodies if b.visible and b.id in self.document.reproject}
         if stale and self.document.reprojected(stale):     # wygaszony szkic na powierzchni pokazuje się: dopiero teraz jego obraz na bryle
             fresh = {b.id: b for b in self.document.bodies}

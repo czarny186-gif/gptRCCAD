@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.5.35 — TWIST: silnik matematyczny skręcania (etap 3)
+# RCCAD Desktop 0.5.36 — TWIST: szybki podgląd skręcania (etap 4)
+
+- **Podgląd na żywo** w narzędziu TWIST: zielona skręcona bryła w miejscu oryginału. Liczony na kopii siatki wyświetlania silnikiem z etapu 3 - bryła B-Rep i jej siatka w projekcie pozostają bez zmian.
+- Wpisanie kąta w polu i przeciąganie pierścienia od razu odświeża podgląd; zmiana osi, kierunku i bryły też.
+- Anuluj, Esc i zmiana narzędzia przywracają oryginalny widok. Zastosuj nadal nie zmienia modelu - podgląd nigdy nie jest zapisywany jako bryła ani do projektu.
+- Płynność: kopia siatki jest cięta warstwami prostopadłymi do osi raz dla bryły i osi (bez szczelin między trójkątami), a każda zmiana kąta tylko obraca gotowe punkty; zmiany zbierane do jednej klatki, ograniczona liczba trójkątów podglądu. Rysuje istniejący renderer programu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.35 — TWIST: silnik matematyczny skręcania (etap 3)
 
 - **Nowy moduł obliczeń skręcania** (`rccad/twist_math.py`, sam numpy - oddzielony od Open CASCADE i od okna): obrót punktów wokół dowolnej osi 3D o kąt zależny od położenia wzdłuż osi, theta(t) = kąt · f((t - t0) / L). Dla osi Z: x' = x·cos θ - y·sin θ, y' = x·sin θ + y·cos θ, z' = z.
 - Kąt dodatni i ujemny, kąty powyżej 360° (do 100 obrotów), skręcanie całej długości bryły albo tylko wybranego zakresu - przed zakresem bez obrotu, za nim pełny kąt, na granicach ciągle.
@@ -6,10 +17,6 @@
 - Walidacja parametrów z komunikatami po polsku (zerowa oś, kąt nieskończony / za duży, zakres o zerowej długości lub odwrócony, nieznany rozkład).
 - Połączenie z osią bryły z etapu 2 (oś i długość bryły wzdłuż osi z Open CASCADE).
 - Bryły, okno TWIST i projekty bez zmian - deformacja brył dochodzi w kolejnym etapie.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.34 — TWIST: oś skręcenia i manipulator (etap 2)
 
