@@ -3117,7 +3117,7 @@ class StudioTests(unittest.TestCase):
         import rccad.studio as st
         from rccad.gears import occ
         w=self.w
-        self.assertEqual(TABS['Przekładnie'],['gear','gearpair']);self.assertIn('gearpair',st.FAVORITE_TOOLS)
+        self.assertEqual(TABS['Przekładnie'][:2],['gear','gearpair']);self.assertIn('gearpair',st.FAVORITE_TOOLS)
         w.tools['gearpair'].click();self.preview()
         self.assertEqual(w.mode,'gearpair');self.assertTrue(w.gearpair_panel.isVisible());self.assertTrue(w.view.preview_items)
         self.assertIn('poprawnie',w.gp_status.text());self.assertAlmostEqual(w.gp_fields['ratio'].value(),2)
@@ -3154,6 +3154,69 @@ class StudioTests(unittest.TestCase):
         self.assertEqual([(i.get('op') or {}).get('type') for _,i in w.document.states()].count('gear_pair'),1)
         w.undo();self.wait();self.app.processEvents();self.wait()
         self.assertEqual(w.document.get(a.id).meta['gear']['teeth'],20)
+
+    def test_gear_simulation_start_stop_reset_speeds_and_collision(self):
+        """Symulacja przekładni (etap 7): para z zaznaczenia albo kliknięcia, Start / Stop / Reset, prędkość, kierunek,
+        koło napędzające; animacja zmienia tylko macierze brył w widoku (bez budowy B-Rep, model bez zmian); prędkość
+        wyjściowa i kontrola kolizji."""
+        import math
+        from PySide6.QtGui import QVector3D
+        from rccad import history as hist
+        from rccad.gears import occ
+        w=self.w
+        self.assertEqual(TABS['Przekładnie'],['gear','gearpair','gearsim'])
+        w.tools['gearpair'].click()
+        w.set_gearpair_params(dict(kind='external',teeth1=20,teeth2=40,module=2,width=10,backlash=.1))
+        w.apply_gearpair();self.wait()
+        a,b=list(w.selected)
+        w.selected=[b];w.tools['gearsim'].click()                             # zaznaczone koło 2 - drugie znajduje się samo
+        self.assertEqual(w.mode,'gearsim');self.assertIsNotNone(w.gs_sim)
+        self.assertEqual([x.id for x in w.gs_sim.wheels],[a,b])
+        self.assertIn('Brak kolizji',w.gs_status.text())
+        w.gs_rpm.setValue(60)
+        self.assertIn('Prędkość wejściowa (koło 1): <b>60.00 obr/min</b> w lewo',w.gs_info.text())
+        self.assertIn('Prędkość wyjściowa (koło 2): <b>30.00 obr/min</b> w prawo',w.gs_info.text())
+        w.gs_driver.setCurrentIndex(1)
+        self.assertIn('Prędkość wyjściowa (koło 1): <b>120.00 obr/min</b> w prawo',w.gs_info.text())
+        w.gs_driver.setCurrentIndex(0)
+        shapes={x.id:x.shape for x in w.document.bodies};steps=w.document.history_length
+        built=[]
+        with patch.object(hist,'gear_shape',side_effect=lambda *a_:built.append(1)),patch.object(occ,'gear_solid',side_effect=lambda *a_:built.append(1)):
+            w.toggle_gearsim();self.assertTrue(w.gs_running);self.assertTrue(w._gs_timer.isActive());self.assertEqual(w.gs_run_btn.text(),'Stop')
+            w.gearsim_step(.25)                                               # 60 obr/min przez 0,25 s = ćwierć obrotu
+            self.assertAlmostEqual(w.gs_theta,math.pi/2)
+            self.assertIn(a,w.view._body_m);self.assertIn(b,w.view._body_m)
+            m=w.view._body_m[b];c=np.array(w.gs_sim.wheels[1].place[:3,3])
+            moved=m.map(QVector3D(*c));self.assertAlmostEqual(moved.x(),c[0],places=4);self.assertAlmostEqual(moved.y(),c[1],places=4)  # oś stoi
+            self.assertFalse(w.gs_result['collision'])
+            for _ in range(10):
+                w.gearsim_step(.37)
+            self.assertFalse(w.gs_result['collision'])
+            w.toggle_gearsim();self.assertFalse(w.gs_running);self.assertFalse(w._gs_timer.isActive())
+            w.gs_dir.setCurrentIndex(1);theta=w.gs_theta;w.gearsim_step(.1);self.assertLess(w.gs_theta,theta)   # w prawo
+        self.assertEqual(built,[])                                            # bez budowy B-Rep w klatkach
+        self.assertEqual(w.document.history_length,steps)
+        self.assertTrue(all(x.shape is shapes[x.id] for x in w.document.bodies))   # model bez zmian
+        w.reset_gearsim();self.assertEqual(w.gs_theta,0);self.assertNotIn(a,w.view._body_m)
+        w.gs_tempo.setValue(10);w.gs_dir.setCurrentIndex(0);w.gearsim_step(1.0)
+        self.assertAlmostEqual(w.gs_theta,2*math.pi*.1)                         # tempo 10% - wolniej na ekranie
+        w.set_mode(None);self.assertFalse(w.view._body_m);self.assertFalse(w._gs_timer.isActive())   # wyjście - położenie z modelu
+        # kolizja: koło 2 przesunięte bliżej koła 1 (krok przesunięcia)
+        move=dict(type='transform',id=b,mode='move',v=[-.8,0.0,0.0])
+        w.document.pending_op=move;w.document.commit(hist.run_transform(list(w.document.bodies),move))
+        w.selected=[];w.tools['gearsim'].click()                              # ta sama para - z nowym położeniem koła 2
+        self.assertIsNotNone(w.gs_sim);self.assertIn('Kolizja',w.gs_status.text())
+        w.gs_sim=None;w._gs_changed();self.assertFalse(w.gs_run_btn.isEnabled())
+        with patch.object(w.view,'pick_face',return_value=(a,np.array((0,0,1.0)),np.array((0,0,10.0)))):
+            w.view_clicked(5,5,False,False)                                   # kliknięcie koła pary w widoku
+        self.assertIsNotNone(w.gs_sim);self.assertIn('Kolizja',w.gs_status.text())
+        # zwykła bryła - nie koło
+        box=Body('Pudło',k.box(5,5,5)).prepared();w.document.commit([*w.document.bodies,box])
+        w.set_mode(None);w.tools['gearsim'].click();w.gs_sim=None
+        with patch.object(w.view,'pick_face',return_value=(box.id,np.array((0,0,1.0)),np.array((0,0,5.0)))):
+            w.view_clicked(5,5,False,False)
+        self.assertIsNone(w.gs_sim)
+        w.set_mode(None)
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

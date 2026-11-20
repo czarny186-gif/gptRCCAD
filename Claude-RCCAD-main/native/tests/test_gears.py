@@ -114,7 +114,7 @@ class GearValidationTests(unittest.TestCase):
         self.assertEqual(GearParams.from_dict({'teeth': 19.6}).teeth, 20)
 
     def test_engine_does_not_import_qt_or_occ(self):
-        code = ('import sys; sys.path.insert(0, "."); import rccad.gears, rccad.gears.preview, rccad.gears.pair; '
+        code = ('import sys; sys.path.insert(0, "."); import rccad.gears, rccad.gears.preview, rccad.gears.pair, rccad.gears.kinematics; '
                 'print(any(m.startswith(("PySide6", "OCP", "cadquery")) for m in sys.modules))')
         out = subprocess.run([sys.executable, '-c', code], cwd=os.path.join(os.path.dirname(__file__), '..'),
                              capture_output=True, text=True, timeout=120)
@@ -810,6 +810,79 @@ class GearPairTests(unittest.TestCase):
         r = self.pair.solve(self.pair.PairParams(**PAIR_CASES['ring']))
         c = out[0].shape.Center()
         self.assertAlmostEqual(math.hypot(c.x, c.y), r.center, places=5)      # zębnik w odległości osi od środka wieńca
+
+
+class GearKinematicsTests(unittest.TestCase):
+    """Etap 7: symulacja - kąty w przełożeniu, obrót wokół własnych osi (stała odległość osi), faza zębów, kolizje."""
+
+    @classmethod
+    def setUpClass(cls):
+        from rccad.gears import kinematics, pair
+        cls.km, cls.pair = kinematics, pair
+
+    def sim(self, **kw):
+        r = self.pair.solve(self.pair.PairParams(**kw))
+        m4 = lambda place: np.vstack([np.asarray(place, float), [0, 0, 0, 1]])
+        return self.km.Simulation(self.km.Wheel('a', r.gear1, m4(r.place1)), self.km.Wheel('b', r.gear2, m4(r.place2))), r
+
+    def test_angles_follow_the_ratio_and_kind(self):
+        sim, _ = self.sim(teeth1=20, teeth2=50)
+        self.assertEqual(sim.angles(0, 1.0), (1.0, -.4))                    # para zewnętrzna: przeciwnie
+        self.assertEqual(sim.angles(1, 1.0), (-2.5, 1.0))
+        self.assertEqual(sim.speeds(0, 100), (40.0, False))
+        sim, _ = self.sim(kind='internal', teeth1=20, teeth2=60)
+        self.assertAlmostEqual(sim.angles(0, 1.0)[1], 1 / 3)               # z wieńcem: w tę samą stronę
+        self.assertEqual(sim.speeds(1, 30), (90.0, True))
+
+    def test_rotation_keeps_axes_fixed(self):
+        sim, r = self.sim(teeth1=18, teeth2=36, helix=20)
+        mats = sim.matrices(*sim.angles(0, .7))
+        for wheel in sim.wheels:
+            M = mats[wheel.id]
+            c = wheel.place[:3, 3]
+            np.testing.assert_allclose(M[:3, :3] @ c + M[:3, 3], c, atol=1e-12)                 # środek koła stoi
+            np.testing.assert_allclose(M[:3, :3] @ sim.axis, sim.axis, atol=1e-12)            # oś się nie zmienia
+            self.assertAlmostEqual(np.linalg.det(M[:3, :3]), 1)
+        a = mats['a'] @ np.append(sim.wheels[0].place[:3, 3], 1)
+        b = mats['b'] @ np.append(sim.wheels[1].place[:3, 3], 1)
+        self.assertAlmostEqual(np.linalg.norm(a - b), r.center)
+
+    def test_no_collision_over_a_whole_pitch_and_after_many_turns(self):
+        """Faza zębów: przez całą podziałkę i po wielu obrotach odstęp zębów zostaje równy luzowi (j·cos α / 2)."""
+        for kw in (dict(teeth1=20, teeth2=40), dict(teeth1=12, teeth2=40), dict(teeth1=18, teeth2=36, helix=20),
+                   dict(kind='internal', teeth1=20, teeth2=60), dict(kind='internal', teeth1=18, teeth2=72, helix=15, center=57)):
+            sim, r = self.sim(backlash=.1, **kw)
+            overlap, gap = sim.sweep(0, 16)
+            self.assertLess(overlap, self.km.OVERLAP_TOL, kw)
+            self.assertGreater(gap, .04, kw)
+            far = sim.check(*sim.angles(1, 7.3 * 2 * math.pi + .123))           # 7 obrotów koła 2
+            self.assertFalse(far['collision'], kw)
+            self.assertGreater(far['gap'], .04, kw)
+
+    def test_wrong_phase_or_position_is_a_collision(self):
+        sim, r = self.sim(teeth1=20, teeth2=40, backlash=.1)
+        self.assertTrue(sim.check(0.0, math.pi / 40)['collision'])            # koło 2 obrócone o pół podziałki
+        closer = sim.wheels[1].place.copy()
+        closer[0, 3] -= .6                                                     # osie bliżej o 0,6 mm
+        moved = self.km.Simulation(sim.wheels[0], self.km.Wheel('b', sim.wheels[1].params, closer))
+        self.assertTrue(moved.check(0, 0)['collision'])
+        apart = sim.wheels[1].place.copy()
+        apart[0, 3] += 10
+        self.assertFalse(self.km.Simulation(sim.wheels[0], self.km.Wheel('b', sim.wheels[1].params, apart)).engaged)
+
+    def test_incompatible_gears_are_refused(self):
+        sim, r = self.sim(teeth1=18, teeth2=36, helix=20)
+        a, b = sim.wheels
+        same_hand = GearParams.from_dict(dict(b.params.to_dict(), hand=a.params.hand))
+        with self.assertRaises(gears.GearError):
+            self.km.Simulation(a, self.km.Wheel('b', same_hand, b.place))
+        other_module = GearParams.from_dict(dict(b.params.to_dict(), module=3))
+        with self.assertRaises(gears.GearError):
+            self.km.Simulation(a, self.km.Wheel('b', other_module, b.place))
+        tilted = b.place.copy()
+        tilted[:3, :3] = np.array(((1, 0, 0), (0, 0, -1), (0, 1, 0)))
+        with self.assertRaises(gears.GearError):
+            self.km.Simulation(a, self.km.Wheel('b', b.params, tilted))
 
 
 if __name__ == '__main__':

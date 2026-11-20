@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.5.29 — Przekładnie: para kół walcowych (etap 6)
+# RCCAD Desktop 0.5.30 — Przekładnie: symulacja kinematyczna (etap 7)
+
+- **Nowe narzędzie Przekładnie → Symulacja przekładni**: wybór pary (koło pary z zaznaczenia albo kliknięcia - drugie znajduje się samo; albo dwa dowolne koła z generatora), Start / Stop (Enter), Reset, prędkość wejściowa (obr/min), kierunek, koło napędzające i tempo animacji.
+- **Kinematyka**: koła obracają się wokół własnych osi w przełożeniu - para zewnętrzna przeciwnie, z wieńcem w tę samą stronę; stała odległość osi, zachowana faza zębów (także po wielu obrotach). Ramka: przełożenie, prędkość wejściowa i wyjściowa z kierunkami, odległość osi, kąt obrotu.
+- **Bez przebudowy geometrii**: animacja zmienia tylko macierze brył w widoku; model, historia i bryły B-Rep zostają bez zmian, wyjście z narzędzia przywraca położenie.
+- **Kontrola kolizji**: w każdej klatce przekroje czołowe kół (dokładny zarys, zęby skośne na dole i u góry) nie mogą się przenikać; po wyborze pary przegląd całej podziałki zęba z najmniejszym odstępem zębów. Niezgodne koła (moduł, kąt przyporu, kąt pochylenia, kierunki skrętu, nierównoległe osie) - komunikat.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.29 — Przekładnie: para kół walcowych (etap 6)
 
 - **Nowe narzędzie Przekładnie → Para kół walcowych**: para zewnętrzna albo koło z wieńcem. Liczba zębów obu kół albo przełożenie (liczba zębów koła 2 dobiera się sama), moduł, kąt przyporu, kąt pochylenia, szerokość, luz, odległość osi, otwory.
 - **Zazębienie liczone samo**: przełożenie, odległość osi (dobrana sama albo wpisana), toczny kąt przyporu, korekcje zarysu (najmniejsze bez podcięcia i interferencji; przy wpisanej odległości osi - dobrane do niej), kierunki skrętu (para zewnętrzna - przeciwne, z wieńcem - ten sam). Koła ustawiają się w zazębieniu (ząb naprzeciw wrębu), w jednej grupie listy obiektów.
@@ -7,10 +18,6 @@
 - **Podgląd na żywo, Podgląd dokładny, Zastosuj** jak przy jednym kole; dwuklik w koło pary albo Edytuj na kroku otwiera okno pary - zmiana przebudowuje oba koła.
 - Sprawdzone geometrią: zarysy obu kół w zazębieniu nie przecinają się, a odstęp boków równa się zadanemu luzowi (dla zębów skośnych na całej szerokości, także z wieńcem).
 - Szybsze liczenie zarysu koła wewnętrznego (2 ms zamiast 84 ms).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.28 — Przekładnie: podgląd na żywo i edycja kół (etap 5)
 

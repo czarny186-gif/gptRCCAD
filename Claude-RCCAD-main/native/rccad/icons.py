@@ -331,6 +331,21 @@ def _draw_gear(p, kind, ink, acc, soft, pen):
         p.drawEllipse(QPointF(16, 30), 3.5, 3.5)
         p.drawEllipse(QPointF(33.5, 15), 2.6, 2.6)
         return
+    if kind == 'sim':                                  # symulacja: para kół + strzałka obrotu
+        _draw_gear(p, 'pair', ink, acc, soft, pen)
+        p.setBrush(Qt.NoBrush); p.setPen(pen(acc, 2.6))
+        p.drawArc(QRectF(2, 2, 44, 44), 200 * 16, 70 * 16)
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(15.5, 43.5), QPointF(7.5, 45.5), QPointF(10.5, 38.5)]))
+        return
+    if kind in ('ccw', 'cw'):                          # kierunek obrotu
+        p.drawPath(_gear_path(24, 24, 9, 12.5, 9))
+        p.setBrush(Qt.NoBrush); p.setPen(pen(acc, 2.8))
+        p.drawArc(QRectF(5, 5, 38, 38), 30 * 16, 120 * 16)
+        p.setBrush(QColor(acc)); p.setPen(Qt.NoPen)
+        tip = (QPointF(9, 13), QPointF(5.5, 22), QPointF(14.5, 18)) if kind == 'ccw' else (QPointF(39, 13), QPointF(42.5, 22), QPointF(33.5, 18))
+        p.drawPolygon(QPolygonF(list(tip)))
+        return
     if kind == 'gp_int':                               # koło z wieńcem
         ring = QPainterPath(); ring.addEllipse(QPointF(24, 24), 21, 21)
         p.drawPath(ring.subtracted(_gear_path(24, 24, 17.5, 14, 14)))
@@ -510,9 +525,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         _draw_matchsize(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind == 'x_tilt':
         _draw_tilt(p, INK, ORANGE, QColor(BLUE_SOFT), pen)
-    elif kind in ('x_gear', 'x_gearpair') or kind.startswith('gr_') or kind.startswith('gp_'):
+    elif kind in ('x_gear', 'x_gearpair', 'x_gearsim') or kind.startswith('gr_') or kind.startswith('gp_') or kind.startswith('gs_'):
         _draw_gear(p, {'x_gear': 'tool', 'x_gearpair': 'pair', 'gr_rh': 'rh', 'gr_lh': 'lh', 'gr_teeth': 'teeth', 'gr_body': 'body',
-                       'gp_ext': 'gp_ext', 'gp_int': 'gp_int', 'gp_byteeth': 'byteeth', 'gp_byratio': 'byratio'}.get(kind, kind[3:]),
+                       'gp_ext': 'gp_ext', 'gp_int': 'gp_int', 'gp_byteeth': 'byteeth', 'gp_byratio': 'byratio',
+                       'x_gearsim': 'sim', 'gs_ccw': 'ccw', 'gs_cw': 'cw'}.get(kind, kind[3:]),
                    INK, ORANGE, QColor(BLUE_SOFT), pen)
     elif kind in ('x_link', 'lk_join', 'lk_split'):
         _draw_link(p, INK, ORANGE, QColor(BLUE_SOFT), pen, 'split' if kind == 'lk_split' else None)
@@ -1055,6 +1071,8 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_gear(p, 'tool', ink, acc, soft, pen)
         elif name == 'gearpair':
             _draw_gear(p, 'pair', ink, acc, soft, pen)
+        elif name == 'gearsim':
+            _draw_gear(p, 'sim', ink, acc, soft, pen)
         elif name == 'link':
             _draw_link(p, ink, acc, soft, pen)
         elif name == 'color':
