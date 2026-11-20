@@ -1,8 +1,15 @@
 """TWIST – rzeczywiste skręcanie brył B-Rep (Open CASCADE), etap 5: bryły o stałym przekroju wzdłuż osi.
 
-Obsługiwane są tylko graniastosłupy względem osi skręcenia: dwie płaskie podstawy prostopadłe do osi (ten sam przekrój,
-także z otworami), wszystkie pozostałe ściany równoległe do osi (np. prostopadłościan, graniastosłup, walec z otworem
-wzdłuż osi). Inne bryły są odrzucane z komunikatem - oryginał zostaje bez zmian.
+Obsługiwane bryły (względem osi skręcenia):
+- etap 5: graniastosłupy - dwie płaskie podstawy prostopadłe do osi (ten sam przekrój, także z otworami przelotowymi),
+  wszystkie pozostałe ściany równoległe do osi (prostopadłościan, graniastosłup, walec),
+- etap 6: bryły „schodkowe” - każda ściana jest albo płaska i prostopadła do osi, albo równoległa do osi: otwory
+  przelotowe i nieprzelotowe wzdłuż osi, kieszenie, pogłębienia, stopnie, wewnętrzne puste przestrzenie (osobne
+  powłoki) o ścianach wzdłuż osi. Bryła dzielona jest na warstwy o stałym przekroju (granice warstw - poziomy ścian
+  prostopadłych), przekrój warstwy to dokładny przekrój B-Rep płaszczyzną (BRepAlgoAPI_Common, łuki zostają łukami),
+  każda warstwa skręca się jak graniastosłup, a warstwy łączą się operacją logiczną Open CASCADE (wspólne krawędzie
+  i ściany odtworzone, ściany tej samej powierzchni scalone). Każdy otwór skręca się razem z bryłą o lokalny kąt.
+Inne bryły (np. otwór poprzeczny do osi, ściany ukośne, kula) są odrzucane z komunikatem - oryginał zostaje bez zmian.
 
 Budowa (bez siatki trójkątów):
 1. przekrój = dolna podstawa (ściana B-Rep z obrysem i otworami),
@@ -201,26 +208,40 @@ def _sew(faces, tolerance):
     return cq.Shape.cast(raw)
 
 
+def _twisted_faces(section, ta, tb, field, o, d, radius):
+    """Ściany skręconej warstwy [ta, tb] o przekroju section (płaska ściana na poziomie ta, z otworami)."""
+    wires = [section.outerWire(), *section.innerWires()]
+    faces = []
+    for a, b, twisting in _segments(field, ta, tb):
+        for wire in wires:
+            faces += _lateral(wire, field, a, b, twisting, o, d, ta, radius)
+    faces.append(_placed(section, _trsf(o, d, float(field.theta(ta)), 0.0)))
+    faces.append(_placed(section, _trsf(o, d, float(field.theta(tb)), tb - ta)))
+    return faces
+
+
+def _guide_radius(shape, o, d):
+    box = kernel.bounds(shape)
+    size = max(box.xlen, box.ylen, box.zlen, 1.0)
+    pts = np.array([v.toTuple() for v in shape.Vertices()], float)
+    radial = np.linalg.norm((pts - o) - np.outer((pts - o) @ d, d), axis=1) if len(pts) else np.zeros(1)
+    return max(float(radial.max()), .1 * size, 1.0)
+
+
 def twist_solid(shape, field: tm.TwistField, tolerance=TOLERANCE):
     """Skręcona bryła B-Rep (nowy TopoDS_Shape w cq.Solid) albo TwistError. Oryginał nie jest zmieniany.
-    Kąt 0 - kopia oryginału."""
+    Kąt 0 - kopia oryginału. Graniastosłup - jedno zszycie ścian (etap 5); bryła schodkowa - warstwy (etap 6)."""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
     if abs(field.angle) < 1e-12:
         return cq.Shape.cast(BRepBuilderAPI_Copy(shape.wrapped).Shape())
     o, d = np.asarray(field.origin, float), np.asarray(field.direction, float)
-    bottom, t0, t1 = prism_profile(shape, o, d)
-    box = kernel.bounds(shape)
-    size = max(box.xlen, box.ylen, box.zlen, 1.0)
-    pts = np.array([v.toTuple() for v in shape.Vertices()], float)
-    radial = np.linalg.norm((pts - o) - np.outer((pts - o) @ d, d), axis=1)
-    radius = max(float(radial.max()), .1 * size, 1.0)
-    wires = [bottom.outerWire(), *bottom.innerWires()]
-    faces = []
-    for a, b, twisting in _segments(field, t0, t1):
-        for wire in wires:
-            faces += _lateral(wire, field, a, b, twisting, o, d, t0, radius)
-    faces.append(_placed(bottom, _trsf(o, d, float(field.theta(t0)), 0.0)))
-    faces.append(_placed(bottom, _trsf(o, d, float(field.theta(t1)), t1 - t0)))
+    try:
+        bottom, t0, t1 = prism_profile(shape, o, d)
+    except TwistError as prism_error:
+        layers = stepped_layers(shape, o, d, prism_error)
+        return _twist_layers(shape, layers, field, o, d, tolerance)
+    radius = _guide_radius(shape, o, d)
+    faces = _twisted_faces(bottom, t0, t1, field, o, d, radius)
     report = None
     for sew_tol in (1e-6, 1e-5, 1e-4):
         solid = _sew(faces, sew_tol)
@@ -228,6 +249,131 @@ def twist_solid(shape, field: tm.TwistField, tolerance=TOLERANCE):
         if report is not None and report['ok']:
             return solid
     raise TwistError(_failure(report))
+
+
+# ---------------------------------------------------------------------------------------------- bryły schodkowe (etap 6)
+def stepped_layers(shape, origin, direction, prism_error=None):
+    """Podział bryły schodkowej na warstwy o stałym przekroju: [(ta, tb, [ściany przekroju na poziomie ta])].
+    Każda ściana bryły musi być płaska i prostopadła do osi (poziom stały) albo równoległa do osi; inaczej TwistError."""
+    solids = shape.Solids() if hasattr(shape, 'Solids') else []
+    if len(solids) != 1:
+        raise TwistError('TWIST skręca jedną bryłę - ten obiekt nie jest pojedynczą bryłą.')
+    solid = solids[0]
+    d = np.asarray(direction, float)
+    o = np.asarray(origin, float)
+    box = kernel.bounds(solid)
+    size = max(box.xlen, box.ylen, box.zlen, 1.0)
+    lin = max(1e-6, 1e-7 * size)
+    levels = []
+    for face in solid.Faces():
+        if face.geomType() == 'PLANE':
+            n = np.asarray(face.normalAt(face.Center()).toTuple(), float)
+            ft = _axial([v.toTuple() for v in face.Vertices()] or [face.Center().toTuple()], o, d)
+            if abs(abs(float(n @ d)) - 1) < 1e-7 and np.ptp(ft) < lin:
+                levels.append(float(ft.mean()))
+                continue
+        if not _parallel_to_axis(face, d):
+            raise TwistError('TWIST obsługuje bryły z otworami, kieszeniami i stopniami tylko wtedy, gdy wszystkie ich ściany '
+                             'biegną wzdłuż osi skręcenia albo są do niej prostopadłe - ta bryła ma ściany ukośne, zaokrąglone '
+                             'w poprzek osi albo otwór poprzeczny. Bryła bez zmian.')
+    t = _axial([v.toTuple() for v in solid.Vertices()], o, d)
+    if not len(t) or float(t.max() - t.min()) < 1e-6:
+        raise TwistError('Bryła nie ma długości wzdłuż osi skręcenia - wybierz inną oś.')
+    cuts = []
+    for level in sorted(levels + [float(t.min()), float(t.max())]):
+        if not cuts or level - cuts[-1] > lin * 10:
+            cuts.append(level)
+    if len(cuts) < 2:
+        raise prism_error or TwistError('Bryła nie ma podstaw prostopadłych do osi skręcenia.')
+    reach = 4 * size
+    layers = []
+    for ta, tb in zip(cuts[:-1], cuts[1:]):
+        sections = _section(solid, o, d, (ta + tb) / 2, reach)
+        if not sections:
+            raise TwistError('Bryła ma przerwę wzdłuż osi skręcenia - TWIST jej nie obsługuje. Bryła bez zmian.')
+        shift = d * (ta - (ta + tb) / 2)
+        layers.append((ta, tb, [f.translate(cq.Vector(*shift)) for f in sections]))
+    _check_layers(solid, layers)
+    return layers
+
+
+def _section(solid, o, d, t, reach):
+    """Dokładny przekrój bryły płaszczyzną prostopadłą do osi w położeniu t: płaskie ściany (z otworami)."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+    plane = gp_Pln(gp_Pnt(*map(float, o + d * t)), gp_Dir(*map(float, d)))
+    disc = BRepBuilderAPI_MakeFace(plane, -reach, reach, -reach, reach).Face()
+    common = BRepAlgoAPI_Common(solid.wrapped, disc)
+    if not common.IsDone():
+        raise TwistError('Nie udało się wyznaczyć przekroju bryły - bryła bez zmian.')
+    return [f for f in cq.Shape.cast(common.Shape()).Faces() if f.Area() > 1e-12]
+
+
+def _check_layers(solid, layers):
+    """Warstwy odtwarzają bryłę: suma objętości warstw (pole przekroju × wysokość) równa objętości bryły."""
+    total = sum(sum(f.Area() for f in sections) * (tb - ta) for ta, tb, sections in layers)
+    if abs(total - solid.Volume()) > 1e-6 * max(solid.Volume(), 1.0):
+        raise TwistError('Przekrój bryły zmienia się w sposób, którego TWIST jeszcze nie obsługuje (ściany ukośne do osi) - bryła bez zmian.')
+
+
+def _twist_layers(shape, layers, field, o, d, tolerance):
+    """Każda warstwa skręcona jak graniastosłup i zszyta w bryłę; warstwy złączone (BRepAlgoAPI_Fuse) i oczyszczone
+    (ShapeUpgrade_UnifySameDomain - ściany tej samej płaszczyzny / powierzchni scalone, wspólne krawędzie jednej
+    krawędzi). Kontrola całości jak dla graniastosłupa, z liczbą powłok równą oryginałowi (puste przestrzenie)."""
+    radius = _guide_radius(shape, o, d)
+    pieces = []
+    for ta, tb, sections in layers:
+        for section in sections:
+            faces = _twisted_faces(section, ta, tb, field, o, d, radius)
+            piece = None
+            for sew_tol in (1e-6, 1e-5, 1e-4):
+                piece = _sew(faces, sew_tol)
+                if piece is not None and _piece_ok(piece, section.Area() * (tb - ta)):
+                    break
+                piece = None
+            if piece is None:
+                raise TwistError('Nie udało się zbudować skręconej warstwy bryły - zmniejsz kąt; bryła bez zmian.')
+            pieces.append(piece)
+    result = _fuse(pieces)
+    report = check(result, shape, field, tolerance)
+    if not report['ok']:
+        raise TwistError(_failure(report))
+    return result
+
+
+def _piece_ok(piece, volume):
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    return bool(BRepCheck_Analyzer(piece.wrapped, True).IsValid()) and abs(piece.Volume() - volume) < 1e-3 * max(volume, 1e-9)
+
+
+def _fuse(pieces):
+    """Złączenie warstw (stykają się płaskimi ścianami na granicach warstw) w jedną bryłę."""
+    from OCP.BOPAlgo import BOPAlgo_GlueShift
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+    from OCP.TopTools import TopTools_ListOfShape
+    if len(pieces) == 1:
+        return pieces[0]
+    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(pieces[0].wrapped)
+    for p in pieces[1:]:
+        tools.Append(p.wrapped)
+    fuse = BRepAlgoAPI_Fuse()
+    fuse.SetArguments(args)
+    fuse.SetTools(tools)
+    fuse.SetGlue(BOPAlgo_GlueShift)                  # warstwy tylko się stykają - szybszy tryb sklejania
+    fuse.SetFuzzyValue(1e-6)
+    fuse.Build()
+    if not fuse.IsDone():
+        raise TwistError('Nie udało się połączyć skręconych warstw bryły - bryła bez zmian.')
+    unify = ShapeUpgrade_UnifySameDomain(fuse.Shape(), True, True, False)
+    unify.Build()
+    shape = cq.Shape.cast(unify.Shape())
+    solids = shape.Solids()
+    if len(solids) != 1:
+        raise TwistError('Skręcone warstwy nie tworzą jednej bryły - bryła bez zmian.')
+    return solids[0]
 
 
 # ---------------------------------------------------------------------------------------------- kontrola
@@ -244,7 +390,9 @@ def check(result, original, field, tolerance=TOLERANCE):
     solids = result.Solids()
     shells = [sh for s in solids for sh in s.Shells()]
     report['solids'] = len(solids)
-    report['closed'] = len(shells) == 1 and all(BRep_Tool.IsClosed_s(sh.wrapped) for sh in shells)
+    expected = max(1, len([sh for s in original.Solids() for sh in s.Shells()]))      # wewnętrzne powłoki (puste przestrzenie) zostają
+    report['shells'] = len(shells)
+    report['closed'] = len(shells) == expected and all(BRep_Tool.IsClosed_s(sh.wrapped) for sh in shells)
     report['self'] = bool(BRepAlgoAPI_Check(result.wrapped, True, True).IsValid()) if report['valid'] else False
     v0, v1 = original.Volume(), result.Volume()
     report['volume'] = abs(v1 - v0) / max(abs(v0), 1e-12)

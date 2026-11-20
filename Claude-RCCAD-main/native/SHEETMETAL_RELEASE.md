@@ -1,14 +1,21 @@
-# RCCAD Desktop 0.5.37 — TWIST: skręcanie brył B-Rep o stałym przekroju (etap 5)
+# RCCAD Desktop 0.5.38 — TWIST: otwory, kieszenie i puste przestrzenie (etap 6)
+
+- **TWIST skręca bryły z otworami przelotowymi i nieprzelotowymi, kieszeniami, pogłębieniami, stopniami i pustymi przestrzeniami wewnątrz** - gdy wszystkie ściany biegną wzdłuż osi skręcenia albo są do niej prostopadłe.
+- Bryła dzielona jest na warstwy o stałym przekroju (granice - poziomy den otworów, kieszeni i stopni). Przekrój warstwy to dokładny przekrój B-Rep (łuki zostają łukami), każda warstwa skręca się jak graniastosłup (powierzchnie B-spline z kontrolą odchyłki), warstwy łączą się operacją logiczną Open CASCADE - wspólne krawędzie i ściany są odtworzone, ściany tej samej płaszczyzny scalone.
+- Każdy otwór skręca się o lokalny kąt w swoim miejscu; otwory nie są zamykane, małe szczegóły zostają (np. otwór Ø0,4 mm), pusta przestrzeń wewnątrz zostaje osobną powłoką z właściwą orientacją.
+- Kontrola jak dotąd: poprawność, zamknięte powłoki (tyle, ile w oryginale), samoprzecięcia, objętość, odchyłka do 0,01 mm. Bryły nieobsługiwane (otwór poprzeczny, fazy, ściany ukośne, kula) - komunikat, bryła bez zmian.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.37 — TWIST: skręcanie brył B-Rep o stałym przekroju (etap 5)
 
 - **Zastosuj skręca prawdziwą bryłę** (Open CASCADE): przekrój bryły (podstawa, także z otworami) przeciągany wzdłuż osi z obrotem prowadzonym linią śrubową - skręcone ściany boczne to powierzchnie B-spline (NURBS), podstawy płaskie, wszystko zszyte w jedną zamkniętą bryłę zorientowaną na zewnątrz. Wynik to zwykła bryła programu: krok historii „Skręcenie (TWIST)”, cofnij / ponów, zapis projektu, eksport STEP, dalsze operacje.
 - **Kontrola wyniku**: BRepCheck_Analyzer, jedna bryła z zamkniętą powłoką, brak samoprzecięć (BRepAlgoAPI_Check), ta sama objętość, odchyłka od dokładnego skręcenia silnikiem TWIST najwyżej 0,01 mm (w testach ok. 0,00001 mm). Gdy coś się nie zgadza - komunikat, bryła bez zmian.
 - Kąty 0°, 90°, 180°, 360°, 720° i ujemne; osie z etapu 2 (także odwrócone). Silnik obsługuje też zakres i rozkłady Smoothstep / progresywny (pola w oknie jeszcze nie ma).
 - **Na razie tylko bryły o stałym przekroju wzdłuż osi**: prostopadłościan, graniastosłup, walec, z otworami wzdłuż osi. Inne bryły są odrzucane z komunikatem.
 - Poprawka: ikona kroku „Zaokrąglenie szkicu” / „Fazowanie szkicu” na pasku historii (była pusta od 0.5.32).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.36 — TWIST: szybki podgląd skręcania (etap 4)
 

@@ -3454,6 +3454,27 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len(loaded.shape.Faces()),7)
         w.undo();self.wait();self.assertIs(w.document.get(a.id).shape,shape0)                              # cofnij: oryginał
 
+    # TWIST etap 6: kieszeń i otwór nieprzelotowy przez okno programu; otwór poprzeczny - komunikat, bryła bez zmian
+    def test_twist_stage6_pocket_via_window_and_cross_hole_rejected(self):
+        w=self.w
+        pocket=cq.Workplane().box(30,40,80).faces('>Z').workplane().rect(16,20).cutBlind(-20).faces('<Z').workplane().hole(6,15).val()
+        cross=cq.Workplane().box(30,40,80).faces('>X').workplane().hole(8).val().translate(cq.Vector(60,0,0))
+        a=Body('Kieszeń',pocket).prepared();b=Body('Poprzeczny',cross).prepared();w.document.commit([a,b]);w.refresh();self.app.processEvents()
+        steps=len(w.document.states())
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents();self.assertIsNotNone(w.twist_preview_mesh)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertIsNone(w.mode);self.assertEqual(len(w.document.states()),steps+1)
+        out=w.document.get(a.id).shape;self.assertAlmostEqual(out.Volume(),pocket.Volume(),delta=1e-4*pocket.Volume())
+        self.assertEqual(k.point_state(out,(0,0,30)),'out');self.assertEqual(k.point_state(out,(0,0,-30)),'out')   # kieszeń i otwór otwarte
+        self.assertEqual(k.point_state(out,(0,0,0)),'in')
+        shape_b=w.document.get(b.id).shape
+        w.selected=[b.id];w.toggle_mode('twist');self.app.processEvents()
+        with patch.object(w,'toast') as toast:
+            w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertTrue(any('poprzeczny' in str(c) for c in toast.call_args_list),toast.call_args_list)
+        self.assertEqual(w.mode,'twist');self.assertIs(w.document.get(b.id).shape,shape_b);self.assertEqual(len(w.document.states()),steps+1)
+        w.cancel_twist()
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

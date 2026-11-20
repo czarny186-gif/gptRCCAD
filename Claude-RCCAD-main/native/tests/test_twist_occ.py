@@ -151,5 +151,99 @@ class TwistSolidTests(unittest.TestCase):
             hist.RUNNERS['twist']([cone], dict(recipe, id=cone.id))
 
 
+
+W = cq.Workplane
+
+
+class SteppedTwistTests(unittest.TestCase):
+    """Etap 6: otwory przelotowe i nieprzelotowe, wiele otworów, kieszeń, pogłębienie, pusta przestrzeń wewnątrz."""
+
+    def twist(self, shape, angle=90.0, rf=0.0, rt=1.0, kind='linear'):
+        field = tw.field(Z, shape, angle, rf, rt, kind)
+        before = (shape.Volume(), len(shape.Faces()))
+        result = to.twist_solid(shape, field)
+        self.assertEqual((shape.Volume(), len(shape.Faces())), before)                 # oryginał nietknięty
+        report = to.check(result, shape, field)
+        self.assertTrue(report['ok'], report)
+        self.assertAlmostEqual(result.Volume(), shape.Volume(), delta=1e-4 * shape.Volume())
+        self.assertFalse(k.is_triangle_mesh(result))
+        return result, field
+
+    def assert_open(self, result, field, points):
+        """Otwór nie zamknięty: punkty na osi otworu (po skręceniu) są poza materiałem."""
+        for p in points:
+            self.assertFalse(inside(result, field.apply(p)), p)
+
+    def test_single_blind_hole(self):
+        blind = W().box(30, 40, 80).faces('>Z').workplane().hole(8, 30).val()        # bryła z = -40..40, otwór Ø8 z = 10..40
+        result, field = self.twist(blind, 90.0)
+        self.assert_open(result, field, [(0, 0, 15), (0, 0, 39), (3.5, 0, 25)])
+        self.assertTrue(inside(result, field.apply((0, 0, 5))))                      # pod dnem otworu - materiał
+        self.assertTrue(any(abs(f.Area() - math.pi * 16) < 1e-6 for f in result.Faces() if f.geomType() == 'PLANE'))  # płaskie dno
+        part, field = self.twist(blind, 120.0, .2, .9, 'smoothstep')
+        self.assert_open(part, field, [(0, 0, 20)])
+
+    def test_through_hole_off_axis_follows_local_angle(self):
+        shape = W().box(30, 40, 80).faces('>Z').workplane().pushPoints([(8, 12)]).hole(6).val()
+        result, field = self.twist(shape, 180.0)
+        for z in (-39, -20, 0, 20, 39):                                               # oś otworu skręca się o lokalny kąt
+            q = field.apply((8, 12, z))
+            self.assertFalse(inside(result, q), z)
+            self.assertAlmostEqual(math.degrees(math.atan2(q[1], q[0])) % 360, (math.degrees(math.atan2(12, 8)) + 180 * (z + 40) / 80) % 360, 6)
+        self.assertTrue(inside(result, field.apply((-8, -12, 0))))
+
+    def test_many_holes_including_small_detail(self):
+        shape = (W().box(30, 40, 80).faces('>Z').workplane().rarray(12, 16, 2, 2).hole(5)
+                 .faces('>Z').workplane().pushPoints([(0, 0)]).hole(.4, 20).val())  # 4 przelotowe i jeden mały Ø0,4 nieprzelotowy
+        result, field = self.twist(shape, 90.0)
+        self.assert_open(result, field, [(6, 8, 0), (-6, 8, 0), (6, -8, 30), (-6, -8, -30), (0, 0, 35), (0, 0, 21)])
+        small = [f for f in result.Faces() if f.geomType() == 'PLANE' and abs(f.Area() - math.pi * .04) < 1e-6]
+        self.assertEqual(len(small), 1)                                               # mały szczegół (dno Ø0,4) został
+
+    def test_pocket_counterbore_and_step(self):
+        pocket = W().box(30, 40, 80).faces('>Z').workplane().rect(16, 20).cutBlind(-20).val()
+        result, field = self.twist(pocket, -90.0)
+        self.assert_open(result, field, [(0, 0, 30), (7, 9, 39), (-7, -9, 21)])
+        self.assertTrue(inside(result, field.apply((0, 0, 15))))
+        cbore = W().box(30, 40, 80).faces('>Z').workplane().cboreHole(6, 12, 10).val()
+        result, field = self.twist(cbore, 180.0)
+        self.assert_open(result, field, [(0, 0, -30), (5, 0, 35)])
+        self.assertTrue(inside(result, field.apply((5, 0, 0))))                      # poza pogłębieniem materiał
+        step = W().box(30, 40, 40).faces('>Z').workplane().rect(20, 20).extrude(30).val()
+        self.twist(step, 90.0)
+
+    def test_internal_void_keeps_inner_shell(self):
+        void = W().box(30, 40, 80).cut(W().box(10, 10, 20)).val()
+        self.assertEqual(len(void.Shells()), 2)
+        result, field = self.twist(void, 90.0)
+        self.assertEqual(len(result.Solids()), 1)
+        self.assertEqual(len(result.Shells()), 2)                                     # pusta przestrzeń zostaje osobną powłoką
+        self.assert_open(result, field, [(0, 0, 0), (4, 4, 9)])
+        self.assertTrue(inside(result, field.apply((0, 0, 15))))
+        self.assertTrue(to.check(result, void, field)['self'])
+
+    def test_unsupported_details_are_rejected(self):
+        cross = W().box(30, 40, 80).faces('>X').workplane().hole(8).val()          # otwór poprzeczny do osi
+        tapered = W().box(30, 40, 80).faces('>Z').workplane().hole(8, 30).faces('>Z').edges('not %LINE').chamfer(1).val()
+        sphere_void = W().box(30, 40, 80).cut(W().sphere(5)).val()
+        for shape in (cross, tapered, sphere_void):
+            volume = shape.Volume()
+            with self.assertRaises(to.TwistError):
+                to.twist_solid(shape, tw.field(Z, shape, 90.0))
+            self.assertEqual(shape.Volume(), volume)
+
+    def test_history_and_step_export(self):
+        pocket = W().box(30, 40, 80).faces('>Z').workplane().rect(16, 20).cutBlind(-20).faces('<Z').workplane().hole(6).val()
+        body = Body('P', pocket).prepared()
+        recipe = dict(type='twist', id=body.id, angle=90.0, axis=Z, range_from=0.0, range_to=1.0, kind='linear', power=2.0)
+        out = hist.RUNNERS['twist']([body], recipe)[0]
+        self.assertAlmostEqual(out.shape.Volume(), pocket.Volume(), delta=1e-4 * pocket.Volume())
+        path = Path(tempfile.mkdtemp()) / 'pocket.step'
+        k.export_shapes([out.shape], path)
+        shape, kind = k.import_shapes(path)[0]
+        self.assertEqual(kind, 'solid')
+        self.assertAlmostEqual(shape.Volume(), out.shape.Volume(), delta=1e-6 * out.shape.Volume())
+        self.assertEqual(len(shape.Faces()), len(out.shape.Faces()))
+
 if __name__ == '__main__':
     unittest.main()
