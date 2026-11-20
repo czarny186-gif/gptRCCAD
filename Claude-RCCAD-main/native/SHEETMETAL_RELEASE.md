@@ -1,13 +1,21 @@
-# RCCAD Desktop 0.5.36 — TWIST: szybki podgląd skręcania (etap 4)
+# RCCAD Desktop 0.5.37 — TWIST: skręcanie brył B-Rep o stałym przekroju (etap 5)
+
+- **Zastosuj skręca prawdziwą bryłę** (Open CASCADE): przekrój bryły (podstawa, także z otworami) przeciągany wzdłuż osi z obrotem prowadzonym linią śrubową - skręcone ściany boczne to powierzchnie B-spline (NURBS), podstawy płaskie, wszystko zszyte w jedną zamkniętą bryłę zorientowaną na zewnątrz. Wynik to zwykła bryła programu: krok historii „Skręcenie (TWIST)”, cofnij / ponów, zapis projektu, eksport STEP, dalsze operacje.
+- **Kontrola wyniku**: BRepCheck_Analyzer, jedna bryła z zamkniętą powłoką, brak samoprzecięć (BRepAlgoAPI_Check), ta sama objętość, odchyłka od dokładnego skręcenia silnikiem TWIST najwyżej 0,01 mm (w testach ok. 0,00001 mm). Gdy coś się nie zgadza - komunikat, bryła bez zmian.
+- Kąty 0°, 90°, 180°, 360°, 720° i ujemne; osie z etapu 2 (także odwrócone). Silnik obsługuje też zakres i rozkłady Smoothstep / progresywny (pola w oknie jeszcze nie ma).
+- **Na razie tylko bryły o stałym przekroju wzdłuż osi**: prostopadłościan, graniastosłup, walec, z otworami wzdłuż osi. Inne bryły są odrzucane z komunikatem.
+- Poprawka: ikona kroku „Zaokrąglenie szkicu” / „Fazowanie szkicu” na pasku historii (była pusta od 0.5.32).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.36 — TWIST: szybki podgląd skręcania (etap 4)
 
 - **Podgląd na żywo** w narzędziu TWIST: zielona skręcona bryła w miejscu oryginału. Liczony na kopii siatki wyświetlania silnikiem z etapu 3 - bryła B-Rep i jej siatka w projekcie pozostają bez zmian.
 - Wpisanie kąta w polu i przeciąganie pierścienia od razu odświeża podgląd; zmiana osi, kierunku i bryły też.
 - Anuluj, Esc i zmiana narzędzia przywracają oryginalny widok. Zastosuj nadal nie zmienia modelu - podgląd nigdy nie jest zapisywany jako bryła ani do projektu.
 - Płynność: kopia siatki jest cięta warstwami prostopadłymi do osi raz dla bryły i osi (bez szczelin między trójkątami), a każda zmiana kąta tylko obraca gotowe punkty; zmiany zbierane do jednej klatki, ograniczona liczba trójkątów podglądu. Rysuje istniejący renderer programu.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.35 — TWIST: silnik matematyczny skręcania (etap 3)
 

@@ -3321,10 +3321,11 @@ class StudioTests(unittest.TestCase):
         w.tx_angle.setValue(0);self.assertIn('różny od zera',w.tx_status.text())
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.assertEqual(w.mode,'twist')   # błędny kąt: zostaje otwarte
         w.tx_angle.setValue(120)
-        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.app.processEvents()
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
         self.assertIsNone(w.mode);self.assertFalse(w.twist_panel.isVisible())
-        self.assertEqual(len(w.document.states()),steps)                                     # etap 1: bez deformacji i bez kroku historii
-        self.assertTrue(all(x.shape is y for x,y in zip(w.document.bodies,before)))
+        steps+=1;self.assertEqual(len(w.document.states()),steps)                             # od etapu 5: skręcenie B-Rep jako krok historii
+        self.assertIsNot(w.document.get(b.id).shape,before[1]);self.assertIs(w.document.get(a.id).shape,before[0])
+        self.assertAlmostEqual(w.document.get(b.id).shape.Volume(),125,4)
         w.toggle_mode('twist');self.assertEqual(w.mode,'twist');self.assertEqual(w.tx_angle.value(),90.0);self.assertEqual(w.tx_axis.currentData(),'Z')
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier))
         self.assertIsNone(w.mode);self.assertFalse(w.twist_panel.isVisible());self.assertEqual(len(w.document.states()),steps)
@@ -3390,11 +3391,13 @@ class StudioTests(unittest.TestCase):
         with patch.object(w,'_tx_point_at',return_value=np.array([3.,4.,0.])):w.pick_twist(5,5)
         o,d=w.twist_axis();np.testing.assert_allclose(d,(.6,.8,0),atol=1e-12);np.testing.assert_allclose(o,(0,0,0))
         p=w.twist_params();self.assertEqual(p['kind'],'points');np.testing.assert_allclose(p['direction'],(.6,.8,0))
-        # Zastosuj: bez deformacji i bez kroku historii
+        # Zastosuj z osią ukośną do bryły (nie graniastosłup wzdłuż tej osi): komunikat, oryginał bez zmian, okno zostaje
         shape_before=w.document.get(a.id).shape;steps=len(w.document.states())
-        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.app.processEvents()
-        self.assertIsNone(w.mode);self.assertEqual(w.view.handles,[]);self.assertFalse(w.view.selection_items)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertEqual(w.mode,'twist');self.assertTrue(w.view.handles)
         self.assertIs(w.document.get(a.id).shape,shape_before);self.assertEqual(len(w.document.states()),steps)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier))
+        self.assertIsNone(w.mode);self.assertEqual(w.view.handles,[]);self.assertFalse(w.view.selection_items)
 
     # TWIST etap 4: szybki podgląd na kopii siatki - kąt z pola i pierścienia, Anuluj / Esc przywracają widok, nic nie trafia do projektu
     def test_twist_stage4_live_preview_on_mesh_copy(self):
@@ -3435,15 +3438,21 @@ class StudioTests(unittest.TestCase):
         # Anuluj
         w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents();self.assertFalse(visible(a.id))
         w.cancel_twist();self.app.processEvents();self.assertTrue(visible(a.id));self.assertFalse(w.view.preview_items)
-        # Zastosuj: podgląd nie staje się bryłą
-        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents()
-        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.app.processEvents()
+        # Zastosuj: wynik to bryła B-Rep z Open CASCADE, nie siatka podglądu
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents();preview=w.twist_preview_mesh
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
         self.assertIsNone(w.mode);self.assertTrue(visible(a.id));self.assertFalse(w.view.preview_items)
-        body=w.document.get(a.id);self.assertIs(body.shape,shape0);self.assertIs(body.mesh,mesh0);self.assertEqual(len(w.document.states()),steps)
+        body=w.document.get(a.id);self.assertIsNot(body.shape,shape0);self.assertEqual(len(w.document.states()),steps+1)
+        self.assertFalse(k.is_triangle_mesh(body.shape));self.assertEqual(len(body.shape.Faces()),7)        # 4 boki i otwór (B-spline), 2 płaskie podstawy
+        self.assertEqual(sorted(f.geomType() for f in body.shape.Faces()).count('PLANE'),2)
+        self.assertAlmostEqual(body.shape.Volume(),shape0.Volume(),3)
+        self.assertNotEqual(len(body.mesh.triangles),len(preview.triangles))
+        self.assertEqual(w.document.info['op']['type'],'twist');self.assertEqual(w.document.info['label'],'Skręcenie (TWIST)')
         self.assertEqual(len(w.document.bodies),2)
         path=Path(tempfile.mkdtemp())/'tw.rccadx';w.document.save(path)
-        loaded=Document.load(path).get(a.id);self.assertAlmostEqual(loaded.shape.Volume(),shape0.Volume(),6)
-        np.testing.assert_allclose(k.bounds(loaded.shape).xlen,20,atol=1e-6)
+        loaded=Document.load(path).get(a.id);self.assertAlmostEqual(loaded.shape.Volume(),shape0.Volume(),3)
+        self.assertEqual(len(loaded.shape.Faces()),7)
+        w.undo();self.wait();self.assertIs(w.document.get(a.id).shape,shape0)                              # cofnij: oryginał
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

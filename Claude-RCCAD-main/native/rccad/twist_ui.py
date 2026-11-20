@@ -12,8 +12,8 @@ Oryginał jest na czas podglądu tylko ukryty w widoku (istniejący mechanizm po
 w projekcie się nie zmieniają. Kąt z pola i z pierścienia odświeża podgląd (zmiany zbierane do jednej klatki).
 Anuluj / Esc / zmiana narzędzia przywracają oryginalny widok.
 
-Deformacja geometrii B-Rep jeszcze nie jest wykonywana: Zastosuj sprawdza wybór i parametry, model zostaje bez zmian -
-siatka podglądu nigdy nie trafia do projektu. Geometria osi: rccad/twist.py."""
+Etap 5: Zastosuj skręca bryłę B-Rep (rccad/twist_occ.py: bryły o stałym przekroju wzdłuż osi) - krok historii 'twist'.
+Siatka podglądu nigdy nie trafia do projektu. Geometria osi: rccad/twist.py."""
 from __future__ import annotations
 
 import math
@@ -24,6 +24,7 @@ from dataclasses import replace
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QCheckBox
 
+from . import history as hist
 from . import kernel
 from . import shell_ui as ui
 from . import twist as tw
@@ -431,18 +432,36 @@ class TwistTools:
             self.refresh()
 
     # ---------- zatwierdzenie / anulowanie ----------
+    def twist_recipe(self):
+        """Przepis kroku historii 'twist' (history.run_twist): bryła, kąt, oś, cała długość, rozkład liniowy."""
+        return dict(type='twist', id=self.tx_id, angle=float(self.tx_angle.value()), axis=self.twist_axis_spec(),
+                    range_from=0.0, range_to=1.0, kind='linear', power=2.0)
+
     def apply_twist(self):
+        """Etap 5: rzeczywiste skręcenie bryły B-Rep (rccad.twist_occ) w tle, jako krok historii (cofnij / ponów, zapis).
+        Siatka podglądu nie jest używana - bryła liczy się od nowa z geometrii Open CASCADE. Błąd: komunikat, okno
+        zostaje otwarte, oryginał bez zmian."""
         if self.busy or self.mode != 'twist':
             return
         error = self._tx_check()
         if error:
             self.toast(error)
             return
-        # etapy 1-4: bez deformacji geometrii B-Rep - model zostaje bez zmian, siatka podglądu nie jest zapisywana
         self._tx_timer.stop()
-        p = self.twist_params()
-        self.toast(f'TWIST: {p["angle"]:g}° wokół osi. Skręcanie geometrii zostanie dodane w kolejnym etapie - model bez zmian.')
-        self.set_mode(None)
+        recipe = self.twist_recipe()
+        existing = list(self.document.bodies)
+
+        def build():
+            return list(hist.run_twist(existing, recipe))
+
+        def apply(bodies):
+            self.document.pending_op = recipe
+            self.document.pending_label = 'Skręcenie (TWIST)'
+            self.document.pending_icon = 'twist'
+            self.document.commit(bodies)
+            self.selected = [recipe['id']]
+
+        self.run_operation('Skręcenie (TWIST)', build, apply, after=lambda: self.set_mode(None))
 
     def cancel_twist(self):
         self._tx_timer.stop()
