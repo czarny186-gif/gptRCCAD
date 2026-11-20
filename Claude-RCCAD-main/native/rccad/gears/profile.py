@@ -75,12 +75,31 @@ def involute_angle(rb, R):
     return inv(math.acos(min(1.0, rb / R)))
 
 
+_PROFILES = {}           # pamięć zarysów: zarys zależy tylko od uzębienia (nie od szerokości, otworu, piasty)
+
+
+def tooth_key(params: GearParams):
+    """Klucz uzębienia - parametry, od których zależy zarys zęba w przekroju czołowym."""
+    return (params.kind, float(params.module), int(params.teeth), float(params.pressure),
+            float(params.helix) if params.helical else 0.0, float(params.shift), float(params.backlash),
+            float(params.rim_diameter) if params.internal else 0.0)
+
+
 def profile(params: GearParams) -> ToothProfile:
-    """Zarys zęba; GearError przy niepoprawnych parametrach."""
-    errors = [c for c in validate(params) if c.level == 'error']
+    """Zarys zęba; GearError przy niepoprawnych parametrach. Wynik zapamiętany dla tego samego uzębienia (zmiana szerokości,
+    otworu, piasty albo kolejne próby korekcji w parze kół nie liczą zarysu od nowa); zarys traktować jako tylko do odczytu."""
+    errors = [c for c in validate(params) if c.level == 'error']     # zawsze - także otwór, piasta, rowek
     if errors:
         raise GearError(errors[0].message)
-    return _internal(params) if params.internal else _external(params)
+    key = tooth_key(params)
+    hit = _PROFILES.get(key)
+    if hit is not None:
+        return hit
+    prof = _internal(params) if params.internal else _external(params)
+    if len(_PROFILES) >= 256:
+        _PROFILES.pop(next(iter(_PROFILES)))
+    _PROFILES[key] = prof
+    return prof
 
 
 def _unit(v):

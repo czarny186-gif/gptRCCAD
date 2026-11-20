@@ -3218,6 +3218,82 @@ class StudioTests(unittest.TestCase):
         self.assertIsNone(w.gs_sim)
         w.set_mode(None)
 
+    def test_gear_module_full_integration_save_step_library_simulation(self):
+        """Przekładnie (etap 8, test końcowy): koła wszystkich czterech rodzajów i pary w jednym projekcie; edycja jednego
+        koła nie przebudowuje pozostałych; zapis i ponowne otwarcie (parametry, kroki, dwuklik); eksport / import STEP;
+        para z biblioteki obok oryginału w symulacji; cofnięcie w trakcie animacji."""
+        import tempfile
+        from rccad import history as hist, library
+        from rccad.gears import occ
+        w=self.w
+        def gear(kw):
+            w.tools['gear'].click();w.set_gear_params(kw);w.apply_gear();self.wait();return w.selected[0]
+        def pair(kw):
+            w.tools['gearpair'].click();w.set_gearpair_params(kw);w.apply_gearpair();self.wait();return list(w.selected)
+        ids={'spur_ext':gear(dict(kind='spur_ext',module=2,teeth=24,width=10,bore=10,keyway=True,hub=True,hub_diameter=26,hub_length=6)),
+             'helical_ext':gear(dict(kind='helical_ext',module=1.5,teeth=31,width=12,helix=18,hand='left',bore=8)),
+             'spur_int':gear(dict(kind='spur_int',module=2,teeth=60,width=10)),
+             'helical_int':gear(dict(kind='helical_int',module=1.5,teeth=56,width=14,helix=15,hand='right'))}
+        ext=pair(dict(kind='external',teeth1=17,teeth2=34,module=2,helix=20,width=10,backlash=.1,bore1=8,bore2=10))
+        ring=pair(dict(kind='internal',teeth1=18,teeth2=54,module=1.5,width=8,backlash=.1))
+        gears_ids=list(ids.values())+ext+ring
+        for i in gears_ids:
+            body=w.document.get(i);self.assertTrue(occ.solid_report(body.shape)['ok'],body.name);self.assertIsNotNone(body.mesh)
+        # edycja jednego koła: przebudowuje się tylko ono
+        built=[];real=occ.gear_solid
+        with patch.object(occ,'gear_solid',side_effect=lambda p:built.append(p.teeth) or real(p)):
+            index=w.gear_step_index(ids['spur_ext'])
+            w.history_edit(index);self.preview();w.gr_fields['teeth'].setValue(25);w.apply_gear();self.wait();self.app.processEvents();self.wait()
+        self.assertEqual(built,[25]);self.assertEqual(w.document.get(ids['spur_ext']).meta['gear']['teeth'],25)
+        for i in gears_ids:
+            self.assertIsNotNone(w.document.get(i))
+        with tempfile.TemporaryDirectory() as folder:
+            # STEP: wszystkie koła - bryły z tą samą objętością
+            step=Path(folder)/'kola.step'
+            shapes=[w.document.get(i).shape for i in gears_ids]
+            k.export_shapes(shapes,str(step))
+            back=k.import_shapes(str(step))
+            solids=[s_ for s_,kind in back if kind=='solid']
+            self.assertEqual(len(solids),len(shapes))
+            self.assertAlmostEqual(sum(x.Volume() for x in solids),sum(x.Volume() for x in shapes),delta=1e-6*sum(x.Volume() for x in shapes))
+            # zapis i ponowne otwarcie
+            path=Path(folder)/'przekladnie.rccadx';w.document.save(path)
+            before={i:(w.document.get(i).meta['gear'],w.document.get(i).shape.Volume()) for i in gears_ids}
+            w.open_path(path);self.wait()
+            for _ in range(30):
+                self.app.processEvents();time.sleep(.01)
+            self.wait()
+            for i,(meta,volume) in before.items():
+                body=w.document.get(i);self.assertEqual(body.meta['gear'],meta);self.assertAlmostEqual(body.shape.Volume(),volume,delta=1e-6*volume)
+            types=[(info.get('op') or {}).get('type') for _,info in w.document.states()]
+            self.assertEqual((types.count('gear'),types.count('gear_pair')),(4,2))
+            with patch.object(w.view,'pick_face',return_value=(ring[1],np.array((0,0,1.0)),np.array((0,0,4.0)))):
+                w.view_double_clicked(5,5)
+            self.preview();self.assertEqual(w.mode,'gearpair');self.assertEqual(w.gearpair_params().teeth2,54)
+            w.cancel_gearpair();self.wait();self.app.processEvents();self.wait()            # anulowana edycja kroku - historia wraca
+            for i in gears_ids:
+                self.assertIsNotNone(w.document.get(i))
+            # para z biblioteki obok oryginału: symulacja łączy koło z jego partnerem z tej samej kopii
+            item=library.save_bodies([w.document.get(i) for i in ext],Path(folder),'para')
+            loaded=library.load_bodies('object',item)
+            before_ids={b.id for b in w.document.bodies}
+            w._library_insert(dict(bodies=loaded,name='para'),np.eye(3),np.array((0.0,200.0,0)));self.wait();w.set_mode(None)
+            copies=[b.id for b in w.document.bodies if b.id not in before_ids]
+            self.assertEqual(len(copies),2)
+            first_copy=next(i for i in copies if w.document.get(i).meta['gear_pair']['role']==1)
+            w.selected=[first_copy];w.tools['gearsim'].click()
+            self.assertEqual(sorted(x.id for x in w.gs_sim.wheels),sorted(copies))
+            self.assertIn('Brak kolizji',w.gs_status.text())
+            w.selected=[ring[0]];w.set_mode(None);w.tools['gearsim'].click()
+            self.assertEqual([x.id for x in w.gs_sim.wheels],ring);self.assertIn('Brak kolizji',w.gs_status.text())
+            w.toggle_gearsim();w.gearsim_step(.3);self.assertTrue(w.view._body_m)
+            w.set_mode(None);self.assertFalse(w.view._body_m)
+            # cofnięcie w trakcie animacji: koło znika - animacja staje
+            w.selected=[first_copy];w.tools['gearsim'].click();w.toggle_gearsim()
+            w.document.commit([b for b in w.document.bodies if b.id not in copies])
+            w._gs_tick();self.assertFalse(w.gs_running);self.assertIsNone(w.gs_sim);self.assertFalse(w.view._body_m)
+            w.set_mode(None)
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

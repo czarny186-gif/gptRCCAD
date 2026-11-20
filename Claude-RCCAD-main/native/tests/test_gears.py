@@ -885,5 +885,78 @@ class GearKinematicsTests(unittest.TestCase):
             self.km.Simulation(a, self.km.Wheel('b', b.params, tilted))
 
 
+class GearIntegrationTests(unittest.TestCase):
+    """Etap 8: wydajność dużych kół, pamięć zarysów i brył, prostopadłościan ze wzoru, regresje."""
+
+    @classmethod
+    def setUpClass(cls):
+        from rccad.gears import occ
+        cls.occ = occ
+
+    def test_profile_cache_keeps_validation(self):
+        p = GearParams(module=2, teeth=20, bore=10)
+        first = gears.profile(p)
+        self.assertIs(gears.profile(GearParams(module=2, teeth=20, bore=12, width=30)), first)   # to samo uzębienie
+        with self.assertRaises(gears.GearError):                             # zły otwór - błąd mimo zarysu w pamięci
+            gears.profile(GearParams(module=2, teeth=20, bore=34))
+        self.assertIsNot(gears.profile(GearParams(module=2, teeth=21)), first)
+        self.assertIs(self.occ.outline_wire(GearParams(module=2, teeth=20, width=5)), self.occ.outline_wire(p))
+
+    def test_box_from_formula_matches_occ(self):
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+        from rccad import history as hist
+        from rccad.gears.bounds import gear_box
+        turned = np.array(((0, 0, 1, 5), (1, 0, 0, -3), (0, 1, 0, 7)), float)
+        for kw in (dict(teeth=20, bore=8), dict(kind='helical_ext', teeth=23, helix=30, width=25, hand='left', hub=True,
+                                                hub_diameter=20, hub_length=5, bore=8),
+                   dict(kind='helical_int', teeth=60, helix=20, width=10), dict(teeth=20, hub=True, hub_diameter=60, hub_length=4, bore=8)):
+            p = GearParams(**kw)
+            solid = self.occ.gear_solid(p)
+            for place in (None, turned):
+                shape = solid if place is None else hist.apply_placement(solid, place)
+                box = Bnd_Box()
+                BRepBndLib.AddOptimal_s(shape.wrapped, box, False, False)
+                lo, hi = gear_box(p, place)
+                np.testing.assert_allclose(lo, box.Get()[:3], atol=1e-5)
+                np.testing.assert_allclose(hi, box.Get()[3:], atol=1e-5)
+        tilted = np.array(((1, 0, 0, 0), (0, .8, -.6, 0), (0, .6, .8, 0)), float)
+        self.assertIsNone(gear_box(GearParams(), tilted))                    # oś ukośna - liczy OCC
+
+    def test_large_helical_gear_is_built_from_tooth_copies(self):
+        import time
+        from unittest.mock import patch
+        from rccad import kernel
+        p = GearParams(kind='helical_ext', module=.5, teeth=300, helix=20, width=12, bore=20)
+        calls = []
+        real = self.occ._lateral
+        with patch.object(self.occ, '_lateral', side_effect=lambda w, *a, **k: calls.append(len(w.Edges())) or real(w, *a, **k)):
+            start = time.perf_counter()
+            solid = self.occ.gear_solid(p)
+            spent = time.perf_counter() - start
+        self.assertLess(max(calls), 10)                                       # przeciągany jeden ząb, nie cały zarys
+        self.assertTrue(self.occ.solid_report(solid)['ok'])
+        self.assertLess(spent, 60)
+        volume = self.occ.section_face(p).Area() * 12 - math.pi * 100 * 12
+        self.assertAlmostEqual(solid.Volume() / volume, 1, places=5)
+        start = time.perf_counter()
+        kernel.bounds(solid)                                                 # prostopadłościan ze wzoru - bez liczenia OCC
+        self.assertLess(time.perf_counter() - start, .05)
+
+    def test_history_reuses_gear_solids_and_meshes(self):
+        from unittest.mock import patch
+        from rccad import history as hist
+        p = GearParams(kind='helical_ext', teeth=41, helix=12, width=9)
+        recipe = dict(type='gear', params=p.to_dict(), out=['g'])
+        first = hist.run_gear([], recipe)[0]
+        with patch.object(self.occ, 'gear_solid', side_effect=AssertionError('przebudowa B-Rep')):
+            again = hist.run_gear([], recipe)[0]                             # przeliczenie historii: bez budowy i triangulacji
+            self.assertIs(again.shape, first.shape)
+            self.assertIs(again.mesh, first.mesh)
+            place = np.array(((0, -1, 0, 30), (1, 0, 0, 0), (0, 0, 1, 0)), float)
+            moved = hist.run_gear([], dict(recipe, replace=None))[0]
+            self.assertIs(moved.shape, first.shape)
+
+
 if __name__ == '__main__':
     unittest.main()

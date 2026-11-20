@@ -3013,6 +3013,33 @@ def gear_shape(params):
     return shape
 
 
+_GEAR_MESHES = {}         # bryła koła z pamięci (id) -> jej dokładna siatka: to samo koło nie jest drugi raz triangulowane
+
+
+def gear_body(name, params, place=None, **fields):
+    """Bryła koła (Body) z pamięci brył i siatek: koło w położeniu place (3x4) dostaje przesuniętą siatkę i prostopadłościan
+    ze wzoru zamiast liczonych od nowa (przy kilkuset zębach - sekundy)."""
+    from .gears import occ as gear_occ
+    shape = gear_shape(params)
+    entry = _GEAR_MESHES.get(id(shape))
+    mesh = entry[1] if entry is not None and entry[0] is shape else None
+    if mesh is None and not kernel.mesh_deferred():
+        fresh = Body(name, shape, 'solid').prepared().mesh
+        if fresh is not None and fresh.fine:
+            if len(_GEAR_MESHES) >= 24:
+                _GEAR_MESHES.pop(next(iter(_GEAR_MESHES)))
+            _GEAR_MESHES[id(shape)] = (shape, fresh)
+        mesh = fresh
+    if place is not None:
+        matrix = np.asarray(place, float)[:3, :4]
+        shape = apply_placement(shape, matrix)
+        gear_occ.remember_box(shape, params, matrix)
+        if mesh is not None:
+            mesh = kernel.placed_mesh(mesh, matrix)
+    body = Body(name, shape, 'solid', mesh=mesh, **fields)
+    return body if mesh is not None or kernel.mesh_deferred() else body.prepared()
+
+
 def run_gear(bodies, recipe):
     """Koło zębate walcowe z parametrów (Przekładnie → Koła walcowe): bryła B-Rep (silnik rccad.gears), oś Z,
     wieniec od z = 0, pierwszy ząb na osi +X - potem położenie jak każdej bryły (Przesuń / Obróć, Dopasowanie).
@@ -3021,13 +3048,10 @@ def run_gear(bodies, recipe):
     w tym samym położeniu (recipe['place']), z tym samym identyfikatorem, nazwą, kolorem i grupą."""
     from .gears import GearParams
     params = GearParams.from_dict(recipe['params'])
-    shape = gear_shape(params)
     target = recipe.get('replace')
     if target:
         body = _body(bodies, target)
         place = recipe.get('place')
-        if place:
-            shape = apply_placement(shape, np.asarray(place, float))
         old = (body.meta or {}).get('gear')
         name = body.name
         if old is not None and name == gear_name(GearParams.from_dict(old)):
@@ -3036,10 +3060,11 @@ def run_gear(bodies, recipe):
         meta['gear'] = params.to_dict()
         if place:
             meta['gear_place'] = [[float(c) for c in row] for row in np.asarray(place, float)[:3, :4]]
-        return _replace(bodies, replace(body, name=name, shape=shape, meta=meta, threads=()).prepared())
+        made = gear_body(name, params, np.asarray(place, float) if place else None)
+        return _replace(bodies, replace(body, name=name, shape=made.shape, mesh=made.mesh, meta=meta, threads=()))
     ids = list(recipe.get('out') or ())
-    body = Body(recipe.get('name') or gear_name(params), shape, 'solid', id=ids[0] if ids else uuid.uuid4().hex,
-                meta={'gear': params.to_dict()}).prepared()
+    body = gear_body(recipe.get('name') or gear_name(params), params, id=ids[0] if ids else uuid.uuid4().hex,
+                     meta={'gear': params.to_dict()})
     return [*bodies, body]
 
 
@@ -3061,10 +3086,9 @@ def run_gear_pair(bodies, recipe):
     folder = unique_folder(bodies, f'Para kół z{params.teeth1}/z{result.z2}')
     made = []
     for which, gp, place in ((1, result.gear1, result.place1), (2, result.gear2, result.place2)):
-        shape = apply_placement(gear_shape(gp), np.asarray(place, float))
         meta = {'gear': gp.to_dict(), 'gear_place': [[float(c) for c in row] for row in place],
                 'gear_pair': {'role': which, 'pair': ids[0] + ids[1]}}
-        made.append(Body(gear_name(gp), shape, 'solid', id=ids[which - 1], folder=folder, meta=meta).prepared())
+        made.append(gear_body(gear_name(gp), gp, place, id=ids[which - 1], folder=folder, meta=meta))
     return [*bodies, *made]
 
 

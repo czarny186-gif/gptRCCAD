@@ -88,6 +88,12 @@ class Body:
             m = np.eye(4)
             m[:3, :4] = np.asarray(matrix, float)[:3, :4]
             place = (m @ old)[:3, :4]
+            try:                                      # prostopadłościan przesuniętego koła ze wzoru (szybko, dokładnie)
+                from .gears import GearParams
+                from .gears.occ import remember_box
+                remember_box(shape, GearParams.from_dict(self.meta['gear']), place)
+            except Exception:
+                pass
             moved = replace(moved, meta=dict(moved.meta or {}, gear=self.meta['gear'], gear_place=[[float(c) for c in row] for row in place],
                                              **({'gear_pair': self.meta['gear_pair']} if self.meta.get('gear_pair') else {})))
         return moved

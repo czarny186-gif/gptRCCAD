@@ -120,11 +120,19 @@ class GearSimTools:
         return km.Wheel(body.id, GearParams.from_dict(params), km._m4((body.meta or {}).get('gear_place')))
 
     def _gs_partner(self, body):
-        """Drugie koło pary utworzonej narzędziem Para kół (ten sam identyfikator pary)."""
-        key = ((body.meta or {}).get('gear_pair') or {}).get('pair')
+        """Drugie koło pary utworzonej narzędziem Para kół (ten sam identyfikator pary, drugi numer koła). Para wstawiona
+        z biblioteki ma ten sam identyfikator co oryginał - wtedy najbliższe koło o drugim numerze."""
+        info = (body.meta or {}).get('gear_pair') or {}
+        key = info.get('pair')
         if not key:
             return None
-        return next((b for b in self.document.bodies if b.id != body.id and ((b.meta or {}).get('gear_pair') or {}).get('pair') == key), None)
+        here = km._m4((body.meta or {}).get('gear_place'))[:3, 3]
+        candidates = [b for b in self.document.bodies if b.id != body.id
+                      and ((b.meta or {}).get('gear_pair') or {}).get('pair') == key
+                      and ((b.meta or {}).get('gear_pair') or {}).get('role') != info.get('role')]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda b: float(np.linalg.norm(km._m4((b.meta or {}).get('gear_place'))[:3, 3] - here)))
 
     def _gs_try(self, identifier, quiet=False):
         body = self.document.get(identifier)
@@ -206,6 +214,11 @@ class GearSimTools:
         self._gs_show()
 
     def _gs_tick(self):
+        if self.gs_sim is None or any(self.document.get(w.id) is None for w in self.gs_sim.wheels):
+            self.reset_gearsim()                      # koło zniknęło z modelu (np. cofnięcie) - stop, położenie z modelu
+            self.gs_sim = None
+            self._gs_changed()
+            return
         now = time.monotonic()
         dt, self.gs_last = now - (self.gs_last or now), now
         self.gearsim_step(min(dt, .2))

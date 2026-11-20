@@ -113,9 +113,24 @@ def tooth_wire(params: GearParams) -> cq.Wire:
     return cq.Wire(builder.Wire())
 
 
+_WIRES = {}              # zarys koła (OCC) dla uzębienia - wspólny dla zmian szerokości, otworu, piasty
+
+
 def outline_wire(params: GearParams) -> cq.Wire:
-    """Zamknięty zarys całego koła w przekroju czołowym (pierwszy ząb na osi +X)."""
+    """Zamknięty zarys całego koła w przekroju czołowym (pierwszy ząb na osi +X). Zapamiętany dla tego samego uzębienia."""
+    from .profile import tooth_key
     prof = profile(params)
+    key = tooth_key(params)
+    if key in _WIRES:
+        return _WIRES[key]
+    wire = _outline_wire(prof)
+    if len(_WIRES) >= 32:
+        _WIRES.pop(next(iter(_WIRES)))
+    _WIRES[key] = wire
+    return wire
+
+
+def _outline_wire(prof: ToothProfile) -> cq.Wire:
     edges = tooth_edges(prof)
     root = root_edge(prof)
     one = edges + ([root] if root is not None else [])
@@ -272,17 +287,44 @@ def _lateral(wire, z0, height, params=None):
     return cq.Shape.cast(pipe.Shape()).Faces()
 
 
+def _teeth_lateral(params: GearParams, width):
+    """Boki wszystkich zębów: jeden ząb z dnem wrębu wyciągnięty (albo przeciągnięty śrubowo), pozostałe - obrócone kopie
+    dzielące tę samą geometrię (położenie TopLoc). Przy kilkuset zębach skośnych: setne części sekundy zamiast sekund
+    przeciągania całego zarysu."""
+    from OCP.TopLoc import TopLoc_Location
+    prof = profile(params)
+    builder = BRepBuilderAPI_MakeWire()
+    root = root_edge(prof)
+    for edge in tooth_edges(prof) + ([root] if root is not None else []):
+        builder.Add(edge)
+    if not builder.IsDone():
+        raise GearError('Krawędzie zarysu zęba nie łączą się.')
+    first = _lateral(cq.Wire(builder.Wire()), 0.0, width, params)
+    faces = []
+    for k in range(prof.teeth):
+        if k == 0:
+            faces += first
+            continue
+        trsf = gp_Trsf()
+        trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 2 * math.pi * k / prof.teeth)
+        location = TopLoc_Location(trsf)
+        faces += [cq.Face(f.wrapped.Moved(location)) for f in first]
+    return faces
+
+
 def _rotated_wire(wire, angle):
     return wire if not angle else wire.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), math.degrees(angle))
 
 
-def _sew(faces, tolerance=1e-5):
-    """Ściany zszyte w jedną zamkniętą powłokę i bryłę zorientowaną na zewnątrz albo None."""
+def _sew(faces, tolerance=1e-5, cutting=False):
+    """Ściany zszyte w jedną zamkniętą powłokę i bryłę zorientowaną na zewnątrz albo None. Krawędzie sąsiednich ścian koła
+    pokrywają się jedna do jednej, więc bez dzielenia krawędzi (cutting) - kilka razy szybciej; gdy wynik nie jest
+    poprawny, gear_solid zszywa jeszcze raz z dzieleniem."""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
     from OCP.BRepLib import BRepLib
     from OCP.TopAbs import TopAbs_SHELL
     from OCP.TopExp import TopExp_Explorer
-    sewing = BRepBuilderAPI_Sewing(tolerance)
+    sewing = BRepBuilderAPI_Sewing(tolerance, True, True, cutting, False)
     for f in faces:
         sewing.Add(f.wrapped)
     sewing.Perform()
@@ -317,9 +359,13 @@ def gear_solid(params: GearParams) -> cq.Solid:
         shape = _prism(plane_face(outline, [bore] if bore is not None else []), 0.0, width)
         if not solid_report(shape)['ok']:
             raise GearError('Bryła koła nie jest poprawna lub szczelna - zmień parametry.')
+        remember_box(shape, params)
         return shape
     top_outline = _rotated_wire(outline, twist_angle(params))
-    faces = _lateral(outline, 0.0, width, params)    # boki zębów
+    if params.helical:
+        faces = _teeth_lateral(params, width)        # boki zębów: jeden ząb przeciągnięty śrubowo + obrócone kopie
+    else:
+        faces = _lateral(outline, 0.0, width, params)    # boki zębów: jedno wyciągnięcie całego zarysu
     wide_hub = None
     if params.internal:
         rim = _circle(derived(params)['rim'] / 2)
@@ -345,6 +391,10 @@ def gear_solid(params: GearParams) -> cq.Solid:
         if bore is not None:
             faces += _lateral(bore, 0.0, height)       # otwór z rowkiem przez wieniec i piastę - proste ściany
     shape = _sew(faces)
+    checked = shape is not None and wide_hub is None and solid_report(shape)['ok']   # kontrola raz (przy wielu zębach - sekundy)
+    if shape is None or (wide_hub is None and not checked):
+        shape = _sew(faces, cutting=True)            # zapasowo: pełne zszycie z dzieleniem krawędzi
+        checked = False
     if shape is None:
         raise GearError('Nie udało się zszyć bryły koła - zmień parametry.')
     if wide_hub is not None:
@@ -352,9 +402,19 @@ def gear_solid(params: GearParams) -> cq.Solid:
     solids = shape.Solids()
     if len(solids) == 1:
         shape = solids[0]
-    if not solid_report(shape)['ok']:
+    if not checked and not solid_report(shape)['ok']:
         raise GearError('Bryła koła nie jest poprawna lub szczelna - zmień parametry.')
+    remember_box(shape, params)
     return shape
+
+
+def remember_box(shape, params, place=None):
+    """Prostopadłościan koła ze wzoru (gears.bounds) zapamiętany dla kształtu - kernel.bounds nie liczy go z powierzchni."""
+    from .bounds import gear_box
+    from rccad import kernel
+    box = gear_box(params, place)
+    if box is not None:
+        kernel.remember_bounds(shape, *box)
 
 
 def _fuse(a, b):

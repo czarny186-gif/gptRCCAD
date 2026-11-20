@@ -154,6 +154,20 @@ def bounds(shape):
     return result
 
 
+def remember_bounds(shape, lo, hi):
+    """Zapamiętuje dokładny prostopadłościan kształtu policzony inaczej (np. koło zębate ze wzoru - gears.bounds), żeby
+    bounds() nie liczyło go drugi raz z powierzchni B-spline."""
+    import weakref
+    box = Bnd_Box()
+    box.Update(float(lo[0]), float(lo[1]), float(lo[2]), float(hi[0]), float(hi[1]), float(hi[2]))
+    try:
+        if len(_BOUNDS) > 4096:
+            _BOUNDS.clear()
+        _BOUNDS[id(shape)] = (weakref.ref(shape), cq.BoundBox(box))
+    except TypeError:
+        pass
+
+
 def box(x, y, z):
     return valid(cq.Solid.makeBox(*(positive(v) for v in (x, y, z))))
 

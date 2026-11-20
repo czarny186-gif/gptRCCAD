@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.5.30 — Przekładnie: symulacja kinematyczna (etap 7)
+# RCCAD Desktop 0.5.31 — Przekładnie: integracja i optymalizacja (etap 8)
+
+- **Szybsze duże koła (100-300 zębów)**: zęby skośne - jeden ząb przeciągany śrubowo, pozostałe jako obrócone kopie (koło 300 zębów: bryła ok. 5 s zamiast 13 s), szybsze zszycie (krawędzie kół pokrywają się jedna do jednej), kontrola bryły raz zamiast dwa razy. Prostopadłościan otaczający koła liczony ze wzoru (1-2 ms zamiast do 2,6 s) - szybsze wyświetlanie i pomiary. Koło skośne 300 zębów razem z siatką: ok. 9 s zamiast 23 s.
+- **Pamięć podręczna**: zarysy zębów i zarysy kół (zmiana szerokości, otworu, piasty i kolejne próby korekcji w parze kół nie liczą zarysu od nowa), gotowe bryły i siatki kół - przeliczanie historii, cofanie i edycja jednego koła nie przebudowują pozostałych; koła w położeniu dostają przesuniętą siatkę zamiast nowej.
+- **Poprawki**: para kół wstawiona z biblioteki obok oryginału - symulacja łączy koła z tej samej kopii; usunięcie koła w trakcie animacji (np. cofnięcie) zatrzymuje symulację.
+- Test końcowy całego modułu: wszystkie cztery rodzaje kół i pary w jednym projekcie, edycja, zapis i ponowne otwarcie, eksport / import STEP, biblioteka, symulacja.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.30 — Przekładnie: symulacja kinematyczna (etap 7)
 
 - **Nowe narzędzie Przekładnie → Symulacja przekładni**: wybór pary (koło pary z zaznaczenia albo kliknięcia - drugie znajduje się samo; albo dwa dowolne koła z generatora), Start / Stop (Enter), Reset, prędkość wejściowa (obr/min), kierunek, koło napędzające i tempo animacji.
 - **Kinematyka**: koła obracają się wokół własnych osi w przełożeniu - para zewnętrzna przeciwnie, z wieńcem w tę samą stronę; stała odległość osi, zachowana faza zębów (także po wielu obrotach). Ramka: przełożenie, prędkość wejściowa i wyjściowa z kierunkami, odległość osi, kąt obrotu.
 - **Bez przebudowy geometrii**: animacja zmienia tylko macierze brył w widoku; model, historia i bryły B-Rep zostają bez zmian, wyjście z narzędzia przywraca położenie.
 - **Kontrola kolizji**: w każdej klatce przekroje czołowe kół (dokładny zarys, zęby skośne na dole i u góry) nie mogą się przenikać; po wyborze pary przegląd całej podziałki zęba z najmniejszym odstępem zębów. Niezgodne koła (moduł, kąt przyporu, kąt pochylenia, kierunki skrętu, nierównoległe osie) - komunikat.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.29 — Przekładnie: para kół walcowych (etap 6)
 
