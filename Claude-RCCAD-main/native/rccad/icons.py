@@ -861,6 +861,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         pn = pen(ORANGE, 2.6); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRoundedRect(QRectF(5, 7, 38, 34), 6, 6)
         p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(25, 24), QPointF(43, 24)); p.drawPolyline(QPolygonF([QPointF(39, 20), QPointF(44, 24), QPointF(39, 28)]))
         p.drawPolyline(QPolygonF([QPointF(29, 20), QPointF(24, 24), QPointF(29, 28)]))
+    elif kind == 'x_sfillet':
+        body = QPainterPath(); body.moveTo(8, 42); body.lineTo(8, 24); body.arcTo(QRectF(8, 8, 32, 32), 180, -90); body.lineTo(42, 8); body.lineTo(42, 42); body.closeSubpath()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPath(body)
+        pn = pen(INK, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawPolyline(QPolygonF([QPointF(8, 24), QPointF(8, 8), QPointF(24, 8)]))
+        arc = QPainterPath(); arc.moveTo(8, 24); arc.arcTo(QRectF(8, 8, 32, 32), 180, -90)
+        p.setPen(pen(ORANGE, 3.4)); p.drawPath(arc)
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(8, 24), 3, 3); p.drawEllipse(QPointF(24, 8), 3, 3)
     elif kind == 'x_text':
         p.setPen(pen(INK, 4.6)); p.drawLine(QPointF(10, 11), QPointF(34, 11)); p.drawLine(QPointF(22, 11), QPointF(22, 36))
         p.setPen(pen(BLUE, 2.4)); p.drawLine(QPointF(35, 20), QPointF(35, 36)); p.drawLine(QPointF(32, 20), QPointF(38, 20)); p.drawLine(QPointF(32, 36), QPointF(38, 36))
@@ -1138,6 +1145,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 fl(_rounded(15, 17, 18, 14, 2), soft)
                 pn = pen(acc, 2.6); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRoundedRect(QRectF(6, 8, 36, 32), 5, 5)
                 st(acc, 2.4); p.drawLine(QPointF(33, 24), QPointF(41, 24)); p.drawPolyline(poly([(38, 21), (41.5, 24), (38, 27)]))
+            elif sh == 'sfillet':
+                pn = pen(ink, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawPolyline(poly([(9, 22), (9, 9), (22, 9)]))
+                st(ink, 2.8); p.drawLine(QPointF(9, 40), QPointF(9, 26)); p.drawLine(QPointF(26, 9), QPointF(40, 9))
+                arc = QPainterPath(); arc.moveTo(9, 26); arc.arcTo(QRectF(9, 9, 34, 34), 180, -90)
+                st(acc, 3.2); p.drawPath(arc); dot(9, 26); dot(26, 9)
             elif sh == 'trim':
                 st(ink, 2.8); p.drawLine(QPointF(14, 14), QPointF(40, 36)); p.drawLine(QPointF(14, 34), QPointF(40, 12))
                 st(acc, 2.6); p.drawEllipse(QPointF(11, 12), 4.5, 4.5); p.drawEllipse(QPointF(11, 36), 4.5, 4.5)

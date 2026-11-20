@@ -48,7 +48,7 @@ from . import measurement
 from html import escape as html_escape
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
-        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'line': 2, 'circleTangent2': 3}
+        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'sfillet': 1, 'line': 2, 'circleTangent2': 3}
 HINTS = {
     'rect': ['Kliknij pierwszy narożnik prostokąta.', 'Kliknij przeciwległy narożnik.'],
     'centerRect': ['Kliknij środek prostokąta.', 'Kliknij narożnik.'],
@@ -68,6 +68,7 @@ HINTS = {
     'text': ['Wybierz powierzchnię, przeciągnij obszar napisu i wpisz treść.'],
     'trim': ['Nożyczki: kliknij fragment szkicu, który ma zniknąć.'],
     'offset': ['Ofset: kliknij kształt szkicu, który chcesz odsunąć.'],
+    'sfillet': ['Zaokrąglenie / faza: klikaj narożniki szkicu (Shift + klik odznacza, dwuklik w linię - wszystkie narożniki kształtu); Enter zatwierdza.'],
     'line': ['Kliknij początek linii.', 'Kliknij kolejny punkt. Enter lub ponowne kliknięcie kończy, kliknięcie w pierwszy punkt zamyka obrys.'],
 }
 VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '3 punkty', 'circle': 'Środek + promień',
@@ -1723,6 +1724,22 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
         self.off_side.currentIndexChanged.connect(lambda *_: self._off_update())
         self.off_value.valueChanged.connect(lambda *_: self._off_update())
 
+        # --- zaokrąglenie / faza narożników szkicu ---
+        self.sf = {}                # wybrane narożniki: {id szkicu: [punkty 3D]}
+        self._sf_order = []         # kolejność klikania (uchwyt przy ostatnim narożniku)
+        self.sf_panel, lay = self._panel(286, 'Narożniki szkicu', 'x_sfillet', 'Zaokrąglenie i faza', plain=True)
+        self.sf_kind = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 36)
+        self._field(lay, 'Operacja', self.sf_kind)
+        self.sf_size = _spin(2, .01, 1e5, 3, .5)
+        self.sf_size_pic = self._pic_field(lay, 'Promień zaokrąglenia (mm)', 'md_fillet', self.sf_size, 'Promień zaokrąglenia albo odległość fazy od narożnika; strzałkę przy narożniku można też przeciągać.')
+        self.sf_label = lay.itemAt(lay.count() - 2).widget()
+        self.sf_status = _label('Klikaj narożniki szkicu.', 'status')
+        self.sf_status.setWordWrap(True)
+        lay.addWidget(self.sf_status)
+        self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_sketch_fillet, lambda: self.choose_tool(None))
+        self.sf_size.valueChanged.connect(lambda *_: self._sf_update())
+        self.sf_kind.currentIndexChanged.connect(self._sf_kind_changed)
+
         self._build_ply_panels()
         self._build_scale_panel()
         self._build_color_panel()
@@ -1733,7 +1750,7 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
         self._build_gearsim_panel()
         self._build_link_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1789,6 +1806,8 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
         self.text_panel.move(92, 88 + TOOLS_TOP - 18)
         self.off_panel.adjustSize()
         self.off_panel.move(92, 88 + TOOLS_TOP - 18)
+        self.sf_panel.adjustSize()
+        self.sf_panel.move(92, 88 + TOOLS_TOP - 18)
         self.ex_panel.adjustSize()
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
@@ -1832,6 +1851,8 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
+            if action is None and self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
+                action = self.apply_sketch_fillet
             focus = QApplication.focusWidget()
             if action and not isinstance(focus, QPlainTextEdit) and (focus is None or self.isAncestorOf(focus) or focus is self):
                 action()
@@ -2241,6 +2262,8 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
         self.text_panel.setVisible(name == 'text')
         self.off_panel.setVisible(name == 'offset' and self.mode == 'sketch')
         self._off_clear()
+        self.sf_panel.setVisible(name == 'sfillet' and self.mode == 'sketch')
+        self._sf_clear()
         if name == 'text':
             self._text_begin()
         else:
@@ -2469,7 +2492,7 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
             return kernel.polyline(self.sketch_plane, pts) if len(pts) >= 2 else None
         if t == 'measure':
             return kernel.polyline(self.sketch_plane, pts) if len(pts) == 2 else None
-        if t in ('text', 'trim', 'offset', 'circleTangent2', 'point'):
+        if t in ('text', 'trim', 'offset', 'sfillet', 'circleTangent2', 'point'):
             return None
         if len(pts) == need:
             return self._wire(pts)
@@ -2768,6 +2791,9 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
             if self.off is None:
                 self._off_hover()
             return
+        if self.tool == 'sfillet':
+            self._sf_hover()
+            return
         if self.tool == 'circleTangent2':
             if len(self.tangent_lines) == 2:
                 try:
@@ -2862,6 +2888,9 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
                 return
             if t == 'offset':
                 self.pick_offset()
+                return
+            if t == 'sfillet':
+                self.pick_sketch_corner(bool(QApplication.keyboardModifiers() & Qt.ShiftModifier))
                 return
             if t == 'circleTangent2':
                 if len(self.tangent_lines) < 2:
@@ -3147,6 +3176,166 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
             return
         self._off_clear()
         self.create_sketch(wires, 'Ofset')
+
+    # ---------- zaokrąglenie / faza narożników szkicu ----------
+    def _sf_corners_of(self, body):
+        cache = self.__dict__.setdefault('_sf_corner_cache', {})
+        hit = cache.get(body.id)
+        if hit is None or hit[0] is not body.shape:
+            try:
+                corners = kernel.sketch_corners(body.shape)
+            except Exception:
+                corners = []
+            hit = cache[body.id] = (body.shape, corners)
+        return hit[1]
+
+    def _sf_bodies(self):
+        """Szkice w płaszczyźnie bieżącego szkicu, których narożniki można zaokrąglać."""
+        return [b for b in self.document.bodies if b.kind == 'sketch' and b.visible and not (b.meta or {}).get('surface')
+                and not b.name.startswith('Punkt') and self._same_plane(b.plane, self.sketch_plane)]
+
+    def _sf_corner_at(self, x, y, radius=12.0):
+        best = None
+        for body in self._sf_bodies():
+            corners = self._sf_corners_of(body)
+            if not corners:
+                continue
+            xy, _, w = self.view.project_points(np.asarray(corners, float))
+            dist = np.linalg.norm(xy - [x, y], axis=1)
+            dist[~np.isfinite(dist) | (w <= 0)] = np.inf
+            j = int(np.argmin(dist))
+            if dist[j] < radius and (best is None or dist[j] < best[0]):
+                best = (float(dist[j]), body.id, np.asarray(corners[j], float))
+        return None if best is None else best[1:]
+
+    def _sf_hover(self):
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        hit = self._sf_corner_at(pos.x(), pos.y())
+        self.view.hover_vertex = hit[1] if hit else None
+        self.view.overlay.update()
+
+    def pick_sketch_corner(self, shift=False):
+        """Kliknięcie narożnika szkicu: dodaje go do wybranych (Shift + klik albo ponowne kliknięcie odznacza)."""
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        hit = self._sf_corner_at(pos.x(), pos.y())
+        if hit is None:
+            raise kernel.CadError('Kliknij narożnik szkicu (miejsce, w którym spotykają się dwie linie).')
+        bid, point = hit
+        points = self.sf.setdefault(bid, [])
+        same = [q for q in points if float(np.linalg.norm(q - point)) < 1e-6]
+        if same:
+            points[:] = [q for q in points if all(q is not r for r in same)]
+        elif not shift:
+            points.append(point)
+            self._sf_order.append((bid, point))
+        self.sf = {k: v for k, v in self.sf.items() if v}
+        self._sf_update()
+
+    def pick_sketch_shape_corners(self, x, y):
+        """Dwuklik w linię szkicu: zaznacza wszystkie narożniki tego kształtu."""
+        hit = self.view.nearest_edge(x, y, kinds=('sketch',))
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body not in self._sf_bodies():
+            return
+        corners = self._sf_corners_of(body)
+        if not corners:
+            self.toast('Ten kształt nie ma narożników do zaokrąglenia.')
+            return
+        points = self.sf.setdefault(body.id, [])
+        for c in corners:
+            if all(float(np.linalg.norm(q - c)) >= 1e-6 for q in points):
+                points.append(np.asarray(c, float))
+        self._sf_order.append((body.id, np.asarray(corners[-1], float)))
+        self._sf_update()
+
+    def _sf_kind_changed(self, *_):
+        fillet = self.sf_kind.currentData() == 'fillet'
+        self.sf_label.setText('Promień zaokrąglenia (mm)' if fillet else 'Odległość fazy (mm)')
+        self.sf_size_pic.setPixmap(ui.icons.pixmap('md_fillet' if fillet else 'md_chamfer', 48))
+        self._sf_update()
+
+    def _sf_recipe(self):
+        return dict(type='sketch_fillet', kind=self.sf_kind.currentData(), size=float(self.sf_size.value()),
+                    items=[dict(id=bid, corners=[[float(c) for c in q] for q in pts], index=[self._sf_index(bid, q) for q in pts])
+                           for bid, pts in self.sf.items() if self.document.get(bid) is not None])
+
+    def _sf_index(self, bid, point):
+        corners = self._sf_corners_of(self.document.get(bid))
+        return next((i for i, q in enumerate(corners) if float(np.linalg.norm(q - point)) < 1e-6), None)
+
+    def _sf_update(self, handle=True):
+        """Podgląd na żywo (pomarańczowa przerywana linia) i opis wyboru."""
+        import cadquery as cq
+        self.sf = {k: v for k, v in self.sf.items() if v and self.document.get(k) is not None}
+        self.view.sel_vertices = [q for pts in self.sf.values() for q in pts]
+        count = len(self.view.sel_vertices)
+        if not count:
+            self.view.set_preview_mesh(None)
+            self.sf_status.setText('Klikaj narożniki szkicu; dwuklik w linię zaznacza wszystkie narożniki kształtu.')
+        else:
+            word = 'narożnik' if count == 1 else 'narożniki' if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14 else 'narożników'
+            try:
+                wires = [w for w in hist.run_sketch_fillet(list(self.document.bodies), self._sf_recipe()) if w.id in self.sf]
+                self.view.set_preview_mesh(kernel.display_mesh(cq.Compound.makeCompound([b.shape for b in wires]), PREVIEW_TOL),
+                                           line_color=SKETCH_ORANGE, width=2.6, dashed=True)
+                self.sf_status.setText(f'Wybrane: {count} {word} · Enter zatwierdza')
+            except kernel.CadError as exc:
+                self.view.set_preview_mesh(None)
+                self.sf_status.setText(f'Wybrane: {count} {word} · {exc}')
+        self.view.overlay.update()
+        if handle:
+            self._sf_place_handle()
+
+    def _sf_place_handle(self):
+        if not self.sf or self.mode != 'sketch' or self.tool != 'sfillet':
+            self.view.set_handles([])
+            return
+        order = [(bid, p) for bid, p in self._sf_order if any(float(np.linalg.norm(q - p)) < 1e-6 for q in self.sf.get(bid, ()))]
+        self._sf_order = order
+        bid, point = order[-1] if order else next((bid, pts[-1]) for bid, pts in self.sf.items())
+        body = self.document.get(bid)
+        try:
+            corner, direction = kernel.sketch_corner_handle(body.shape, point)
+        except Exception:
+            self.view.set_handles([])
+            return
+        self.view.set_handles([dict(id='sf', start=corner, tip=corner + direction * self.sf_size.value(), dir=direction, color=(.94, .6, .13, 1), label='')])
+
+    def _sf_clear(self):
+        if getattr(self, 'sf', None):
+            self.sf = {}
+            self._sf_order = []
+            self.view.set_handles([])
+            self.view.set_preview_mesh(None)
+            self.view.sel_vertices = []
+            self.view.overlay.update()
+        if getattr(self, 'tool', None) != 'sfillet' and hasattr(self, 'view'):
+            self.view.hover_vertex = None
+        if hasattr(self, 'sf_status'):
+            self.sf_status.setText('Klikaj narożniki szkicu; dwuklik w linię zaznacza wszystkie narożniki kształtu.')
+
+    def apply_sketch_fillet(self):
+        if self.busy or not self.sf:
+            return
+        recipe = self._sf_recipe()
+        existing = list(self.document.bodies)
+        try:
+            hist.run_sketch_fillet(existing, recipe)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        label = 'Zaokrąglenie szkicu' if recipe['kind'] == 'fillet' else 'Fazowanie szkicu'
+
+        def build():
+            return list(hist.run_sketch_fillet(existing, recipe))
+
+        def apply(bodies):
+            self.document.pending_op = recipe
+            self.document.pending_label = label
+            self.document.commit(bodies)
+
+        self._sf_clear()
+        self.run_operation(label, build, apply)
 
     # ---------- wymiary z klawiatury (panel jak #dimensionPanel, podgląd na żywo) ----------
     def open_dim_input(self, first=''):
@@ -6811,6 +7000,9 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
     def view_double_clicked(self, x, y):
         """Podwójne kliknięcie ściany w trybie edycji bryły: podświetla ścianę i zaznacza wszystkie jej krawędzie (zaokrąglenie / faza na okrągło).
         Bez narzędzia: dwuklik w koło zębate otwiera generator z jego parametrami."""
+        if not self.busy and self.mode == 'sketch' and self.tool == 'sfillet':
+            self.pick_sketch_shape_corners(x, y)
+            return
         if not self.busy and self.mode is None:
             hit = self.view.pick_face(x, y)
             body = self.document.get(hit[0]) if hit else None
@@ -8637,6 +8829,10 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
             if self._hv is None:
                 self._hv = self._off_signed()
             self._off_set_signed(self._hv + delta)
+        elif hid == 'sf' and self.sf:
+            if self._hv is None:
+                self._hv = self.sf_size.value()
+            self.sf_size.setValue(max(.1, round(self._hv + delta, 1)))
         elif hid == 'split':
             if self._hv is None:
                 self._hv = self.sp_offset.value()
@@ -8688,6 +8884,8 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
             self._place_extrude_handle()
         elif hid == 'off':
             self._off_place_handle()
+        elif hid == 'sf':
+            self._sf_place_handle()
         elif hid == 'mod':
             self._place_mod_handle()
         elif hid == 'split':
@@ -10611,6 +10809,8 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
                 action = self.apply_text
             if action is None and self.mode == 'sketch' and self.tool == 'offset' and self.off is not None:
                 action = self.apply_offset
+            if action is None and self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
+                action = self.apply_sketch_fillet
             if action:
                 action()
                 event.accept()
@@ -10629,6 +10829,9 @@ class StudioWindow(StepEditTools, TiltTools, GearTools, GearPairTools, GearSimTo
                 self.text_cancel()
             elif self.mode == 'sketch' and self.tool == 'offset' and self.off is not None:
                 self.cancel_offset()
+            elif self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
+                self._sf_clear()
+                self.show_sketch_hint()
             elif self.mode is not None:
                 self.set_mode(None)
             else:

@@ -3610,6 +3610,47 @@ class StudioTests(unittest.TestCase):
         self.assertIn('większy',w.off_status.text());w.apply_offset();self.wait();self.assertEqual(len(w.document.bodies),3)
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertIsNone(w.off);self.assertEqual(w.mode,'sketch')
 
+    # 0.5.32: zaokrąglenie / faza narożników szkicu (zakładka Szkic) - jak Edycja → Zaokrąglij / Fazuj
+    def test_sketch_corner_fillet_tool(self):
+        from PySide6.QtCore import QPoint
+        self.sketch('rect',(0,0),(20,10));w=self.w;src=w.document.bodies[0]
+        w.choose_tool('sfillet');self.assertTrue(w.sf_panel.isVisible());self.assertFalse(w.off_panel.isVisible())
+        for _ in range(5):self.app.processEvents()
+        def click(point,shift=False):
+            xy=w.view.project_one(point)
+            with patch('rccad.studio.QCursor.pos',return_value=w.view.mapToGlobal(QPoint(round(xy[0]),round(xy[1])))):
+                if shift:
+                    with patch('rccad.studio.QApplication.keyboardModifiers',return_value=Qt.ShiftModifier):w.sketch_clicked('XY',*point[:2])
+                else:w.sketch_clicked('XY',*point[:2])
+        click((20,10,0));self.assertEqual(len(w.sf[src.id]),1);np.testing.assert_allclose(w.sf[src.id][0],(20,10,0),atol=1e-9)
+        self.assertTrue(w.view.preview_items);self.assertEqual(len(w.view.sel_vertices),1)
+        h=w.view.handles[0];self.assertEqual(h['id'],'sf');np.testing.assert_allclose(h['dir'],np.array([-1,-1,0])/math.sqrt(2),atol=1e-9)
+        w.sf_size.setValue(2);np.testing.assert_allclose(h['start'],(20,10,0),atol=1e-9)
+        w.handle_dragged('sf',1.5);w.handle_released('sf');self.assertAlmostEqual(w.sf_size.value(),3.5)
+        click((0,0,0));click((0,0,0),shift=True);self.assertEqual(len(w.sf[src.id]),1)        # Shift + klik odznacza
+        click((0,0,0));self.assertEqual(len(w.sf[src.id]),2)
+        w.sf_size.setValue(11);self.assertIn('zmniejsz',w.sf_status.text())                     # za duży promień: komunikat, bez podglądu
+        w.sf_size.setValue(2);self.assertIn('Enter',w.sf_status.text())
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        body=w.document.get(src.id);self.assertTrue(body.shape.IsClosed());self.assertEqual(len(body.shape.Edges()),6)
+        self.assertAlmostEqual(cq.Face.makeFromWires(body.shape).Area(),200-2*(4-math.pi),6)
+        self.assertEqual(w.document.info['label'],'Zaokrąglenie szkicu');self.assertEqual(w.document.info['op']['type'],'sketch_fillet')
+        self.assertEqual(w.sf,{});self.assertEqual(w.view.handles,[]);self.assertEqual(w.view.sel_vertices,[])
+        # faza: dwuklik w linię - wszystkie (pozostałe) narożniki kształtu
+        w.sf_kind.setCurrentIndex(w.sf_kind._data.index('chamfer'));self.assertIn('fazy',w.sf_label.text())
+        xy=w.view.project_one((10,0,0));w.view_double_clicked(*xy)
+        self.assertEqual(len(w.sf[src.id]),2)                                                      # dwa ostre narożniki zostały
+        w.sf_size.setValue(1);w.apply_sketch_fillet();self.wait()
+        body=w.document.get(src.id);self.assertEqual(len(body.shape.Edges()),8)
+        self.assertAlmostEqual(cq.Face.makeFromWires(body.shape).Area(),200-2*(4-math.pi)-2*.5,6)
+        tmp=Path(tempfile.mkdtemp())/'sf.rccadx';w.document.save(tmp)
+        loaded=Document.load(tmp);self.assertAlmostEqual(cq.Face.makeFromWires(loaded.get(src.id).shape).Area(),200-2*(4-math.pi)-1,6)
+        w.undo();self.wait();w.undo();self.wait()
+        self.assertEqual(len(w.document.get(src.id).shape.Edges()),4)
+        w.redo();self.wait();self.assertEqual(len(w.document.get(src.id).shape.Edges()),6)                 # ponów: krok przeliczony z przepisu
+        click((20,0,0));self.assertTrue(w.sf)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertEqual(w.sf,{});self.assertEqual(w.mode,'sketch')
+
     # 0.4.65: szkic dokładnie po obrysie ściany bryły - ofset wybiera linię szkicu, nie krawędź bryły
     def test_sketch_offset_on_face_outline(self):
         from PySide6.QtCore import QPoint

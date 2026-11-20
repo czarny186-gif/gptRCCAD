@@ -1605,6 +1605,164 @@ def _vec(plane, p):
     return cq.Vector(*to_world(plane, float(p[0]), float(p[1])))
 
 
+def sketch_corners(shape, tol=1e-6):
+    """Narożniki szkicu: punkty, w których dwie kolejne krawędzie łamanej spotykają się pod kątem (nie stycznie) -
+    tylko tam można dodać zaokrąglenie albo fazę. Lista punktów 3D (np. array)."""
+    edges, closed = _wire_edges(shape)
+    corners = []
+    count = len(edges) if closed else len(edges) - 1
+    for i in range(count):
+        a, b = edges[i], edges[(i + 1) % len(edges)]
+        if a is b and len(edges) == 1:
+            continue
+        ta = a.tangentAt(1.0)
+        tb = b.tangentAt(0.0)
+        if ta.cross(tb).Length < 1e-6 and ta.dot(tb) > 0:
+            continue                       # przejście styczne (np. odcinek w łuk owalu) - bez narożnika
+        corners.append(np.array(a.endPoint().toTuple()))
+    return corners
+
+
+def sketch_corner_handle(shape, corner, tol=1e-4):
+    """Uchwyt-strzałka narożnika: (narożnik, kierunek dwusiecznej do wnętrza kąta) - wzdłuż niej rośnie zaokrąglenie."""
+    edges, closed = _wire_edges(shape)
+    corner = np.asarray(corner, float)
+    count = len(edges) if closed else len(edges) - 1
+    for i in range(count):
+        a, b = edges[i], edges[(i + 1) % len(edges)]
+        if np.linalg.norm(np.array(a.endPoint().toTuple()) - corner) < tol:
+            ta = -np.array(a.tangentAt(1.0).toTuple())
+            tb = np.array(b.tangentAt(0.0).toTuple())
+            d = ta / np.linalg.norm(ta) + tb / np.linalg.norm(tb)
+            if np.linalg.norm(d) < 1e-9:
+                d = ta
+            return corner, d / np.linalg.norm(d)
+    raise CadError('Narożnik nie leży na szkicu.')
+
+
+def _wire_edges(shape):
+    """Krawędzie łamanej szkicu po kolei, każda skierowana zgodnie z obchodzeniem (krawędź odwrócona w łamanej -
+    odtworzona w odwrotnym kierunku), i czy łamana jest zamknięta."""
+    import cadquery as cq
+    from OCP.BRepTools import BRepTools_WireExplorer
+    from OCP.TopAbs import TopAbs_REVERSED
+    wires = shape.Wires() if hasattr(shape, 'Wires') else []
+    if len(wires) != 1:
+        raise CadError('Zaokrąglać można narożniki jednego kształtu szkicu (łamanej lub wielokąta).')
+    wire = wires[0]
+    explorer = BRepTools_WireExplorer(wire.wrapped)
+    edges = []
+    while explorer.More():
+        edge = explorer.Current()
+        edges.append(cq.Edge(_reversed_edge(edge) if edge.Orientation() == TopAbs_REVERSED else edge))
+        explorer.Next()
+    return edges, wire.IsClosed()
+
+
+def _edge_curve(edge):
+    """(krzywa 3D z położeniem krawędzi, początek i koniec zakresu parametru)."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    adaptor = BRepAdaptor_Curve(edge)
+    return BRep_Tool.Curve_s(edge, 0.0, 0.0), adaptor.FirstParameter(), adaptor.LastParameter()
+
+
+def _reversed_edge(edge):
+    """Ta sama krawędź jako nowa krawędź w odwrotnym kierunku (parametryzacja od końca do początku)."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    curve, first, last = _edge_curve(edge)
+    reversed_curve = curve.Reversed()
+    return BRepBuilderAPI_MakeEdge(reversed_curve, curve.ReversedParameter(last), curve.ReversedParameter(first)).Edge()
+
+
+def _on_edge(edge, point, tol=1e-6):
+    import cadquery as cq
+    return edge.distance(cq.Vertex.makeVertex(*map(float, point))) < tol
+
+
+def _trimmed(edge, start=None, end=None):
+    """Krawędź przycięta do punktów start / end (leżących na niej) - ta sama krzywa, nowe granice parametru."""
+    import cadquery as cq
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnCurve
+    from OCP.gp import gp_Pnt
+    curve, first, last = _edge_curve(edge.wrapped)
+
+    def param(point):
+        projection = GeomAPI_ProjectPointOnCurve(gp_Pnt(*map(float, point)), curve, first, last)
+        return projection.LowerDistanceParameter()
+    u0 = param(start) if start is not None else first
+    u1 = param(end) if end is not None else last
+    if u1 - u0 <= 1e-12:
+        raise CadError('Zaokrąglenie zjada całą krawędź - zmniejsz wymiar.')
+    return cq.Edge(BRepBuilderAPI_MakeEdge(curve, u0, u1).Edge())
+
+
+def sketch_fillet(shape, plane, corners, size, kind='fillet', tol=1e-4):
+    """Szkic z zaokrąglonymi (kind='fillet', size = promień) albo sfazowanymi (kind='chamfer', size = odległość od
+    narożnika wzdłuż obu krawędzi) narożnikami. corners - punkty 3D narożników (dopasowanie do tol). Łamana otwarta
+    lub zamknięta, odcinki i łuki; kolejne narożniki liczone na już zmienionych krawędziach. Zwraca cq.Wire."""
+    import cadquery as cq
+    from OCP.ChFi2d import ChFi2d_ChamferAPI, ChFi2d_FilletAPI
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+    if size <= 0:
+        raise CadError('Promień / odległość musi być większa od zera.')
+    edges, closed = _wire_edges(shape)
+    if not corners:
+        raise CadError('Wybierz co najmniej jeden narożnik szkicu.')
+    frame = frame_of(actual_frame(shape, plane))        # szkic przesunięty / obrócony - jego rzeczywista płaszczyzna
+    origin, normal = np.asarray(frame.origin, float), np.asarray(frame.normal, float)
+    pln = gp_Pln(gp_Pnt(*map(float, origin)), gp_Dir(*map(float, normal)))
+    for corner in corners:
+        corner = np.asarray(corner, float)
+        count = len(edges) if closed else len(edges) - 1
+        index = next((i for i in range(count) if np.linalg.norm(np.array(edges[i].endPoint().toTuple()) - corner) < tol), None)
+        if index is None:
+            raise CadError('Wybrany narożnik nie leży już na szkicu - wybierz narożniki jeszcze raz.')
+        a, b = edges[index], edges[(index + 1) % len(edges)]
+        point = gp_Pnt(*map(float, corner))
+        from OCP.TopoDS import TopoDS_Edge
+        na, nb = TopoDS_Edge(), TopoDS_Edge()
+        if kind == 'fillet':
+            api = ChFi2d_FilletAPI(a.wrapped, b.wrapped, pln)
+            api.Perform(float(size))                 # wynik Perform bywa False mimo poprawnego rozwiązania (algorytm analityczny)
+            if api.NbResults(point) < 1:
+                raise CadError(f'Promień {size:g} mm nie mieści się w narożniku - zmniejsz promień.')
+            middle = api.Result(point, na, nb)
+        else:
+            if min(a.Length(), b.Length()) <= size + 1e-9:
+                raise CadError(f'Faza {size:g} mm dłuższa niż krawędź przy narożniku - zmniejsz odległość.')
+            api = ChFi2d_ChamferAPI(a.wrapped, b.wrapped)
+            if not api.Perform():
+                raise CadError('Nie da się sfazować tego narożnika.')
+            middle = api.Result(na, nb, float(size), float(size))
+        if middle.IsNull():
+            raise CadError('Nie udało się zaokrąglić narożnika - zmniejsz promień.')
+        middle = cq.Edge(middle)
+        p0, p1 = np.array(middle.startPoint().toTuple()), np.array(middle.endPoint().toTuple())
+        end_a = np.array(a.endPoint().toTuple())
+        if np.linalg.norm(p0 - np.array(a.startPoint().toTuple())) < 1e-9 or _on_edge(b, p0) and not _on_edge(a, p0):
+            p0, p1 = p1, p0
+            middle = cq.Edge(_reversed_edge(middle.wrapped))
+        if not (_on_edge(a, p0) and _on_edge(b, p1)) or np.linalg.norm(p0 - end_a) < 1e-9:
+            raise CadError(f'Zaokrąglenie {size:g} mm nie mieści się w narożniku - zmniejsz wymiar.')
+        na, nb = _trimmed(a, end=p0), _trimmed(b, start=p1)
+        parts = [na, middle, nb]
+        if index + 1 < len(edges):
+            edges = edges[:index] + parts + edges[index + 2:]
+        else:                                        # narożnik między ostatnią a pierwszą krawędzią zamkniętej łamanej
+            edges = edges[1:index] + parts
+    edges = [e for e in edges if e.Length() > 1e-9]
+    try:
+        wire = cq.Wire.assembleEdges(edges)
+    except Exception:
+        raise CadError('Po zaokrągleniu kształt się rozpada - zmniejsz promień.') from None
+    if closed and not wire.IsClosed():
+        raise CadError('Po zaokrągleniu kształt nie jest zamknięty - zmniejsz promień.')
+    return wire
+
+
 def polyline(plane, points, closed=False):
     """Łamana (lub zamknięty wielokąt) z punktów (U, V)."""
     if not plane_ok(plane):

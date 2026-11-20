@@ -22,12 +22,13 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'gear': 'gear', 'gear_pair': 'gearpair', 'link': 'link'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'gear': 'gear', 'gear_pair': 'gearpair', 'sketch_fillet': 'x_sfillet', 'link': 'link'}
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
                'Zaokrąglanie': 'mod', 'Skorupa': 'shell', 'Fazowanie': 'mod', 'Odbicie lustrzane': 'mirror', 'Przecięcie': 'split', 'Szyk': 'pattern', 'Przekształcenie': 'move', 'Dopasowanie': 'mate', 'Wyrównanie': 'align',
-               'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file', 'Koło zębate': 'gear', 'Para kół zębatych': 'gearpair'}
+               'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file', 'Koło zębate': 'gear', 'Para kół zębatych': 'gearpair',
+               'Zaokrąglenie szkicu': 'x_sfillet', 'Fazowanie szkicu': 'x_sfillet'}
 
 
 def _num(value, unit=''):
@@ -3907,6 +3908,34 @@ def run_sketchmeta(bodies, recipe):
     return _replace(bodies, replace(body, shape=shape, mesh=kernel.display_mesh(shape), meta=meta))
 
 
+def run_sketch_fillet(bodies, recipe):
+    """Zaokrąglenie albo faza narożników szkicu (zakładka Szkic): recipe['items'] - [{id, corners (punkty 3D)}],
+    kind 'fillet' (size - promień) albo 'chamfer' (size - odległość od narożnika). Kształt szkicu dostaje nowe krawędzie
+    (łuki / odcinki fazy), ten sam identyfikator i nazwę."""
+    kind, size = recipe.get('kind', 'fillet'), float(recipe['size'])
+    changed = {}
+    for item in recipe['items']:
+        body = _body(bodies, item['id'])
+        if body.kind != 'sketch':
+            raise kernel.CadError('Zaokrąglać można tylko narożniki szkicu.')
+        if (body.meta or {}).get('surface'):
+            raise kernel.CadError('Szkic owinięty na powierzchni - narożniki zaokrąglij przed owinięciem.')
+        current = kernel.sketch_corners(body.shape)
+        corners = []
+        for j, c in enumerate(item['corners']):
+            c = np.asarray(c, float)
+            index = (item.get('index') or [None] * len(item['corners']))[j]
+            if any(float(np.linalg.norm(q - c)) < 1e-4 for q in current):
+                corners.append(c)
+            elif index is not None and 0 <= index < len(current):      # szkic zmieniony wcześniej w historii (np. inny wymiar):
+                corners.append(np.asarray(current[index], float))       # ten sam narożnik po kolejności obchodzenia
+            else:
+                raise kernel.CadError('Wybranego narożnika nie ma już na szkicu - wybierz narożniki jeszcze raz.')
+        wire = kernel.sketch_fillet(body.shape, body.plane, corners, size, kind)
+        changed[body.id] = body.changed(wire)
+    return [changed.get(b.id, b) for b in bodies]
+
+
 def run_trim(bodies, recipe):
     """Nożyczki: usuwa kawałek szkicu (między przecięciami z innymi szkicami) najbliższy zapisanemu punktowi."""
     body = _body(bodies, recipe['id'])
@@ -3972,7 +4001,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link, 'gear': run_gear, 'gear_pair': run_gear_pair}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link, 'gear': run_gear, 'gear_pair': run_gear_pair, 'sketch_fillet': run_sketch_fillet}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -4117,6 +4146,8 @@ def reads(recipe, current):
         return {recipe['id']}
     if kind == 'trim':
         return {recipe['id']} | sketches
+    if kind == 'sketch_fillet':
+        return {item['id'] for item in recipe.get('items') or ()}
     if kind == 'gear':
         return {recipe['replace']} if recipe.get('replace') else set()
     if kind == 'gear_pair':

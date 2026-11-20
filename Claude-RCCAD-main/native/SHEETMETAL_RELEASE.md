@@ -1,13 +1,21 @@
-# RCCAD Desktop 0.5.31 — Przekładnie: integracja i optymalizacja (etap 8)
+# RCCAD Desktop 0.5.32 — Zaokrąglenie i faza narożników szkicu
+
+- **Nowe narzędzie w zakładce Szkic (obok Ofsetu): Zaokrąglenie / faza narożników** - działa jak Edycja → Zaokrąglij / Fazuj, tylko na liniach szkicu. Okienko: Zaokrąglij / Fazuj, promień albo odległość fazy (z obrazkiem), stan wyboru, Zastosuj / Zamknij.
+- **Wybór narożników**: kliknięcie narożnika (miejsca, gdzie spotykają się dwie linie) dodaje go - pomarańczowa kropka; ponowne kliknięcie albo Shift + klik odznacza; dwuklik w linię zaznacza wszystkie narożniki kształtu. Narożnik pod kursorem podświetla się. Można wybierać narożniki kilku kształtów naraz.
+- **Podgląd na żywo** (pomarańczowa przerywana linia) i **pomarańczowa strzałka** przy ostatnio klikniętym narożniku - przeciąganie zmienia promień / fazę. Za duży promień - komunikat w okienku zamiast podglądu.
+- **Enter / Zastosuj** zmienia kształt szkicu (ten sam szkic, ta sama nazwa) - krok historii „Zaokrąglenie szkicu” albo „Fazowanie szkicu” (cofanie, edycja kroku, zapis projektu). Esc czyści wybór. Działa na prostokątach, wielokątach i łamanych (otwartych i zamkniętych, także z łukami), w każdej płaszczyźnie i na ścianach brył; zaokrąglony kształt wyciąga się jak każdy szkic.
+- Szkic zmieniony wcześniej w historii (np. inny wymiar prostokąta) - zaokrąglenie trafia w ten sam narożnik.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.31 — Przekładnie: integracja i optymalizacja (etap 8)
 
 - **Szybsze duże koła (100-300 zębów)**: zęby skośne - jeden ząb przeciągany śrubowo, pozostałe jako obrócone kopie (koło 300 zębów: bryła ok. 5 s zamiast 13 s), szybsze zszycie (krawędzie kół pokrywają się jedna do jednej), kontrola bryły raz zamiast dwa razy. Prostopadłościan otaczający koła liczony ze wzoru (1-2 ms zamiast do 2,6 s) - szybsze wyświetlanie i pomiary. Koło skośne 300 zębów razem z siatką: ok. 9 s zamiast 23 s.
 - **Pamięć podręczna**: zarysy zębów i zarysy kół (zmiana szerokości, otworu, piasty i kolejne próby korekcji w parze kół nie liczą zarysu od nowa), gotowe bryły i siatki kół - przeliczanie historii, cofanie i edycja jednego koła nie przebudowują pozostałych; koła w położeniu dostają przesuniętą siatkę zamiast nowej.
 - **Poprawki**: para kół wstawiona z biblioteki obok oryginału - symulacja łączy koła z tej samej kopii; usunięcie koła w trakcie animacji (np. cofnięcie) zatrzymuje symulację.
 - Test końcowy całego modułu: wszystkie cztery rodzaje kół i pary w jednym projekcie, edycja, zapis i ponowne otwarcie, eksport / import STEP, biblioteka, symulacja.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.30 — Przekładnie: symulacja kinematyczna (etap 7)
 
