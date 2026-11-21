@@ -1,13 +1,20 @@
-# RCCAD Desktop 0.5.40 — TWIST w historii: wszystkie parametry, edycja kroku, biblioteka (etap 8)
+# RCCAD Desktop 0.5.41 — TWIST: uchwyty zakresu i gładkie przejścia (etap 9)
+
+- **Uchwyty zakresu skręcania**: dwie niebieskie strzałki na osi (istniejący system uchwytów programu) przy początku i końcu zakresu - przeciąganie przesuwa początek / koniec (pola „Zakres skręcenia” zmieniają się razem z nimi, koniec nie przeskoczy początku). Granice zakresu widać na osi jako okręgi.
+- **⇄ Odwróć** przy kącie - odwraca kierunek skręcania. Dalej: odwrócenie osi, osie dowolne (2 punkty, krawędź, walec), zakotwiczenie początku / środka / końca, rozkłady liniowy / płynny / progresywny.
+- **Podgląd na żywo** przy każdej zmianie: kąt, pierścień, strzałki zakresu, pola zakresu, rozkład, zakotwiczenie, oś, kierunek.
+- **Gładkie przejścia**: krzywa prowadząca dokładniejsza - rozkład płynny przechodzi w nieskręconą część bryły stycznie (załamanie powierzchni ≤ 0,001°), obliczenia przy tym szybsze. Liniowy (na obu granicach) i progresywny (na końcu) mają załamanie wynikające z ich przebiegu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.40 — TWIST w historii: wszystkie parametry, edycja kroku, biblioteka (etap 8)
 
 - **Krok „Skręcenie (TWIST)” zapisuje wszystkie parametry**: bryłę źródłową, oś (rodzaj osi oraz wyznaczony punkt i kierunek), kąt, zakres (od–do), rozkład, tryb zakotwiczenia i tolerancję. Starsze kroki z wersji 0.5.37–0.5.39 otwierają się i przeliczają jak dawniej (zakotwiczenie na początku, tolerancja 0,01 mm).
 - **Nowe pola w okienku TWIST** (krok 3 „Zakres i rozkład”): zakres w % długości, rozkład (liniowy / płynny / progresywny), zakotwiczenie (początek / środek / koniec - który przekrój stoi w miejscu), tolerancja w mm. Podgląd na żywo uwzględnia wszystkie.
 - **Ponowna edycja**: dwuklik w krok na pasku historii albo w skręconą bryłę otwiera TWIST z parametrami kroku na modelu sprzed niego; Zastosuj zastępuje krok, dalsze kroki (np. przesunięcie) przeliczają się same; Anuluj / Esc - bez zmian. Cofnij / ponów, zapis i odczyt projektu (także kompaktowy) zachowują parametry i geometrię.
 - **Biblioteka**: skręcona bryła pamięta parametry i kształt sprzed skręcenia (przesuwane i obracane razem z nią); po wstawieniu z biblioteki dwuklik pozwala zmienić skręcenie - bryła przebudowuje się z kształtu źródłowego, a nie skręca już skręconej.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.39 — TWIST: modele z plików STEP (etap 7)
 

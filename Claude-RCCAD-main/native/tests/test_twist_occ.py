@@ -292,5 +292,59 @@ class StepImportTwistTests(unittest.TestCase):
                 out = k.boolean(op, result, [tool])
                 self.assertTrue(k.is_valid(out) and out.Volume() > 0, op)
 
+
+class AdvancedTwistTests(unittest.TestCase):
+    """Etap 9: fragment bryły, zakotwiczenie, rozkłady, dowolna oś; gładkie przejście na granicach zakresu."""
+
+    @staticmethod
+    def boundary_creases(shape, levels):
+        """Największy kąt (°) między normalnymi sąsiednich ścian bocznych na krawędziach leżących na poziomach levels."""
+        faces = shape.Faces()
+        worst = {}
+        for e in shape.Edges():
+            box = e.BoundingBox()
+            level = next((z for z in levels if box.zlen < 1e-3 and abs(box.zmin - z) < 1e-3), None)
+            if level is None:
+                continue
+            pair = [f for f in faces if any(e.isSame(x) for x in f.Edges())]
+            if len(pair) != 2:
+                continue
+            for q in (.05, .3, .7, .95):
+                p = e.positionAt(q)
+                n1, n2 = (np.asarray(f.normalAt(p).toTuple()) for f in pair)
+                angle = math.degrees(math.acos(min(1.0, abs(float(n1 @ n2)))))
+                worst[level] = max(worst.get(level, 0.0), angle)
+        return worst
+
+    def test_smooth_distribution_has_no_crease_at_range_limits(self):
+        box = k.box(20, 30, 80)
+        for angle in (120.0, -200.0):
+            field = tw.field(Z, box, angle, .2, .8, 'smoothstep')
+            result = to.twist_solid(box, field)
+            self.assertTrue(to.check(result, box, field)['ok'])
+            creases = self.boundary_creases(result, (16.0, 64.0))
+            self.assertEqual(set(creases), {16.0, 64.0})
+            self.assertLess(max(creases.values()), .01, creases)                 # styczne przejście (praktycznie 0°)
+        linear = to.twist_solid(box, tw.field(Z, box, 120.0, .2, .8, 'linear'))
+        self.assertGreater(min(self.boundary_creases(linear, (16.0, 64.0)).values()), 5.0)   # liniowy: załamanie z natury rozkładu
+        prog = self.boundary_creases(to.twist_solid(box, tw.field(Z, box, 120.0, .2, .8, 'progressive')), (16.0, 64.0))
+        self.assertLess(prog[16.0], .01)                                         # progresywny: gładko na początku zakresu
+        self.assertGreater(prog[64.0], 5.0)
+
+    def test_fragment_anchor_and_any_axis(self):
+        box = k.box(20, 30, 80)
+        tilted = k.transform(box, (0, 0, 0), (0, 25, 40))                      # bryła obrócona - oś wzdłuż niej, dowolna w 3D
+        center, axes = tw.principal_axes(tilted)
+        spec = dict(kind='points', p=[float(c) for c in center], d=[float(c) for c in axes['Z']], reverse=False)
+        for anchor in ('start', 'center', 'end'):
+            for kind in ('linear', 'smoothstep', 'progressive'):
+                field = tw.field(dict(spec, reverse=anchor == 'end'), tilted, 75.0, .15, .7, kind, 2.0, anchor)
+                result = to.twist_solid(tilted, field)
+                self.assertTrue(to.check(result, tilted, field)['ok'], (anchor, kind))
+        field = tw.field(Z, box, 90.0, .25, .75, 'smoothstep', 2.0, 'end')
+        result = to.twist_solid(box, field)
+        self.assertTrue(has_point(result, (20, 30, 80)))                         # zakotwiczony koniec w miejscu
+        self.assertTrue(has_point(result, (25, 5, 0)) or has_point(result, (-5, 25, 0)))   # początek obrócony o pełny kąt
+
 if __name__ == '__main__':
     unittest.main()

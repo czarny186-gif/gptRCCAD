@@ -3619,6 +3619,45 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(any(np.allclose(v.toTuple(),(25,5,80),atol=1e-6) for v in out.shape.Vertices()))
         self.assertEqual(out.meta['twist']['anchor'],'start');self.assertEqual(out.meta['twist']['tolerance'],.01)
 
+    # TWIST etap 9: uchwyty zakresu (strzałki), okręgi granic na osi, odwrócenie kierunku, podgląd na żywo przy każdej zmianie
+    def test_twist_stage9_range_handles_flip_and_live_preview(self):
+        w=self.w
+        a=Body('Belka',k.box(20,30,80)).prepared();w.document.commit([a]);w.refresh();self.app.processEvents()
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents()
+        hs={h['id']:h for h in w.view.handles};self.assertEqual(set(hs),{'tx','txs','txe'})
+        np.testing.assert_allclose(hs['txs']['start'],(10,15,0),atol=1e-6);np.testing.assert_allclose(hs['txs']['dir'],(0,0,-1))
+        np.testing.assert_allclose(hs['txe']['start'],(10,15,80),atol=1e-6);np.testing.assert_allclose(hs['txe']['dir'],(0,0,1))
+        self.assertTrue(w.view.selection_items)                                                    # oś z okręgami granic zakresu
+        def previews():self.app.processEvents();return w.twist_preview_mesh
+        p0=previews()
+        # strzałka początku: 16 mm w stronę początku bryły nie wychodzi poza 0 %, 16 mm do środka -> 20 %
+        w.handle_dragged('txs',16.0);self.assertEqual(w.tx_from.value(),0.0)
+        w.handle_dragged('txs',-16.0);w.handle_released('txs');self.assertAlmostEqual(w.tx_from.value(),20.0)
+        p1=previews();self.assertIsNot(p1,p0)
+        np.testing.assert_allclose([h for h in w.view.handles if h['id']=='txs'][0]['start'],(10,15,16),atol=1e-6)
+        w.handle_dragged('txe',-16.0);w.handle_released('txe');self.assertAlmostEqual(w.tx_to.value(),80.0)
+        w.handle_dragged('txe',-200.0);self.assertAlmostEqual(w.tx_to.value(),20.1);w.handle_released('txe')   # koniec nie przeskakuje początku
+        w.tx_to.setValue(80);p2=previews();self.assertIsNot(p2,p1)
+        low=p2.vertices[p2.vertices[:,2]<15.9];high=p2.vertices[p2.vertices[:,2]>64.1]
+        self.assertTrue(np.all((abs(low[:,0]-10)<=10+1e-4)&(abs(low[:,1]-15)<=15+1e-4)))                  # poniżej zakresu bez obrotu
+        self.assertTrue(any(np.allclose(v,(-5,25,80),atol=1e-3) for v in high))                            # powyżej pełny kąt 90°
+        # odwrócenie kierunku skręcania
+        w.tx_flip.click();self.assertEqual(w.tx_angle.value(),-90.0);p3=previews();self.assertIsNot(p3,p2)
+        self.assertTrue(any(np.allclose(v,(25,25,80),atol=1e-3) for v in p3.vertices))
+        w.tx_flip.click();self.assertEqual(w.tx_angle.value(),90.0)
+        # każde ustawienie odświeża podgląd na żywo
+        for change in (lambda:w.tx_dist.setCurrentIndex(1),lambda:w.tx_dist.setCurrentIndex(2),lambda:w.tx_anchor.setCurrentIndex(2),
+                       lambda:w.tx_anchor.setCurrentIndex(1),lambda:w.tx_reverse.setChecked(True),lambda:w.tx_axis.setCurrentIndex(0),
+                       lambda:w.tx_from.setValue(30)):
+            before=previews();change();self.assertIsNot(previews(),before)
+        # zakotwiczenie końca: górny przekrój w miejscu
+        w.tx_reverse.setChecked(False);w.tx_axis.setCurrentIndex(2);w.tx_anchor.setCurrentIndex(2);w.tx_dist.setCurrentIndex(0);p4=previews()
+        top=p4.vertices[p4.vertices[:,2]>79.99];self.assertTrue(any(np.allclose(v,(20,30,80),atol=1e-3) for v in top))
+        # Zastosuj: bryła z tymi ustawieniami
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        op=w.document.infos()[0][-1]['op'];self.assertEqual((op['range_from'],op['range_to'],op['anchor']),(.3,.8,'end'))
+        self.assertTrue(any(np.allclose(v.toTuple(),(20,30,80),atol=1e-6) for v in w.document.get(a.id).shape.Vertices()))
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

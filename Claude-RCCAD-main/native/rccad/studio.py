@@ -8872,8 +8872,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self.scale_handle_dragged(hid, delta)
         elif hid.startswith('tl') and self.mode == 'tilt':
             self.tilt_handle_dragged(hid, delta)
-        elif hid == 'tx' and self.mode == 'twist':
-            self.twist_handle_dragged(delta)
+        elif hid in ('tx', 'txs', 'txe') and self.mode == 'twist':
+            self.twist_handle_dragged(delta, hid)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
             if self._hv is None or self._hv[0] != hid:
@@ -8903,7 +8903,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self._off_place_handle()
         elif hid == 'sf':
             self._sf_place_handle()
-        elif hid == 'tx':
+        elif hid in ('tx', 'txs', 'txe'):
             self._tx_place_ring()
         elif hid == 'mod':
             self._place_mod_handle()

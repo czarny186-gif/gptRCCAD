@@ -34,6 +34,7 @@ from . import twist_math as tm
 
 TOLERANCE = 0.01            # mm - największa dopuszczalna odchyłka powierzchni od dokładnego skręcenia
 VOLUME_TOLERANCE = 1e-3     # względna zmiana objętości (skręcanie zachowuje objętość)
+GUIDE_TOLERANCE = 1e-7     # względna tolerancja aproksymacji krzywej prowadzącej (rozkład płynny / progresywny)
 
 
 class TwistError(kernel.CadError):
@@ -213,7 +214,7 @@ def _guide(field, a, b, origin, direction, radius):
     for i, (t, angle) in enumerate(zip(ts, th), 1):
         p = o + d * t + radius * (math.cos(angle) * e1 + math.sin(angle) * e2)
         arr.SetValue(i, gp_Pnt(*map(float, p)))
-    curve = GeomAPI_PointsToBSpline(arr, 3, 8, GeomAbs_C2, 1e-6 * max(radius, 1.0)).Curve()
+    curve = GeomAPI_PointsToBSpline(arr, 3, 8, GeomAbs_C2, GUIDE_TOLERANCE * max(radius, 1.0)).Curve()
     return cq.Wire.assembleEdges([cq.Edge(BRepBuilderAPI_MakeEdge(curve).Edge())])
 
 

@@ -22,7 +22,7 @@ import numpy as np
 from dataclasses import replace
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from . import history as hist
 from . import kernel
@@ -43,6 +43,7 @@ DISTRIBUTION_ITEMS = (('Liniowy', 'linear', 'tw_lin'), ('Płynny', 'smoothstep',
 ANCHOR_ITEMS = (('Początek', 'start', 'tw_astart'), ('Środek', 'center', 'tw_acenter'), ('Koniec', 'end', 'tw_aend'))
 DEFAULT_TOLERANCE = 0.01
 RING_COLOR = (.94, .6, .13, 1)
+RANGE_COLOR = (.16, .5, .95, 1)          # uchwyty zakresu skręcania (strzałki przy granicach zakresu)
 PREVIEW_COLOR, PREVIEW_LINE = (.3, .75, .5, .8), (.05, .4, .2, 1)
 AXIS_LINE = (.94, .42, .05, 1)
 
@@ -57,7 +58,17 @@ class TwistTools:
         self.tx_angle.setSuffix('°')
         self.tx_angle.setToolTip('Kąt skręcenia w stopniach: o tyle obróci się jeden koniec bryły względem drugiego (ujemny - w drugą stronę). '
                                  'Pierścień przy bryle można też przeciągać.')
-        self._field(lay, 'Kąt skręcenia (°)', self.tx_angle)
+        angle_row = QWidget()
+        arow = QHBoxLayout(angle_row)
+        arow.setContentsMargins(0, 0, 0, 0)
+        arow.addWidget(self.tx_angle, 1)
+        self.tx_flip = QPushButton('⇄ Odwróć')
+        self.tx_flip.setObjectName('chip')
+        self.tx_flip.setToolTip('Odwraca kierunek skręcania (ten sam kąt w drugą stronę).')
+        self.tx_flip.clicked.connect(lambda: self.tx_angle.setValue(-self.tx_angle.value()))
+        self.tx_flip.setFixedHeight(self.tx_angle.sizeHint().height())
+        arow.addWidget(self.tx_flip)
+        self._field(lay, 'Kąt skręcenia (°)', angle_row)
         self.tx_step2 = ui.StepRow(2, 'tw_global', 'Oś skręcenia', plain=True)
         lay.addWidget(self.tx_step2)
         self.tx_kind = ui.Segmented(list(TWIST_KINDS), 24)
@@ -84,8 +95,10 @@ class TwistTools:
         self.tx_to = _spin(100.0, .1, 100.0, 1, 5)
         for spin in (self.tx_from, self.tx_to):
             spin.setSuffix(' %')
-        self.tx_from.setToolTip('Początek skręcanej części bryły - w procentach długości wzdłuż osi (0 % - od początku).')
-        self.tx_to.setToolTip('Koniec skręcanej części bryły - w procentach długości (100 % - do końca). Poza zakresem bryła się nie skręca.')
+        self.tx_from.setToolTip('Początek skręcanej części bryły - w procentach długości wzdłuż osi (0 % - od początku). '
+                                'Niebieską strzałkę przy początku zakresu można też przeciągać.')
+        self.tx_to.setToolTip('Koniec skręcanej części bryły - w procentach długości (100 % - do końca). Poza zakresem bryła się nie skręca. '
+                              'Niebieską strzałkę przy końcu zakresu można też przeciągać.')
         span = QWidget()
         row = QHBoxLayout(span)
         row.setContentsMargins(0, 0, 0, 0)
@@ -416,9 +429,22 @@ class TwistTools:
         vertices = np.array([b, *rim], np.float32)
         triangles = np.array([(0, i + 1, (i + 1) % len(rim) + 1) for i in range(len(rim))], np.uint32)
         line = np.array([a, b], np.float32)
-        mesh = kernel.DisplayMesh(vertices, triangles, {0: line}, tuple(float(c) for c in (a + b) / 2), float(size))
+        edges = {0: line}
+        # granice zakresu skręcania: okręgi wokół osi w kolorze osi (bryła skręca się tylko między nimi)
+        lo, hi = self._tx_range_t(geo)
+        ring_r = max(radius * 1.08, .05 * size)
+        loop = np.linspace(0, 2 * math.pi, 49)
+        for key, t in ((1, lo), (2, hi)):
+            c = origin + direction * t
+            edges[key] = np.array([c + ring_r * (math.cos(q) * e1 + math.sin(q) * e2) for q in loop], np.float32)
+        mesh = kernel.DisplayMesh(vertices, triangles, edges, tuple(float(c) for c in (a + b) / 2), float(size))
         self.view.set_selection_meshes([mesh], color=(.94, .42, .05, .95), line_color=AXIS_LINE)
         self.view.overlay.update()
+
+    def _tx_range_t(self, geo):
+        """Położenia początku i końca zakresu skręcania na osi (t)."""
+        _, _, t0, t1, _ = geo
+        return t0 + (t1 - t0) * self.tx_from.value() / 100.0, t0 + (t1 - t0) * self.tx_to.value() / 100.0
 
     def _tx_ring(self):
         geo = self._tx_geometry()
@@ -441,10 +467,37 @@ class TwistTools:
         e1, e2 = tw.ring_basis(axis)
         tip = c + r * (math.cos(sweep) * e1 + math.sin(sweep) * e2)
         text = f'{self.tx_angle.value():g}°'.replace('.', ',')
-        self.view.set_handles([dict(id='tx', kind='ring', ring=(c, axis, r), tip=tip, dir=np.cross(axis, e1), color=RING_COLOR,
-                                    label='', sweep=sweep, text=text)])
+        handles = [dict(id='tx', kind='ring', ring=(c, axis, r), tip=tip, dir=np.cross(axis, e1), color=RING_COLOR,
+                        label='', sweep=sweep, text=text)]
+        geo = self._tx_geometry()
+        if geo is not None:
+            # uchwyty zakresu: strzałki na osi przy początku (w stronę początku bryły) i końcu zakresu (w stronę końca)
+            origin, direction, t0, t1, radius = geo
+            lo, hi = self._tx_range_t(geo)
+            length = max(.12 * max(t1 - t0, radius), 3.0)
+            for hid, t, sign in (('txs', lo, -1.0), ('txe', hi, 1.0)):
+                start = origin + direction * t
+                handles.append(dict(id=hid, start=start, tip=start + sign * direction * length, dir=sign * direction,
+                                    color=RANGE_COLOR, label=''))
+        self.view.set_handles(handles)
 
-    def twist_handle_dragged(self, delta):
+    def twist_handle_dragged(self, delta, hid='tx'):
+        """Przeciąganie: pierścień - kąt; strzałki zakresu - początek / koniec zakresu (przesunięcie w mm wzdłuż osi
+        przeliczone na procent długości bryły)."""
+        if hid in ('txs', 'txe'):
+            geo = self._tx_geometry()
+            if geo is None:
+                return
+            length = max(geo[3] - geo[2], 1e-9)
+            spin = self.tx_from if hid == 'txs' else self.tx_to
+            if self._hv is None:
+                self._hv = spin.value()
+            if hid == 'txs':
+                value = min(max(self._hv - delta / length * 100.0, 0.0), self.tx_to.value() - .1)
+            else:
+                value = max(min(self._hv + delta / length * 100.0, 100.0), self.tx_from.value() + .1)
+            spin.setValue(round(value, 1))
+            return
         ring = self._tx_ring()
         if ring is None:
             return
