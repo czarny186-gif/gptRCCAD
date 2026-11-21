@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import cadquery as cq
 from rccad import sketchmeta as sm
+import time
 import unittest
 from rccad import twist as tw, twist_occ
 from dataclasses import replace
@@ -3657,6 +3658,58 @@ class StudioTests(unittest.TestCase):
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
         op=w.document.infos()[0][-1]['op'];self.assertEqual((op['range_from'],op['range_to'],op['anchor']),(.3,.8,'end'))
         self.assertTrue(any(np.allclose(v.toTuple(),(20,30,80),atol=1e-6) for v in w.document.get(a.id).shape.Vertices()))
+
+    # TWIST etap 10: duży model STEP (61 brył), skręcenie dwa razy tej samej bryły, edycja wcześniejszego kroku z przeliczeniem
+    # następnego, zapis / ponowne otwarcie, cofnij / ponów, anulowanie długiego liczenia (Esc), zwolnienie pamięci podglądu
+    def test_twist_stage10_large_step_repeated_edit_cancel(self):
+        w=self.w;W=cq.Workplane
+        def corners(shape):return np.array(sorted(tuple(round(c,4)+0.0 for c in v.toTuple()) for v in shape.Vertices()))
+        parts=[W().box(8,8,8).val().translate(cq.Vector(20*(i%10),20*(i//10),0)) for i in range(60)]
+        post=W().box(20,30,80).faces('>Z').workplane().hole(6,30).val().translate(cq.Vector(-60,0,40))
+        folder=Path(tempfile.mkdtemp());src=folder/'duzy.step'
+        cq.exporters.export(cq.Compound.makeCompound([*parts,post]),str(src))
+        with patch('rccad.studio.QFileDialog.getOpenFileName',return_value=(str(src),'')):w.import_model()
+        self.wait();self.assertEqual(len(w.document.bodies),61)
+        before={b.id:b for b in w.document.bodies};pid=min(w.document.bodies,key=lambda b:b.shape.Center().x).id
+        steps=len(w.document.states())
+        # 1. skręcenie 60°
+        w.selected=[pid];w.toggle_mode('twist');self.app.processEvents();w.tx_angle.setValue(60)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertIsNone(w.mode);self.assertEqual(len(w._tx_slices),0)                     # pamięć podglądu zwolniona po wyjściu
+        # 2. ponownie ta sama bryła: +30° (złożenie od kształtu źródłowego)
+        w.selected=[pid];w.toggle_mode('twist');self.app.processEvents();w.tx_angle.setValue(30);self.app.processEvents()
+        self.assertIsNotNone(w.twist_preview_mesh)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertEqual(len(w.document.states()),steps+2)
+        body=w.document.get(pid);self.assertEqual(len(body.meta['twist']['stack']),1)
+        f90=tw.field(dict(kind='global',axis='Z'),post,90.0)
+        self.assertTrue(twist_occ.check(body.shape,post,f90)['ok'])                             # 60° + 30° = 90°
+        for i,b in before.items():
+            if i!=pid:self.assertIs(w.document.get(i),b)
+        # edycja pierwszego kroku: 60° -> 10°, drugi krok przeliczony (razem 40°)
+        first=steps
+        w.history_edit(first);self.app.processEvents();self.assertEqual(w.tx_angle.value(),60.0)
+        w.tx_angle.setValue(10);w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait();self.wait()
+        self.assertEqual(len(w.document.states()),steps+2)
+        f40=tw.field(dict(kind='global',axis='Z'),post,40.0)
+        self.assertTrue(twist_occ.check(w.document.get(pid).shape,post,f40)['ok'])
+        after=corners(w.document.get(pid).shape)
+        # zapis i ponowne otwarcie, cofnij / ponów
+        path=folder/'duzy.rccadx';w.document.save(path);w.open_path(path);self.wait()
+        self.assertEqual(len(w.document.bodies),61);np.testing.assert_allclose(corners(w.document.get(pid).shape),after,atol=1e-4)
+        self.assertEqual(len(w.document.get(pid).meta['twist']['stack']),1)
+        w.undo();self.wait();w.undo();self.wait();np.testing.assert_allclose(corners(w.document.get(pid).shape),corners(post),atol=1e-4)
+        w.redo();self.wait();w.redo();self.wait();np.testing.assert_allclose(corners(w.document.get(pid).shape),after,atol=1e-4)
+        # anulowanie długiego liczenia: Esc w trakcie - przerwanie obliczeń, model bez zmian, okno TWIST otwarte
+        plate=W().box(30,40,80).faces('>Z').workplane().rarray(10,10,2,3).hole(4).val().translate(cq.Vector(0,0,300))   # Esc zaraz po Enter
+        big=Body('Płyta',plate).prepared();w.document.commit([*w.document.bodies,big]);w.refresh();steps=len(w.document.states())
+        w.selected=[big.id];w.toggle_mode('twist');self.app.processEvents()
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.assertTrue(w.busy)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier))
+        self.assertFalse(w.busy);self.assertTrue(w._tx_stop.is_set());self.assertEqual(w.mode,'twist')
+        start=time.perf_counter();w.pool.waitForDone(30000);self.assertLess(time.perf_counter()-start,10)
+        self.wait();self.assertIs(w.document.get(big.id).shape,plate);self.assertEqual(len(w.document.states()),steps)
+        w.cancel_twist();self.assertIsNone(w.mode)
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

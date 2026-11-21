@@ -84,25 +84,97 @@ class TwistField:
         p = np.asarray(points, float)
         return (p - np.asarray(self.origin, float)) @ np.asarray(self.direction, float)
 
+    @property
+    def breaks(self):
+        """Położenia na osi, w których kąt przestaje być stały albo zmienia przebieg (granice zakresu)."""
+        return (self.start, self.end)
+
     def apply(self, points):
         """Punkty po skręceniu (tablica N×3 albo jeden punkt 3D) - bez zmiany oryginału."""
-        p = np.asarray(points, float)
-        single = p.ndim == 1
-        p = p.reshape(-1, 3)
-        o, d = np.asarray(self.origin, float), np.asarray(self.direction, float)
-        v = p - o
-        t = v @ d
-        th = self.theta(t)
-        c, s = np.cos(th)[:, None], np.sin(th)[:, None]
-        along = np.outer(t, d)                      # składowa wzdłuż osi - bez zmian
-        radial = v - along
-        # Rodrigues: R·v = v·cos + (d × v)·sin + d(d·v)(1 - cos); dla składowej prostopadłej d·radial = 0
-        out = o + along + radial * c + np.cross(d, radial) * s
-        return out[0] if single else out
+        return _rotate(points, self.origin, self.direction, self.theta)
 
     def inverse(self):
         """Pole odwrotne (cofa skręcenie): ten sam zakres i oś, kąt przeciwny - t nie zmienia się przy obrocie."""
         return TwistField(self.origin, self.direction, -self.angle, self.start, self.end, self.kind, self.power, -self.offset)
+
+
+def _rotate(points, origin, direction, theta):
+    """Obrót każdego punktu wokół osi o kąt theta(t) zależny od położenia t wzdłuż osi (t się nie zmienia)."""
+    p = np.asarray(points, float)
+    single = p.ndim == 1
+    p = p.reshape(-1, 3)
+    o, d = np.asarray(origin, float), np.asarray(direction, float)
+    v = p - o
+    t = v @ d
+    th = theta(t)
+    c, s = np.cos(th)[:, None], np.sin(th)[:, None]
+    along = t[:, None] * d                      # składowa wzdłuż osi - bez zmian
+    radial = v - along
+    # Rodrigues: R·v = v·cos + (d × v)·sin + d(d·v)(1 - cos); dla składowej prostopadłej d·radial = 0.
+    # d × v jako mnożenie przez stałą macierz (szybciej niż np.cross dla dużych tablic); d × along = 0
+    skew_t = np.array([[0.0, d[2], -d[1]], [-d[2], 0.0, d[0]], [d[1], -d[0], 0.0]])
+    out = o + along + radial * c + (v @ skew_t) * s
+    return out[0] if single else out
+
+
+class CompositeField:
+    """Kilka skręceń wokół tej samej prostej (etap 10: ponowne skręcanie tej samej bryły). Obroty wokół jednej osi są
+    przemienne, więc złożenie to jedno skręcenie o kącie theta(t) = suma kątów składowych (z ich zakresami, rozkładami
+    i zakotwiczeniem). Składowa o przeciwnym zwrocie osi wchodzi z odwrotnym znakiem."""
+    kind = 'composite'
+    power = 2.0
+    offset = 0.0
+
+    def __init__(self, origin, direction, parts):
+        o = np.asarray(origin, float).reshape(3)
+        d = np.asarray(direction, float).reshape(3)
+        d = d / np.linalg.norm(d)
+        self.origin, self.direction = tuple(o), tuple(d)
+        self.parts = []
+        for part in parts:
+            pd = np.asarray(part.direction, float)
+            sign = float(np.sign(pd @ d))
+            shift = float((o - np.asarray(part.origin, float)) @ pd)      # t_części = sign·t + shift
+            self.parts.append((part, sign, shift))
+        breaks = sorted({(c - shift) * sign for part, sign, shift in self.parts for c in part.breaks})
+        self.start, self.end = breaks[0], breaks[-1]
+        self._breaks = tuple(breaks)
+        self.angle = float(sum(sign * part.angle for part, sign, _ in self.parts))
+
+    @property
+    def length(self):
+        return self.end - self.start
+
+    @property
+    def breaks(self):
+        return self._breaks
+
+    def theta(self, t):
+        t = np.asarray(t, float)
+        return sum(sign * part.theta(sign * t + shift) for part, sign, shift in self.parts)
+
+    def axial(self, points):
+        p = np.asarray(points, float)
+        return (p - np.asarray(self.origin, float)) @ np.asarray(self.direction, float)
+
+    def apply(self, points):
+        return _rotate(points, self.origin, self.direction, self.theta)
+
+    def inverse(self):
+        return CompositeField(self.origin, self.direction, [part.inverse() for part, _, _ in self.parts])
+
+
+def compose(parts, size=1.0):
+    """Złożenie skręceń wokół jednej prostej; inna oś (nierównoległa albo przesunięta) - TwistParamError."""
+    first = parts[-1]
+    o, d = np.asarray(first.origin, float), np.asarray(first.direction, float)
+    for part in parts:
+        pd, po = np.asarray(part.direction, float), np.asarray(part.origin, float)
+        off = (po - o) - d * float((po - o) @ d)
+        if abs(abs(float(pd @ d)) - 1) > 1e-9 or float(np.linalg.norm(off)) > 1e-6 * max(size, 1.0):
+            raise TwistParamError('Ta bryła jest już skręcona wokół innej osi - ponowne skręcanie działa tylko wokół tej samej osi '
+                                  '(zmień poprzedni krok TWIST albo wybierz tę samą oś).')
+    return CompositeField(o, d, parts)
 
 
 def make_field(origin, direction, angle, start, end, kind='linear', power=2.0, offset=0.0):

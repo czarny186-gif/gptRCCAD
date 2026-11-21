@@ -17,6 +17,7 @@ Siatka podglądu nigdy nie trafia do projektu. Geometria osi: rccad/twist.py."""
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 from dataclasses import replace
@@ -44,6 +45,7 @@ ANCHOR_ITEMS = (('Początek', 'start', 'tw_astart'), ('Środek', 'center', 'tw_a
 DEFAULT_TOLERANCE = 0.01
 RING_COLOR = (.94, .6, .13, 1)
 RANGE_COLOR = (.16, .5, .95, 1)          # uchwyty zakresu skręcania (strzałki przy granicach zakresu)
+BACKGROUND_TRIANGLES = 400_000           # większy podgląd tnie się w wątku roboczym
 PREVIEW_COLOR, PREVIEW_LINE = (.3, .75, .5, .8), (.05, .4, .2, 1)
 AXIS_LINE = (.94, .42, .05, 1)
 
@@ -219,6 +221,7 @@ class TwistTools:
         self.refresh()
         body = self._tx_solid(bid)
         self.tx_step.set_state('done' if body else 'active', body.name if body else '')
+        self.tx_step._tx_last = None
         self._tx_refresh()
 
     # ---------- wskazywanie osi ----------
@@ -374,15 +377,20 @@ class TwistTools:
         self._tx_timer.start()
 
     def _tx_status(self):
+        def step(row, state, text):
+            # bez zmian - bez ponownego ustawiania stylu (setStyleSheet przy każdym kroku przeciągania pierścienia)
+            if getattr(row, '_tx_last', None) != (state, text):
+                row._tx_last = (state, text)
+                row.set_state(state, text)
         error = self._tx_check()
         kind = self.tx_kind.currentData()
         done = error is None or (self._tx_solid(self.tx_id) is not None and self._tx_axis_ready())
         label = {'global': f'Globalna {self.tx_axis.currentData()}', 'local': f'Lokalna {self.tx_axis.currentData()}',
                  'points': 'Przez 2 punkty', 'edge': (self.tx_line or {}).get('label', 'Krawędź'), 'cyl': (self.tx_line or {}).get('label', 'Oś walca')}[kind]
-        self.tx_step2.set_state('done' if done else 'active', label + (' (odwrócona)' if self.tx_reverse.isChecked() and done else ''))
+        step(self.tx_step2, 'done' if done else 'active', label + (' (odwrócona)' if self.tx_reverse.isChecked() and done else ''))
         names = {'linear': 'liniowy', 'smoothstep': 'płynny', 'progressive': 'progresywny', 'start': 'początek', 'center': 'środek', 'end': 'koniec'}
-        self.tx_step3.set_state('done', f'{self.tx_from.value():g}–{self.tx_to.value():g} % · {names[self.tx_dist.currentData()]} · '
-                                        f'w miejscu: {names[self.tx_anchor.currentData()]}'.replace('.', ','))
+        step(self.tx_step3, 'done', f'{self.tx_from.value():g}–{self.tx_to.value():g} % · {names[self.tx_dist.currentData()]} · '
+                                    f'w miejscu: {names[self.tx_anchor.currentData()]}'.replace('.', ','))
         if error:
             self.tx_status.setText(error)
             return
@@ -481,6 +489,11 @@ class TwistTools:
                                     color=RANGE_COLOR, label=''))
         self.view.set_handles(handles)
 
+    def twist_handle_released(self):
+        """Po puszczeniu uchwytu: uchwyty na nowym miejscu i podgląd w pełnej dokładności."""
+        self._tx_place_ring()
+        self._tx_timer.start()
+
     def twist_handle_dragged(self, delta, hid='tx'):
         """Przeciąganie: pierścień - kąt; strzałki zakresu - początek / koniec zakresu (przesunięcie w mm wzdłuż osi
         przeliczone na procent długości bryły)."""
@@ -530,20 +543,52 @@ class TwistTools:
             self._tx_preview_clear()
             return
         layers = tp.layer_count(field.angle, field.kind, field.power, len(mesh.triangles))
+        if self._hv is not None:
+            layers = max(tp.MIN_LAYERS, layers // 4)   # przeciąganie uchwytu: mniej warstw - płynnie; pełna dokładność po puszczeniu
         key = (id(mesh), field.origin, field.direction, field.start, field.end, layers)
-        hit = self._tx_cache.get('sliced')
-        if hit is None or hit[0] != key:
-            sliced = tp.SlicedMesh(mesh.vertices, mesh.triangles, mesh.edges, field.origin, field.direction,
-                                   tp.cut_planes(field.start, field.end, layers))
-            hit = self._tx_cache['sliced'] = (key, sliced)
-        vertices, edges = hit[1].twisted(field)
-        preview = kernel.DisplayMesh(vertices.astype(np.float32), hit[1].triangles.astype(np.uint32),
-                                     {k: e.astype(np.float32) for k, e in edges.items()}, mesh.center, mesh.size)
+        cache = self.__dict__.setdefault('_tx_slices', tp.SliceCache())
+        sliced = cache.peek(key)
+        if sliced is None and len(mesh.triangles) * (2 * layers + 1) > BACKGROUND_TRIANGLES:
+            # duża siatka: cięcie w wątku roboczym (sam numpy na kopiach tablic), okno nie zamarza; ostatnie żądanie wygrywa
+            planes = tp.cut_planes(field.start, field.end, layers)
+
+            def compute(mesh=mesh, field=field, planes=planes):
+                sliced = tp.SlicedMesh(mesh.vertices, mesh.triangles, mesh.edges, field.origin, field.direction, planes)
+                return sliced, sliced.twisted(field)
+
+            def show(value, error, key=key, field=field, body_id=body.id):
+                if value is None or self.mode != 'twist' or self.tx_id != body_id:
+                    return
+                cache.put(key, value[0], mesh)
+                if self._tx_field() is not None:
+                    self._tx_timer.start()             # ustawienia mogły się zmienić w trakcie - pokaż aktualne
+                self._tx_show_preview(body, mesh, value[0], value[1])
+            self.run_preview('twist', compute, show)
+            return
+        sliced = cache.get(key, lambda: tp.SlicedMesh(mesh.vertices, mesh.triangles, mesh.edges, field.origin, field.direction,
+                                                     tp.cut_planes(field.start, field.end, layers)), mesh)
+        self._tx_show_preview(body, mesh, sliced, sliced.twisted(field))
+
+    def _tx_show_preview(self, body, mesh, sliced, twisted):
+        vertices, edges = twisted
+        preview = kernel.DisplayMesh(vertices, sliced.triangles, edges, mesh.center, mesh.size)
         self.twist_preview_mesh = preview
         self.view.set_preview_mesh(preview, color=PREVIEW_COLOR, line_color=PREVIEW_LINE, width=1.6)
         if self.override.get(body.id) is None or set(self.override) != {body.id}:
             self.override = {body.id: replace(body, visible=False)}     # oryginał ukryty tylko w widoku
             self.refresh()
+
+    def _tx_leave(self):
+        """Wyjście z narzędzia: zwolnienie pamięci podglądu (pocięte siatki), przerwanie zaległego podglądu w tle."""
+        self._tx_timer.stop()
+        cache = self.__dict__.get('_tx_slices')
+        if cache is not None:
+            cache.clear()
+        self.twist_preview_mesh = None
+        st = getattr(self, '_pv', {}).get('twist')
+        if st is not None:
+            st['gen'] += 1
+            st['pending'] = None
 
     def _tx_preview_clear(self):
         self.twist_preview_mesh = None
@@ -562,6 +607,7 @@ class TwistTools:
                       power=2.0, anchor=p['anchor'], tolerance=p['tolerance'])
         if self._tx_rebuild is not None and self._tx_rebuild['id'] == self.tx_id:
             recipe['source'] = self._tx_rebuild['source']
+            recipe['stack'] = list(self._tx_rebuild.get('stack') or [])
         return recipe
 
     # ---------- ponowna edycja (krok historii, dwuklik w bryłę, bryła z biblioteki) ----------
@@ -600,9 +646,21 @@ class TwistTools:
         if body is None:
             raise kernel.CadError('brak bryły')
         if recipe.get('source'):
-            self._tx_rebuild = dict(id=body.id, source=recipe['source'], shape=hist.twist_source_shape(recipe['source']))
+            self._tx_rebuild = dict(id=body.id, source=recipe['source'], stack=list(recipe.get('stack') or []),
+                                    shape=self._tx_rebuild_shape(recipe['source'], recipe.get('stack')))
         self._tx_set(body.id)
         self.set_twist_params(recipe)
+
+    def _tx_rebuild_shape(self, source, stack):
+        """Kształt, od którego liczy się przebudowywane skręcenie: źródło, a gdy wcześniej były inne skręcenia (stos) -
+        źródło z nimi (do podglądu i osi; sam krok liczy złożenie od źródła)."""
+        shape = hist.twist_source_shape(source)
+        if stack:
+            from . import twist_math as tmath
+            from . import twist_occ
+            fields = [hist._twist_part(e, shape) for e in stack]
+            shape = twist_occ.twist_solid(shape, fields[0] if len(fields) == 1 else tmath.compose(fields), float(stack[-1].get('tolerance', .01)))
+        return shape
 
     def twist_step_index(self, body_id):
         """Numer ostatniego kroku 'twist' tej bryły w historii albo None."""
@@ -625,7 +683,8 @@ class TwistTools:
             self.history_edit(index)
             return True
         self.set_mode('twist')
-        self._tx_rebuild = dict(id=body.id, source=twist['source'], shape=hist.twist_source_shape(twist['source']))
+        stack = list(twist.get('stack') or [])
+        self._tx_rebuild = dict(id=body.id, source=twist['source'], stack=stack, shape=self._tx_rebuild_shape(twist['source'], stack))
         self._tx_set(body.id)
         self.set_twist_params(twist)
         self.toast('Bryła skręcona (np. z biblioteki): zmień parametry i kliknij Zastosuj - bryła zostanie przebudowana z kształtu sprzed skręcenia.', 6000)
@@ -645,8 +704,10 @@ class TwistTools:
         recipe = self.twist_recipe()
         existing = list(self.document.bodies)
 
+        stop = threading.Event()                    # Esc / Anuluj w trakcie liczenia przerywa obliczenia między krokami Open CASCADE
+
         def build():
-            return list(hist.run_twist(existing, recipe))
+            return list(hist.run_twist(existing, recipe, cancel=stop))
 
         def apply(bodies):
             self.document.pending_op = recipe
@@ -656,7 +717,16 @@ class TwistTools:
             self.selected = [recipe['id']]
 
         self.run_operation('Skręcenie (TWIST)', build, apply, after=lambda: self.set_mode(None))
+        cancel_op = getattr(self, '_cancel_op', None)
+        if cancel_op is not None:
+            def cancel():
+                stop.set()
+                cancel_op()
+            self._cancel_op = cancel
+        self._tx_stop = stop
 
     def cancel_twist(self):
         self._tx_timer.stop()
+        if self.busy and getattr(self, '_cancel_op', None) is not None:
+            self._cancel_op()                    # Anuluj w trakcie liczenia - przerwanie obliczeń, model bez zmian
         self.set_mode(None)          # set_mode czyści podgląd i podmianę widoku (override), refresh pokazuje oryginał

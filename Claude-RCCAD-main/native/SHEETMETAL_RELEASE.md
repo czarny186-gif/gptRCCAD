@@ -1,13 +1,22 @@
-# RCCAD Desktop 0.5.41 — TWIST: uchwyty zakresu i gładkie przejścia (etap 9)
+# RCCAD Desktop 0.5.42 — TWIST: optymalizacja i testy końcowe (etap 10)
+
+- **Anulowanie długich obliczeń**: Esc albo Anuluj w trakcie skręcania przerywa liczenie od razu (między krokami Open CASCADE), bryła zostaje bez zmian. Bryła źródłowa jest kopiowana przed liczeniem w tle - wątek roboczy nie zapisuje nic w kształcie, który wyświetla okno.
+- **Szybsze skręcanie dużych brył**: kontrola odchyłki rzutuje punkty tylko na pobliskie ściany (np. 9,7 s → 0,8 s), bryły z otworami nieprzelotowymi i kieszeniami zszywane od razu w całość bez operacji logicznej; przy wyniku, którego inna tolerancja zszycia nie poprawi, bez zbędnych powtórzeń.
+- **Podgląd**: wspólne wierzchołki i pojedyncza precyzja (pamięć pociętej siatki ok. 2,7× mniejsza), pamięć ostatnich ustawień (powrót do nich bez ponownego liczenia), duże siatki liczone w tle, mniej szczegółów podczas przeciągania uchwytów, wszystkie krawędzie obracane naraz; pamięć zwalniana po wyjściu z narzędzia.
+- **Ponowne skręcanie tej samej bryły** wokół tej samej osi: jedno złożone skręcenie kształtu źródłowego (kąty się sumują) - wcześniej było odrzucane. Inna oś - komunikat.
+- Poprawka: skręcenie nie pomija fragmentu, w którym dwa skręcenia mają ten sam kąt na końcach i w środku (złożenia).
+- Komunikat o samoprzecięciu podpowiada też przyczynę (ścianka o zerowej grubości, otwór dotykający krawędzi).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.41 — TWIST: uchwyty zakresu i gładkie przejścia (etap 9)
 
 - **Uchwyty zakresu skręcania**: dwie niebieskie strzałki na osi (istniejący system uchwytów programu) przy początku i końcu zakresu - przeciąganie przesuwa początek / koniec (pola „Zakres skręcenia” zmieniają się razem z nimi, koniec nie przeskoczy początku). Granice zakresu widać na osi jako okręgi.
 - **⇄ Odwróć** przy kącie - odwraca kierunek skręcania. Dalej: odwrócenie osi, osie dowolne (2 punkty, krawędź, walec), zakotwiczenie początku / środka / końca, rozkłady liniowy / płynny / progresywny.
 - **Podgląd na żywo** przy każdej zmianie: kąt, pierścień, strzałki zakresu, pola zakresu, rozkład, zakotwiczenie, oś, kierunek.
 - **Gładkie przejścia**: krzywa prowadząca dokładniejsza - rozkład płynny przechodzi w nieskręconą część bryły stycznie (załamanie powierzchni ≤ 0,001°), obliczenia przy tym szybsze. Liniowy (na obu granicach) i progresywny (na końcu) mają załamanie wynikające z ich przebiegu.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.40 — TWIST w historii: wszystkie parametry, edycja kroku, biblioteka (etap 8)
 

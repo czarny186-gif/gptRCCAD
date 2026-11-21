@@ -46,8 +46,9 @@ class TwistPreviewTests(unittest.TestCase):
     def test_slicing_keeps_surface_orientation_and_is_watertight(self):
         s = self.sliced()
         self.assertGreater(len(s.triangles), len(self.T) * 5)
-        self.assertAlmostEqual(area(s.vertices, s.triangles), area(self.V, self.T), 6)
-        self.assertAlmostEqual(volume(s.vertices, s.triangles), volume(self.V, self.T), 6)    # ta sama orientacja trójkątów
+        # siatka podglądu w pojedynczej precyzji (float32): zgodność względna 1e-6
+        self.assertAlmostEqual(area(s.vertices.astype(float), s.triangles), area(self.V, self.T), delta=1e-6 * area(self.V, self.T))
+        self.assertAlmostEqual(volume(s.vertices.astype(float), s.triangles), volume(self.V, self.T), delta=1e-6 * abs(volume(self.V, self.T)))   # ta sama orientacja trójkątów
         self.assertEqual(open_edges(*s.twisted(tm.make_field((0, 0, 0), (0, 0, 1), 0.0, 0, 80))[:1], s.triangles), 0)
         self.assertEqual(open_edges(self.V, self.T), 0)
         for layers in (8, 64):
@@ -74,9 +75,9 @@ class TwistPreviewTests(unittest.TestCase):
         f = tm.make_field((0, 0, 0), (0, 0, 1), 90.0, 0, 80, 'smoothstep')
         s = self.sliced()
         v, edges = s.twisted(f)
-        np.testing.assert_allclose(v, f.apply(s.vertices))
+        np.testing.assert_allclose(v, f.apply(s.vertices), atol=1e-5)
         corner = np.argmin(np.linalg.norm(s.vertices - (10, 15, 80), axis=1))
-        np.testing.assert_allclose(v[corner], (-15, 10, 80), atol=1e-9)           # górny róg obrócony o 90°
+        np.testing.assert_allclose(v[corner], (-15, 10, 80), atol=1e-5)           # górny róg obrócony o 90°
         np.testing.assert_array_equal(self.mesh.vertices, before_v)
         np.testing.assert_array_equal(self.mesh.triangles, before_t)
         for key, p in before_e.items():
@@ -84,11 +85,11 @@ class TwistPreviewTests(unittest.TestCase):
         self.assertEqual(set(edges), set(self.mesh.edges))
         vertical = next(key for key, p in self.mesh.edges.items() if len(p) == 2 and abs(p[1][2] - p[0][2]) > 70)
         self.assertGreater(len(edges[vertical]), 20)                              # pionowa krawędź gęsto podzielona
-        np.testing.assert_allclose(np.linalg.norm(edges[vertical][:, :2], axis=1), np.linalg.norm(self.mesh.edges[vertical][0][:2]), atol=1e-9)
+        np.testing.assert_allclose(np.linalg.norm(edges[vertical][:, :2], axis=1), np.linalg.norm(self.mesh.edges[vertical][0][:2]), atol=1e-5)
 
     def test_densify_polyline(self):
         p = tp.densify_polyline([(1, 0, 0), (1, 0, 10)], (0, 0, 0), (0, 0, 1), [2.5, 5, 7.5])
-        np.testing.assert_allclose(p[:, 2], [0, 2.5, 5, 7.5, 10])
+        np.testing.assert_allclose(p[:, 2], [0, 2.5, 5, 7.5, 10])             # (densify_polyline - bez zmiany precyzji)
         p = tp.densify_polyline([(1, 0, 10), (1, 0, 0)], (0, 0, 0), (0, 0, 1), [5])
         np.testing.assert_allclose(p[:, 2], [10, 5, 0])
         flat = tp.densify_polyline([(0, 0, 3), (5, 0, 3)], (0, 0, 0), (0, 0, 1), [3])

@@ -1970,6 +1970,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self.mz_pending, self.mz_ref = {}, None
         if self.mode == 'link' and mode != 'link':
             self._link_leave()
+        if self.mode == 'twist' and mode != 'twist':
+            self._tx_leave()                    # TWIST: pamięć podglądu zwolniona
         if self.mode == 'gearsim' and mode != 'gearsim':
             self._gearsim_leave()                     # animacja stop, koła wracają do położenia z modelu
         self.wrap_sketch = False
@@ -8904,7 +8906,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         elif hid == 'sf':
             self._sf_place_handle()
         elif hid in ('tx', 'txs', 'txe'):
-            self._tx_place_ring()
+            self.twist_handle_released()
         elif hid == 'mod':
             self._place_mod_handle()
         elif hid == 'split':

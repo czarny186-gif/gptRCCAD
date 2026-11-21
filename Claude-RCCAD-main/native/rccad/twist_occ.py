@@ -41,6 +41,16 @@ class TwistError(kernel.CadError):
     """Skręcenie niemożliwe albo wynik niepoprawny (komunikat po polsku) - oryginał zostaje bez zmian."""
 
 
+class TwistCancelled(TwistError):
+    """Obliczenia przerwane przez użytkownika (Esc / Anuluj) - oryginał zostaje bez zmian."""
+
+
+def _cancelled(cancel):
+    """Przerwanie między krokami Open CASCADE: cancel - obiekt z is_set() (threading.Event) albo funkcja zwracająca True."""
+    if cancel is not None and (cancel.is_set() if hasattr(cancel, 'is_set') else cancel()):
+        raise TwistCancelled('Skręcanie przerwane - bryła bez zmian.')
+
+
 def _frame(direction):
     d = np.asarray(direction, float)
     e1 = np.cross(d, (0, 0, 1.0) if abs(d[2]) < .9 else (1.0, 0, 0))
@@ -168,11 +178,12 @@ def _parallel_to_axis(face, d, ang=1e-6):
 
 # ---------------------------------------------------------------------------------------------- budowa
 def _segments(field, t0, t1):
-    """Odcinki [a, b] długości bryły: stałe (poza zakresem skręcenia) i skręcany."""
-    cuts = sorted({t0, t1, *(c for c in (field.start, field.end) if t0 < c < t1)})
+    """Odcinki [a, b] długości bryły: stałe (kąt się nie zmienia) i skręcane - granice z field.breaks (zakresy skręceń)."""
+    cuts = sorted({t0, t1, *(c for c in field.breaks if t0 < c < t1)})
     out = []
     for a, b in zip(cuts[:-1], cuts[1:]):
-        twisting = field.start < (a + b) / 2 < field.end
+        th = np.asarray(field.theta(np.linspace(a, b, 33)), float)     # gęsto: złożenie skręceń może mieć ten sam kąt na końcach i w środku
+        twisting = float(np.ptp(th)) > 1e-12
         out.append((a, b, twisting))
     return out
 
@@ -199,7 +210,7 @@ def _guide(field, a, b, origin, direction, radius):
     o, d = np.asarray(origin, float), np.asarray(direction, float)
     e1, e2 = _frame(d)
     span = float(field.theta(b) - field.theta(a))
-    if field.kind == 'linear':
+    if field.kind == 'linear' and field.start <= a and b <= field.end:
         pitch = (b - a) * 2 * math.pi / abs(span)
         return cq.Wire.makeHelix(pitch, b - a, radius, cq.Vector(*(o + d * a)), cq.Vector(*d), lefthand=span < 0)
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
@@ -207,7 +218,9 @@ def _guide(field, a, b, origin, direction, radius):
     from OCP.GeomAbs import GeomAbs_C2
     from OCP.TColgp import TColgp_Array1OfPnt
     from OCP.gp import gp_Pnt
-    count = max(64, int(abs(math.degrees(span)) / 2.0) + 1)
+    probe = np.asarray(field.theta(np.linspace(a, b, 257)), float)
+    variation = float(np.abs(np.diff(probe)).sum())                  # całkowita zmienność kąta (złożenia mogą się znosić)
+    count = max(64, int(math.degrees(max(variation, abs(span))) / 2.0) + 1)
     ts = np.linspace(a, b, count)
     th = field.theta(ts)
     arr = TColgp_Array1OfPnt(1, count)
@@ -240,7 +253,8 @@ def _lateral(wire, field, a, b, twisting, origin, direction, t0, radius):
     return cq.Shape.cast(pipe.Shape()).Faces()
 
 
-def _sew(faces, tolerance):
+def _sew(faces, tolerance, shells=1):
+    """Zszycie ścian w bryłę o dokładnie `shells` zamkniętych powłokach (więcej niż 1 - puste przestrzenie wewnątrz)."""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
     from OCP.BRepLib import BRepLib
     from OCP.TopAbs import TopAbs_SHELL
@@ -250,15 +264,18 @@ def _sew(faces, tolerance):
     for f in faces:
         sewing.Add(f.wrapped)
     sewing.Perform()
+    found = []
     explorer = TopExp_Explorer(sewing.SewedShape(), TopAbs_SHELL)
-    if not explorer.More():
+    while explorer.More():
+        found.append(TopoDS.Shell_s(explorer.Current()))
+        explorer.Next()
+    if len(found) != shells:
         return None
-    shell = TopoDS.Shell_s(explorer.Current())
-    explorer.Next()
-    if explorer.More():
-        return None
-    raw = BRepBuilderAPI_MakeSolid(shell).Solid()
-    BRepLib.OrientClosedSolid_s(raw)                 # ściany zorientowane na zewnątrz
+    maker = BRepBuilderAPI_MakeSolid()
+    for shell in found:
+        maker.Add(shell)
+    raw = maker.Solid()
+    BRepLib.OrientClosedSolid_s(raw)                 # ściany zorientowane na zewnątrz (powłoki wewnętrzne - do środka)
     return _forward(cq.Shape.cast(raw))
 
 
@@ -307,7 +324,7 @@ def _forward(solid):
     return cq.Shape.cast(TopoDS.Solid_s(maker.Solid()))
 
 
-def twist_solid(shape, field: tm.TwistField, tolerance=TOLERANCE):
+def twist_solid(shape, field: tm.TwistField, tolerance=TOLERANCE, cancel=None):
     """Skręcona bryła B-Rep (nowy TopoDS_Shape w cq.Solid) albo TwistError. Oryginał nie jest zmieniany.
     Kąt 0 - kopia oryginału. Graniastosłup - jedno zszycie ścian (etap 5); bryła schodkowa - warstwy (etap 6)."""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
@@ -317,16 +334,21 @@ def twist_solid(shape, field: tm.TwistField, tolerance=TOLERANCE):
     try:
         bottom, t0, t1 = prism_profile(shape, o, d)
     except TwistError as prism_error:
+        _cancelled(cancel)
         layers = stepped_layers(shape, o, d, prism_error)
-        return _twist_layers(shape, layers, field, o, d, tolerance)
+        return _twist_layers(shape, layers, field, o, d, tolerance, cancel)
+    _cancelled(cancel)
     radius = _guide_radius(shape, o, d)
     faces = _twisted_faces(bottom, t0, t1, field, o, d, radius)
     report = None
     for sew_tol in (1e-6, 1e-5, 1e-4):
+        _cancelled(cancel)
         solid = _sew(faces, sew_tol)
-        report = check(solid, shape, field, tolerance) if solid is not None else None
+        report = check(solid, shape, field, tolerance, cancel) if solid is not None else None
         if report is not None and report['ok']:
             return solid
+        if report is not None and _built(report):
+            break
     raise TwistError(_failure(report))
 
 
@@ -393,7 +415,46 @@ def _check_layers(solid, layers):
         raise TwistError('Przekrój bryły zmienia się w sposób, którego TWIST jeszcze nie obsługuje (ściany ukośne do osi) - bryła bez zmian.')
 
 
-def _twist_layers(shape, layers, field, o, d, tolerance):
+def _twist_layers(shape, layers, field, o, d, tolerance, cancel=None):
+    """Bryła schodkowa (etap 10): ściany boczne wszystkich warstw i oryginalne ściany prostopadłe do osi (podstawy, dna
+    otworów i kieszeni, stopnie - obrócone sztywnie o kąt w swoim miejscu) zszyte od razu w jedną bryłę - bez operacji
+    logicznej, szybciej i bez sztucznych przecięć na granicach warstw. Gdy to się nie uda - dawna droga: każda warstwa
+    osobno i złączenie (BRepAlgoAPI_Fuse)."""
+    _cancelled(cancel)
+    radius = _guide_radius(shape, o, d)
+    solid = shape.Solids()[0]
+    size, lin, ang = _tolerances(solid)
+    shells = len(solid.Shells())
+    faces = []
+    for face in solid.Faces():
+        level = _cap_level(face, o, d, lin, ang)
+        if level is not None:
+            faces.append(_placed(face, _trsf(o, d, float(field.theta(level)), 0.0)))
+    for ta, tb, sections in layers:
+        for section in sections:
+            for a, b, twisting in _segments(field, ta, tb):
+                for wire in (section.outerWire(), *section.innerWires()):
+                    _cancelled(cancel)
+                    faces += _lateral(wire, field, a, b, twisting, o, d, ta, radius)
+    for sew_tol in (1e-6, 1e-5, 1e-4):
+        _cancelled(cancel)
+        sewn = _sew(faces, sew_tol, shells)
+        if sewn is None:
+            continue
+        report = check(sewn, shape, field, tolerance, cancel)
+        if report['ok']:
+            return sewn
+        if _built(report):
+            raise TwistError(_failure(report))       # bryła zamknięta i poprawna, ale przecina się / odbiega - inna tolerancja nic nie zmieni
+    return _twist_layers_fused(shape, layers, field, o, d, tolerance, cancel)
+
+
+def _built(report):
+    """Zszycie się udało (poprawna, zamknięta bryła) - nie przechodzi tylko kontrola samoprzecięć / objętości / odchyłki."""
+    return report['valid'] and report.get('forward', True) and report['solids'] == 1 and report['closed']
+
+
+def _twist_layers_fused(shape, layers, field, o, d, tolerance, cancel=None):
     """Każda warstwa skręcona jak graniastosłup i zszyta w bryłę; warstwy złączone (BRepAlgoAPI_Fuse) i oczyszczone
     (ShapeUpgrade_UnifySameDomain - ściany tej samej płaszczyzny / powierzchni scalone, wspólne krawędzie jednej
     krawędzi). Kontrola całości jak dla graniastosłupa, z liczbą powłok równą oryginałowi (puste przestrzenie)."""
@@ -401,6 +462,7 @@ def _twist_layers(shape, layers, field, o, d, tolerance):
     pieces = []
     for ta, tb, sections in layers:
         for section in sections:
+            _cancelled(cancel)
             faces = _twisted_faces(section, ta, tb, field, o, d, radius)
             piece = None
             for sew_tol in (1e-6, 1e-5, 1e-4):
@@ -411,8 +473,9 @@ def _twist_layers(shape, layers, field, o, d, tolerance):
             if piece is None:
                 raise TwistError('Nie udało się zbudować skręconej warstwy bryły - zmniejsz kąt; bryła bez zmian.')
             pieces.append(piece)
+    _cancelled(cancel)
     result = _fuse(pieces)
-    report = check(result, shape, field, tolerance)
+    report = check(result, shape, field, tolerance, cancel)
     if not report['ok']:
         raise TwistError(_failure(report))
     return result
@@ -453,7 +516,7 @@ def _fuse(pieces):
 
 
 # ---------------------------------------------------------------------------------------------- kontrola
-def check(result, original, field, tolerance=TOLERANCE):
+def check(result, original, field, tolerance=TOLERANCE, cancel=None):
     """Raport kontroli wyniku: valid (BRepCheck_Analyzer), solids, closed (powłoka zamknięta), self (brak samoprzecięć -
     BRepAlgoAPI_Check), volume (zmiana objętości), deviation (największa odchyłka od dokładnego skręcenia), ok."""
     from OCP.BRep import BRep_Tool
@@ -471,10 +534,12 @@ def check(result, original, field, tolerance=TOLERANCE):
     expected = max(1, len([sh for s in original.Solids() for sh in s.Shells()]))      # wewnętrzne powłoki (puste przestrzenie) zostają
     report['shells'] = len(shells)
     report['closed'] = len(shells) == expected and all(BRep_Tool.IsClosed_s(sh.wrapped) for sh in shells)
+    _cancelled(cancel)
     report['self'] = bool(BRepAlgoAPI_Check(result.wrapped, True, True).IsValid()) if report['valid'] else False
+    _cancelled(cancel)
     v0, v1 = _volume(original), _volume(result)
     report['volume'] = abs(v1 - v0) / max(abs(v0), 1e-12)
-    report['deviation'] = deviation(result, original, field)
+    report['deviation'] = deviation(result, original, field, cancel)
     report['ok'] = (report['valid'] and report['forward'] and report['solids'] == 1 and report['closed'] and report['self'] and v1 > 0
                     and report['volume'] < VOLUME_TOLERANCE and report['deviation'] <= tolerance)
     return report
@@ -500,25 +565,43 @@ def control_points(original, count=7):
     return np.array(pts, float)
 
 
-def deviation(result, original, field):
+def deviation(result, original, field, cancel=None):
     """Największa odległość punktów kontrolnych po dokładnym skręceniu (silnik twist_math) od ścian wyniku.
-    Punkt rzutowany na powierzchnie ścian (ShapeAnalysis_Surface) - liczy się tylko rzut leżący w obrębie ściany
-    (BRepClass_FaceClassifier); gdy żaden nie trafia w ścianę - dokładna odległość od całej bryły (BRepExtrema)."""
+    Punkt rzutowany tylko na ściany, których prostopadłościan otaczający go zawiera (BRepBndLib - szybki wybór
+    1-3 ścian zamiast wszystkich), ShapeAnalysis_Surface; liczy się rzut leżący w obrębie ściany
+    (BRepClass_FaceClassifier). Gdy żaden nie trafia - dokładna odległość od całej bryły (BRepExtrema)."""
     from OCP.BRep import BRep_Tool
+    from OCP.BRepBndLib import BRepBndLib
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
     from OCP.BRepClass import BRepClass_FaceClassifier
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCP.Bnd import Bnd_Box
     from OCP.ShapeAnalysis import ShapeAnalysis_Surface
     from OCP.TopAbs import TopAbs_OUT
     from OCP.gp import gp_Pnt
     box = kernel.bounds(result)
-    tol = 1e-7 * max(box.xlen, box.ylen, box.zlen, 1.0)
-    faces = [(f.wrapped, ShapeAnalysis_Surface(BRep_Tool.Surface_s(f.wrapped))) for f in result.Faces()]
+    size = max(box.xlen, box.ylen, box.zlen, 1.0)
+    tol = 1e-7 * size
+    pad = max(TOLERANCE * 4, 1e-4 * size)
+    faces, lows, highs = [], [], []
+    for f in result.Faces():
+        bb = Bnd_Box()
+        BRepBndLib.Add_s(f.wrapped, bb, False)
+        x0, y0, z0, x1, y1, z1 = bb.Get()
+        lows.append((x0 - pad, y0 - pad, z0 - pad))
+        highs.append((x1 + pad, y1 + pad, z1 + pad))
+        faces.append((f.wrapped, ShapeAnalysis_Surface(BRep_Tool.Surface_s(f.wrapped))))
+    lows, highs = np.array(lows), np.array(highs)
     worst = 0.0
-    for p in field.apply(control_points(original)):
+    points = field.apply(control_points(original))
+    for n, p in enumerate(points):
+        if n % 64 == 0:
+            _cancelled(cancel)
         point = gp_Pnt(*map(float, p))
         best = float('inf')
-        for face, analysis in faces:
+        near = np.nonzero(np.all((lows <= p) & (p <= highs), axis=1))[0]
+        for index in near:
+            face, analysis = faces[index]
             uv = analysis.ValueOfUV(point, tol)
             gap = analysis.Gap()
             if gap < best and BRepClass_FaceClassifier(face, uv, 1e-6).State() != TopAbs_OUT:
@@ -536,7 +619,8 @@ def _failure(report):
     if not report['valid'] or not report.get('forward', True) or report['solids'] != 1 or not report['closed']:
         return 'Skręcona bryła nie jest poprawna (Open CASCADE: BRepCheck / powłoka niezamknięta) - oryginał bez zmian.'
     if not report['self']:
-        return 'Skręcona bryła przecina samą siebie - zmniejsz kąt skręcenia; oryginał bez zmian.'
+        return ('Skręcona bryła przecina samą siebie (np. ścianka o zerowej grubości albo otwór dotykający krawędzi bryły) - '
+                'zmniejsz kąt albo popraw bryłę; oryginał bez zmian.')
     if report['volume'] is not None and report['volume'] >= VOLUME_TOLERANCE:
         return f'Objętość skręconej bryły różni się o {report["volume"] * 100:.2g}% - wynik odrzucony, oryginał bez zmian.'
     return (f'Skręcona powierzchnia odbiega od dokładnej o {report["deviation"]:.3g} mm (dopuszczalne {TOLERANCE:g} mm) - '

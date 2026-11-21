@@ -131,10 +131,16 @@ def _twist_placed(twist, matrix):
     origin = rotation @ np.asarray(twist['origin'], float) + translation
     direction = rotation @ np.asarray(twist['direction'], float)
     source = transformed(hist.twist_source_shape(twist['source']), rotation, translation)
+    stack = []
+    for entry in twist.get('stack') or ():                         # wcześniejsze skręcenia tego źródła - ta sama prosta, przeniesiona
+        o = rotation @ np.asarray(entry['origin'], float) + translation
+        d = rotation @ np.asarray(entry['direction'], float)
+        stack.append(dict(entry, origin=[float(c) for c in o], direction=[float(c) for c in d],
+                          axis=dict(kind='points', axis='Z', reverse=False, p=[float(c) for c in o], d=[float(c) for c in d])))
     return dict(twist, origin=[float(c) for c in origin], direction=[float(c) for c in direction],
                 axis=dict(kind='points', axis=twist['axis'].get('axis', 'Z'), reverse=False,
                           p=[float(c) for c in origin], d=[float(c) for c in direction]),
-                source=hist.twist_source(source))
+                source=hist.twist_source(source), stack=stack)
 
 
 def _remap(value, mapping):

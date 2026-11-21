@@ -79,11 +79,28 @@ def slice_triangles(vertices, triangles, origin, direction, planes):
         ws = np.where(low, np.where(tr1 > tr0, (c - tr0) / (tr1 - tr0), 1.0), np.where(tr2 > tr1, (c - tr1) / (tr2 - tr1), 0.0))
     L = v0 + (v2 - v0) * wl[:, None]
     Sp = np.where(low[:, None], v0 + (v1 - v0) * ws[:, None], v1 + (v2 - v1) * ws[:, None])
+    # wspólne wierzchołki (etap 10): punkt na krawędzi i płaszczyźnie jest ten sam dla obu sąsiednich trójkątów, a przekroje
+    # 0 i ostatni to oryginalne wierzchołki v0 / v2 - bez powtórzeń (mniej pamięci, szybsze skręcanie i rysowanie)
+    s0, s1, s2 = S[row, 0], S[row, 1], S[row, 2]
+    plane = np.clip(lo[row] + k - 1, 0, len(P) - 1)
+    first, last = k == 0, k == count[row] - 1
+    inner = ~(first | last)
+    ea_l, eb_l = np.minimum(s0, s2), np.maximum(s0, s2)
+    ea_s = np.where(low, np.minimum(s0, s1), np.minimum(s1, s2))
+    eb_s = np.where(low, np.maximum(s0, s1), np.maximum(s1, s2))
+    nv = len(V)
+    keys = np.concatenate([(ea_l[inner] * nv + eb_l[inner]) * len(P) + plane[inner],
+                           (ea_s[inner] * nv + eb_s[inner]) * len(P) + plane[inner]])
+    points = np.concatenate([L[inner], Sp[inner]])
+    unique, first_at, inverse = np.unique(keys, return_index=True, return_inverse=True)
     base = len(V)
-    total = len(row)
-    V = np.concatenate([V, L, Sp])
-    Li = base + np.arange(total)
-    Si = base + total + np.arange(total)
+    V = np.concatenate([V, points[first_at]])
+    n_inner = int(inner.sum())
+    Li = np.where(first, s0, np.where(last, s2, 0))
+    # łamana v0-v1-v2 na końcach pasa: v0 / v2, chyba że v1 leży na tym samym poziomie co koniec (wtedy przekrój wypada w v1)
+    Si = np.where(first, np.where(tr1 <= tr0, s1, s0), np.where(last, np.where(tr1 >= tr2, s1, s2), 0))
+    Li[inner] = base + inverse[:n_inner]
+    Si[inner] = base + inverse[n_inner:]
     # pasy między przekrojem k i k+1 (ten sam trójkąt)
     a = np.nonzero(k[:-1] < count[row[:-1]] - 1)[0]           # indeks przekroju k, k+1 istnieje w tym samym wierszu
     b = a + 1
@@ -97,6 +114,7 @@ def slice_triangles(vertices, triangles, origin, direction, planes):
     new = np.concatenate([tri1, tri2[~pent], tri2p[pent], tri3p[pent]])
     flip = np.concatenate([even[r], even[r][~pent], even[r][pent], even[r][pent]])
     new[flip] = new[flip][:, ::-1]                             # ta sama orientacja co trójkąt oryginalny
+    new = new[(new[:, 0] != new[:, 1]) & (new[:, 1] != new[:, 2]) & (new[:, 0] != new[:, 2])]   # zdegenerowane (wierzchołek końca pasa)
     return V, np.concatenate([keep, new])
 
 
@@ -121,15 +139,74 @@ def densify_polyline(points, origin, direction, planes):
 
 
 class SlicedMesh:
-    """Pocięta kopia siatki: wierzchołki, trójkąty i linie krawędzi gotowe do skręcania dowolnym kątem."""
+    """Pocięta kopia siatki: wierzchołki, trójkąty i linie krawędzi gotowe do skręcania dowolnym kątem.
+    Przechowywana w pojedynczej precyzji (float32 / uint32 - jak siatka wyświetlania): o połowę mniej pamięci."""
 
     def __init__(self, vertices, triangles, edges, origin, direction, planes):
-        self.vertices, self.triangles = slice_triangles(vertices, triangles, origin, direction, planes)
-        self.edges = {k: densify_polyline(p, origin, direction, planes) for k, p in (edges or {}).items()}
+        v, t = slice_triangles(vertices, triangles, origin, direction, planes)
+        self.vertices, self.triangles = v.astype(np.float32), t.astype(np.uint32)
+        self.edges = {k: densify_polyline(p, origin, direction, planes).astype(np.float32) for k, p in (edges or {}).items()}
         self.planes = list(planes)
+        # wszystkie linie krawędzi w jednej tablicy - jedno obracanie na zmianę kąta zamiast osobnego dla każdej krawędzi
+        self._edge_keys = list(self.edges)
+        lengths = [len(self.edges[k]) for k in self._edge_keys]
+        self._edge_split = np.cumsum(lengths)[:-1] if lengths else np.zeros(0, int)
+        self._edge_points = (np.concatenate([self.edges[k] for k in self._edge_keys]) if lengths and sum(lengths)
+                             else np.zeros((0, 3), np.float32))
+
+    @property
+    def nbytes(self):
+        return int(self.vertices.nbytes + self.triangles.nbytes + 2 * self._edge_points.nbytes)
 
     def twisted(self, field):
-        """(wierzchołki, linie krawędzi) po skręceniu polem rccad.twist_math.TwistField - nowe tablice."""
-        vertices = field.apply(self.vertices) if len(self.vertices) else self.vertices.copy()
-        edges = {k: field.apply(p) if len(p) else p.copy() for k, p in self.edges.items()}
-        return vertices, edges
+        """(wierzchołki, linie krawędzi) po skręceniu polem rccad.twist_math.TwistField - nowe tablice float32."""
+        vertices = field.apply(self.vertices).astype(np.float32) if len(self.vertices) else self.vertices.copy()
+        if not len(self._edge_points):
+            return vertices, {k: p.copy() for k, p in self.edges.items()}
+        moved = field.apply(self._edge_points).astype(np.float32)
+        return vertices, dict(zip(self._edge_keys, np.split(moved, self._edge_split)))
+
+
+class SliceCache:
+    """Kilka ostatnich pociętych siatek (klucz: siatka, oś, zakres, liczba warstw) - powrót do wcześniejszych ustawień
+    (np. przełączenie rozkładu tam i z powrotem, strzałka zakresu wraca) nie tnie siatki od nowa. Ograniczona liczbą
+    wpisów i łączną pamięcią, żeby duże modele nie zajmowały RAM. Wpis trzyma też siatkę źródłową (owner), więc jej
+    id() w kluczu nie może zostać użyte ponownie przez inną siatkę, dopóki wpis jest w pamięci."""
+
+    def __init__(self, entries=4, budget=256 * 2 ** 20):
+        self.entries, self.budget = entries, budget
+        self._items = []                         # [(klucz, SlicedMesh, owner)] - od najstarszego
+        self.hits = self.misses = 0
+
+    def peek(self, key):
+        """Siatka z pamięci (oznaczona jako ostatnio używana) albo None."""
+        for i, item in enumerate(self._items):
+            if item[0] == key:
+                self._items.append(self._items.pop(i))
+                self.hits += 1
+                return item[1]
+        return None
+
+    def put(self, key, value, owner=None):
+        self._items = [item for item in self._items if item[0] != key]
+        self._items.append((key, value, owner))
+        while len(self._items) > self.entries or (len(self._items) > 1 and self.nbytes > self.budget):
+            self._items.pop(0)
+
+    def get(self, key, build, owner=None):
+        value = self.peek(key)
+        if value is None:
+            self.misses += 1
+            value = build()
+            self.put(key, value, owner)
+        return value
+
+    @property
+    def nbytes(self):
+        return sum(item[1].nbytes for item in self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def clear(self):
+        self._items.clear()

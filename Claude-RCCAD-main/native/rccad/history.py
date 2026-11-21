@@ -2377,24 +2377,63 @@ def twist_params(recipe):
     return params
 
 
-def run_twist(bodies, recipe):
+def _twist_part(params, source):
+    """Pole jednego zapisanego skręcenia (z meta / stosu) - oś zapisana wprost (punkt i kierunek), zakres na źródle."""
+    from . import twist as tw
+    axis = dict(kind='points', p=list(params['origin']), d=list(params['direction']), reverse=False)
+    return tw.field(axis, source, float(params['angle']), float(params.get('range_from', 0.0)), float(params.get('range_to', 1.0)),
+                    params.get('kind', 'linear'), float(params.get('power', 2.0)), params.get('anchor', 'start'))
+
+
+def run_twist(bodies, recipe, cancel=None):
     """TWIST - skręcenie bryły (rccad.twist_occ). Przepis: id (bryła źródłowa), angle (°), axis (opis osi jak
     rccad.twist.resolve: kind, axis, p, d, reverse), origin / direction (oś wyznaczona przy zatwierdzeniu - informacyjnie),
     range_from / range_to (część długości 0..1), kind (rozkład), power, anchor ('start' / 'center' / 'end'),
     tolerance (mm - dopuszczalna odchyłka powierzchni), source (opcjonalnie: kształt źródłowy zamiast bieżącego - przebudowa
-    bryły wstawionej z biblioteki). Wynik pamięta parametry i kształt źródłowy w meta['twist'] (edycja bez kroku historii)."""
+    bryły wstawionej z biblioteki) i stack (wcześniejsze skręcenia tego źródła). Wynik pamięta parametry, kształt źródłowy
+    i stos w meta['twist'] (edycja bez kroku historii).
+
+    Ponowne skręcenie już skręconej bryły (meta['twist'] - kształt bez zmian od skręcenia) wokół tej samej osi: jedno
+    złożone skręcenie kształtu źródłowego (rccad.twist_math.CompositeField), a nie skręcanie już skręconej bryły.
+    Bryła źródłowa jest kopiowana przed liczeniem (BRepBuilderAPI_Copy) - obliczenia w wątku roboczym nie zapisują
+    niczego (np. siatki) w kształcie, który w tym czasie wyświetla okno."""
     from . import twist as tw
+    from . import twist_math as tm
     from . import twist_occ
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
     body = _body(bodies, recipe['id'])
     if body.kind != 'solid':
         raise kernel.CadError('TWIST skręca tylko bryły.')
     p = twist_params(recipe)
-    source = twist_source_shape(recipe['source']) if recipe.get('source') else body.shape
-    field = tw.field(p['axis'], source, p['angle'], p['range_from'], p['range_to'], p['kind'], p['power'], p['anchor'])
-    shape = twist_occ.twist_solid(source, field, p['tolerance'])
+    prev = (body.meta or {}).get('twist')
+    if recipe.get('source'):
+        source_text, stack = recipe['source'], list(recipe.get('stack') or [])
+    elif prev:
+        source_text = prev['source']
+        stack = [*(prev.get('stack') or []), {k: v for k, v in prev.items() if k not in ('source', 'stack')}]
+    else:
+        source_text, stack = None, []
+    source = twist_source_shape(source_text) if source_text else cq.Shape.cast(BRepBuilderAPI_Copy(body.shape.wrapped).Shape())
+    if stack:
+        o, d = tw.resolve(p['axis'], body.shape)
+        last = stack[-1]
+        if p['axis'].get('kind', 'global') in ('global', 'local') and abs(abs(float(np.dot(d, last['direction']))) - 1) < 1e-9:
+            o = np.asarray(last['origin'], float)              # oś globalna / lokalna: ta sama prosta co poprzednie skręcenie
+        axis = dict(kind='points', p=[float(c) for c in o], d=[float(c) for c in d], reverse=False)
+        new = tw.field(axis, source, p['angle'], p['range_from'], p['range_to'], p['kind'], p['power'], p['anchor'])
+        box = kernel.bounds(source)
+        try:
+            field = tm.compose([_twist_part(e, source) for e in stack] + [new], max(box.xlen, box.ylen, box.zlen))
+        except tm.TwistParamError as exc:
+            raise kernel.CadError(str(exc)) from None
+        origin, direction = new.origin, new.direction
+    else:
+        field = tw.field(p['axis'], source, p['angle'], p['range_from'], p['range_to'], p['kind'], p['power'], p['anchor'])
+        origin, direction = field.origin, field.direction
+    shape = twist_occ.twist_solid(source, field, p['tolerance'], cancel)
     result = body.changed(shape)
-    meta = dict(p, origin=[float(c) for c in field.origin], direction=[float(c) for c in field.direction],
-                source=recipe.get('source') or twist_source(source))
+    meta = dict(p, origin=[float(c) for c in origin], direction=[float(c) for c in direction],
+                source=source_text or twist_source(source), stack=stack)
     return _replace(bodies, replace(result, meta=dict(result.meta or {}, twist=meta)))
 
 

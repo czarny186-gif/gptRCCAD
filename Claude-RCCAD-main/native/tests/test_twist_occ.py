@@ -179,7 +179,7 @@ class SteppedTwistTests(unittest.TestCase):
         result, field = self.twist(blind, 90.0)
         self.assert_open(result, field, [(0, 0, 15), (0, 0, 39), (3.5, 0, 25)])
         self.assertTrue(inside(result, field.apply((0, 0, 5))))                      # pod dnem otworu - materiał
-        self.assertTrue(any(abs(f.Area() - math.pi * 16) < 1e-6 for f in result.Faces() if f.geomType() == 'PLANE'))  # płaskie dno
+        self.assertTrue(any(abs(f.Area() - math.pi * 16) < 1e-4 for f in result.Faces() if f.geomType() == 'PLANE'))  # płaskie dno (krawędź z przeciągnięcia)
         part, field = self.twist(blind, 120.0, .2, .9, 'smoothstep')
         self.assert_open(part, field, [(0, 0, 20)])
 
