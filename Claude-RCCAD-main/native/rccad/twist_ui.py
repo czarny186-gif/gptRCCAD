@@ -22,7 +22,7 @@ import numpy as np
 from dataclasses import replace
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QCheckBox
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QWidget
 
 from . import history as hist
 from . import kernel
@@ -39,6 +39,9 @@ KIND_HINTS = {'global': 'Oś X / Y / Z układu globalnego przez środek bryły.'
               'points': 'Kliknij dwa punkty osi (narożnik, punkt krawędzi albo powierzchni).',
               'edge': 'Kliknij prostą krawędź - oś biegnie wzdłuż niej.',
               'cyl': 'Kliknij powierzchnię walcową (otwór, wałek) - oś walca.'}
+DISTRIBUTION_ITEMS = (('Liniowy', 'linear', 'tw_lin'), ('Płynny', 'smoothstep', 'tw_smooth'), ('Progresywny', 'progressive', 'tw_prog'))
+ANCHOR_ITEMS = (('Początek', 'start', 'tw_astart'), ('Środek', 'center', 'tw_acenter'), ('Koniec', 'end', 'tw_aend'))
+DEFAULT_TOLERANCE = 0.01
 RING_COLOR = (.94, .6, .13, 1)
 PREVIEW_COLOR, PREVIEW_LINE = (.3, .75, .5, .8), (.05, .4, .2, 1)
 AXIS_LINE = (.94, .42, .05, 1)
@@ -74,6 +77,38 @@ class TwistTools:
         self.tx_info = _label('', 'help')
         self.tx_info.setWordWrap(True)
         lay.addWidget(self.tx_info)
+        # etap 8: pozostałe parametry kroku - zakres, rozkład, zakotwiczenie, tolerancja (zapisywane w historii)
+        self.tx_step3 = ui.StepRow(3, 'tw_lin', 'Zakres i rozkład', plain=True)
+        lay.addWidget(self.tx_step3)
+        self.tx_from = _spin(0.0, 0.0, 99.9, 1, 5)
+        self.tx_to = _spin(100.0, .1, 100.0, 1, 5)
+        for spin in (self.tx_from, self.tx_to):
+            spin.setSuffix(' %')
+        self.tx_from.setToolTip('Początek skręcanej części bryły - w procentach długości wzdłuż osi (0 % - od początku).')
+        self.tx_to.setToolTip('Koniec skręcanej części bryły - w procentach długości (100 % - do końca). Poza zakresem bryła się nie skręca.')
+        span = QWidget()
+        row = QHBoxLayout(span)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.tx_from)
+        row.addWidget(QLabel('–'))
+        row.addWidget(self.tx_to)
+        self._field(lay, 'Zakres skręcenia (% długości)', span)
+        self.tx_dist = ui.Segmented(list(DISTRIBUTION_ITEMS), 24)
+        for button, tip in zip(self.tx_dist._buttons, ('Kąt narasta równomiernie na całym zakresie.',
+                                                        'Łagodny początek i koniec skręcenia (Smoothstep).',
+                                                        'Skręcenie narasta coraz szybciej ku końcowi zakresu.')):
+            button.setToolTip(tip)
+        self._field(lay, 'Rozkład skręcenia', self.tx_dist)
+        self.tx_anchor = ui.Segmented(list(ANCHOR_ITEMS), 24)
+        for button, tip in zip(self.tx_anchor._buttons, ('Przekrój na początku osi zostaje w miejscu (domyślnie).',
+                                                          'Przekrój w połowie długości zostaje w miejscu - końce obracają się w przeciwne strony.',
+                                                          'Przekrój na końcu osi zostaje w miejscu.')):
+            button.setToolTip(tip)
+        self._field(lay, 'Zakotwiczenie (co stoi w miejscu)', self.tx_anchor)
+        self.tx_tol = _spin(DEFAULT_TOLERANCE, .001, 1.0, 3, .005)
+        self.tx_tol.setSuffix(' mm')
+        self.tx_tol.setToolTip('Największa dopuszczalna odchyłka skręconej powierzchni od dokładnego skręcenia (kontrola wyniku).')
+        self._field(lay, 'Tolerancja (mm)', self.tx_tol)
         self.tx_status = _label('', 'status')
         self.tx_status.setWordWrap(True)
         lay.addWidget(self.tx_status)
@@ -84,6 +119,7 @@ class TwistTools:
         self.tx_points = []           # punkty wskazane w trybie „2 punkty”
         self.tx_line = None           # oś wskazana krawędzią / walcem: dict(p, d, label)
         self._tx_cache = {}
+        self._tx_rebuild = None       # przebudowa bryły ze źródła zapisanego w meta['twist'] (np. wstawionej z biblioteki)
         self._tx_timer = QTimer(self)               # zmiany kąta (pole, przeciąganie pierścienia) - jeden podgląd na klatkę
         self._tx_timer.setSingleShot(True)
         self._tx_timer.setInterval(0)
@@ -92,23 +128,29 @@ class TwistTools:
         self.tx_axis.currentIndexChanged.connect(lambda *_: self._tx_refresh())
         self.tx_reverse.toggled.connect(lambda *_: self._tx_refresh())
         self.tx_kind.currentIndexChanged.connect(lambda *_: self._tx_kind_changed())
+        for spin in (self.tx_from, self.tx_to, self.tx_tol):
+            spin.valueChanged.connect(lambda *_: self._tx_refresh())
+        for seg in (self.tx_dist, self.tx_anchor):
+            seg.currentIndexChanged.connect(lambda *_: self._tx_refresh())
 
     # ---------- wejście / wybór bryły ----------
     def _twist_enter(self):
         self.twist_panel.show()
         self.view.setCursor(Qt.PointingHandCursor)
-        for widget, value in ((self.tx_angle, 90.0),):
+        for widget, value in ((self.tx_angle, 90.0), (self.tx_from, 0.0), (self.tx_to, 100.0), (self.tx_tol, DEFAULT_TOLERANCE)):
             widget.blockSignals(True)
             widget.setValue(value)
             widget.blockSignals(False)
-        for widget in (self.tx_axis, self.tx_kind, self.tx_reverse):
+        for widget in (self.tx_axis, self.tx_kind, self.tx_reverse, self.tx_dist, self.tx_anchor):
             widget.blockSignals(True)
         self.tx_axis.setCurrentIndex(2)
         self.tx_kind.setCurrentIndex(0)
         self.tx_reverse.setChecked(False)
-        for widget in (self.tx_axis, self.tx_kind, self.tx_reverse):
+        self.tx_dist.setCurrentIndex(0)
+        self.tx_anchor.setCurrentIndex(0)
+        for widget in (self.tx_axis, self.tx_kind, self.tx_reverse, self.tx_dist, self.tx_anchor):
             widget.blockSignals(False)
-        self.tx_points, self.tx_line, self._tx_cache = [], None, {}
+        self.tx_points, self.tx_line, self._tx_cache, self._tx_rebuild = [], None, {}, None
         self._tx_kind_widgets()
         solids = [i for i in self.selected if self._tx_solid(i) is not None]
         picked = solids[0] if solids else None
@@ -157,6 +199,8 @@ class TwistTools:
             self.view.set_hover_mesh(kernel.display_mesh(face) if ok else None)
 
     def _tx_set(self, bid):
+        if self._tx_rebuild is not None and self._tx_rebuild['id'] != bid:
+            self._tx_rebuild = None
         self.tx_id = bid
         self.selected = [bid] if bid else []
         self.refresh()
@@ -251,6 +295,15 @@ class TwistTools:
             spec.update(p=[float(c) for c in self.tx_line['p']], d=[float(c) for c in self.tx_line['d']])
         return spec
 
+    def _tx_base(self, body):
+        """(kształt, siatka) skręcanej bryły: bieżąca bryła albo - przy przebudowie - zapisany kształt źródłowy."""
+        rebuild = self._tx_rebuild
+        if rebuild is not None and body is not None and rebuild['id'] == body.id:
+            if rebuild.get('mesh') is None:
+                rebuild['mesh'] = kernel.display_mesh(rebuild['shape'])
+            return rebuild['shape'], rebuild['mesh']
+        return (body.shape, body.mesh) if body is not None else (None, None)
+
     def twist_axis(self):
         """(punkt, kierunek) osi skręcenia albo None, gdy oś nie jest jeszcze wskazana."""
         body = self._tx_solid(self.tx_id)
@@ -259,10 +312,11 @@ class TwistTools:
         spec = self.twist_axis_spec()
         if spec['kind'] in ('points', 'edge', 'cyl') and spec.get('p') is None:
             return None
-        key = (id(body.shape), repr(sorted(spec.items())))
+        shape = self._tx_base(body)[0]
+        key = (id(shape), repr(sorted(spec.items())))
         hit = self._tx_cache.get('axis')
         if hit is None or hit[0] != key:
-            hit = self._tx_cache['axis'] = (key, tw.resolve(spec, body.shape))
+            hit = self._tx_cache['axis'] = (key, tw.resolve(spec, shape))
         return hit[1]
 
     def twist_params(self):
@@ -271,7 +325,9 @@ class TwistTools:
         axis = self.twist_axis()
         return dict(id=self.tx_id, angle=float(self.tx_angle.value()), axis=spec['axis'], kind=spec['kind'], reverse=spec['reverse'],
                     origin=None if axis is None else [float(c) for c in axis[0]],
-                    direction=None if axis is None else [float(c) for c in axis[1]])
+                    direction=None if axis is None else [float(c) for c in axis[1]],
+                    range_from=round(self.tx_from.value() / 100.0, 6), range_to=round(self.tx_to.value() / 100.0, 6),
+                    distribution=self.tx_dist.currentData(), anchor=self.tx_anchor.currentData(), tolerance=float(self.tx_tol.value()))
 
     def _tx_check(self):
         """Komunikat błędu albo None, gdy wybór i parametry są poprawne."""
@@ -279,6 +335,8 @@ class TwistTools:
             return 'Kliknij bryłę do skręcenia.'
         if abs(self.tx_angle.value()) < 1e-9:
             return 'Kąt skręcenia musi być różny od zera.'
+        if self.tx_to.value() - self.tx_from.value() < .1:
+            return 'Zakres skręcenia: koniec musi być za początkiem.'
         kind = self.tx_kind.currentData()
         try:
             axis = self.twist_axis()
@@ -309,6 +367,9 @@ class TwistTools:
         label = {'global': f'Globalna {self.tx_axis.currentData()}', 'local': f'Lokalna {self.tx_axis.currentData()}',
                  'points': 'Przez 2 punkty', 'edge': (self.tx_line or {}).get('label', 'Krawędź'), 'cyl': (self.tx_line or {}).get('label', 'Oś walca')}[kind]
         self.tx_step2.set_state('done' if done else 'active', label + (' (odwrócona)' if self.tx_reverse.isChecked() and done else ''))
+        names = {'linear': 'liniowy', 'smoothstep': 'płynny', 'progressive': 'progresywny', 'start': 'początek', 'center': 'środek', 'end': 'koniec'}
+        self.tx_step3.set_state('done', f'{self.tx_from.value():g}–{self.tx_to.value():g} % · {names[self.tx_dist.currentData()]} · '
+                                        f'w miejscu: {names[self.tx_anchor.currentData()]}'.replace('.', ','))
         if error:
             self.tx_status.setText(error)
             return
@@ -331,7 +392,8 @@ class TwistTools:
         if body is None or axis is None:
             return None
         origin, direction = axis
-        points = body.mesh.vertices if body.mesh is not None and len(body.mesh.vertices) else [v.toTuple() for v in body.shape.Vertices()]
+        shape, mesh = self._tx_base(body)
+        points = mesh.vertices if mesh is not None and len(mesh.vertices) else [v.toTuple() for v in shape.Vertices()]
         t0, t1, radius = tw.extent(points, origin, direction)
         return origin, direction, t0, t1, radius
 
@@ -392,13 +454,14 @@ class TwistTools:
 
     # ---------- szybki podgląd skręcenia (kopia siatki wyświetlania) ----------
     def _tx_field(self):
-        """Pole skręcenia podglądu (cała długość bryły wzdłuż osi, rozkład liniowy) albo None."""
+        """Pole skręcenia podglądu (zakres, rozkład i zakotwiczenie z okna) albo None."""
         geo = self._tx_geometry()
         if geo is None or self._tx_check() is not None:
             return None
         origin, direction, t0, t1, _ = geo
         try:
-            return tm.field_for_extent(origin, direction, self.tx_angle.value(), t0, t1)
+            return tm.field_for_extent(origin, direction, self.tx_angle.value(), t0, t1, self.tx_from.value() / 100.0,
+                                       self.tx_to.value() / 100.0, self.tx_dist.currentData(), 2.0, self.tx_anchor.currentData())
         except tm.TwistParamError:
             return None
 
@@ -408,11 +471,11 @@ class TwistTools:
         if self.mode != 'twist':
             return
         body = self._tx_solid(self.tx_id)
-        field = self._tx_field() if body is not None and body.mesh is not None and len(body.mesh.triangles) else None
+        mesh = self._tx_base(body)[1]
+        field = self._tx_field() if mesh is not None and len(mesh.triangles) else None
         if field is None:
             self._tx_preview_clear()
             return
-        mesh = body.mesh
         layers = tp.layer_count(field.angle, field.kind, field.power, len(mesh.triangles))
         key = (id(mesh), field.origin, field.direction, field.start, field.end, layers)
         hit = self._tx_cache.get('sliced')
@@ -438,9 +501,82 @@ class TwistTools:
 
     # ---------- zatwierdzenie / anulowanie ----------
     def twist_recipe(self):
-        """Przepis kroku historii 'twist' (history.run_twist): bryła, kąt, oś, cała długość, rozkład liniowy."""
-        return dict(type='twist', id=self.tx_id, angle=float(self.tx_angle.value()), axis=self.twist_axis_spec(),
-                    range_from=0.0, range_to=1.0, kind='linear', power=2.0)
+        """Przepis kroku historii 'twist' (history.run_twist): bryła źródłowa, oś (opis i wyznaczony punkt / kierunek),
+        kąt, zakres, rozkład, zakotwiczenie, tolerancja; przy przebudowie - także kształt źródłowy."""
+        p = self.twist_params()
+        recipe = dict(type='twist', id=self.tx_id, angle=p['angle'], axis=self.twist_axis_spec(), origin=p['origin'],
+                      direction=p['direction'], range_from=p['range_from'], range_to=p['range_to'], kind=p['distribution'],
+                      power=2.0, anchor=p['anchor'], tolerance=p['tolerance'])
+        if self._tx_rebuild is not None and self._tx_rebuild['id'] == self.tx_id:
+            recipe['source'] = self._tx_rebuild['source']
+        return recipe
+
+    # ---------- ponowna edycja (krok historii, dwuklik w bryłę, bryła z biblioteki) ----------
+    def set_twist_params(self, params):
+        """Okno TWIST z parametrami z przepisu / meta['twist'] (bez zmiany wybranej bryły)."""
+        axis = dict(params.get('axis') or {})
+        widgets = (self.tx_angle, self.tx_from, self.tx_to, self.tx_tol, self.tx_axis, self.tx_kind, self.tx_reverse, self.tx_dist, self.tx_anchor)
+        for w in widgets:
+            w.blockSignals(True)
+        self.tx_angle.setValue(float(params.get('angle', 90.0)))
+        self.tx_from.setValue(100.0 * float(params.get('range_from', 0.0)))
+        self.tx_to.setValue(100.0 * float(params.get('range_to', 1.0)))
+        self.tx_tol.setValue(float(params.get('tolerance', DEFAULT_TOLERANCE)))
+        self.tx_kind.setCurrentIndex([k for _, k, _ in TWIST_KINDS].index(axis.get('kind', 'global')))
+        self.tx_axis.setCurrentIndex('XYZ'.index(axis.get('axis', 'Z')))
+        self.tx_reverse.setChecked(bool(axis.get('reverse')))
+        self.tx_dist.setCurrentIndex([k for _, k, _ in DISTRIBUTION_ITEMS].index(params.get('kind', 'linear')))
+        self.tx_anchor.setCurrentIndex([k for _, k, _ in ANCHOR_ITEMS].index(params.get('anchor', 'start')))
+        for w in widgets:
+            w.blockSignals(False)
+        self.tx_points, self.tx_line = [], None
+        if axis.get('p') is not None and axis.get('d') is not None:
+            p, d = np.asarray(axis['p'], float), np.asarray(axis['d'], float)
+            if axis.get('kind') == 'points':
+                self.tx_points = [p, p + d]
+            elif axis.get('kind') in ('edge', 'cyl'):
+                self.tx_line = dict(p=p, d=d, label='Krawędź (z kroku)' if axis['kind'] == 'edge' else 'Oś walca (z kroku)')
+        self._tx_cache = {}
+        self._tx_kind_widgets()
+        self._tx_refresh()
+
+    def _step_fill_twist(self, recipe):
+        """Edycja kroku historii (dwuklik w krok / bryłę, Edytuj parametry): okno z wartościami kroku na modelu sprzed
+        niego; Zastosuj zastępuje krok, dalsze kroki przeliczają się (mechanizm edycji kroków programu)."""
+        body = self._tx_solid(recipe['id'])
+        if body is None:
+            raise kernel.CadError('brak bryły')
+        if recipe.get('source'):
+            self._tx_rebuild = dict(id=body.id, source=recipe['source'], shape=hist.twist_source_shape(recipe['source']))
+        self._tx_set(body.id)
+        self.set_twist_params(recipe)
+
+    def twist_step_index(self, body_id):
+        """Numer ostatniego kroku 'twist' tej bryły w historii albo None."""
+        found = None
+        for index, (_, info) in enumerate(self.document.states()):
+            op = info.get('op') or {}
+            if op.get('type') == 'twist' and op.get('id') == body_id:
+                found = index
+        return found
+
+    def edit_twist(self, body_id):
+        """Dwuklik w skręconą bryłę: krok TWIST z historii (gdy jest - dalsze kroki zostają i się przeliczą), inaczej
+        przebudowa z kształtu źródłowego zapisanego w bryle (np. bryła wstawiona z biblioteki)."""
+        body = self._tx_solid(body_id)
+        twist = ((body.meta or {}).get('twist') if body is not None else None)
+        if twist is None or self.busy:
+            return False
+        index = self.twist_step_index(body_id)
+        if index is not None:
+            self.history_edit(index)
+            return True
+        self.set_mode('twist')
+        self._tx_rebuild = dict(id=body.id, source=twist['source'], shape=hist.twist_source_shape(twist['source']))
+        self._tx_set(body.id)
+        self.set_twist_params(twist)
+        self.toast('Bryła skręcona (np. z biblioteki): zmień parametry i kliknij Zastosuj - bryła zostanie przebudowana z kształtu sprzed skręcenia.', 6000)
+        return True
 
     def apply_twist(self):
         """Etap 5: rzeczywiste skręcenie bryły B-Rep (rccad.twist_occ) w tle, jako krok historii (cofnij / ponów, zapis).

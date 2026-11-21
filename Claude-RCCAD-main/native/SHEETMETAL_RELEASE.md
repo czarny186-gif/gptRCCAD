@@ -1,12 +1,19 @@
-# RCCAD Desktop 0.5.39 — TWIST: modele z plików STEP (etap 7)
+# RCCAD Desktop 0.5.40 — TWIST w historii: wszystkie parametry, edycja kroku, biblioteka (etap 8)
 
-- **TWIST na bryłach z importu STEP** (bez historii modelu), przez istniejący import programu: także gdy płaskie ściany są zapisane w pliku jako powierzchnie NURBS (rozpoznawanie płaszczyzn GeomLib_IsPlanarSurface) i przy większych tolerancjach z pliku (tolerancje kontroli dopasowane do bryły, dokładne całkowanie pól i objętości).
-- **Model wielobryłowy**: skręcana jest tylko wskazana bryła; gdy zaznaczone było całe złożenie, program przypomina, że skręci jedną. Pozostałe bryły, nazwy, kolory, foldery i kolejność na liście zostają bez zmian.
-- **Dalsza edycja wyniku zwykłymi narzędziami**: poprawka orientacji skręconej bryły (była oznaczona jako odwrócona - zaokrąglenia i fazy krawędzi na niej się nie udawały). Sprawdzone: odejmowanie, łączenie, część wspólna, zaokrąglenie / faza każdej krawędzi, przesuwanie, ponowny eksport STEP całego modelu, cofanie.
+- **Krok „Skręcenie (TWIST)” zapisuje wszystkie parametry**: bryłę źródłową, oś (rodzaj osi oraz wyznaczony punkt i kierunek), kąt, zakres (od–do), rozkład, tryb zakotwiczenia i tolerancję. Starsze kroki z wersji 0.5.37–0.5.39 otwierają się i przeliczają jak dawniej (zakotwiczenie na początku, tolerancja 0,01 mm).
+- **Nowe pola w okienku TWIST** (krok 3 „Zakres i rozkład”): zakres w % długości, rozkład (liniowy / płynny / progresywny), zakotwiczenie (początek / środek / koniec - który przekrój stoi w miejscu), tolerancja w mm. Podgląd na żywo uwzględnia wszystkie.
+- **Ponowna edycja**: dwuklik w krok na pasku historii albo w skręconą bryłę otwiera TWIST z parametrami kroku na modelu sprzed niego; Zastosuj zastępuje krok, dalsze kroki (np. przesunięcie) przeliczają się same; Anuluj / Esc - bez zmian. Cofnij / ponów, zapis i odczyt projektu (także kompaktowy) zachowują parametry i geometrię.
+- **Biblioteka**: skręcona bryła pamięta parametry i kształt sprzed skręcenia (przesuwane i obracane razem z nią); po wstawieniu z biblioteki dwuklik pozwala zmienić skręcenie - bryła przebudowuje się z kształtu źródłowego, a nie skręca już skręconej.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.39 — TWIST: modele z plików STEP (etap 7)
+
+- **TWIST na bryłach z importu STEP** (bez historii modelu), przez istniejący import programu: także gdy płaskie ściany są zapisane w pliku jako powierzchnie NURBS (rozpoznawanie płaszczyzn GeomLib_IsPlanarSurface) i przy większych tolerancjach z pliku (tolerancje kontroli dopasowane do bryły, dokładne całkowanie pól i objętości).
+- **Model wielobryłowy**: skręcana jest tylko wskazana bryła; gdy zaznaczone było całe złożenie, program przypomina, że skręci jedną. Pozostałe bryły, nazwy, kolory, foldery i kolejność na liście zostają bez zmian.
+- **Dalsza edycja wyniku zwykłymi narzędziami**: poprawka orientacji skręconej bryły (była oznaczona jako odwrócona - zaokrąglenia i fazy krawędzi na niej się nie udawały). Sprawdzone: odejmowanie, łączenie, część wspólna, zaokrąglenie / faza każdej krawędzi, przesuwanie, ponowny eksport STEP całego modelu, cofanie.
 
 ### 0.5.38 — TWIST: otwory, kieszenie i puste przestrzenie (etap 6)
 

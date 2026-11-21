@@ -14,6 +14,7 @@ import numpy as np
 import cadquery as cq
 from rccad import sketchmeta as sm
 import unittest
+from rccad import twist as tw, twist_occ
 from dataclasses import replace
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
@@ -3537,6 +3538,86 @@ class StudioTests(unittest.TestCase):
         # cofnij: oryginalne bryły z importu
         w.undo();self.wait();w.undo();self.wait()
         self.assertIs(w.document.get(hexa_id).shape,before[hexa_id].shape);self.assertIs(w.document.get(nurbs_id).shape,before[nurbs_id].shape)
+
+    # TWIST etap 8: wszystkie parametry w kroku historii, zapis / ponowne otwarcie (także kompaktowe), edycja kroku z
+    # przeliczeniem dalszych kroków, cofnij / ponów, dwuklik w bryłę, biblioteka (przebudowa ze źródła), starsze przepisy
+    def test_twist_stage8_history_save_reopen_edit_library(self):
+        from rccad import library
+        w=self.w
+        def corners(shape):return np.array(sorted(tuple(round(c,5)+0.0 for c in v.toTuple()) for v in shape.Vertices()))
+        box=k.box(20,30,80);a=Body('Belka',box).prepared();w.document.commit([a]);w.refresh();self.app.processEvents()
+        w.selected=[a.id];w.toggle_mode('twist');self.app.processEvents()
+        w.tx_angle.setValue(150);w.tx_from.setValue(20);w.tx_to.setValue(80);w.tx_dist.setCurrentIndex(1);w.tx_anchor.setCurrentIndex(1);w.tx_tol.setValue(.005)
+        self.app.processEvents();self.assertIsNotNone(w.twist_preview_mesh);self.assertIn('20–80 %',w.tx_step3.value.text())
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertIsNone(w.mode)
+        infos,cur=w.document.infos();tw_index=cur;op=infos[cur]['op']
+        self.assertEqual(op['type'],'twist');self.assertEqual(op['id'],a.id)
+        self.assertEqual((op['angle'],op['range_from'],op['range_to'],op['kind'],op['anchor'],op['tolerance']),(150.0,.2,.8,'smoothstep','center',.005))
+        self.assertEqual(op['axis'],dict(kind='global',axis='Z',reverse=False));np.testing.assert_allclose(op['origin'],(10,15,40));np.testing.assert_allclose(op['direction'],(0,0,1))
+        self.assertEqual(set(hist.reads(op,list(w.document.bodies))),{a.id})                            # zależność: bryła źródłowa
+        twisted=w.document.get(a.id);meta=twisted.meta['twist']
+        self.assertEqual((meta['angle'],meta['anchor'],meta['kind']),(150.0,'center','smoothstep'));self.assertTrue(meta['source'])
+        f=tw.field(op['axis'],box,150.0,.2,.8,'smoothstep',2.0,'center')
+        self.assertTrue(twist_occ.check(twisted.shape,box,f,.005)['ok'])
+        # dalszy krok zależny od skręcenia: przesunięcie
+        moved=hist.run_transform(list(w.document.bodies),dict(mode='move',id=a.id,v=(0,0,10)))
+        w.document.pending_op=dict(type='transform',mode='move',id=a.id,v=(0,0,10));w.document.commit(moved);w.refresh()
+        self.assertAlmostEqual(k.bounds(w.document.get(a.id).shape).zmin,10,5)
+        before=corners(w.document.get(a.id).shape);steps=len(w.document.states())
+        # zapis i ponowne otwarcie (zwykłe i kompaktowe): parametry i geometria bez zmian
+        folder=Path(tempfile.mkdtemp())
+        for name,compact in (('tw.rccadx',False),('tw_k.rccadx',True)):
+            path=folder/name;w.document.save(path,compact=compact) if compact else w.document.save(path)
+            doc=Document.load(path);self.assertEqual(len(doc.states()),steps)
+            np.testing.assert_allclose(corners(doc.get(a.id).shape),before,atol=1e-5)
+            self.assertEqual(doc.infos()[0][tw_index]['op'],op);self.assertEqual(doc.get(a.id).meta['twist']['anchor'],'center')
+        w.open_path(folder/'tw.rccadx');self.wait()
+        self.assertEqual(len(w.document.states()),steps);np.testing.assert_allclose(corners(w.document.get(a.id).shape),before,atol=1e-5)
+        # edycja kroku: okno z parametrami kroku, zmiana kąta i rozkładu, dalsze kroki przeliczone
+        w.history_edit(tw_index);self.app.processEvents()
+        self.assertEqual(w.mode,'twist');self.assertEqual(w.tx_id,a.id)
+        self.assertEqual((w.tx_angle.value(),w.tx_from.value(),w.tx_to.value(),w.tx_dist.currentData(),w.tx_anchor.currentData(),w.tx_tol.value()),
+                         (150.0,20.0,80.0,'smoothstep','center',.005))
+        w.tx_angle.setValue(-90);w.tx_dist.setCurrentIndex(0);self.app.processEvents()
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait();self.wait()
+        self.assertIsNone(w.mode);infos,cur=w.document.infos();self.assertEqual(len(infos),steps);self.assertEqual(cur,steps-1)
+        self.assertEqual((infos[tw_index]['op']['angle'],infos[tw_index]['op']['kind']),(-90.0,'linear'))
+        after=w.document.get(a.id).shape;self.assertAlmostEqual(k.bounds(after).zmin,10,5)        # przesunięcie przeliczone
+        g=tw.field(op['axis'],box,-90.0,.2,.8,'linear',2.0,'center')
+        np.testing.assert_allclose(corners(after),corners(twist_occ.twist_solid(box,g).translate(cq.Vector(0,0,10))),atol=1e-5)
+        # cofnij / ponów
+        w.undo();self.wait();np.testing.assert_allclose(corners(w.document.get(a.id).shape),before,atol=1e-5)
+        w.redo();self.wait();np.testing.assert_allclose(corners(w.document.get(a.id).shape),corners(after),atol=1e-5)
+        # dwuklik w skręconą bryłę: edycja jej kroku
+        with patch.object(w.view,'pick_face',return_value=(a.id,(0,0,1),(10,15,50))):w.view_double_clicked(5,5)
+        self.assertEqual(w.mode,'twist');self.assertEqual(w.tx_angle.value(),-90.0);self.assertEqual(w.document.infos()[1],tw_index-1)
+        w.cancel_twist();self.app.processEvents();self.wait()
+        self.assertEqual(w.document.infos()[1],steps-1)                                                   # Anuluj - bez zmian
+        # biblioteka: zapis, wstawienie obrócone, przebudowa ze źródła zapisanego w bryle
+        with patch('rccad.library.settings.settings_dir',return_value=folder):
+            lib=library.save_bodies([w.document.get(a.id)],library.root('object'),'Skręcona')
+            loaded=library.load_bodies('object',lib)
+        self.assertEqual(loaded[0].meta['twist']['angle'],-90.0)
+        rot=np.array([[0,-1,0],[1,0,0],[0,0,1.]]);shift=np.array([100.,0,0])
+        placed=replace(loaded[0],id='kopia').placed(k.transformed(loaded[0].shape,rot,shift),np.column_stack([rot,shift]))
+        w.document.commit([*w.document.bodies,placed.prepared()]);w.refresh();steps=len(w.document.states())
+        self.assertEqual(placed.meta['twist']['axis']['kind'],'points')
+        self.assertTrue(w.edit_twist('kopia'));self.assertEqual(w.mode,'twist');self.assertIsNotNone(w._tx_rebuild)
+        self.assertEqual(w.tx_kind.currentData(),'points');self.assertEqual(w.tx_angle.value(),-90.0)
+        w.tx_angle.setValue(45);self.app.processEvents()
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertEqual(len(w.document.states()),steps+1);self.assertIn('source',w.document.infos()[0][-1]['op'])
+        rebuilt=w.document.get('kopia').shape
+        src=k.transformed(box.translate(cq.Vector(0,0,10)),rot,shift)
+        h=tw.field(placed.meta['twist']['axis'],src,45.0,.2,.8,'linear',2.0,'center')
+        self.assertTrue(twist_occ.check(rebuilt,src,h,.005)['ok'])                                         # przebudowa ze źródła, nie skręcanie wyniku
+        self.assertAlmostEqual(rebuilt.Volume(),box.Volume(),delta=1e-3*box.Volume())
+        # starszy przepis (0.5.37-0.5.39): bez zakotwiczenia, tolerancji i osi wyznaczonej - liczy się jak dawniej
+        old=dict(type='twist',id=a.id,angle=90.0,axis=dict(kind='global',axis='Z',reverse=False),range_from=0.0,range_to=1.0,kind='linear',power=2.0)
+        out=hist.RUNNERS['twist']([Body('Belka',box,id=a.id).prepared()],old)[0]
+        self.assertTrue(any(np.allclose(v.toTuple(),(25,5,80),atol=1e-6) for v in out.shape.Vertices()))
+        self.assertEqual(out.meta['twist']['anchor'],'start');self.assertEqual(out.meta['twist']['tolerance'],.01)
 
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w

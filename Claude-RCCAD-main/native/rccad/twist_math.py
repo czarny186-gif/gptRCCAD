@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 
 DISTRIBUTIONS = ('linear', 'smoothstep', 'progressive')
+ANCHORS = ('start', 'center', 'end')   # który przekrój bryły zostaje w miejscu: początek, środek albo koniec długości
 MAX_ANGLE = 36000.0          # najwyżej 100 pełnych obrotów - ochrona przed pomyłką w polu kąta
 EPS = 1e-9
 
@@ -67,6 +68,7 @@ class TwistField:
     end: float
     kind: str = 'linear'
     power: float = 2.0
+    offset: float = 0.0          # stopnie odejmowane od kąta wszędzie (zakotwiczenie: przekrój z kątem 0 nie musi być na początku)
 
     @property
     def length(self):
@@ -75,7 +77,7 @@ class TwistField:
     def theta(self, t):
         """Kąt obrotu (radiany) w położeniu t wzdłuż osi."""
         u = (np.asarray(t, float) - self.start) / self.length
-        return np.radians(self.angle) * distribution(u, self.kind, self.power)
+        return np.radians(self.angle * distribution(u, self.kind, self.power) - self.offset)
 
     def axial(self, points):
         """Współrzędna t punktów wzdłuż osi."""
@@ -100,18 +102,18 @@ class TwistField:
 
     def inverse(self):
         """Pole odwrotne (cofa skręcenie): ten sam zakres i oś, kąt przeciwny - t nie zmienia się przy obrocie."""
-        return TwistField(self.origin, self.direction, -self.angle, self.start, self.end, self.kind, self.power)
+        return TwistField(self.origin, self.direction, -self.angle, self.start, self.end, self.kind, self.power, -self.offset)
 
 
-def make_field(origin, direction, angle, start, end, kind='linear', power=2.0):
+def make_field(origin, direction, angle, start, end, kind='linear', power=2.0, offset=0.0):
     """Sprawdza parametry i tworzy TwistField (kierunek normalizowany)."""
     try:
         o = np.asarray(origin, float).reshape(3)
         d = np.asarray(direction, float).reshape(3)
-        angle, start, end, power = float(angle), float(start), float(end), float(power)
+        angle, start, end, power, offset = float(angle), float(start), float(end), float(power), float(offset)
     except (TypeError, ValueError):
         raise TwistParamError('Parametry skręcenia muszą być liczbami (oś: trzy współrzędne).') from None
-    if not (np.isfinite(o).all() and np.isfinite(d).all() and np.isfinite([angle, start, end, power]).all()):
+    if not (np.isfinite(o).all() and np.isfinite(d).all() and np.isfinite([angle, start, end, power, offset]).all()):
         raise TwistParamError('Parametry skręcenia muszą być skończonymi liczbami.')
     n = float(np.linalg.norm(d))
     if n < EPS:
@@ -124,12 +126,14 @@ def make_field(origin, direction, angle, start, end, kind='linear', power=2.0):
         raise TwistParamError(f'Nieznany rozkład skręcenia: {kind}.')
     if kind == 'progressive' and power <= 1.0 + 1e-9:
         raise TwistParamError('Wykładnik rozkładu progresywnego musi być większy od 1.')
-    return TwistField(tuple(o), tuple(d / n), angle, start, end, kind, power)
+    return TwistField(tuple(o), tuple(d / n), angle, start, end, kind, power, offset)
 
 
-def field_for_extent(origin, direction, angle, t_min, t_max, range_from=0.0, range_to=1.0, kind='linear', power=2.0):
+def field_for_extent(origin, direction, angle, t_min, t_max, range_from=0.0, range_to=1.0, kind='linear', power=2.0, anchor='start'):
     """Pole dla bryły o zasięgu [t_min, t_max] wzdłuż osi. range_from / range_to - część długości bryły (0..1):
-    0 i 1 - cała długość; np. 0.25 i 0.75 - tylko środkowa połowa (poniżej bez obrotu, powyżej pełny kąt)."""
+    0 i 1 - cała długość; np. 0.25 i 0.75 - tylko środkowa połowa (poniżej bez obrotu, powyżej pełny kąt).
+    anchor - przekrój bryły, który zostaje w miejscu: 'start' (początek osi, domyślnie), 'center' (środek długości),
+    'end' (koniec) - reszta obraca się względem niego (różnica kątów wzdłuż bryły bez zmian)."""
     try:
         a, b = float(range_from), float(range_to)
         t_min, t_max = float(t_min), float(t_max)
@@ -141,5 +145,10 @@ def field_for_extent(origin, direction, angle, t_min, t_max, range_from=0.0, ran
         raise TwistParamError('Bryła nie ma długości wzdłuż osi skręcenia - wybierz inną oś.')
     if not (0.0 <= a < b <= 1.0):
         raise TwistParamError('Zakres skręcenia: początek i koniec między 0 a 100% długości, koniec za początkiem.')
+    if anchor not in ANCHORS:
+        raise TwistParamError(f'Nieznany tryb zakotwiczenia: {anchor}.')
     length = t_max - t_min
-    return make_field(origin, direction, angle, t_min + a * length, t_min + b * length, kind, power)
+    field = make_field(origin, direction, angle, t_min + a * length, t_min + b * length, kind, power)
+    at = {'start': t_min, 'center': (t_min + t_max) / 2, 'end': t_max}[anchor]
+    offset = float(angle * distribution((at - field.start) / field.length, kind, power))
+    return make_field(origin, direction, angle, field.start, field.end, kind, power, offset) if offset else field

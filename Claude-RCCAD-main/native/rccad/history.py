@@ -2348,17 +2348,54 @@ def tilt_face(shape, face, heights):
     return kernel.valid(result)
 
 
+TWIST_DEFAULTS = dict(range_from=0.0, range_to=1.0, kind='linear', power=2.0, anchor='start', tolerance=0.01)
+
+
+def twist_source(shape):
+    """Kształt źródłowy skręcenia zapisany jako tekst (BREP skompresowany zlib, base64) - do meta bryły i przepisu."""
+    import base64
+    import zlib
+    return base64.b64encode(zlib.compress(kernel._brep_bytes(shape), 9)).decode('ascii')
+
+
+def twist_source_shape(text):
+    import base64
+    import zlib
+    return kernel._from_brep(zlib.decompress(base64.b64decode(text)))
+
+
+def twist_params(recipe):
+    """Parametry kroku TWIST z wartościami domyślnymi (starsze przepisy z 0.5.37-0.5.39 nie mają zakotwiczenia i tolerancji)."""
+    params = dict(TWIST_DEFAULTS)
+    params.update({k: v for k, v in recipe.items() if k in TWIST_DEFAULTS and v is not None})
+    params['angle'] = float(recipe['angle'])
+    params['axis'] = dict(recipe['axis'])
+    for key in ('range_from', 'range_to', 'power', 'tolerance'):
+        params[key] = float(params[key])
+    if not 1e-5 <= params['tolerance'] <= 1.0:
+        raise kernel.CadError('Tolerancja skręcenia musi być między 0,00001 a 1 mm.')
+    return params
+
+
 def run_twist(bodies, recipe):
-    """TWIST - skręcenie bryły o stałym przekroju wzdłuż osi (rccad.twist_occ). recipe: id, angle (°), axis (opis osi jak
-    rccad.twist.resolve: kind, axis, p, d, reverse), range_from / range_to (część długości 0..1), kind (rozkład), power."""
+    """TWIST - skręcenie bryły (rccad.twist_occ). Przepis: id (bryła źródłowa), angle (°), axis (opis osi jak
+    rccad.twist.resolve: kind, axis, p, d, reverse), origin / direction (oś wyznaczona przy zatwierdzeniu - informacyjnie),
+    range_from / range_to (część długości 0..1), kind (rozkład), power, anchor ('start' / 'center' / 'end'),
+    tolerance (mm - dopuszczalna odchyłka powierzchni), source (opcjonalnie: kształt źródłowy zamiast bieżącego - przebudowa
+    bryły wstawionej z biblioteki). Wynik pamięta parametry i kształt źródłowy w meta['twist'] (edycja bez kroku historii)."""
     from . import twist as tw
     from . import twist_occ
     body = _body(bodies, recipe['id'])
     if body.kind != 'solid':
         raise kernel.CadError('TWIST skręca tylko bryły.')
-    field = tw.field(recipe['axis'], body.shape, float(recipe['angle']), float(recipe.get('range_from', 0.0)),
-                     float(recipe.get('range_to', 1.0)), recipe.get('kind', 'linear'), float(recipe.get('power', 2.0)))
-    return _replace(bodies, body.changed(twist_occ.twist_solid(body.shape, field)))
+    p = twist_params(recipe)
+    source = twist_source_shape(recipe['source']) if recipe.get('source') else body.shape
+    field = tw.field(p['axis'], source, p['angle'], p['range_from'], p['range_to'], p['kind'], p['power'], p['anchor'])
+    shape = twist_occ.twist_solid(source, field, p['tolerance'])
+    result = body.changed(shape)
+    meta = dict(p, origin=[float(c) for c in field.origin], direction=[float(c) for c in field.direction],
+                source=recipe.get('source') or twist_source(source))
+    return _replace(bodies, replace(result, meta=dict(result.meta or {}, twist=meta)))
 
 
 def run_tilt(bodies, recipe):

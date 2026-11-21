@@ -7012,7 +7012,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
 
     def view_double_clicked(self, x, y):
         """Podwójne kliknięcie ściany w trybie edycji bryły: podświetla ścianę i zaznacza wszystkie jej krawędzie (zaokrąglenie / faza na okrągło).
-        Bez narzędzia: dwuklik w koło zębate otwiera generator z jego parametrami."""
+        Bez narzędzia: dwuklik w koło zębate otwiera generator z jego parametrami, w skręconą bryłę - okno TWIST."""
         if not self.busy and self.mode == 'sketch' and self.tool == 'sfillet':
             self.pick_sketch_shape_corners(x, y)
             return
@@ -7021,6 +7021,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             body = self.document.get(hit[0]) if hit else None
             if body is not None and body.kind == 'solid' and (body.meta or {}).get('gear'):
                 self.edit_gear(body.id)
+            elif body is not None and body.kind == 'solid' and (body.meta or {}).get('twist'):
+                self.edit_twist(body.id)            # skręcona bryła: okno TWIST z parametrami (krok historii albo przebudowa)
             return
         if self.busy or self.mode != 'mod':
             return

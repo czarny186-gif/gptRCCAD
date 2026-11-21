@@ -144,13 +144,13 @@ def axial_extent(shape, origin, direction, tolerance=.05):
     return t0, t1
 
 
-def field(spec, shape, angle, range_from=0.0, range_to=1.0, kind='linear', power=2.0):
+def field(spec, shape, angle, range_from=0.0, range_to=1.0, kind='linear', power=2.0, anchor='start'):
     """Pole skręcenia (rccad.twist_math.TwistField) dla bryły: oś z opisu spec (jak resolve), zakres jako część
     długości bryły wzdłuż osi. Łączy geometrię Open CASCADE (oś, zasięg) z czystą matematyką deformacji."""
     from . import twist_math
     origin, direction = resolve(spec, shape)
     t0, t1 = axial_extent(shape, origin, direction)
     try:
-        return twist_math.field_for_extent(origin, direction, angle, t0, t1, range_from, range_to, kind, power)
+        return twist_math.field_for_extent(origin, direction, angle, t0, t1, range_from, range_to, kind, power, anchor)
     except twist_math.TwistParamError as exc:
         raise kernel.CadError(str(exc)) from None

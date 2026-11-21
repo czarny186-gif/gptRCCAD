@@ -96,6 +96,8 @@ class Body:
                 pass
             moved = replace(moved, meta=dict(moved.meta or {}, gear=self.meta['gear'], gear_place=[[float(c) for c in row] for row in place],
                                              **({'gear_pair': self.meta['gear_pair']} if self.meta.get('gear_pair') else {})))
+        if self.kind == 'solid' and self.meta and self.meta.get('twist'):
+            moved = replace(moved, meta=dict(moved.meta or {}, twist=_twist_placed(self.meta['twist'], matrix)))
         return moved
 
     def _placed_mesh(self, shape, matrix):
@@ -117,6 +119,22 @@ class Body:
         if self.meta and self.meta.get('link'):
             meta = dict(meta or {}, link=self.meta['link'])          # połączenie z innymi obiektami zostaje po zmianie kształtu
         return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False or (mesh is None and not mesh_deferred()) else mesh, meta=meta)
+
+
+def _twist_placed(twist, matrix):
+    """Dane skręcenia (meta['twist']) po sztywnym ruchu bryły: kształt źródłowy, punkt i kierunek osi przesunięte razem
+    z nią; oś zapisana wprost (2 punkty), bo oś globalna / lokalna liczona od nowa nie pasowałaby do obróconej bryły."""
+    from . import history as hist
+    from .kernel import transformed
+    m = np.asarray(matrix, float)[:3, :4]
+    rotation, translation = m[:, :3], m[:, 3]
+    origin = rotation @ np.asarray(twist['origin'], float) + translation
+    direction = rotation @ np.asarray(twist['direction'], float)
+    source = transformed(hist.twist_source_shape(twist['source']), rotation, translation)
+    return dict(twist, origin=[float(c) for c in origin], direction=[float(c) for c in direction],
+                axis=dict(kind='points', axis=twist['axis'].get('axis', 'Z'), reverse=False,
+                          p=[float(c) for c in origin], d=[float(c) for c in direction]),
+                source=hist.twist_source(source))
 
 
 def _remap(value, mapping):

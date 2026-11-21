@@ -562,6 +562,24 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         body = QPainterPath(); body.moveTo(12, 12); body.lineTo(12, 36); body.arcTo(QRectF(12, 30, 24, 12), 180, 180); body.lineTo(36, 12); body.closeSubpath()
         p.drawPath(body); p.drawEllipse(QRectF(12, 6, 24, 12))
         dash = pen(ORANGE, 2.6); dash.setStyle(Qt.DashLine); p.setPen(dash); p.drawLine(QPointF(24, 2), QPointF(24, 46))
+    elif kind in ('tw_lin', 'tw_smooth', 'tw_prog'):
+        p.setPen(pen(INK, 1.6)); p.drawLine(QPointF(8, 40), QPointF(42, 40)); p.drawLine(QPointF(8, 40), QPointF(8, 6))
+        curve = QPainterPath(); curve.moveTo(8, 40)
+        if kind == 'tw_lin':
+            curve.lineTo(40, 8)
+        elif kind == 'tw_smooth':
+            curve.cubicTo(26, 40, 22, 8, 40, 8)
+        else:
+            curve.cubicTo(28, 40, 36, 30, 40, 8)
+        p.setPen(pen(ORANGE, 3.2)); p.setBrush(Qt.NoBrush); p.drawPath(curve)
+    elif kind in ('tw_astart', 'tw_acenter', 'tw_aend'):
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawRect(QRectF(17, 6, 14, 36))
+        y = {'tw_astart': 40, 'tw_acenter': 24, 'tw_aend': 8}[kind]
+        p.setPen(pen(INK, 3.0)); p.drawLine(QPointF(9, y), QPointF(39, y))
+        for x in (11, 17, 23, 29, 35):
+            p.drawLine(QPointF(x, y), QPointF(x - 4, y + (5 if kind != 'tw_aend' else -5)))
+        p.setPen(pen(ORANGE, 2.6)); p.setBrush(Qt.NoBrush)
+        p.drawArc(QRectF(12, (6 if kind != 'tw_aend' else 30), 24, 12), 200 * 16, 220 * 16)
     elif kind in ('tw_x', 'tw_y', 'tw_z'):
         color = {'tw_x': '#e5484d', 'tw_y': '#2fa56d', 'tw_z': '#3b82f6'}[kind]
         p.setPen(pen(color, 3.2)); p.drawLine(QPointF(24, 40), QPointF(24, 12))
