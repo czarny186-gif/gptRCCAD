@@ -110,9 +110,14 @@ class TwistTools:
             widget.blockSignals(False)
         self.tx_points, self.tx_line, self._tx_cache = [], None, {}
         self._tx_kind_widgets()
-        picked = next((i for i in self.selected if self._tx_solid(i) is not None), None)
+        solids = [i for i in self.selected if self._tx_solid(i) is not None]
+        picked = solids[0] if solids else None
         self._tx_set(picked)
         self.hint('TWIST: kliknij bryłę, ustaw kąt i oś; pierścień przy bryle obraca kąt. Enter zatwierdza, Esc anuluje.')
+        if len(solids) > 1:
+            # zaznaczone kilka brył (np. całe złożenie z pliku STEP) - skręcana jest tylko jedna, reszta zostaje bez zmian
+            self.toast(f'Zaznaczono {len(solids)} brył - TWIST skręci tylko jedną: „{self.document.get(picked).name}”. '
+                       'Inną wybierzesz kliknięciem; pozostałe zostają bez zmian.', 6000)
 
     def _tx_solid(self, bid):
         body = self.document.get(bid) if bid else None

@@ -1,13 +1,19 @@
-# RCCAD Desktop 0.5.38 — TWIST: otwory, kieszenie i puste przestrzenie (etap 6)
+# RCCAD Desktop 0.5.39 — TWIST: modele z plików STEP (etap 7)
+
+- **TWIST na bryłach z importu STEP** (bez historii modelu), przez istniejący import programu: także gdy płaskie ściany są zapisane w pliku jako powierzchnie NURBS (rozpoznawanie płaszczyzn GeomLib_IsPlanarSurface) i przy większych tolerancjach z pliku (tolerancje kontroli dopasowane do bryły, dokładne całkowanie pól i objętości).
+- **Model wielobryłowy**: skręcana jest tylko wskazana bryła; gdy zaznaczone było całe złożenie, program przypomina, że skręci jedną. Pozostałe bryły, nazwy, kolory, foldery i kolejność na liście zostają bez zmian.
+- **Dalsza edycja wyniku zwykłymi narzędziami**: poprawka orientacji skręconej bryły (była oznaczona jako odwrócona - zaokrąglenia i fazy krawędzi na niej się nie udawały). Sprawdzone: odejmowanie, łączenie, część wspólna, zaokrąglenie / faza każdej krawędzi, przesuwanie, ponowny eksport STEP całego modelu, cofanie.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.38 — TWIST: otwory, kieszenie i puste przestrzenie (etap 6)
 
 - **TWIST skręca bryły z otworami przelotowymi i nieprzelotowymi, kieszeniami, pogłębieniami, stopniami i pustymi przestrzeniami wewnątrz** - gdy wszystkie ściany biegną wzdłuż osi skręcenia albo są do niej prostopadłe.
 - Bryła dzielona jest na warstwy o stałym przekroju (granice - poziomy den otworów, kieszeni i stopni). Przekrój warstwy to dokładny przekrój B-Rep (łuki zostają łukami), każda warstwa skręca się jak graniastosłup (powierzchnie B-spline z kontrolą odchyłki), warstwy łączą się operacją logiczną Open CASCADE - wspólne krawędzie i ściany są odtworzone, ściany tej samej płaszczyzny scalone.
 - Każdy otwór skręca się o lokalny kąt w swoim miejscu; otwory nie są zamykane, małe szczegóły zostają (np. otwór Ø0,4 mm), pusta przestrzeń wewnątrz zostaje osobną powłoką z właściwą orientacją.
 - Kontrola jak dotąd: poprawność, zamknięte powłoki (tyle, ile w oryginale), samoprzecięcia, objętość, odchyłka do 0,01 mm. Bryły nieobsługiwane (otwór poprzeczny, fazy, ściany ukośne, kula) - komunikat, bryła bez zmian.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.37 — TWIST: skręcanie brył B-Rep o stałym przekroju (etap 5)
 

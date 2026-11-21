@@ -245,5 +245,52 @@ class SteppedTwistTests(unittest.TestCase):
         self.assertAlmostEqual(shape.Volume(), out.shape.Volume(), delta=1e-6 * out.shape.Volume())
         self.assertEqual(len(shape.Faces()), len(out.shape.Faces()))
 
+
+class StepImportTwistTests(unittest.TestCase):
+    """Etap 7: bryły z pliku STEP - płaskie ściany zapisane jako NURBS, większe tolerancje, dalsza edycja wyniku."""
+
+    def roundtrip(self, shapes):
+        path = Path(tempfile.mkdtemp()) / 'model.step'
+        cq.exporters.export(cq.Compound.makeCompound(shapes), str(path))
+        parts = k.import_shapes(path)
+        self.assertTrue(all(kind == 'solid' for _, kind in parts))
+        return [s for s, _ in parts]
+
+    def test_nurbs_planar_faces_from_step(self):
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+        src = W().box(20, 30, 60).faces('>Z').workplane().hole(6).faces('<Z').workplane().pushPoints([(5, 8)]).hole(4, 20).val()
+        nurbs = cq.Shape.cast(BRepBuilderAPI_NurbsConvert(src.wrapped, True).Shape())
+        shape = self.roundtrip([nurbs])[0]
+        self.assertTrue(all(f.geomType() == 'BSPLINE' for f in shape.Faces()))
+        field = tw.field(Z, shape, 90.0)
+        result = to.twist_solid(shape, field)
+        report = to.check(result, shape, field)
+        self.assertTrue(report['ok'] and report['forward'], report)
+        self.assertEqual(k.point_state(result, field.apply((0, 0, 0))), 'out')            # otwór przelotowy
+        self.assertEqual(k.point_state(result, field.apply((5, -8, -25))), 'out')         # otwór nieprzelotowy od spodu
+
+    def test_larger_tolerance_from_step(self):
+        from OCP.ShapeFix import ShapeFix_ShapeTolerance
+        shape = self.roundtrip([W().polygon(6, 30).extrude(50).val()])[0]
+        ShapeFix_ShapeTolerance().LimitTolerance(shape.wrapped, 1e-4, 1e-4)
+        ShapeFix_ShapeTolerance().SetTolerance(shape.wrapped, 1e-4)
+        field = tw.field(Z, shape, 120.0)
+        self.assertTrue(to.check(to.twist_solid(shape, field), shape, field)['ok'])
+
+    def test_result_is_forward_and_editable(self):
+        for shape in (k.box(20, 30, 80), W().polygon(6, 30).extrude(50).faces('>Z').workplane().hole(8).val()):
+            result = to.twist_solid(shape, tw.field(Z, shape, 90.0))
+            self.assertEqual(result.wrapped.Orientation().name, 'TopAbs_FORWARD')
+            faces = result.Faces()
+            for i, e in enumerate(result.Edges()):                                         # każda krawędź da się zaokrąglić
+                if sum(1 for f in faces if any(e.isSame(x) for x in f.Edges())) < 2:
+                    continue                                                               # szew powierzchni otworu - nie krawędź
+                rounded = k.blend(result, {i}, .5, 'fillet')
+                self.assertTrue(k.is_valid(rounded) and 0 < rounded.Volume() < result.Volume(), i)
+            tool = k.box(10, 10, 200).translate(cq.Vector(0, 0, -50))
+            for op in ('subtract', 'union', 'intersect'):
+                out = k.boolean(op, result, [tool])
+                self.assertTrue(k.is_valid(out) and out.Volume() > 0, op)
+
 if __name__ == '__main__':
     unittest.main()

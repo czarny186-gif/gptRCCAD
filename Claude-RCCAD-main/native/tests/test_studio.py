@@ -3475,6 +3475,69 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.mode,'twist');self.assertIs(w.document.get(b.id).shape,shape_b);self.assertEqual(len(w.document.states()),steps+1)
         w.cancel_twist()
 
+    # TWIST etap 7: model wielobryłowy z importu STEP - skręcona tylko wybrana bryła, nazwy / kolory / folder zostają,
+    # dalsza edycja (operacje logiczne, zaokrąglenie, przesunięcie), ponowny eksport STEP, cofanie
+    def test_twist_stage7_imported_step_assembly(self):
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+        w=self.w;W=cq.Workplane
+        post=W().box(20,30,80).faces('>Z').workplane().hole(6,30).val()
+        hexa=W().polygon(6,30).extrude(50).val().translate(cq.Vector(60,0,0))
+        cube=W().box(10,10,10).val().translate(cq.Vector(0,60,0))
+        nurbs=cq.Shape.cast(BRepBuilderAPI_NurbsConvert(W().box(20,30,60).faces('>Z').workplane().hole(6).val().translate(cq.Vector(0,-60,0)).wrapped,True).Shape())
+        folder=Path(tempfile.mkdtemp());src=folder/'zlozenie.step'
+        cq.exporters.export(cq.Compound.makeCompound([post,hexa,cube,nurbs]),str(src))
+        with patch('rccad.studio.QFileDialog.getOpenFileName',return_value=(str(src),'')):w.import_model()
+        self.wait()
+        parts=list(w.document.bodies);self.assertEqual(len(parts),4);self.assertTrue(all(b.folder=='zlozenie' for b in parts))
+        self.assertEqual(len({b.color for b in parts}),4);steps=len(w.document.states())
+        before={b.id:b for b in parts}
+        hexa_id=min(parts,key=lambda b:abs(b.shape.Center().x-60)).id
+        nurbs_id=min(parts,key=lambda b:abs(b.shape.Center().y+60)).id
+        self.assertTrue(all(f.geomType()=='BSPLINE' for f in w.document.get(nurbs_id).shape.Faces()))
+        # całe złożenie zaznaczone - skręcana tylko jedna bryła, wybór kliknięciem
+        w.selected=[b.id for b in parts]
+        with patch.object(w,'toast') as toast:w.toggle_mode('twist');self.app.processEvents()
+        self.assertIn('tylko jedną',str(toast.call_args_list));self.assertEqual(w.selected,[w.tx_id])
+        with patch.object(w.view,'pick_body',return_value=hexa_id):w.view_clicked(5,5,False,False)
+        self.assertEqual(w.tx_id,hexa_id);self.app.processEvents()
+        w.tx_angle.setValue(120)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertIsNone(w.mode);self.assertEqual(len(w.document.states()),steps+1)
+        twisted=w.document.get(hexa_id);old=before[hexa_id]
+        self.assertIsNot(twisted.shape,old.shape);self.assertAlmostEqual(twisted.shape.Volume(),old.shape.Volume(),delta=1e-4*old.shape.Volume())
+        self.assertEqual((twisted.name,twisted.color,twisted.folder,twisted.visible),(old.name,old.color,old.folder,old.visible))
+        for i,b in before.items():
+            if i!=hexa_id:self.assertIs(w.document.get(i),b)                                  # pozostałe bryły nietknięte
+        self.assertEqual([b.id for b in w.document.bodies],[b.id for b in parts])             # kolejność / struktura listy
+        # bryła z płaskimi ścianami NURBS (tak zapisują niektóre programy)
+        w.selected=[nurbs_id];w.toggle_mode('twist');self.app.processEvents()
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier));self.wait()
+        self.assertIsNone(w.mode);self.assertEqual(len(w.document.states()),steps+2)
+        self.assertEqual(k.point_state(w.document.get(nurbs_id).shape,(0,-60,0)),'out')    # otwór przelotowy został
+        # dalsza edycja zwykłymi narzędziami: operacje logiczne, przesunięcie, zaokrąglenie krawędzi podstawy
+        cube_id=min(parts,key=lambda b:abs(b.shape.Center().y-60)).id
+        tool=Body('Narzędzie',k.box(10,10,100).translate(cq.Vector(55,-5,-10))).prepared()
+        bodies=[*w.document.bodies,tool]
+        cut=hist.run_bool(bodies,dict(op='subtract',base=hexa_id,tools=[tool.id]))
+        shape=next(b for b in cut if b.id==hexa_id).shape
+        self.assertTrue(k.is_valid(shape));self.assertLess(shape.Volume(),twisted.shape.Volume())
+        uni=hist.run_bool(bodies,dict(op='union',base=hexa_id,tools=[tool.id]))
+        self.assertTrue(k.is_valid(next(b for b in uni if b.id==hexa_id).shape))
+        com=hist.run_bool(bodies,dict(op='intersect',base=hexa_id,tools=[tool.id]))
+        common=next(b for b in com if b.id==hexa_id).shape;self.assertTrue(k.is_valid(common));self.assertGreater(common.Volume(),0)
+        moved=hist.run_transform(list(w.document.bodies),dict(mode='move',id=hexa_id,v=(0,0,25)))
+        self.assertAlmostEqual(k.bounds(next(b for b in moved if b.id==hexa_id).shape).zmin,25,6)
+        top=max(range(len(twisted.shape.Edges())),key=lambda i:twisted.shape.Edges()[i].Center().z)
+        filleted=k.blend(twisted.shape,{top},1.0,'chamfer')
+        self.assertTrue(k.is_valid(filleted));self.assertLess(filleted.Volume(),twisted.shape.Volume())
+        # ponowny eksport STEP całego modelu i import
+        out=folder/'po_twist.step';k.export_shapes([b.shape for b in w.document.bodies],out)
+        again=k.import_shapes(out);self.assertEqual(len(again),4)
+        vols=sorted(round(s.Volume(),2) for s,_ in again);self.assertEqual(vols,sorted(round(b.shape.Volume(),2) for b in w.document.bodies))
+        # cofnij: oryginalne bryły z importu
+        w.undo();self.wait();w.undo();self.wait()
+        self.assertIs(w.document.get(hexa_id).shape,before[hexa_id].shape);self.assertIs(w.document.get(nurbs_id).shape,before[nurbs_id].shape)
+
     def test_tilt_face_with_arrows_stretches_the_body_and_close_cancels(self):
         w=self.w
         a=Body('A',k.box(20,10,10)).prepared();w.document.commit([a]);w.refresh()

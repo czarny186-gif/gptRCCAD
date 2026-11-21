@@ -52,6 +52,60 @@ def _axial(points, origin, direction):
 
 
 # ---------------------------------------------------------------------------------------------- rozpoznanie graniastosłupa
+def _volume(shape):
+    """Objętość z całkowaniem adaptacyjnym (eps 1e-9) - dokładna także dla ścian B-spline / NURBS z plików STEP."""
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape.wrapped, props, 1e-9, True)
+    return props.Mass()
+
+
+def _area(face):
+    """Pole ściany z całkowaniem adaptacyjnym (jak _volume)."""
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face.wrapped, props, 1e-9, True)
+    return props.Mass()
+
+
+def _tolerances(solid):
+    """(rozmiar, tolerancja liniowa, tolerancja kątowa) dla bryły - także z pliku STEP, gdzie tolerancje ścian i krawędzi
+    bywają większe niż w bryłach RCCAD (ShapeAnalysis_ShapeTolerance: największa tolerancja w bryle)."""
+    from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
+    box = kernel.bounds(solid)
+    size = max(box.xlen, box.ylen, box.zlen, 1.0)
+    shape_tol = ShapeAnalysis_ShapeTolerance().Tolerance(solid.wrapped, 1)
+    lin = max(1e-6, 1e-7 * size, 2.0 * shape_tol)
+    return size, lin, max(1e-6, 2.0 * lin / size)
+
+
+def _plane_normal(face, lin):
+    """Normalna płaskiej ściany (PLANE albo powierzchnia B-spline / NURBS, która jest płaszczyzną - tak zapisują
+    płaskie ściany niektóre programy w STEP; GeomLib_IsPlanarSurface) albo None."""
+    if face.geomType() == 'PLANE':
+        return np.asarray(face.normalAt(face.Center()).toTuple(), float)
+    if face.geomType() not in ('BSPLINE', 'BEZIER', 'OFFSET', 'OTHER'):
+        return None
+    from OCP.BRep import BRep_Tool
+    from OCP.GeomLib import GeomLib_IsPlanarSurface
+    planar = GeomLib_IsPlanarSurface(BRep_Tool.Surface_s(face.wrapped), lin)
+    if not planar.IsPlanar():
+        return None
+    a = planar.Plan().Axis().Direction()
+    return np.array([a.X(), a.Y(), a.Z()], float)
+
+
+def _cap_level(face, origin, d, lin, ang):
+    """Położenie t płaskiej ściany prostopadłej do osi albo None."""
+    n = _plane_normal(face, lin)
+    if n is None or abs(abs(float(n @ d)) - 1) > ang:
+        return None
+    ft = _axial([v.toTuple() for v in face.Vertices()] or [face.Center().toTuple()], origin, d)
+    return float(ft.mean()) if np.ptp(ft) < lin else None
+
+
 def prism_profile(shape, origin, direction, tol=1e-6):
     """(dolna podstawa - cq.Face, t0, t1) dla bryły o stałym przekroju wzdłuż osi albo TwistError z opisem."""
     solids = shape.Solids() if hasattr(shape, 'Solids') else []
@@ -59,8 +113,8 @@ def prism_profile(shape, origin, direction, tol=1e-6):
         raise TwistError('TWIST skręca jedną bryłę - ten obiekt nie jest pojedynczą bryłą.')
     solid = solids[0]
     d = np.asarray(direction, float)
-    size = max(kernel.bounds(solid).xlen, kernel.bounds(solid).ylen, kernel.bounds(solid).zlen, 1.0)
-    lin = max(tol, 1e-7 * size)
+    size, lin, ang = _tolerances(solid)
+    lin = max(lin, tol)
     t = _axial([v.toTuple() for v in solid.Vertices()], origin, d)
     if not len(t):
         raise TwistError('Bryła bez wierzchołków (np. kula lub torus) - TWIST obsługuje na razie tylko graniastosłupy wzdłuż osi.')
@@ -69,32 +123,31 @@ def prism_profile(shape, origin, direction, tol=1e-6):
         raise TwistError('Bryła nie ma długości wzdłuż osi skręcenia - wybierz inną oś.')
     caps = {0: [], 1: []}
     for face in solid.Faces():
-        if face.geomType() == 'PLANE':
-            n = np.asarray(face.normalAt(face.Center()).toTuple(), float)
-            ft = _axial([v.toTuple() for v in face.Vertices()] or [face.Center().toTuple()], origin, d)
-            if abs(abs(float(n @ d)) - 1) < 1e-7 and np.ptp(ft) < lin:
-                if abs(float(ft[0]) - t0) < lin:
-                    caps[0].append(face)
-                    continue
-                if abs(float(ft[0]) - t1) < lin:
-                    caps[1].append(face)
-                    continue
-        if not _parallel_to_axis(face, d):
+        level = _cap_level(face, origin, d, lin, ang)
+        if level is not None:
+            if abs(level - t0) < lin:
+                caps[0].append(face)
+                continue
+            if abs(level - t1) < lin:
+                caps[1].append(face)
+                continue
+        if not _parallel_to_axis(face, d, ang):
             raise TwistError('TWIST obsługuje na razie tylko bryły o stałym przekroju wzdłuż osi skręcenia '
                              '(np. prostopadłościan, graniastosłup) - ta bryła ma ściany ukośne albo zmienny przekrój względem tej osi.')
     if len(caps[0]) != 1 or len(caps[1]) != 1:
         raise TwistError('Bryła nie ma dwóch płaskich podstaw prostopadłych do osi skręcenia - wybierz oś wzdłuż graniastosłupa.')
     bottom, top = caps[0][0], caps[1][0]
-    area = bottom.Area()
-    if abs(top.Area() - area) > 1e-6 * max(area, 1.0) or abs(solid.Volume() - area * (t1 - t0)) > 1e-6 * max(solid.Volume(), 1.0):
+    area = _area(bottom)
+    rel = max(1e-6, 4 * lin / size)
+    if abs(_area(top) - area) > rel * max(area, 1.0) or abs(_volume(solid) - area * (t1 - t0)) > rel * max(_volume(solid), 1.0):
         raise TwistError('Przekrój bryły zmienia się wzdłuż osi skręcenia - TWIST obsługuje na razie tylko stały przekrój.')
     shift = np.asarray(top.Center().toTuple(), float) - np.asarray(bottom.Center().toTuple(), float)
-    if np.linalg.norm(shift - d * (t1 - t0)) > max(1e-5, 1e-7 * size):
+    if np.linalg.norm(shift - d * (t1 - t0)) > max(1e-5, 4 * lin):
         raise TwistError('Podstawy bryły są przesunięte względem osi skręcenia (graniastosłup pochyły) - wybierz oś wzdłuż bryły.')
     return bottom, t0, t1
 
 
-def _parallel_to_axis(face, d):
+def _parallel_to_axis(face, d, ang=1e-6):
     """Ściana boczna graniastosłupa: normalna prostopadła do osi w siatce punktów ściany (BRepLProp przez cadquery)."""
     from OCP.BRepGProp import BRepGProp_Face
     from OCP.gp import gp_Pnt, gp_Vec
@@ -107,7 +160,7 @@ def _parallel_to_axis(face, d):
             length = normal.Magnitude()
             if length < 1e-12:
                 continue                              # punkt osobliwy (np. biegun) - pomijany
-            if abs(float(np.dot((normal.X(), normal.Y(), normal.Z()), d))) > 1e-6 * length:
+            if abs(float(np.dot((normal.X(), normal.Y(), normal.Z()), d))) > ang * length:
                 return False
     return True
 
@@ -205,7 +258,7 @@ def _sew(faces, tolerance):
         return None
     raw = BRepBuilderAPI_MakeSolid(shell).Solid()
     BRepLib.OrientClosedSolid_s(raw)                 # ściany zorientowane na zewnątrz
-    return cq.Shape.cast(raw)
+    return _forward(cq.Shape.cast(raw))
 
 
 def _twisted_faces(section, ta, tb, field, o, d, radius):
@@ -226,6 +279,31 @@ def _guide_radius(shape, o, d):
     pts = np.array([v.toTuple() for v in shape.Vertices()], float)
     radial = np.linalg.norm((pts - o) - np.outer((pts - o) @ d, d), axis=1) if len(pts) else np.zeros(1)
     return max(float(radial.max()), .1 * size, 1.0)
+
+
+def _forward(solid):
+    """Bryła z orientacją FORWARD bryły i powłok - każda ściana z orientacją wypadkową (jak widać ją z bryły).
+    BRepLib.OrientClosedSolid może zostawić bryłę oznaczoną REVERSED: objętość i BRepCheck są wtedy poprawne, ale
+    kolejne operacje (np. zaokrąglanie krawędzi) liczą ją jak wywróconą na lewą stronę."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS, TopoDS_Shell
+    builder = BRep_Builder()
+    maker = BRepBuilderAPI_MakeSolid()
+    shells = TopExp_Explorer(solid.wrapped, TopAbs_SHELL)
+    while shells.More():
+        shell = TopoDS_Shell()
+        builder.MakeShell(shell)
+        faces = TopExp_Explorer(shells.Current(), TopAbs_FACE)   # orientacja ściany złożona z orientacji bryły i powłoki
+        while faces.More():
+            builder.Add(shell, faces.Current())
+            faces.Next()
+        shell.Closed(True)
+        maker.Add(shell)
+        shells.Next()
+    return cq.Shape.cast(TopoDS.Solid_s(maker.Solid()))
 
 
 def twist_solid(shape, field: tm.TwistField, tolerance=TOLERANCE):
@@ -261,18 +339,14 @@ def stepped_layers(shape, origin, direction, prism_error=None):
     solid = solids[0]
     d = np.asarray(direction, float)
     o = np.asarray(origin, float)
-    box = kernel.bounds(solid)
-    size = max(box.xlen, box.ylen, box.zlen, 1.0)
-    lin = max(1e-6, 1e-7 * size)
+    size, lin, ang = _tolerances(solid)
     levels = []
     for face in solid.Faces():
-        if face.geomType() == 'PLANE':
-            n = np.asarray(face.normalAt(face.Center()).toTuple(), float)
-            ft = _axial([v.toTuple() for v in face.Vertices()] or [face.Center().toTuple()], o, d)
-            if abs(abs(float(n @ d)) - 1) < 1e-7 and np.ptp(ft) < lin:
-                levels.append(float(ft.mean()))
-                continue
-        if not _parallel_to_axis(face, d):
+        level = _cap_level(face, o, d, lin, ang)
+        if level is not None:
+            levels.append(level)
+            continue
+        if not _parallel_to_axis(face, d, ang):
             raise TwistError('TWIST obsługuje bryły z otworami, kieszeniami i stopniami tylko wtedy, gdy wszystkie ich ściany '
                              'biegną wzdłuż osi skręcenia albo są do niej prostopadłe - ta bryła ma ściany ukośne, zaokrąglone '
                              'w poprzek osi albo otwór poprzeczny. Bryła bez zmian.')
@@ -307,13 +381,14 @@ def _section(solid, o, d, t, reach):
     common = BRepAlgoAPI_Common(solid.wrapped, disc)
     if not common.IsDone():
         raise TwistError('Nie udało się wyznaczyć przekroju bryły - bryła bez zmian.')
-    return [f for f in cq.Shape.cast(common.Shape()).Faces() if f.Area() > 1e-12]
+    return [f for f in cq.Shape.cast(common.Shape()).Faces() if _area(f) > 1e-12]
 
 
 def _check_layers(solid, layers):
     """Warstwy odtwarzają bryłę: suma objętości warstw (pole przekroju × wysokość) równa objętości bryły."""
-    total = sum(sum(f.Area() for f in sections) * (tb - ta) for ta, tb, sections in layers)
-    if abs(total - solid.Volume()) > 1e-6 * max(solid.Volume(), 1.0):
+    total = sum(sum(_area(f) for f in sections) * (tb - ta) for ta, tb, sections in layers)
+    volume = _volume(solid)
+    if abs(total - volume) > 1e-6 * max(volume, 1.0):
         raise TwistError('Przekrój bryły zmienia się w sposób, którego TWIST jeszcze nie obsługuje (ściany ukośne do osi) - bryła bez zmian.')
 
 
@@ -329,7 +404,7 @@ def _twist_layers(shape, layers, field, o, d, tolerance):
             piece = None
             for sew_tol in (1e-6, 1e-5, 1e-4):
                 piece = _sew(faces, sew_tol)
-                if piece is not None and _piece_ok(piece, section.Area() * (tb - ta)):
+                if piece is not None and _piece_ok(piece, _area(section) * (tb - ta)):
                     break
                 piece = None
             if piece is None:
@@ -344,7 +419,7 @@ def _twist_layers(shape, layers, field, o, d, tolerance):
 
 def _piece_ok(piece, volume):
     from OCP.BRepCheck import BRepCheck_Analyzer
-    return bool(BRepCheck_Analyzer(piece.wrapped, True).IsValid()) and abs(piece.Volume() - volume) < 1e-3 * max(volume, 1e-9)
+    return bool(BRepCheck_Analyzer(piece.wrapped, True).IsValid()) and abs(_volume(piece) - volume) < 1e-3 * max(volume, 1e-9)
 
 
 def _fuse(pieces):
@@ -373,7 +448,7 @@ def _fuse(pieces):
     solids = shape.Solids()
     if len(solids) != 1:
         raise TwistError('Skręcone warstwy nie tworzą jednej bryły - bryła bez zmian.')
-    return solids[0]
+    return _forward(solids[0])
 
 
 # ---------------------------------------------------------------------------------------------- kontrola
@@ -386,7 +461,9 @@ def check(result, original, field, tolerance=TOLERANCE):
     report = dict(valid=False, solids=0, closed=False, self=False, volume=None, deviation=None, ok=False)
     if result is None:
         return report
+    from OCP.TopAbs import TopAbs_FORWARD
     report['valid'] = bool(BRepCheck_Analyzer(result.wrapped, True).IsValid())
+    report['forward'] = all(s.wrapped.Orientation() == TopAbs_FORWARD for s in result.Solids())
     solids = result.Solids()
     shells = [sh for s in solids for sh in s.Shells()]
     report['solids'] = len(solids)
@@ -394,10 +471,10 @@ def check(result, original, field, tolerance=TOLERANCE):
     report['shells'] = len(shells)
     report['closed'] = len(shells) == expected and all(BRep_Tool.IsClosed_s(sh.wrapped) for sh in shells)
     report['self'] = bool(BRepAlgoAPI_Check(result.wrapped, True, True).IsValid()) if report['valid'] else False
-    v0, v1 = original.Volume(), result.Volume()
+    v0, v1 = _volume(original), _volume(result)
     report['volume'] = abs(v1 - v0) / max(abs(v0), 1e-12)
     report['deviation'] = deviation(result, original, field)
-    report['ok'] = (report['valid'] and report['solids'] == 1 and report['closed'] and report['self'] and v1 > 0
+    report['ok'] = (report['valid'] and report['forward'] and report['solids'] == 1 and report['closed'] and report['self'] and v1 > 0
                     and report['volume'] < VOLUME_TOLERANCE and report['deviation'] <= tolerance)
     return report
 
@@ -455,7 +532,7 @@ def deviation(result, original, field):
 def _failure(report):
     if report is None:
         return 'Nie udało się zamknąć skręconej bryły (ściany się nie zszyły) - oryginał bez zmian.'
-    if not report['valid'] or report['solids'] != 1 or not report['closed']:
+    if not report['valid'] or not report.get('forward', True) or report['solids'] != 1 or not report['closed']:
         return 'Skręcona bryła nie jest poprawna (Open CASCADE: BRepCheck / powłoka niezamknięta) - oryginał bez zmian.'
     if not report['self']:
         return 'Skręcona bryła przecina samą siebie - zmniejsz kąt skręcenia; oryginał bez zmian.'
