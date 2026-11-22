@@ -152,9 +152,9 @@ class StudioTests(unittest.TestCase):
 
     def test_surface_tool_buttons_are_distinct_and_next_to_new_sketch(self):
         w=self.w;w.set_tab('Szkic');w._layout_overlays()
-        keys=('sketch','wrapsketch','wrapcorner','matchsize','surface')
+        keys=('sketch','wrapsketch','wrapcorner','matchsize','sfillet','surface')       # 0.5.43: zaokrąglenie narożników za Wyrównaj rozmiar
         self.assertEqual([b for b in keys],[b for b in w._tab_tools('Szkic')])
-        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),5)
+        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),6)
         self.assertEqual([w.tools[key].x() for key in keys],sorted(w.tools[key].x() for key in keys))
 
     def test_surface_hover_shows_point_and_corner_hover_shows_edge(self):
@@ -4067,6 +4067,24 @@ class StudioTests(unittest.TestCase):
         w.redo();self.wait();self.assertEqual(len(w.document.get(src.id).shape.Edges()),6)                 # ponów: krok przeliczony z przepisu
         click((20,0,0));self.assertTrue(w.sf)
         w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertEqual(w.sf,{});self.assertEqual(w.mode,'sketch')
+
+    # 0.5.43: Zaokrąglenie / faza narożników na górnym pasku (zakładka Szkic, za Wyrównaj rozmiar), nie na pasku kształtów szkicu
+    def test_sketch_fillet_button_on_top_bar(self):
+        import rccad.studio as st
+        w=self.w
+        self.assertEqual(st.TABS['Szkic'][st.TABS['Szkic'].index('matchsize')+1],'sfillet');self.assertIn('sfillet',st.FAVORITE_TOOLS)
+        self.assertIn('sfillet',w.tools);self.assertNotIn('sfillet',w.shape_buttons)
+        self.assertTrue(w._tool_name('sfillet').startswith('Zaokrąglenie'))
+        self.sketch('rect',(0,0),(20,10));src=w.document.bodies[0]
+        w.set_mode(None);w.selected=[src.id];w.tools['sfillet'].click();self.app.processEvents()   # zaznaczony szkic: od razu jego szkic i narzędzie
+        self.assertEqual((w.mode,w.tool),('sketch','sfillet'));self.assertTrue(w.sf_panel.isVisible());self.assertTrue(w.tools['sfillet'].isChecked())
+        w.tools['sfillet'].click();self.assertEqual((w.mode,w.tool),('sketch',None));self.assertFalse(w.sf_panel.isVisible())
+        w.tools['sfillet'].click();self.assertEqual(w.tool,'sfillet')
+        w.set_mode(None);self.assertFalse(w.tools['sfillet'].isChecked())
+        w.selected=[];w.tools['sfillet'].click();self.assertEqual(w.mode,'plane')                 # bez zaznaczenia: wybór płaszczyzny
+        w.plane_picked('XY');self.app.processEvents()
+        self.assertEqual((w.mode,w.tool),('sketch','sfillet'));self.assertTrue(w.sf_panel.isVisible())
+        self.assertEqual(w._tab,'Szkic')
 
     # 0.4.65: szkic dokładnie po obrysie ściany bryły - ofset wybiera linię szkicu, nie krawędź bryły
     def test_sketch_offset_on_face_outline(self):

@@ -1,4 +1,13 @@
-# RCCAD Desktop 0.5.42 — TWIST: optymalizacja i testy końcowe (etap 10)
+# RCCAD Desktop 0.5.43 — Zaokrąglenie narożników szkicu na górnym pasku
+
+- **Zaokrąglenie / faza narożników szkicu przeniesione na górny pasek** (zakładka Szkic, zaraz za „Wyrównaj rozmiar”). Boczny pasek kształtów szkicu jest o jeden przycisk krótszy - ostatnie narzędzie znów mieści się nad paskiem zadań Windows.
+- W otwartym szkicu przycisk włącza / wyłącza narzędzie; poza szkicem otwiera szkic zaznaczonego kształtu (od razu z narzędziem) albo prosi o wskazanie płaszczyzny. Można je też dodać do Ulubionych. Działanie narzędzia bez zmian.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.42 — TWIST: optymalizacja i testy końcowe (etap 10)
 
 - **Anulowanie długich obliczeń**: Esc albo Anuluj w trakcie skręcania przerywa liczenie od razu (między krokami Open CASCADE), bryła zostaje bez zmian. Bryła źródłowa jest kopiowana przed liczeniem w tle - wątek roboczy nie zapisuje nic w kształcie, który wyświetla okno.
 - **Szybsze skręcanie dużych brył**: kontrola odchyłki rzutuje punkty tylko na pobliskie ściany (np. 9,7 s → 0,8 s), bryły z otworami nieprzelotowymi i kieszeniami zszywane od razu w całość bez operacji logicznej; przy wyniku, którego inna tolerancja zszycia nie poprawi, bez zbędnych powtórzeń.
@@ -6,10 +15,6 @@
 - **Ponowne skręcanie tej samej bryły** wokół tej samej osi: jedno złożone skręcenie kształtu źródłowego (kąty się sumują) - wcześniej było odrzucane. Inna oś - komunikat.
 - Poprawka: skręcenie nie pomija fragmentu, w którym dwa skręcenia mają ten sam kąt na końcach i w środku (złożenia).
 - Komunikat o samoprzecięciu podpowiada też przyczynę (ścianka o zerowej grubości, otwór dotykający krawędzi).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.41 — TWIST: uchwyty zakresu i gładkie przejścia (etap 9)
 

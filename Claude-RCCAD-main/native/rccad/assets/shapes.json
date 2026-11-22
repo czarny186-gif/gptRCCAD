@@ -133,13 +133,6 @@
   "variant": false
  },
  {
-  "shape": "sfillet",
-  "title": "Zaokrąglenie / faza narożników szkicu",
-  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M5 27V14a9 9 0 0 1 9-9h13\"></path><path d=\"M5 10V5h5\" stroke-dasharray=\"2 2\"></path></svg>",
-  "group": null,
-  "variant": false
- },
- {
   "shape": "trim",
   "title": "Nożyczki — usuń fragment pomiędzy punktami przecięcia",
   "svg": "<svg viewBox=\"0 0 32 32\"><circle cx=\"8\" cy=\"24\" r=\"4\"></circle><circle cx=\"23\" cy=\"24\" r=\"4\"></circle><path d=\"M11 21L27 5M20 21L5 5M14 18l5-5\"></path></svg>",

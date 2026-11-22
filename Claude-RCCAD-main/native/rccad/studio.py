@@ -204,7 +204,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'sfillet', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear', 'gearpair', 'gearsim'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -480,6 +480,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                  ('wrapsketch', ui.style_icon('wrapsketch', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
                  ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
                  ('matchsize', ui.style_icon('matchsize', 38), 'Wyrównaj rozmiar — takie same kształty przyjmują wymiary wzorca'),
+                 ('sfillet', ui.style_icon('s_sfillet', 38), 'Zaokrąglenie / faza narożników szkicu — klikaj narożniki szkicu, Enter zatwierdza'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('link', ui.style_icon('link', 38), 'Połącz — bryły zachowują się jak jedna (bez scalania); Rozłącz je rozdziela'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
@@ -1947,6 +1948,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
     def toggle_mode(self, key):
         if self.busy:
             return
+        if key == 'sfillet':
+            self._toggle_sketch_fillet()
+            return
         target = 'plane' if key == 'sketch' else key
         current = 'plane' if self.mode == 'sketch' else self.mode
         if current == target:
@@ -1956,6 +1960,22 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         chosen = self._cube_plane_if_current() if target == 'plane' else None
         if chosen is not None:
             self.enter_sketch(chosen)      # powierzchnia już wybrana na kostce: bez ponownego wskazywania
+
+    def _toggle_sketch_fillet(self):
+        """Przycisk Zaokrąglenie / faza narożników (górny pasek, zakładka Szkic): w otwartym szkicu włącza / wyłącza
+        narzędzie; poza szkicem otwiera szkic zaznaczonego kształtu szkicu albo - bez zaznaczenia - wybór płaszczyzny,
+        a po jej wskazaniu narzędzie jest już włączone."""
+        if self.mode == 'sketch':
+            self.choose_tool(None if self.tool == 'sfillet' else 'sfillet')
+            return
+        sketch = next((b for b in (self.document.get(i) for i in self.selected)
+                       if b is not None and b.kind == 'sketch' and not (b.meta or {}).get('surface')), None)
+        self.set_mode('plane')
+        self.tool = 'sfillet'
+        if sketch is not None:
+            self.enter_sketch(sketch.plane)
+        else:
+            self.hint('Zaokrąglenie narożników: wskaż płaszczyznę szkicu (albo najpierw zaznacz kształt szkicu).')
 
     def set_mode(self, mode):
         """Przełącza narzędzie; None = zwykłe zaznaczanie."""
@@ -2286,6 +2306,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         main = button or self.shape_buttons.get(self._group_button(name))
         for b in self.shape_buttons.values():
             b.setChecked(b is main)
+        if 'sfillet' in self.tools:
+            self.tools['sfillet'].setChecked(name == 'sfillet' and self.mode in ('sketch', 'plane'))
         if self.mode == 'sketch':
             self.show_sketch_hint()
             self.sk_hint.setText('Wybierz kształt do rysowania' if name is None and not self.selected else
