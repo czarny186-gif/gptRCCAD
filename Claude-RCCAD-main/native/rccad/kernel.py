@@ -3498,3 +3498,64 @@ def _fillet_offset_tool(info, d):
     big, small = _fillet_corner(info, hi, h), _fillet_corner(info, lo, h)
     tool = big.cut(small) if small is not None else big
     return valid(tool.clean())
+
+
+# ---------- narzędzia szkicu: połącz szkice, punkty do wymiarowania ----------
+def sketch_join(shapes, tol=1e-3):
+    """Połącz szkice: krawędzie kilku osobnych szkiców (np. czterech pojedynczych linii kwadratu) łączą się w ciągłe
+    obrysy - końce bliżej niż tol stają się wspólnym wierzchołkiem. Wynik: jedna łamana albo zbiór łamanych (kilka
+    rozłącznych obrysów w jednym szkicu). Ofset, zaokrąglenie i wyciągnięcie działają wtedy na cały obrys."""
+    from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+    from OCP.TopTools import TopTools_HSequenceOfShape
+    from OCP.ShapeFix import ShapeFix_Wire
+    from OCP.TopoDS import TopoDS
+    edges = [e for sh in shapes for e in sh.Edges()]
+    if not edges:
+        raise CadError('Wybrane szkice nie mają linii do połączenia.')
+    closed = [e for e in edges if e.IsClosed()]          # okręgi / elipsy - osobne zamknięte obrysy
+    seq = TopTools_HSequenceOfShape()
+    for e in edges:
+        if not e.IsClosed():
+            seq.Append(e.wrapped)
+    wires = []
+    if seq.Length():
+        out = TopTools_HSequenceOfShape()
+        ShapeAnalysis_FreeBounds.ConnectEdgesToWires_s(seq, float(tol), False, out)
+        for i in range(1, out.Length() + 1):
+            w = TopoDS.Wire_s(out.Value(i))
+            fix = ShapeFix_Wire()
+            fix.Load(w)
+            fix.SetPrecision(float(tol))
+            fix.SetMaxTolerance(float(tol) * 2)
+            fix.FixReorder()
+            fix.FixConnected(float(tol))
+            fix.FixClosed(float(tol))
+            wires.append(cq.Wire(fix.Wire()))
+    wires += [cq.Wire.assembleEdges([e]) for e in closed]
+    if not wires:
+        raise CadError('Nie udało się połączyć szkiców.')
+    return wires[0] if len(wires) == 1 else compound(wires)
+
+
+def sketch_points(shape):
+    """Punkty szkicu do wymiarowania: [(punkt 3D, rodzaj)] - końce linii ('end'), środki okręgów i łuków ('center'),
+    środki odcinków ('mid'). Bez powtórzeń."""
+    out = []
+
+    def add(p, kind):
+        p = np.asarray(p, float)
+        if not any(float(np.linalg.norm(q - p)) < 1e-6 for q, _ in out):
+            out.append((p, kind))
+    for e in shape.Edges():
+        gt = e.geomType()
+        if gt in ('CIRCLE', 'ELLIPSE'):
+            try:
+                add(e.arcCenter().toTuple() if gt == 'CIRCLE' else e.Center().toTuple(), 'center')
+            except Exception:
+                pass
+        if not e.IsClosed():
+            add(e.startPoint().toTuple(), 'end')
+            add(e.endPoint().toTuple(), 'end')
+            if gt == 'LINE':
+                add(e.positionAt(.5).toTuple(), 'mid')
+    return out

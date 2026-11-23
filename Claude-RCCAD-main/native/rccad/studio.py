@@ -39,6 +39,7 @@ from .matchsize_ui import MatchSizeTools
 from .stepedit_ui import StepEditTools
 from .tilt_ui import TiltTools
 from .twist_ui import TwistTools
+from .sketchtools_ui import SketchTools, SKETCH_TOOLS
 from .gear_ui import GearTools
 from .gearpair_ui import GearPairTools
 from .gearsim_ui import GearSimTools
@@ -49,7 +50,7 @@ from . import measurement
 from html import escape as html_escape
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
-        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'sfillet': 1, 'line': 2, 'circleTangent2': 3}
+        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'sfillet': 1, 'smirror': 1, 'sjoin': 1, 'sdim': 1, 'line': 2, 'circleTangent2': 3}
 HINTS = {
     'rect': ['Kliknij pierwszy narożnik prostokąta.', 'Kliknij przeciwległy narożnik.'],
     'centerRect': ['Kliknij środek prostokąta.', 'Kliknij narożnik.'],
@@ -70,6 +71,9 @@ HINTS = {
     'trim': ['Nożyczki: kliknij fragment szkicu, który ma zniknąć.'],
     'offset': ['Ofset: kliknij kształt szkicu, który chcesz odsunąć.'],
     'sfillet': ['Zaokrąglenie / faza: klikaj narożniki szkicu (Shift + klik odznacza, dwuklik w linię - wszystkie narożniki kształtu); Enter zatwierdza.'],
+    'smirror': ['Lustro szkicu: klikaj kształty, potem wskaż linię lustra (albo oś szkicu); Enter zatwierdza.'],
+    'sjoin': ['Połącz szkice: klikaj szkice (albo „Zaznacz wszystkie”); Enter łączy je w jeden szkic.'],
+    'sdim': ['Wymiar: kliknij dwa punkty (koniec linii, środek okręgu) i wpisz odstęp; klik w kształt - jego wymiary.'],
     'line': ['Kliknij początek linii.', 'Kliknij kolejny punkt. Enter lub ponowne kliknięcie kończy, kliknięcie w pierwszy punkt zamyka obrys.'],
 }
 VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '3 punkty', 'circle': 'Środek + promień',
@@ -204,7 +208,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'sfillet', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'sfillet', 'smirror', 'sjoin', 'sdim', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear', 'gearpair', 'gearsim'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -219,7 +223,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -481,6 +485,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                  ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
                  ('matchsize', ui.style_icon('matchsize', 38), 'Wyrównaj rozmiar — takie same kształty przyjmują wymiary wzorca'),
                  ('sfillet', ui.style_icon('s_sfillet', 38), 'Zaokrąglenie / faza narożników szkicu — klikaj narożniki szkicu, Enter zatwierdza'),
+                 ('smirror', ui.style_icon('s_smirror', 38), 'Lustro szkicu — odbij kształty szkicu względem linii albo osi szkicu'),
+                 ('sjoin', ui.style_icon('s_sjoin', 38), 'Połącz szkice — osobne linie (np. boki kwadratu) w jeden szkic: Ofset i zaokrąglenie działają na cały kształt'),
+                 ('sdim', ui.style_icon('s_sdim', 38), 'Wymiar — kliknij dwa punkty (np. środki okręgów) i wpisz odstęp; kliknięty kształt - jego wymiary'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('link', ui.style_icon('link', 38), 'Połącz — bryły zachowują się jak jedna (bez scalania); Rozłącz je rozdziela'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
@@ -799,6 +806,29 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self.t_spins.append(spin)
         grid.setColumnStretch(2, 1)
         tl.addLayout(grid)
+        # strzałki klawiatury: po wybraniu kierunku (przycisk X / Y / Z albo chwycenie uchwytu osi) ← → ↑ ↓ przesuwają / obracają o krok
+        arrows = QHBoxLayout()
+        arrows.setSpacing(6)
+        arrows.addWidget(_label('Strzałki', 'label'))
+        self.t_arrow_buttons = []
+        for i, axis in enumerate('XYZ'):
+            b = QToolButton()
+            b.setObjectName('segbtn')
+            b.setText(axis)
+            b.setCheckable(True)
+            b.setFixedSize(30, 28)
+            b.setToolTip(f'Kierunek {axis} dla strzałek klawiatury: → / ↑ = +krok, ← / ↓ = −krok (Shift ×10). Kliknij ponownie, aby wyłączyć.')
+            b.clicked.connect(lambda on, n=i: self.set_transform_arrow(n if on else None))
+            arrows.addWidget(b)
+            self.t_arrow_buttons.append(b)
+        arrows.addWidget(_label('Krok', 'label'))
+        self.t_arrow_step = _spin(1.0, .001, 1e4, 3, .5)
+        self.t_arrow_step.setToolTip('Krok jednego naciśnięcia strzałki (mm przy przesuwaniu, stopnie przy obrocie)')
+        self.t_arrow_step.setDecimals(2)
+        self.t_arrow_step.setFixedWidth(62)
+        arrows.addWidget(self.t_arrow_step)
+        tl.addLayout(arrows)
+        self.t_arrow = None
         self._buttons(tl, 'Zastosuj', 'Zamknij', self.apply_transform, lambda: self.set_mode(None))
         ui.shadow(self.t_editor, 26, 7, 46)
         self.t_editor.hide()
@@ -1743,6 +1773,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self.sf_size.valueChanged.connect(lambda *_: self._sf_update())
         self.sf_kind.currentIndexChanged.connect(self._sf_kind_changed)
 
+        self._build_sketch_tool_panels()
         self._build_ply_panels()
         self._build_scale_panel()
         self._build_color_panel()
@@ -1754,7 +1785,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self._build_gearsim_panel()
         self._build_link_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.sketch_tool_panels(), *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1812,6 +1843,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self.off_panel.move(92, 88 + TOOLS_TOP - 18)
         self.sf_panel.adjustSize()
         self.sf_panel.move(92, 88 + TOOLS_TOP - 18)
+        for p in self.sketch_tool_panels():
+            p.adjustSize()
+            p.move(92, 88 + TOOLS_TOP - 18)
         self.ex_panel.adjustSize()
         self.ex_panel.move(18, 170 + TOOLS_TOP - 18)
         self.ex_bar.adjustSize()
@@ -1831,6 +1865,12 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         if obj is self.dim_panel and event.type() == QEvent.Hide and self._dim_target is not None:
             self._dim_target = None
             self.view.set_preview_mesh(None)
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self.mode in ('move', 'rotate') \
+                and getattr(self, 't_arrow', None) is not None and self.isActiveWindow() \
+                and not isinstance(QApplication.focusWidget(), (QLineEdit, QDoubleSpinBox, QPlainTextEdit, QComboBox)) \
+                and not (event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)):
+            if self.transform_arrow_key(event.key(), bool(event.modifiers() & Qt.ShiftModifier)):
+                return True             # strzałki przesuwają / obracają zaznaczony obiekt wzdłuż wybranego kierunku
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Tab and self.isActiveWindow() and not self.busy and not isinstance(QApplication.focusWidget(), QPlainTextEdit):
             if self.dim_panel.isVisible():
                 edits = [e for e in self.dim_edits if e.isVisible()]
@@ -1861,6 +1901,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                 action = self.apply_text
             if action is None and self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
                 action = self.apply_sketch_fillet
+            if action is None and self.mode == 'sketch' and self.tool in SKETCH_TOOLS:
+                action = self.skt_apply
             focus = QApplication.focusWidget()
             if action and not isinstance(focus, QPlainTextEdit) and (focus is None or self.isAncestorOf(focus) or focus is self):
                 action()
@@ -1951,6 +1993,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         if key == 'sfillet':
             self._toggle_sketch_fillet()
             return
+        if key in SKETCH_TOOLS:
+            self._toggle_sketch_tool(key)
+            return
         target = 'plane' if key == 'sketch' else key
         current = 'plane' if self.mode == 'sketch' else self.mode
         if current == target:
@@ -2011,6 +2056,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self.view.snapper = None
         self.view.hover_gate = None
         self.view.free_drag = None
+        self.view.set_hover_body(None)
         self.mode = mode
         self._timers['extrude'].setInterval(16)
         self.points = []
@@ -2284,6 +2330,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self.choose_tool(name)
 
     def choose_tool(self, name, button=None):
+        previous = list(self.selected) or list(self.__dict__.pop('_skt_pending', ()))
+        self.__dict__.pop('_skt_pending', None)
         if name is not None and self.mode == 'sketch' and self.selected:
             self.selected = []
             self.refresh()
@@ -2295,6 +2343,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self._off_clear()
         self.sf_panel.setVisible(name == 'sfillet' and self.mode == 'sketch')
         self._sf_clear()
+        self._skt_begin(name, previous)          # Lustro szkicu / Połącz szkice / Wymiar
         if name == 'text':
             self._text_begin()
         else:
@@ -2525,7 +2574,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             return kernel.polyline(self.sketch_plane, pts) if len(pts) >= 2 else None
         if t == 'measure':
             return kernel.polyline(self.sketch_plane, pts) if len(pts) == 2 else None
-        if t in ('text', 'trim', 'offset', 'sfillet', 'circleTangent2', 'point'):
+        if t in ('text', 'trim', 'offset', 'sfillet', 'circleTangent2', 'point', *SKETCH_TOOLS):
             return None
         if len(pts) == need:
             return self._wire(pts)
@@ -2827,6 +2876,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         if self.tool == 'sfillet':
             self._sf_hover()
             return
+        if self.tool in SKETCH_TOOLS:
+            self.skt_hover()
+            return
         if self.tool == 'circleTangent2':
             if len(self.tangent_lines) == 2:
                 try:
@@ -2924,6 +2976,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                 return
             if t == 'sfillet':
                 self.pick_sketch_corner(bool(QApplication.keyboardModifiers() & Qt.ShiftModifier))
+                return
+            if t in SKETCH_TOOLS:
+                self.skt_click()
                 return
             if t == 'circleTangent2':
                 if len(self.tangent_lines) < 2:
@@ -3772,10 +3827,12 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                 self.view.hover_vertex = vertex[1] if vertex else None
                 self.view._set_hover_edge(None if vertex else self.view.nearest_edge(x, y, True))
                 self.view.overlay.update()
-            elif self.mode is None and self._planes_visible:
-                name = self.view.plane_at(x, y)
-                self.view._highlight_plane(name)
-                self.view.setCursor(Qt.PointingHandCursor if name else Qt.ArrowCursor)
+            elif self.mode is None:
+                sketch = self._hover_sketch(x, y)         # szkic pod kursorem podświetla się (wiadomo, który się zaznaczy / przesunie)
+                name = self.view.plane_at(x, y) if self._planes_visible and sketch is None else None
+                if self._planes_visible:
+                    self.view._highlight_plane(name)
+                self.view.setCursor(Qt.PointingHandCursor if (name or sketch) else Qt.ArrowCursor)
             elif self.mode == 'extrude' and not self.ex_profiles:
                 self._hover_extrude(x, y)
             elif self.mode == 'extrude' and self.ex_extent.currentData() == 'upto':
@@ -3797,7 +3854,15 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             elif self.mode == 'bool':
                 self._hover_bool(x, y)
             elif self.mode in ('move', 'rotate') and getattr(self, 't_feature', None) is None and self._hv is None:
-                self._hover_transform_feature(x, y)
+                if self._hover_sketch(x, y) is not None:      # szkic pod kursorem ma pierwszeństwo przed otworem bryły
+                    if getattr(self, '_feature_hover_key', None) is not None:
+                        self._feature_hover_key = None
+                        self.view.set_preview_mesh(None)
+                    timer = self.__dict__.get('_feature_hover_timer')
+                    if timer is not None:
+                        timer.stop()
+                else:
+                    self._hover_transform_feature(x, y)
             elif self.mode == 'sweep':
                 if self.sw_profiles and self.sw_path is None:
                     self.view._set_hover_edge(self.view.nearest_edge(x, y))
@@ -3829,6 +3894,15 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                     self._hover_extrude(x, y)
         except Exception:
             self._hover_key = None
+
+    def _hover_sketch(self, x, y):
+        """Podświetla cały szkic, którego linia jest pod kursorem (pomarańczowe krawędzie); zwraca jego id albo None."""
+        hit = self.view.nearest_edge(x, y, kinds=('sketch',))
+        body = self.document.get(hit[0]) if hit else None
+        bid = body.id if body is not None and body.kind == 'sketch' else None
+        if bid is not None or getattr(self.view, '_hover_key', None) is None or (isinstance(self.view._hover_key, tuple) and self.view._hover_key[:1] == ('body',)):
+            self.view.set_hover_body(bid)
+        return bid
 
     def _hover_face_only(self, x, y):
         hit = self.view.pick_face(x, y)
@@ -8803,6 +8877,28 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         self.refresh()
         self._place_gizmo()
 
+    def set_transform_arrow(self, index):
+        """Kierunek (0..2 = X / Y / Z albo None) dla strzałek klawiatury w Przesuń / Obróć."""
+        self.t_arrow = index
+        for i, b in enumerate(self.t_arrow_buttons):
+            b.setChecked(i == index)
+        if index is not None and self.mode in ('move', 'rotate'):
+            unit = 'mm' if self.mode == 'move' else '°'
+            self.t_status.setText(f'Strzałki: {"XYZ"[index]} ({self.t_arrow_step.value():g} {unit} na naciśnięcie)' if self.t_target is None
+                                  else f'Zaznaczono: {self.t_target.name} · strzałki: oś {"XYZ"[index]}')
+
+    def transform_arrow_key(self, key, shift=False):
+        """→ / ↑ = +krok, ← / ↓ = −krok wzdłuż (albo wokół) wybranej osi. Zwraca, czy klawisz obsłużono."""
+        if self.mode not in ('move', 'rotate') or self.t_target is None or self.t_arrow is None or self.busy:
+            return False
+        sign = {Qt.Key_Right: 1, Qt.Key_Up: 1, Qt.Key_Left: -1, Qt.Key_Down: -1}.get(key)
+        if sign is None:
+            return False
+        step = self.t_arrow_step.value() * (10 if shift else 1)
+        spin = self.t_spins[self.t_arrow]
+        spin.setValue(round(spin.value() + sign * step, 3))
+        return True
+
     def _place_gizmo(self):
         """Uchwyty w stylu Fusion 360: przesuwanie = kolorowe strzałki osi + kwadraty płaszczyzn; obrót = kolorowe pierścienie."""
         if self.t_target is None or self.mode not in ('move', 'rotate'):
@@ -8900,6 +8996,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self.twist_handle_dragged(delta, hid)
         elif hid in ('x', 'y', 'z') and self.t_target is not None:
             index = 'xyz'.index(hid)
+            if self.t_arrow != index:
+                self.set_transform_arrow(index)       # chwycona oś staje się kierunkiem strzałek klawiatury
             if self._hv is None or self._hv[0] != hid:
                 self._hv = (hid, self.t_spins[index].value())
             value = self._hv[1] + (delta if self.mode == 'move' else math.degrees(delta / max(self.t_radius, 1e-6)))
@@ -10144,7 +10242,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
             self.selected = ids
             self.delete_selected()
 
-    def objects_folder_select(self, ids):
+    def objects_folder_select(self, ids, modifiers=None):
+        """Klik w nagłówek grupy zaznacza wszystkie jej obiekty (na polu roboczym też). Z Shift / Ctrl grupa dochodzi do
+        dotychczasowego zaznaczenia (albo z niego wypada, gdy była już cała zaznaczona) - tak można zaznaczyć kilka grup."""
         if self.busy:
             return
         if self.mode == 'bool':
@@ -10162,7 +10262,13 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
         if self.mode is not None:
             self.set_mode(None)
         ids = [i for i in ids if self.document.get(i) is not None]
-        self.selected = [] if sorted(self.selected) == sorted(ids) else ids
+        if modifiers is not None and modifiers & (Qt.ShiftModifier | Qt.ControlModifier):
+            if ids and all(i in self.selected for i in ids):
+                self.selected = [i for i in self.selected if i not in ids]
+            else:
+                self.selected = [*self.selected, *[i for i in ids if i not in self.selected]]
+        else:
+            self.selected = [] if sorted(self.selected) == sorted(ids) else ids
         self.refresh()
 
     def objects_group_hide(self, cat):
@@ -10854,6 +10960,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                 action = self.apply_offset
             if action is None and self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
                 action = self.apply_sketch_fillet
+            if action is None and self.mode == 'sketch' and self.tool in SKETCH_TOOLS:
+                action = self.skt_apply
             if action:
                 action()
                 event.accept()
@@ -10874,6 +10982,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, GearTools, GearPairTool
                 self.cancel_offset()
             elif self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
                 self._sf_clear()
+                self.show_sketch_hint()
+            elif self.mode == 'sketch' and self.tool in SKETCH_TOOLS and self.skt_escape():
                 self.show_sketch_hint()
             elif self.mode is not None:
                 self.set_mode(None)

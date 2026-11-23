@@ -1,11 +1,21 @@
-# RCCAD Desktop 0.5.43 — Zaokrąglenie narożników szkicu na górnym pasku
+# RCCAD Desktop 0.5.44 — Narzędzia szkicu: lustro, połącz, wymiar; strzałki w Przesuń / Obróć
 
-- **Zaokrąglenie / faza narożników szkicu przeniesione na górny pasek** (zakładka Szkic, zaraz za „Wyrównaj rozmiar”). Boczny pasek kształtów szkicu jest o jeden przycisk krótszy - ostatnie narzędzie znów mieści się nad paskiem zadań Windows.
-- W otwartym szkicu przycisk włącza / wyłącza narzędzie; poza szkicem otwiera szkic zaznaczonego kształtu (od razu z narzędziem) albo prosi o wskazanie płaszczyzny. Można je też dodać do Ulubionych. Działanie narzędzia bez zmian.
+- **Podświetlenie szkicu pod kursorem**: bez wybranego narzędzia oraz w Przesuń / Obróć (zanim wybierzesz obiekt) szkic pod kursorem świeci się na pomarańczowo - widać, który szkic zaznaczysz, przesuniesz albo obrócisz.
+- **Grupy na liście Obiekty z Shift**: Shift (albo Ctrl) + klik w nazwę grupy dodaje wszystkie jej obiekty do zaznaczenia - także na polu roboczym - więc można zaznaczyć kilka grup naraz; ponowny Shift + klik grupę odznacza. Nagłówek zaznaczonej grupy jest wyróżniony.
+- **Lustro szkicu** (górny pasek, zakładka Szkic, obok Zaokrąglenia): klikasz kształty, wskazujesz prostą linię szkicu albo oś poziomą / pionową i Enter. Odbicie jako kopia (albo bez oryginału); połowa profilu z odbiciem staje się jednym zamkniętym szkicem.
+- **Połącz szkice**: osobne linie (np. cztery boki kwadratu) albo kilka szkiców z jednej płaszczyzny stają się jednym szkicem z ciągłym obrysem - Ofset odsuwa cały kwadrat, a zaokrąglenie narożników i wyciągnięcie działają na całość. Zaznaczone wcześniej szkice trafiają do narzędzia od razu; „Zaznacz wszystkie w tym szkicu”.
+- **Wymiar**: kliknij dwa punkty (koniec linii, środek okręgu / łuku, środek odcinka), wpisz odstęp - kształt drugiego punktu przesuwa się na tę odległość (najkrótsza, poziomo albo pionowo), z podglądem. Klik w samą linię / okrąg / prostokąt otwiera jego wymiary (długość, średnica, szerokość…), dwa końce pojedynczej linii zmieniają jej długość. Kształty z wymiarami zachowują je po przesunięciu.
+- **Strzałki klawiatury w Przesuń / Obróć**: wybierz kierunek X / Y / Z (wiersz „Strzałki” albo chwyć uchwyt osi) - → / ↑ przesuwają lub obracają o krok, ← / ↓ w drugą stronę, Shift ×10; krok ustawiasz obok.
+- Wszystkie nowe narzędzia są na górnym pasku (boczny pasek się nie wydłuża) i można je dodać do Ulubionych; kroki historii „Połączenie szkiców” i „Lustro szkicu” cofają się i przeliczają jak inne.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.43 — Zaokrąglenie narożników szkicu na górnym pasku
+
+- **Zaokrąglenie / faza narożników szkicu przeniesione na górny pasek** (zakładka Szkic, zaraz za „Wyrównaj rozmiar”). Boczny pasek kształtów szkicu jest o jeden przycisk krótszy - ostatnie narzędzie znów mieści się nad paskiem zadań Windows.
+- W otwartym szkicu przycisk włącza / wyłącza narzędzie; poza szkicem otwiera szkic zaznaczonego kształtu (od razu z narzędziem) albo prosi o wskazanie płaszczyzny. Można je też dodać do Ulubionych. Działanie narzędzia bez zmian.
 
 ### 0.5.42 — TWIST: optymalizacja i testy końcowe (etap 10)
 

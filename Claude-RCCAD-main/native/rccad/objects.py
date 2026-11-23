@@ -38,6 +38,7 @@ QWidget#orow[sel="true"] { background:#dcecff; border:1px solid #8ec0f3; }
 QWidget#orow[off="true"] QLabel { color:#9aabba; }
 QWidget#fhead { background:#f2f7fc; border-radius:8px; }
 QWidget#fhead:hover { background:#e6f1fc; }
+QWidget#fhead[sel="true"] { background:#d4e8fb; border:1px solid #8cc0ef; }
 QFrame#objects QLabel#fname { font-size:12px; font-weight:700; color:#29475e; }
 QFrame#objects QLabel#badge { background:#eef4fa; color:#5b7a93; border-radius:8px; font-size:10px; font-weight:700; padding:0 6px; }
 """
@@ -201,10 +202,11 @@ class FolderHead(QWidget):
     renamed = Signal(str, str)
     editing = Signal(bool)
 
-    def __init__(self, name, count, folded, hidden, hooks):
+    def __init__(self, name, count, folded, hidden, hooks, selected=False):
         super().__init__()
         self.name, self.edit = name, None
         self.setObjectName('fhead')
+        self.setProperty('sel', 'true' if selected else 'false')     # cała grupa zaznaczona - nagłówek też się wyróżnia
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedHeight(30)
         self.setCursor(Qt.PointingHandCursor)
@@ -247,7 +249,8 @@ class FolderHead(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            QTimer.singleShot(0, self.hooks['select'])
+            mods = event.modifiers()
+            QTimer.singleShot(0, lambda: self.hooks['select'](mods))      # Shift / Ctrl: dodaj grupę do zaznaczenia
             event.accept()
             return
         super().mousePressEvent(event)
@@ -340,7 +343,7 @@ class ObjectsPanel(QFrame):
     folder_rename = Signal(str, str)      # stara, nowa nazwa
     folder_hide = Signal(object)          # id elementów grupy
     folder_delete = Signal(object)
-    folder_select = Signal(object)
+    folder_select = Signal(object, object)   # id elementów grupy, modyfikatory (Shift / Ctrl - dodaj do zaznaczenia)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -538,9 +541,9 @@ class ObjectsPanel(QFrame):
                 fh = FolderHead(folder, len(inside), key in self._folded, all(m in hidden for m in ids), dict(
                     fold=lambda k=key: self._fold(k),
                     hide=lambda ids=ids: self.folder_hide.emit(ids),
-                    select=lambda ids=ids: self.folder_select.emit(ids),
+                    select=lambda mods=Qt.NoModifier, ids=ids: self.folder_select.emit(ids, mods),
                     ungroup=lambda ids=ids: self.folder_move.emit(ids, ''),
-                    **{'del': lambda ids=ids: self.folder_delete.emit(ids)}))
+                    **{'del': lambda ids=ids: self.folder_delete.emit(ids)}), selected=bool(ids) and all(m in selected for m in ids))
                 fh.renamed.connect(self.folder_rename.emit)
                 fh.editing.connect(self._set_editing)
                 lay.addWidget(fh)

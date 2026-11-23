@@ -152,9 +152,9 @@ class StudioTests(unittest.TestCase):
 
     def test_surface_tool_buttons_are_distinct_and_next_to_new_sketch(self):
         w=self.w;w.set_tab('Szkic');w._layout_overlays()
-        keys=('sketch','wrapsketch','wrapcorner','matchsize','sfillet','surface')       # 0.5.43: zaokrąglenie narożników za Wyrównaj rozmiar
+        keys=('sketch','wrapsketch','wrapcorner','matchsize','sfillet','smirror','sjoin','sdim','surface')       # 0.5.43: zaokrąglenie narożników za Wyrównaj rozmiar; 0.5.44: lustro, połącz, wymiar
         self.assertEqual([b for b in keys],[b for b in w._tab_tools('Szkic')])
-        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),6)
+        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),9)
         self.assertEqual([w.tools[key].x() for key in keys],sorted(w.tools[key].x() for key in keys))
 
     def test_surface_hover_shows_point_and_corner_hover_shows_edge(self):
@@ -4085,6 +4085,151 @@ class StudioTests(unittest.TestCase):
         w.plane_picked('XY');self.app.processEvents()
         self.assertEqual((w.mode,w.tool),('sketch','sfillet'));self.assertTrue(w.sf_panel.isVisible())
         self.assertEqual(w._tab,'Szkic')
+
+    # 0.5.44: szkic pod kursorem podświetla się bez narzędzia oraz w Przesuń / Obróć przed wybraniem obiektu
+    def test_sketch_hover_highlight_without_tool(self):
+        w=self.w;sk=Body('Szkic',k.polyline('XY',[(0,0),(30,0),(30,20)]),'sketch','XY').prepared()
+        box=Body('B',k.box(10,10,10)).prepared()
+        w.document.commit([sk,box]);w.set_mode(None);w.refresh()
+        for _ in range(5):self.app.processEvents()
+        xy=w.view.project_one((15,0,0))
+        w.view_hover(*xy);self.assertEqual(w.view._hover_key,('body',sk.id))
+        w.view_hover(5,5);self.assertIsNone(w.view._hover_key)                       # poza szkicem podświetlenie znika
+        w.set_mode('move');w.view_hover(*xy);self.assertEqual(w.view._hover_key,('body',sk.id))
+        w.set_mode('rotate');self.assertIsNone(w.view._hover_key);w.view_hover(*xy);self.assertEqual(w.view._hover_key,('body',sk.id))
+        w.set_mode(None);self.assertIsNone(w.view._hover_key)
+
+    # 0.5.44: Shift + klik w nagłówek grupy na liście Obiekty dodaje całą grupę do zaznaczenia (także kilka grup)
+    def test_objects_group_shift_click_adds_groups(self):
+        from rccad.objects import FolderHead
+        w=self.w;a,b,c,d=[replace(Body(n,k.box(5,5,5).translate((i*10,0,0))).prepared(),folder=f) for i,(n,f) in enumerate((('A','G1'),('B','G1'),('C','G2'),('D','G2')))]
+        e=Body('E',k.box(3,3,3).translate((0,20,0))).prepared()
+        w.document.commit([a,b,c,d,e]);w.refresh();w.selected=[e.id];w.refresh()
+        w.objects_folder_select([a.id,b.id],Qt.ShiftModifier);self.assertEqual(set(w.selected),{e.id,a.id,b.id})
+        w.objects_folder_select([c.id,d.id],Qt.ShiftModifier);self.assertEqual(set(w.selected),{e.id,a.id,b.id,c.id,d.id})
+        w.objects.update_items(*w.objects._stale) if getattr(w.objects,'_stale',None) else None
+        for _ in range(3):self.app.processEvents()
+        heads={h.name:h.property('sel') for h in w.objects.findChildren(FolderHead)}
+        self.assertEqual(heads.get('G1'),'true');self.assertEqual(heads.get('G2'),'true')   # nagłówki zaznaczonych grup też wyróżnione
+        w.objects_folder_select([a.id,b.id],Qt.ShiftModifier);self.assertEqual(set(w.selected),{e.id,c.id,d.id})   # ponownie: grupa wypada
+        w.objects_folder_select([a.id,b.id]);self.assertEqual(set(w.selected),{a.id,b.id})    # bez Shift: tylko ta grupa
+        from PySide6.QtTest import QTest
+        for _ in range(3):self.app.processEvents()
+        h=next(h for h in w.objects.findChildren(FolderHead) if h.name=='G2')
+        QTest.mouseClick(h,Qt.LeftButton,Qt.ShiftModifier)
+        for _ in range(5):self.app.processEvents()
+        self.assertEqual(set(w.selected),{a.id,b.id,c.id,d.id})                          # prawdziwy Shift + klik nagłówka
+
+    # 0.5.44: nowe narzędzia szkicu stoją na górnym pasku (zakładka Szkic), nie na pasku bocznym
+    def test_sketch_tools_on_top_bar(self):
+        import rccad.studio as st
+        w=self.w;tools=st.TABS['Szkic']
+        self.assertEqual(tools[tools.index('sfillet')+1:tools.index('sfillet')+4],['smirror','sjoin','sdim'])
+        for key in ('smirror','sjoin','sdim'):
+            self.assertIn(key,w.tools);self.assertNotIn(key,w.shape_buttons);self.assertIn(key,st.FAVORITE_TOOLS)
+        w.set_mode('plane');w.plane_picked('XY');w.tools['sjoin'].click()
+        self.assertEqual(w.tool,'sjoin');self.assertTrue(w.sj_panel.isVisible());self.assertTrue(w.tools['sjoin'].isChecked())
+        w.tools['sdim'].click();self.assertEqual(w.tool,'sdim');self.assertFalse(w.sj_panel.isVisible());self.assertTrue(w.sd_panel.isVisible())
+        self.assertFalse(w.tools['sjoin'].isChecked())
+        w.tools['sdim'].click();self.assertIsNone(w.tool);self.assertFalse(w.sd_panel.isVisible())
+        w.set_mode(None);w.tools['smirror'].click();self.assertEqual(w.mode,'plane');w.plane_picked('XY');self.app.processEvents()
+        self.assertEqual((w.mode,w.tool),('sketch','smirror'));self.assertTrue(w.smr_panel.isVisible())
+
+    # 0.5.44: Połącz szkice - cztery osobne linie kwadratu stają się jednym szkicem, Ofset odsuwa cały kwadrat
+    def test_sketch_join_square_then_offset_whole(self):
+        w=self.w;pts=[(0,0),(20,0),(20,20),(0,20)]
+        sides=[Body(f'Linia {i}',k.polyline('XY',[pts[i],pts[(i+1)%4]]),'sketch','XY').prepared() for i in range(4)]
+        w.document.commit(sides);w.refresh();w.set_mode('plane');w.plane_picked('XY')
+        w.selected=[s.id for s in sides];w.choose_tool('sjoin')                       # zaznaczone szkice od razu w narzędziu
+        self.assertEqual(w.sj_ids,[s.id for s in sides])
+        w.apply_sketch_join();self.wait()
+        sk=[b for b in w.document.bodies if b.kind=='sketch'];self.assertEqual(len(sk),1)
+        self.assertEqual(sk[0].id,sides[0].id);self.assertTrue(sk[0].shape.Wires()[0].IsClosed());self.assertEqual(len(k.sketch_corners(sk[0].shape)),4)
+        out=k.sketch_offset(sk[0].shape,'XY',2);self.assertEqual(len(out),1);bb=out[0].BoundingBox()
+        self.assertAlmostEqual(bb.xlen,24,5);self.assertAlmostEqual(bb.ylen,24,5)                # cały kwadrat, nie jedna linia
+        again=hist.run_sketch_join(sides,dict(type='sketch_join',ids=[s.id for s in sides]))   # przeliczenie kroku daje to samo
+        self.assertEqual(len(again),1);self.assertEqual(again[0].id,sides[0].id)
+        w.undo();self.wait();self.assertEqual(len([b for b in w.document.bodies if b.kind=='sketch']),4)
+        with self.assertRaises(k.CadError):hist.run_sketch_join(sides[:1],dict(type='sketch_join',ids=[sides[0].id]))
+        other=Body('Inna',k.polyline('XZ',[(0,0),(5,0)]),'sketch','XZ').prepared()
+        with self.assertRaises(k.CadError):hist.run_sketch_join([sides[0],other],dict(type='sketch_join',ids=[sides[0].id,other.id]))
+
+    # 0.5.44: Lustro szkicu - połowa profilu z odbiciem daje jeden zamknięty szkic; okrąg - kopia po drugiej stronie linii
+    def test_sketch_mirror_tool(self):
+        w=self.w
+        half=Body('Pół',k.polyline('XY',[(0,0),(10,0),(10,10),(0,10)]),'sketch','XY').prepared()
+        circ=Body('Okrąg',k.sketch('circle','XY',2,x=15,y=5),'sketch','XY').prepared()
+        axis=Body('Oś',k.polyline('XY',[(20,-5),(20,30)]),'sketch','XY').prepared()
+        w.document.commit([half,circ,axis]);w.refresh();w.set_mode('plane');w.plane_picked('XY');w.choose_tool('smirror')
+        for _ in range(5):self.app.processEvents()
+        w.skt_click(*w.view.project_one((5,0,0)));self.assertEqual(w.smr['ids'],[half.id])
+        w._smr_axis('v');self.assertIsNotNone(w.smr['line'])
+        w.apply_sketch_mirror();self.wait()
+        sk={b.id:b for b in w.document.bodies};self.assertEqual(len(sk),3)
+        bb=sk[half.id].shape.BoundingBox();self.assertAlmostEqual(bb.xmin,-10,5);self.assertAlmostEqual(bb.xmax,10,5)
+        self.assertTrue(sk[half.id].shape.Wires()[0].IsClosed())                          # pół + odbicie = jeden zamknięty obrys
+        w.skt_click(*w.view.project_one(circ.shape.Edges()[0].positionAt(.25).toTuple()));self.assertEqual(w.smr['ids'],[circ.id])
+        w._smr_set_stage('line');w.skt_click(*w.view.project_one((20,12,0)))            # linia lustra: prosta linia szkicu
+        self.assertEqual(w.smr['stage'],'shapes');self.assertEqual(w.smr['line'][2],'Oś')
+        w.apply_sketch_mirror();self.wait()
+        self.assertEqual(len(w.document.bodies),4);copy=w.document.bodies[-1] if w.document.bodies[-1].id not in sk else None
+        copy=next(b for b in w.document.bodies if b.id not in sk)
+        c=copy.shape.Edges()[0].arcCenter();self.assertAlmostEqual(c.x,25,5);self.assertAlmostEqual(c.y,5,5)
+        self.assertIn(w.document.get(circ.id).shape.Edges()[0].arcCenter().x,(15.0,))       # oryginał zostaje
+
+    # 0.5.44: Wymiar - odstęp między środkami dwóch okręgów; okrąg zachowuje swoje wymiary (dalej edytowalny)
+    def test_sketch_dimension_between_circle_centers(self):
+        w=self.w;self.sketch('circle',(0,0),(3,0));self.sketch('circle',(20,5),(24,5))
+        a,b=[x for x in w.document.bodies if x.kind=='sketch']
+        w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        w.skt_click(*w.view.project_one((0,0,0)));self.assertEqual(w.sd['a'][2],'center')
+        w.skt_click(*w.view.project_one((20,5,0)));self.assertEqual(w.sd['b'][0],b.id)
+        self.assertAlmostEqual(w.sd_value.value(),math.hypot(20,5),3)
+        w.sd_value.setValue(30);self.assertIn(b.id,w.override)                            # podgląd przesunięcia
+        w.apply_sketch_dim();self.wait()
+        nb=w.document.get(b.id);c=nb.shape.Edges()[0].arcCenter()
+        self.assertAlmostEqual(math.hypot(c.x,c.y),30,4);self.assertAlmostEqual(c.y/c.x,5/20,4)
+        self.assertEqual(nb.meta['tool'],'circle');self.assertAlmostEqual(float(sm.values(nb.meta)[0]),4,4)
+        self.assertAlmostEqual(w.document.get(a.id).shape.Edges()[0].arcCenter().x,0,6)    # pierwszy kształt stoi
+        # poziomo: tylko odstęp wzdłuż osi poziomej szkicu
+        w.skt_click(*w.view.project_one((0,0,0)));w.skt_click(*w.view.project_one((c.x,c.y,0)))
+        w.sd_kind.setCurrentIndex(1);self.assertAlmostEqual(w.sd_value.value(),c.x,3)
+        w.sd_value.setValue(12);w.apply_sketch_dim();self.wait()
+        c2=w.document.get(b.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(c2.x,12,4);self.assertAlmostEqual(c2.y,c.y,4)
+
+    # 0.5.44: Wymiar - klik w linię otwiera jej wymiary; dwa końce pojedynczej linii bez wymiarów zmieniają długość
+    def test_sketch_dimension_shape_and_plain_line(self):
+        w=self.w;self.sketch('rect',(0,0),(20,10));r=w.document.bodies[0]
+        line=Body('L',k.polyline('XY',[(0,30),(10,30)]),'sketch','XY').prepared()
+        w.document.commit([*w.document.bodies,line]);w.refresh();w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        w.skt_click(*w.view.project_one((7,0,0)))                                      # bok prostokąta (poza punktami)
+        self.assertTrue(w.dim_panel.isVisible());self.assertEqual(w._dim_target['body'].id,r.id)
+        w.dim_panel.hide()
+        w.skt_click(*w.view.project_one((7,30,0)));self.assertEqual(w.sd['b'][0],line.id)
+        self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
+        e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
+
+    # 0.5.44: Przesuń / Obróć - po wybraniu kierunku strzałki klawiatury przesuwają (obracają) o krok
+    def test_transform_arrow_keys_nudge(self):
+        from PySide6.QtTest import QTest
+        w=self.w;box=Body('B',k.box(10,10,10)).prepared();w.document.commit([box]);w.refresh()
+        w.selected=[box.id];w.set_mode('move');self.assertIsNotNone(w.t_target);w.activateWindow();w.view.setFocus()
+        QTest.keyClick(w.view,Qt.Key_Right);self.assertEqual(w.t_spins[0].value(),0)       # bez kierunku strzałki nic nie robią
+        w.t_arrow_buttons[1].click();self.assertEqual(w.t_arrow,1)
+        with patch.object(w,'isActiveWindow',return_value=True):
+            QTest.keyClick(w.view,Qt.Key_Right);QTest.keyClick(w.view,Qt.Key_Up)
+            self.assertAlmostEqual(w.t_spins[1].value(),2);QTest.keyClick(w.view,Qt.Key_Left,Qt.ShiftModifier)
+            self.assertAlmostEqual(w.t_spins[1].value(),-8)
+            w.t_arrow_step.setValue(.5);QTest.keyClick(w.view,Qt.Key_Down);self.assertAlmostEqual(w.t_spins[1].value(),-8.5)
+            w.handle_dragged('z',1.0);self.assertEqual(w.t_arrow,2);self.assertTrue(w.t_arrow_buttons[2].isChecked())
+        w.apply_transform();self.wait()
+        bb0=box.shape.BoundingBox();bb=w.document.get(box.id).shape.BoundingBox();self.assertAlmostEqual(bb.ymin,bb0.ymin-8.5,4)
+        w.set_mode('rotate');w.selected=[box.id];w.select_transform_target(w.document.get(box.id));w.set_transform_arrow(2)
+        with patch.object(w,'isActiveWindow',return_value=True):
+            QTest.keyClick(w.view,Qt.Key_Right)
+        self.assertAlmostEqual(w.t_spins[2].value(),.5)
 
     # 0.4.65: szkic dokładnie po obrysie ściany bryły - ofset wybiera linię szkicu, nie krawędź bryły
     def test_sketch_offset_on_face_outline(self):

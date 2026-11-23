@@ -928,6 +928,23 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         arc = QPainterPath(); arc.moveTo(8, 24); arc.arcTo(QRectF(8, 8, 32, 32), 180, -90)
         p.setPen(pen(ORANGE, 3.4)); p.drawPath(arc)
         p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(8, 24), 3, 3); p.drawEllipse(QPointF(24, 8), 3, 3)
+    elif kind == 'x_smirror':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPolygon(QPolygonF([QPointF(20, 8), QPointF(6, 40), QPointF(20, 40)]))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4)); p.drawPolygon(QPolygonF([QPointF(28, 8), QPointF(42, 40), QPointF(28, 40)]))
+        pn = pen(INK, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 3), QPointF(24, 45))
+    elif kind == 'x_sjoin':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(Qt.NoPen); p.drawRect(QRectF(9, 9, 30, 30))
+        p.setPen(pen(BLUE, 3.0)); p.drawLine(QPointF(9, 9), QPointF(39, 9)); p.drawLine(QPointF(39, 9), QPointF(39, 39))
+        p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(39, 39), QPointF(9, 39)); p.drawLine(QPointF(9, 39), QPointF(9, 9))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        for x, y in ((9, 9), (39, 9), (39, 39), (9, 39)):
+            p.drawEllipse(QPointF(x, y), 3.4, 3.4)
+    elif kind == 'x_sdim':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawEllipse(QPointF(11, 31), 7, 7); p.drawEllipse(QPointF(37, 31), 7, 7)
+        p.setPen(pen(ORANGE, 2.6)); p.setBrush(Qt.NoBrush); p.drawLine(QPointF(11, 13), QPointF(37, 13))
+        p.drawLine(QPointF(11, 7), QPointF(11, 24)); p.drawLine(QPointF(37, 7), QPointF(37, 24))
+        p.drawPolyline(QPolygonF([QPointF(16, 9), QPointF(11.5, 13), QPointF(16, 17)])); p.drawPolyline(QPolygonF([QPointF(32, 9), QPointF(36.5, 13), QPointF(32, 17)]))
+        p.setBrush(QColor(INK)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(11, 31), 2.4, 2.4); p.drawEllipse(QPointF(37, 31), 2.4, 2.4)
     elif kind == 'x_text':
         p.setPen(pen(INK, 4.6)); p.drawLine(QPointF(10, 11), QPointF(34, 11)); p.drawLine(QPointF(22, 11), QPointF(22, 36))
         p.setPen(pen(BLUE, 2.4)); p.drawLine(QPointF(35, 20), QPointF(35, 36)); p.drawLine(QPointF(32, 20), QPointF(38, 20)); p.drawLine(QPointF(32, 36), QPointF(38, 36))
@@ -1212,6 +1229,23 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 st(ink, 2.8); p.drawLine(QPointF(9, 40), QPointF(9, 26)); p.drawLine(QPointF(26, 9), QPointF(40, 9))
                 arc = QPainterPath(); arc.moveTo(9, 26); arc.arcTo(QRectF(9, 9, 34, 34), 180, -90)
                 st(acc, 3.2); p.drawPath(arc); dot(9, 26); dot(26, 9)
+            elif sh == 'smirror':
+                # lustro szkicu: kształt, przerywana oś i jego odbicie (pomarańczowe)
+                st(ink, 2.8); p.drawPolyline(poly([(20, 10), (8, 38), (20, 38)]))
+                st(acc, 2.8); p.drawPolyline(poly([(28, 10), (40, 38), (28, 38)]))
+                pn = pen(ink, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 5), QPointF(24, 44))
+                dot(20, 10); dot(28, 10)
+            elif sh == 'sjoin':
+                # połącz szkice: cztery osobne odcinki, które stają się jednym obrysem (pomarańczowe węzły)
+                st(ink, 2.8); p.drawLine(QPointF(10, 10), QPointF(38, 10)); p.drawLine(QPointF(38, 10), QPointF(38, 38))
+                st(acc, 2.8); p.drawLine(QPointF(38, 38), QPointF(10, 38)); p.drawLine(QPointF(10, 38), QPointF(10, 10))
+                dot(10, 10); dot(38, 10); dot(38, 38); dot(10, 38)
+            elif sh == 'sdim':
+                # wymiar: dwa okręgi i linia wymiarowa ze strzałkami między ich środkami
+                st(ink, 2.4); p.drawEllipse(QPointF(11, 30), 6, 6); p.drawEllipse(QPointF(37, 30), 6, 6)
+                st(acc, 2.6); p.drawLine(QPointF(11, 14), QPointF(37, 14)); p.drawLine(QPointF(11, 9), QPointF(11, 24)); p.drawLine(QPointF(37, 9), QPointF(37, 24))
+                p.drawPolyline(poly([(16, 10), (11.5, 14), (16, 18)])); p.drawPolyline(poly([(32, 10), (36.5, 14), (32, 18)]))
+                dot(11, 30, ink); dot(37, 30, ink)
             elif sh == 'trim':
                 st(ink, 2.8); p.drawLine(QPointF(14, 14), QPointF(40, 36)); p.drawLine(QPointF(14, 34), QPointF(40, 12))
                 st(acc, 2.6); p.drawEllipse(QPointF(11, 12), 4.5, 4.5); p.drawEllipse(QPointF(11, 36), 4.5, 4.5)
