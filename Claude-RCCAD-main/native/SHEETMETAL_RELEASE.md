@@ -1,4 +1,14 @@
-# RCCAD Desktop 0.5.45 — Wymiary jako linie konstrukcyjne, przyciąganie przy przesuwaniu, porządek w Obiektach
+# RCCAD Desktop 0.5.46 — Dopasowanie i Wyrównanie szkiców, szybsze Zastosuj przy wyciąganiu
+
+- **Dopasowanie szkicu** (górny pasek, zakładka Szkic): zaznaczony szkic (albo kilka) przenosi się na środek wskazanej płaskiej ściany bryły albo zamkniętego szkicu i kładzie na ścianie (także pionowej / skośnej - płaszczyzna szkicu obraca się razem z nim). Obrót wokół środka co 90° albo o wpisany kąt, podgląd na żywo, wymiary szkicu zostają.
+- **Wyrównanie szkicu**: wskazana prosta linia szkicu albo skrajny punkt okręgu / łuku ustawia się na linii wzorcowej - prostej krawędzi bryły w płaszczyźnie szkicu albo linii innego szkicu. Skośna linia najpierw obraca się równolegle do wzorca; szkic przesuwa się prostopadle do wzorca.
+- **Wyciąganie i wycinanie - sprawdzone**: podgląd pokazywał tylko bryłę-narzędzie, a dokładny wynik (bryła + połączenie / wycięcie) liczył się dopiero po Zastosuj - stąd wrażenie liczenia od nowa. Teraz, gdy ustawienia stoją ok. pół sekundy, dokładny wynik liczy się w tle już podczas podglądu; Zastosuj z tymi samymi ustawieniami bierze gotowy wynik (albo dokańcza trwające liczenie) zamiast zaczynać od początku.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.45 — Wymiary jako linie konstrukcyjne, przyciąganie przy przesuwaniu, porządek w Obiektach
 
 - **Wymiar - „Rozsuń oba po równo”**: wpisany odstęp przesuwa oba wybrane kształty po połowie (środek między punktami stoi). Bez zaznaczenia - jak dotąd przesuwa się kształt drugiego punktu.
 - **Wymiar zostaje na polu roboczym** jako purpurowa przerywana linia konstrukcyjna z wartością (⇔ - wymiar rozsuwany po równo). Idzie za kształtami, gdy się przesuwają; nie jest geometrią (nie trafia do eksportu ani operacji).
@@ -7,10 +17,6 @@
   - Delete usuwa samą linię - ustawiony odstęp zostaje (Cofnij przywraca linię).
 - **Lista Obiekty**: osobne pozycje „Linie konstrukcyjne” oraz STEP (także BREP), STL, SVG i DXF dla obiektów z importu - obok Szkiców, Tekstów i Brył. Rodzaj pliku zapisuje się w projekcie.
 - **Przyciąganie przy przesuwaniu myszą** (Przesuń - strzałki, kwadraty płaszczyzn, chwycony obiekt), dla szkiców i brył: środek okręgu na środek okręgu (także otwory brył), środki zamkniętych kształtów, wierzchołki, równoległe proste w jednej linii i styczność (okrąg - prosta, okrąg - okrąg). Pomarańczowy znacznik pokazuje, co złapano; Alt - bez przyciągania. Pola X / Y / Z mają teraz 4 miejsca po przecinku.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.44 — Narzędzia szkicu: lustro, połącz, wymiar; strzałki w Przesuń / Obróć
 

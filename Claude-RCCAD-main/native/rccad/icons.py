@@ -928,6 +928,14 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         arc = QPainterPath(); arc.moveTo(8, 24); arc.arcTo(QRectF(8, 8, 32, 32), 180, -90)
         p.setPen(pen(ORANGE, 3.4)); p.drawPath(arc)
         p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(8, 24), 3, 3); p.drawEllipse(QPointF(24, 8), 3, 3)
+    elif kind == 'x_sfit':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 12, 38, 30))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4)); p.drawEllipse(QPointF(24, 27), 7, 7)
+        p.setPen(pen(ORANGE, 2.4)); p.drawLine(QPointF(8, 4), QPointF(18, 14)); p.drawPolyline(QPolygonF([QPointF(12, 14), QPointF(18, 14), QPointF(18, 8)]))
+    elif kind == 'x_salign':
+        p.setPen(pen(BLUE, 3.4)); p.drawLine(QPointF(4, 41), QPointF(44, 41))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4)); p.drawRect(QRectF(12, 15, 24, 24))
+        p.setPen(pen(ORANGE, 2.4)); p.drawLine(QPointF(24, 3), QPointF(24, 11)); p.drawPolyline(QPolygonF([QPointF(20, 8), QPointF(24, 12), QPointF(28, 8)]))
     elif kind == 'x_smirror':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPolygon(QPolygonF([QPointF(20, 8), QPointF(6, 40), QPointF(20, 40)]))
         p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4)); p.drawPolygon(QPolygonF([QPointF(28, 8), QPointF(42, 40), QPointF(28, 40)]))
@@ -1246,6 +1254,17 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 st(acc, 2.6); p.drawLine(QPointF(11, 14), QPointF(37, 14)); p.drawLine(QPointF(11, 9), QPointF(11, 24)); p.drawLine(QPointF(37, 9), QPointF(37, 24))
                 p.drawPolyline(poly([(16, 10), (11.5, 14), (16, 18)])); p.drawPolyline(poly([(32, 10), (36.5, 14), (32, 18)]))
                 dot(11, 30, ink); dot(37, 30, ink)
+            elif sh == 'sfit':
+                # dopasowanie szkicu: ściana (prostokąt) i mały szkic przesuwany na jej środek
+                st(ink, 2.4); p.drawRect(QRectF(5, 13, 38, 28))
+                st(acc, 2.6); p.drawEllipse(QPointF(24, 27), 6, 6); p.drawLine(QPointF(10, 6), QPointF(19, 15))
+                p.drawPolyline(poly([(13, 15), (19, 15), (19, 9)]))
+                dot(24, 27)
+            elif sh == 'salign':
+                # wyrównanie szkicu: krawędź wzorcowa i linia szkicu dosunięta do niej
+                st(ink, 3.0); p.drawLine(QPointF(6, 40), QPointF(42, 40))
+                st(acc, 2.8); p.drawRect(QRectF(12, 14, 22, 22))
+                p.drawLine(QPointF(23, 4), QPointF(23, 11)); p.drawPolyline(poly([(19, 8), (23, 12), (27, 8)]))
             elif sh == 'trim':
                 st(ink, 2.8); p.drawLine(QPointF(14, 14), QPointF(40, 36)); p.drawLine(QPointF(14, 34), QPointF(40, 12))
                 st(acc, 2.6); p.drawEllipse(QPointF(11, 12), 4.5, 4.5); p.drawEllipse(QPointF(11, 36), 4.5, 4.5)

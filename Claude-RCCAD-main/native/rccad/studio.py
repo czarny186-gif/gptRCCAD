@@ -40,6 +40,7 @@ from .stepedit_ui import StepEditTools
 from .tilt_ui import TiltTools
 from .twist_ui import TwistTools
 from .sketchtools_ui import SketchTools, SKETCH_TOOLS
+from .sketchplace_ui import SketchPlace
 from . import dims
 from .gear_ui import GearTools
 from .gearpair_ui import GearPairTools
@@ -209,7 +210,7 @@ def _label(text, name='label'):
 
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
-TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'sfillet', 'smirror', 'sjoin', 'sdim', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
+TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'sfillet', 'smirror', 'sjoin', 'sdim', 'sfit', 'salign', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
         'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear', 'gearpair', 'gearsim'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
@@ -224,7 +225,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlace, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -239,6 +240,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self._refine_timer.setSingleShot(True)
         self._refine_timer.setInterval(60)
         self._refine_timer.timeout.connect(lambda: self._refine_meshes())
+        self._ex_spec_timer = QTimer(self)          # wyciągnięcie / wycięcie: dokładny wynik liczony w tle przed Zastosuj
+        self._ex_spec_timer.setSingleShot(True)
+        self._ex_spec_timer.setInterval(self.EX_SPECULATE_MS)
+        self._ex_spec_timer.timeout.connect(lambda: self._extrude_speculate())
         self._warm_timer = QTimer(self)
         self._warm_timer.setSingleShot(True)
         self._warm_timer.setInterval(400)
@@ -491,6 +496,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
                  ('smirror', ui.style_icon('s_smirror', 38), 'Lustro szkicu — odbij kształty szkicu względem linii albo osi szkicu'),
                  ('sjoin', ui.style_icon('s_sjoin', 38), 'Połącz szkice — osobne linie (np. boki kwadratu) w jeden szkic: Ofset i zaokrąglenie działają na cały kształt'),
                  ('sdim', ui.style_icon('s_sdim', 38), 'Wymiar — kliknij dwa punkty (np. środki okręgów) i wpisz odstęp; kliknięty kształt - jego wymiary'),
+                 ('sfit', ui.style_icon('s_sfit', 38), 'Dopasowanie szkicu — zaznaczony szkic na środek płaskiej ściany bryły albo zamkniętego szkicu'),
+                 ('salign', ui.style_icon('s_salign', 38), 'Wyrównanie szkicu — linia szkicu (albo skrajny punkt okręgu) na krawędzi bryły lub linii innego szkicu'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('link', ui.style_icon('link', 38), 'Połącz — bryły zachowują się jak jedna (bez scalania); Rozłącz je rozdziela'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
@@ -1777,6 +1784,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self.sf_kind.currentIndexChanged.connect(self._sf_kind_changed)
 
         self._build_sketch_tool_panels()
+        self._build_sketch_place_panels()
         self._build_ply_panels()
         self._build_scale_panel()
         self._build_color_panel()
@@ -1788,7 +1796,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self._build_gearsim_panel()
         self._build_link_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.sketch_tool_panels(), *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.sketch_tool_panels(), *self.sketch_place_panels(), *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1837,7 +1845,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.sketch_place_panels(), *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1902,7 +1910,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'tilt': self.apply_tilt, 'twist': self.apply_twist, 'gear': self.apply_gear, 'gearpair': self.apply_gearpair, 'gearsim': self.toggle_gearsim, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'sfit': self.apply_sfit, 'salign': self.apply_salign, 'tilt': self.apply_tilt, 'twist': self.apply_twist, 'gear': self.apply_gear, 'gearpair': self.apply_gearpair, 'gearsim': self.toggle_gearsim, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -2064,6 +2072,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self.view.hover_gate = None
         self.view.free_drag = None
         self.view.set_hover_body(None)
+        if mode != 'extrude' and hasattr(self, '_ex_spec_timer'):
+            self._extrude_spec_clear()            # wynik liczony z wyprzedzeniem przestaje być potrzebny
         self.mode = mode
         self._timers['extrude'].setInterval(16)
         self.points = []
@@ -2228,6 +2238,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             self._color_enter()
         elif mode == 'matchsize':
             self._matchsize_enter()
+        elif mode in ('sfit', 'salign'):
+            self._splace_begin(mode)          # Dopasowanie / Wyrównanie szkicu
         elif mode == 'tilt':
             self._tilt_enter()
         elif mode == 'twist':
@@ -3854,6 +3866,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
                 self._hover_shell_solid(x, y)
             elif self.mode == 'matchsize':
                 self._mz_hover(x, y)
+            elif self.mode in ('sfit', 'salign'):
+                self.splace_hover(x, y)
             elif self.mode == 'link':
                 self.link_hover(x, y)
             elif self.mode == 'tilt' and self.tl_face is None:
@@ -4045,6 +4059,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             self.pick_color(x, y)
         elif self.mode == 'matchsize':
             self.pick_matchsize(x, y)
+        elif self.mode in ('sfit', 'salign'):
+            self.splace_click(x, y, shift)
         elif self.mode == 'tilt':
             self.pick_tilt(x, y)
         elif self.mode == 'twist':
@@ -5008,6 +5024,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             color = (.9, .2, .2, .7) if red else ((.3, .75, .5, .72) if op == 'intersect' else PREVIEW_BLUE)
             self.view.set_preview_mesh(mesh, color=color, line_color=(.56, .07, .07, 1) if red else (.14, .3, .45, 1), width=2)
             self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}.')
+            self._ex_spec_timer.start()          # ustawienia stoją: dokładny wynik zaczyna się liczyć w tle
 
         self.run_preview('extrude', compute, show)
         if self._hv is None:
@@ -5035,11 +5052,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
                             pass
         return ids
 
-    def apply_extrude(self):
-        if self.apply_step_recipe():
-            return
-        if self.busy or not self.ex_profiles:
-            return
+    def _extrude_job(self):
+        """Zadanie wyciągnięcia / wycięcia dla bieżących ustawień: (klucz ustawień, build, nazwa operacji, op).
+        Klucz opisuje wszystko, od czego zależy wynik - ten sam klucz = ten sam wynik."""
         op = self.ex_op.currentData()
         makers = self._make_tools()
         existing = list(self.document.bodies)
@@ -5052,19 +5067,14 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         skip = self._extent_skip() if op == 'join' and scope != 'target' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
         skip = sorted(set(skip) | self._protected())             # ukrytych brył operacja nie zmienia
         folder = self._new_folder(profiles, spent, len(makers), op, 'Wyciągnięcie')
-        folded = self._extrude_fold(op, direction, d1, d2, profiles, existing, spent, target, scope)
-        if folded is not None:          # kolejne pociągnięcie tej samej ściany: poprawia wcześniejsze wyciągnięcie (bez duplikatu w historii)
-            j, merged = folded
-            self.view.set_preview_mesh(None)
-            self.view.set_handles([])
-            self.set_mode(None)
-            self._fold_step(j, merged, 'Wyciągnięcie' if op == 'join' else 'Wycięcie', step_label=None)
-            return
+        described = hist.describe_profiles(profiles, existing)
+        key = repr((id(self.document.bodies), tuple(id(b.shape) for b in existing), op, direction, d1, d2, described, sorted(spent),
+                    upto, scope, target.get('body') if target else None, skip, folder))
 
         def build():
             receivers=hist.extrusion_receivers(existing,profiles,scope,target.get('body') if target else None) if scope else None
             bodies = hist.offloaded(hist.combine_makers, existing, makers, op, spent, out, skip=skip, folder=folder,only=receivers)
-            recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=described, spent=sorted(spent), out=out)
             if receivers is not None:recipe.update(join_to=receivers,join_side=scope)
             if folder:
                 recipe['folder'] = folder
@@ -5073,6 +5083,87 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             if skip:
                 recipe['skip'] = list(skip)      # bryła-wysokość nie bierze udziału w operacji (także przy przeliczaniu historii)
             return bodies, recipe      # zapis kroku do historii liczy się w tle razem z operacją
+        label = {'cut': 'Wycięcie', 'join': 'Wyciągnięcie (dodaj)', 'intersect': 'Część wspólna'}.get(op, 'Wyciągnięcie')
+        return key, build, label, op
+
+    EX_SPECULATE_MS = 450         # po tylu ms bez zmian ustawień wynik wyciągnięcia liczy się w tle, zanim klikniesz Zastosuj
+
+    def _extrude_speculate(self):
+        """Wynik wyciągnięcia / wycięcia (dokładna bryła z operacją logiczną) liczony w tle już podczas podglądu: Zastosuj
+        z tymi samymi ustawieniami bierze gotowy wynik zamiast liczyć wszystko od nowa."""
+        if (self.mode != 'extrude' or not self.ex_profiles or self.busy or self.step_editing or self.document.merging
+                or self._hv is not None):
+            return
+        try:
+            key, build, _label, _op = self._extrude_job()
+        except Exception:
+            return
+        spec = self.__dict__.get('_ex_spec')
+        if spec is not None and spec['key'] == key:
+            return                                      # ten wynik już jest albo właśnie się liczy
+        if spec is not None and not spec['event'].is_set():
+            spec['next'] = True                         # poprzedni jeszcze się liczy - nowy wystartuje po nim
+            return
+        import threading
+        spec = self._ex_spec = dict(key=key, event=threading.Event(), result=None, error=None, next=False)
+
+        def run():
+            try:
+                spec['result'] = build()
+            except Exception as exc:
+                spec['error'] = exc
+            finally:
+                spec['event'].set()
+            return None
+
+        work = _Work(run)
+
+        def finished(*_):
+            if spec.get('next') and self.__dict__.get('_ex_spec') is spec:
+                spec['next'] = False
+                self._ex_spec_timer.start()
+        work.signals.done.connect(finished)
+        work.signals.failed.connect(finished)
+        self.pool.start(work)
+
+    def _extrude_spec_clear(self):
+        self.__dict__.pop('_ex_spec', None)
+        timer = self.__dict__.get('_ex_spec_timer')
+        if timer is not None:
+            timer.stop()
+
+    def apply_extrude(self):
+        if self.apply_step_recipe():
+            return
+        if self.busy or not self.ex_profiles:
+            return
+        op = self.ex_op.currentData()
+        existing = list(self.document.bodies)
+        spent = self._consumed_sketches(self.ex_profiles)
+        profiles, direction, d1, d2 = list(self.ex_profiles), self.ex_dir.currentData(), self.ex_value.value(), self.ex_second.value()
+        target = self.ex_target
+        scope=self.ex_join_scope.currentData() if op=='join' and self.ex_extent.currentData()=='upto' else None
+        folded = self._extrude_fold(op, direction, d1, d2, profiles, existing, spent, target, scope)
+        if folded is not None:          # kolejne pociągnięcie tej samej ściany: poprawia wcześniejsze wyciągnięcie (bez duplikatu w historii)
+            self._extrude_spec_clear()
+            j, merged = folded
+            self.view.set_preview_mesh(None)
+            self.view.set_handles([])
+            self.set_mode(None)
+            self._fold_step(j, merged, 'Wyciągnięcie' if op == 'join' else 'Wycięcie', step_label=None)
+            return
+        key, build, label, op = self._extrude_job()
+        spec = self.__dict__.pop('_ex_spec', None)
+        if spec is not None and spec['key'] == key:
+            # wynik dla tych ustawień liczy się już w tle (albo jest gotowy) - bez liczenia od nowa
+            fresh = build
+
+            def build():
+                spec['event'].wait()
+                if spec['error'] is not None or spec['result'] is None:
+                    return fresh()
+                return spec['result']
+        self._extrude_spec_clear()
 
         def apply(result):
             bodies, recipe = result
@@ -5082,7 +5173,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
-        self.run_operation({'cut': 'Wycięcie', 'join': 'Wyciągnięcie (dodaj)', 'intersect': 'Część wspólna'}.get(op, 'Wyciągnięcie'), build, apply, after=lambda: self.set_mode(None))
+        self.run_operation(label, build, apply, after=lambda: self.set_mode(None))
 
     def _extrude_fold(self, op, direction, d1, d2, profiles, existing, spent, target, scope):
         doc = self.document

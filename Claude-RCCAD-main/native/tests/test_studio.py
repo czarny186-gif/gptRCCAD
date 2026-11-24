@@ -152,9 +152,9 @@ class StudioTests(unittest.TestCase):
 
     def test_surface_tool_buttons_are_distinct_and_next_to_new_sketch(self):
         w=self.w;w.set_tab('Szkic');w._layout_overlays()
-        keys=('sketch','wrapsketch','wrapcorner','matchsize','sfillet','smirror','sjoin','sdim','surface')       # 0.5.43: zaokrąglenie narożników za Wyrównaj rozmiar; 0.5.44: lustro, połącz, wymiar
+        keys=('sketch','wrapsketch','wrapcorner','matchsize','sfillet','smirror','sjoin','sdim','sfit','salign','surface')       # 0.5.43: zaokrąglenie narożników za Wyrównaj rozmiar; 0.5.44: lustro, połącz, wymiar; 0.5.46: dopasowanie, wyrównanie szkicu
         self.assertEqual([b for b in keys],[b for b in w._tab_tools('Szkic')])
-        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),9)
+        self.assertEqual(len({w.tools[key].icon().cacheKey() for key in keys}),11)
         self.assertEqual([w.tools[key].x() for key in keys],sorted(w.tools[key].x() for key in keys))
 
     def test_surface_hover_shows_point_and_corner_hover_shows_edge(self):
@@ -1299,6 +1299,30 @@ class StudioTests(unittest.TestCase):
         with patch.object(self.w.view,'pick_profile',return_value=sk.id):self.w.view_clicked(5,5,False,False)
 
     # 0.4.66: zaznaczone szkice (np. grupa importu) - Wyciągnij od razu bierze wszystkie, Shift + klik odznacza
+    # 0.5.46: dokładny wynik wyciągnięcia / wycięcia liczy się w tle już podczas podglądu - Zastosuj nie liczy od nowa
+    def test_extrude_apply_reuses_result_computed_during_preview(self):
+        w=self.w;box=Body('Kostka',k.box(40,40,10)).prepared()
+        sk=Body('S',k.transform(k.sketch('rectangle','XY',10,10),(0,0,10)),'sketch','XY').prepared()
+        w.document.commit([box,sk]);w.refresh();w.selected=[sk.id];w.set_mode('extrude')
+        w.ex_op.setCurrentIndex(w.ex_op.findData('cut'));w.ex_value.setValue(-4);self.wait()
+        w._ex_spec_timer.stop();w._extrude_speculate()
+        spec=w._ex_spec;self.assertTrue(spec['event'].wait(60));self.assertIsNone(spec['error'])
+        calls=[]
+        real=hist.offloaded
+        with patch.object(hist,'offloaded',side_effect=lambda *a,**kw:(calls.append(1),real(*a,**kw))[1]):
+            w.apply_extrude();self.wait()
+        self.assertEqual(calls,[])                                                  # gotowy wynik - bez liczenia od nowa
+        solid=next(x for x in w.document.bodies if x.kind=='solid');v1=solid.shape.Volume();self.assertLess(v1,40*40*10-1)
+        # inne ustawienia niż policzone w tle: liczy się od nowa (i dobrze)
+        w.undo();self.wait();w.selected=[sk.id];w.set_mode('extrude');w.ex_op.setCurrentIndex(w.ex_op.findData('cut'));w.ex_value.setValue(-4);self.wait()
+        w._ex_spec_timer.stop();w._extrude_speculate();self.assertTrue(w._ex_spec['event'].wait(60))
+        w.ex_value.setValue(-6);w._ex_spec_timer.stop()
+        with patch.object(hist,'offloaded',side_effect=lambda *a,**kw:(calls.append(1),real(*a,**kw))[1]):
+            w.apply_extrude();self.wait()
+        self.assertEqual(calls,[1])
+        solid=next(x for x in w.document.bodies if x.kind=='solid');self.assertLess(solid.shape.Volume(),v1-1)
+        w.set_mode(None);self.assertIsNone(w.__dict__.get('_ex_spec'))
+
     def test_extrude_takes_selected_sketches_and_shift_deselects(self):
         w=self.w
         a=Body('A',k.sketch('rectangle','XY',10,10),'sketch','XY',folder='plik').prepared()
@@ -4210,6 +4234,67 @@ class StudioTests(unittest.TestCase):
         w.skt_click(*w.view.project_one((7,30,0)));self.assertEqual(w.sd['b'][0],line.id)
         self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
         e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
+
+    # 0.5.46: Dopasowanie szkicu - zaznaczony szkic na środek płaskiej ściany bryły albo zamkniętego szkicu
+    def test_sketch_fit_to_face_and_closed_sketch(self):
+        w=self.w;self.sketch('circle',(50,50),(53,50));circ=next(x for x in w.document.bodies if x.kind=='sketch')
+        w.set_mode(None)
+        box=Body('Kostka',k.box(40,20,10)).prepared();big=Body('Duży',k.polyline('XY',[(-100,0),(-60,0),(-60,30),(-100,30)],True),'sketch','XY').prepared()
+        w.document.commit([*w.document.bodies,box,big]);w.refresh();w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        bb=box.shape.BoundingBox();top=np.array([(bb.xmin+bb.xmax)/2,(bb.ymin+bb.ymax)/2,bb.zmax])
+        w.selected=[circ.id];w.set_mode('sfit');self.assertEqual(w.sfit['ids'],[circ.id]);self.assertEqual(w.sfit['stage'],'target')
+        self.assertTrue(w.sfit_panel.isVisible());self.assertTrue(w.tools['sfit'].isChecked() if 'sfit' in w.tools else True)
+        w.splace_click(*w.view.project_one(top+[5,3,0]))
+        self.assertEqual(w.sfit['target']['kind'],'face');self.assertIn(circ.id,w.override)          # podgląd
+        w.apply_sfit();self.wait()
+        moved=w.document.get(circ.id);c=moved.shape.Edges()[0].arcCenter()
+        self.assertTrue(np.allclose(c.toTuple(),top,atol=1e-6))
+        self.assertEqual(moved.meta['tool'],'circle')                                     # wymiary okręgu zostają
+        self.assertAlmostEqual(float(sm.values(moved.meta)[0]),3,4)
+        self.assertTrue(np.allclose(k.actual_frame(moved.shape,moved.plane).normal,(0,0,1),atol=1e-9))
+        # na środek zamkniętego szkicu (ta sama płaszczyzna XY: ruch w płaszczyźnie)
+        w.selected=[circ.id];w.undo();self.wait();w.selected=[circ.id];w.set_mode('sfit')
+        w.splace_click(*w.view.project_one((-100,15,0)))
+        self.assertEqual(w.sfit['target']['kind'],'sketch');w.apply_sfit();self.wait()
+        c=w.document.get(circ.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(c.x,-80,4);self.assertAlmostEqual(c.y,15,4)
+        self.assertEqual(w.document.get(circ.id).plane,'XY')
+        # pionowa ściana: szkic kładzie się na niej (płaszczyzna obrócona), obrót 90° wokół środka
+        w.selected=[big.id];w.set_mode('sfit');side=np.array([bb.xmax,(bb.ymin+bb.ymax)/2,(bb.zmin+bb.zmax)/2])
+        w.splace_click(*w.view.project_one(side+[0,2,1]));self.assertEqual(w.sfit['target']['kind'],'face')
+        w._sfit_turn(90);w.apply_sfit();self.wait()
+        nb=w.document.get(big.id);fr=k.actual_frame(nb.shape,nb.plane)
+        self.assertTrue(np.allclose(fr.normal,(1,0,0),atol=1e-6))
+        nbb=nb.shape.BoundingBox();self.assertAlmostEqual(nbb.xmin,bb.xmax,5)
+        self.assertAlmostEqual(nbb.ylen,40,4);self.assertAlmostEqual(nbb.zlen,30,4)           # obrót o 90° (bez obrotu: 30 x 40)
+
+    # 0.5.46: Wyrównanie szkicu - linia szkicu na krawędź bryły (z obrotem), skrajny punkt okręgu na linię szkicu
+    def test_sketch_align_line_and_circle_point(self):
+        w=self.w;box=Body('Kostka',k.box(40,20,10)).prepared();bb=box.shape.BoundingBox()
+        tilted=Body('Skos',k.polyline('XY',[(0,-30),(10,-25),(10,-40)],True),'sketch','XY').prepared()
+        circ=Body('Okrąg',k.sketch('circle','XY',10,x=60,y=0),'sketch','XY').prepared()
+        guide=Body('Prowadnica',k.polyline('XY',[(50,20),(90,20)]),'sketch','XY').prepared()
+        w.document.commit([box,tilted,circ,guide]);w.refresh();w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        w.set_mode('salign');self.assertTrue(w.salign_panel.isVisible())
+        w.splace_click(*w.view.project_one((5,-27.5,0)))                                 # skośna linia (0,-30)-(10,-25)
+        self.assertEqual(w.salign['source']['kind'],'line')
+        w.splace_click(*w.view.project_one(((bb.xmin+bb.xmax)/2+3,bb.ymin,0)))           # krawędź bryły y=ymin na z=0
+        self.assertEqual(w.salign['target']['kind'],'solid')
+        w.apply_salign();self.wait()
+        e=w.document.get(tilted.id).shape.Edges()[0]
+        a,b=np.array(e.startPoint().toTuple()),np.array(e.endPoint().toTuple())
+        self.assertAlmostEqual(a[1],bb.ymin,5);self.assertAlmostEqual(b[1],bb.ymin,5)        # linia leży na krawędzi
+        self.assertAlmostEqual(np.linalg.norm(b-a),math.hypot(10,5),5)
+        # okrąg: górny skrajny punkt na linię y=20 (styczny od dołu)
+        r=circ.shape.Edges()[0].radius()
+        w.set_mode('salign');w.splace_click(*w.view.project_one((60,r,0)))
+        self.assertEqual(w.salign['source']['kind'],'point');self.assertTrue(np.allclose(w.salign['source']['p'],(60,r,0)))
+        w.splace_click(*w.view.project_one((70,20,0)));w.apply_salign();self.wait()
+        c=w.document.get(circ.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(c.y,20-r,5);self.assertAlmostEqual(c.x,60,5)
+        # krawędź bryły poza płaszczyzną szkicu nie jest wzorcem
+        w.set_mode('salign');w.splace_click(*w.view.project_one((60,20-2*r,0)))
+        self.assertIsNone(w._salign_target_at(*w.view.project_one(((bb.xmin+bb.xmax)/2,bb.ymin,bb.zmax))))
 
     # 0.5.45: Wymiar zostaje jako purpurowa linia konstrukcyjna; „Rozsuń oba po równo”; klik w wartość - edycja; Delete - tylko linia
     def test_sketch_dimension_line_symmetric_edit_delete(self):
