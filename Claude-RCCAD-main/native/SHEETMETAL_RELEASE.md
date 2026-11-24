@@ -1,12 +1,20 @@
-# RCCAD Desktop 0.5.46 — Dopasowanie i Wyrównanie szkiców, szybsze Zastosuj przy wyciąganiu
+# RCCAD Desktop 0.5.47 — Wymiar: edycja, przesuwanie myszą, kilka wymiarów z punktu; odznaczanie prawym przyciskiem
 
-- **Dopasowanie szkicu** (górny pasek, zakładka Szkic): zaznaczony szkic (albo kilka) przenosi się na środek wskazanej płaskiej ściany bryły albo zamkniętego szkicu i kładzie na ścianie (także pionowej / skośnej - płaszczyzna szkicu obraca się razem z nim). Obrót wokół środka co 90° albo o wpisany kąt, podgląd na żywo, wymiary szkicu zostają.
-- **Wyrównanie szkicu**: wskazana prosta linia szkicu albo skrajny punkt okręgu / łuku ustawia się na linii wzorcowej - prostej krawędzi bryły w płaszczyźnie szkicu albo linii innego szkicu. Skośna linia najpierw obraca się równolegle do wzorca; szkic przesuwa się prostopadle do wzorca.
-- **Wyciąganie i wycinanie - sprawdzone**: podgląd pokazywał tylko bryłę-narzędzie, a dokładny wynik (bryła + połączenie / wycięcie) liczył się dopiero po Zastosuj - stąd wrażenie liczenia od nowa. Teraz, gdy ustawienia stoją ok. pół sekundy, dokładny wynik liczy się w tle już podczas podglądu; Zastosuj z tymi samymi ustawieniami bierze gotowy wynik (albo dokańcza trwające liczenie) zamiast zaczynać od początku.
+- **Poprawiona edycja wymiaru**: wpisanie nowej wartości po kliknięciu wymiaru i Enter w otwartym szkicu nie zmieniało odległości (Enter przejmowało narzędzie) - teraz zmienia.
+- **Wymiar - tylko wybór punktów i przesuwanie**: lewy przycisk nie obraca już widoku i nie otwiera zmiany rozmiaru kształtów. Przeciągnięcie kształtu przesuwa go w płaszczyźnie szkicu, linie wymiarów idą za nim, a wartości zmieniają się na bieżąco (z przyciąganiem do środków, linii i stycznych; Alt - bez). Widok przesuwasz prawym przyciskiem albo kółkiem.
+- **Kilka wymiarów z jednego punktu** (np. od środka jednego okręgu do kilku innych) - każdy da się potem edytować osobno.
+- **Odznaczanie prawym przyciskiem** w Lustrze, Połącz szkice, Wymiarze, Dopasowaniu i Wyrównaniu: prawy klik na wybranym szkicu, ścianie, linii albo punkcie odznacza go.
+- **Dopasowanie i Wyrównanie nie zamykają się po Zastosuj** - od razu można wybrać kolejne szkice i cel (wcześniej po ponownym otwarciu stare zaznaczenie blokowało wybór nowych). Okno zamyka Zamknij albo wybór innego narzędzia.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.46 — Dopasowanie i Wyrównanie szkiców, szybsze Zastosuj przy wyciąganiu
+
+- **Dopasowanie szkicu** (górny pasek, zakładka Szkic): zaznaczony szkic (albo kilka) przenosi się na środek wskazanej płaskiej ściany bryły albo zamkniętego szkicu i kładzie na ścianie (także pionowej / skośnej - płaszczyzna szkicu obraca się razem z nim). Obrót wokół środka co 90° albo o wpisany kąt, podgląd na żywo, wymiary szkicu zostają.
+- **Wyrównanie szkicu**: wskazana prosta linia szkicu albo skrajny punkt okręgu / łuku ustawia się na linii wzorcowej - prostej krawędzi bryły w płaszczyźnie szkicu albo linii innego szkicu. Skośna linia najpierw obraca się równolegle do wzorca; szkic przesuwa się prostopadle do wzorca.
+- **Wyciąganie i wycinanie - sprawdzone**: podgląd pokazywał tylko bryłę-narzędzie, a dokładny wynik (bryła + połączenie / wycięcie) liczył się dopiero po Zastosuj - stąd wrażenie liczenia od nowa. Teraz, gdy ustawienia stoją ok. pół sekundy, dokładny wynik liczy się w tle już podczas podglądu; Zastosuj z tymi samymi ustawieniami bierze gotowy wynik (albo dokańcza trwające liczenie) zamiast zaczynać od początku.
 
 ### 0.5.45 — Wymiary jako linie konstrukcyjne, przyciąganie przy przesuwaniu, porządek w Obiektach
 

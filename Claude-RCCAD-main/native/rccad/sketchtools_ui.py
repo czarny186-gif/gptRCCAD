@@ -19,7 +19,7 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton
 
 from . import dims
 from . import history as hist
@@ -148,6 +148,8 @@ class SketchTools:
             self.sj_ids = chosen
             self._sj_update()
         else:
+            self.selected = []
+            self.view.set_handles([])            # Wymiar: bez uchwytów zmiany rozmiaru kształtów
             self._sd_update()
 
     def _skt_body_ok(self, body):
@@ -462,12 +464,8 @@ class SketchTools:
         self.sd_value.selectAll()
 
     def _sd_shape_dims(self, body, edge):
-        """Kliknięta linia / okrąg bez punktu: wymiary samego kształtu (istniejące okno wymiarów szkicu)."""
-        if body.meta and body.meta.get('tool') in sm.EDITABLE and body.meta.get('tool') != 'line':
-            self.selected = [body.id]
-            self._last_sketch_id = body.id
-            self.open_dim_edit()
-            return
+        """Kliknięta linia bez punktu: pojedyncza prosta linia - wymiar jej długości (od końców). Wymiar nie otwiera okna
+        zmiany rozmiaru kształtu - w tym narzędziu klik wybiera punkty, a przeciąganie przesuwa kształty."""
         e = body.shape.Edges()[edge]
         if len(body.shape.Edges()) == 1 and e.geomType() == 'LINE':      # pojedyncza linia: długość od jej końców
             pts = dims.points_of(body.shape)
@@ -478,12 +476,120 @@ class SketchTools:
                 self._sd_value_now()
                 self._sd_update()
                 return
-        if body.meta and body.meta.get('tool') in sm.EDITABLE:
-            self.selected = [body.id]
-            self._last_sketch_id = body.id
-            self.open_dim_edit()
-            return
-        self.toast('Ten kształt nie ma własnych wymiarów - kliknij dwa jego punkty (np. środek okręgu i koniec linii).')
+        self.toast('Kliknij punkt kształtu (środek okręgu, koniec albo środek linii). Przeciągnij kształt, żeby go przesunąć.')
+
+    # ------------------------------------------------------------------ Wymiar: przesuwanie kształtów myszą
+    SD_DRAG_PX = 4.0
+
+    def _sd_hook(self, kind, x, y):
+        """Lewy przycisk w narzędziu Wymiar: klik wybiera punkt, przeciągnięcie kształtu przesuwa go w płaszczyźnie szkicu
+        (linie wymiarów idą za nim, wartości zmieniają się na bieżąco). Widok się nie obraca, uchwyty zmiany rozmiaru są
+        wyłączone - przesuwać widok można prawym przyciskiem albo kółkiem."""
+        if kind == 'press':
+            body, _ = self._skt_body_at(x, y)
+            uv = self.view.plane_point(self.sketch_plane, x, y)
+            self._sd_drag = dict(x=x, y=y, body=body, uv=uv, moved=False, shift=None)
+            return True
+        drag = self.__dict__.get('_sd_drag')
+        if drag is None:
+            return True
+        if kind == 'move':
+            if not drag['moved'] and np.hypot(x - drag['x'], y - drag['y']) < self.SD_DRAG_PX:
+                return True
+            body = drag['body']
+            if body is None or drag['uv'] is None:
+                return True
+            uv = self.view.plane_point(self.sketch_plane, x, y)
+            if uv is None:
+                return True
+            drag['moved'] = True
+            shift = np.asarray(kernel.to_world(self.sketch_plane, *uv), float) - np.asarray(kernel.to_world(self.sketch_plane, *drag['uv']), float)
+            shift = self._sd_drag_snap(body, shift)
+            drag['shift'] = shift
+            try:
+                self.override = {body.id: dims.moved(body, shift, self._meta_shape)}
+            except Exception:
+                self.override = {}
+            self.refresh()
+            return True
+        self._sd_drag = None                     # puszczenie
+        self.view.set_marker(None)
+        if not drag['moved']:
+            self._sd_click(x, y)                 # zwykłe kliknięcie: wybór punktu
+            return True
+        body, shift = drag['body'], drag['shift']
+        self.override = {}
+        if body is None or shift is None or float(np.linalg.norm(shift)) < 1e-9:
+            self.refresh()
+            return True
+        moved = dims.moved(body, shift, self._meta_shape)
+        self._dim_commit([moved if b.id == body.id else b for b in self.document.bodies], 'Przesunięcie szkicu', select=[])
+        return True
+
+    def _sd_drag_snap(self, body, shift):
+        """Przeciągany kształt klei się do środków, wierzchołków, linii i stycznych innych szkiców tej płaszczyzny."""
+        from . import movesnap
+        if QApplication.keyboardModifiers() & Qt.AltModifier:
+            self.view.set_marker(None)
+            return shift
+        try:
+            frame = kernel.frame_of(self.sketch_plane)
+            u = np.asarray(frame.xdir, float)
+            v = np.cross(np.asarray(frame.normal, float), u)
+            others = [b.shape for b in self.document.bodies if b.id != body.id and self._skt_body_ok(b)]
+            moving, static = movesnap.gather([body.shape]), movesnap.gather(others)
+            ppm = max(self.view._cam_ppm(), 1e-6)
+            hit = movesnap.snap(shift, moving, static, [u, v], 10.0 / ppm)
+        except Exception:
+            hit = None
+        if hit is None:
+            self.view.set_marker(None)
+            return shift
+        corr, point, label = hit
+        self.view.set_marker(point, label=label)
+        return shift + corr
+
+    # ------------------------------------------------------------------ prawy przycisk: odznaczanie w narzędziach
+    def tool_right_deselect(self, x, y):
+        """Prawy klik na wybranym elemencie (szkic, ściana, linia, punkt) w Lustrze, Połącz, Wymiarze, Dopasowaniu
+        i Wyrównaniu odznacza go. Zwraca True, gdy coś odznaczono (wtedy widok się nie przesuwa)."""
+        if self.busy:
+            return False
+        if self.mode == 'sketch' and self.tool in SKETCH_TOOLS:
+            body, edge = self._skt_body_at(x, y)
+            if self.tool == 'smirror':
+                line = self.smr['line']
+                if body is not None and body.id in self.smr['ids']:
+                    self.smr['ids'].remove(body.id)
+                elif line is not None and body is not None and body.name == line[2]:
+                    self.smr['line'] = None
+                else:
+                    return False
+                self._smr_update()
+                return True
+            if self.tool == 'sjoin':
+                if body is None or body.id not in self.sj_ids:
+                    return False
+                self.sj_ids.remove(body.id)
+                self._sj_update()
+                return True
+            if self.tool == 'sdim':
+                hit = self._sd_point_at(x, y)
+                a, b = self.sd['a'], self.sd['b']
+                same = lambda h, k: h is not None and k is not None and h[0] == k[0] and np.linalg.norm(h[1] - k[1]) < 1e-9
+                if same(hit, b):
+                    self.sd['b'] = None
+                elif same(hit, a):
+                    self.sd = dict(a=b, b=None) if b is not None else dict(a=None, b=None)
+                else:
+                    return False
+                self.override = {}
+                self._sd_update()
+                return True
+            return False
+        if self.mode in ('sfit', 'salign'):
+            return self.splace_right(x, y)
+        return False
 
     def _sd_axis(self):
         kind = self.sd_kind.currentData()
@@ -674,6 +780,9 @@ class SketchTools:
         """Prawy przycisk na zaznaczonej linii wymiaru: przeciąganie przesuwa kształty wzdłuż niej, wymiar zmienia się na
         żywo; puszczenie zapisuje odległość."""
         if stage == 'press':
+            if self.tool_right_deselect(x, y):
+                self._dim_drag = None
+                return True                      # prawy klik odznaczył element narzędzia
             cid = self._dim_item_at(x, y)
             if cid is None or cid not in self.selected or self.busy:
                 return False

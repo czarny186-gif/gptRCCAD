@@ -1919,6 +1919,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             if action is None and self.mode == 'sketch' and self.tool in SKETCH_TOOLS:
                 action = self.skt_apply
             focus = QApplication.focusWidget()
+            editor = self.__dict__.get('_dim_editor')
+            if editor is not None and editor.isVisible():
+                action = self._dim_edit_done      # Enter przy otwartym polu wartości wymiaru zatwierdza nowy wymiar (nie narzędzie)
             if action and not isinstance(focus, QPlainTextEdit) and (focus is None or self.isAncestorOf(focus) or focus is self):
                 action()
                 return True
@@ -3692,6 +3695,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def _sketch_hook(self, kind, x, y):
         if self.mode == 'sketch' and self.tool == 'text' and not self.busy:
             return self._text_hook(kind, x, y)
+        if self.mode == 'sketch' and self.tool == 'sdim' and not self.busy:
+            return self._sd_hook(kind, x, y)          # Wymiar: klik - punkt, przeciągnięcie - przesuwanie kształtu (bez obrotu widoku)
         if self.mode != 'sketch' or self.tool is not None or self.busy:
             return False
         if kind == 'press':

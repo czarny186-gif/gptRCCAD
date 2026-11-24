@@ -183,6 +183,42 @@ class SketchPlace:
         else:
             self._salign_click(x, y)
 
+    def splace_right(self, x, y):
+        """Prawy klik na wybranym szkicu, ścianie albo linii odznacza go."""
+        body, _ = self._splace_sketch_at(x, y)
+        if self.mode == 'sfit':
+            target = self.sfit['target']
+            if body is not None and body.id in self.sfit['ids']:
+                self.sfit['ids'].remove(body.id)
+                if not self.sfit['ids']:
+                    self.sfit['stage'] = 'shapes'
+            elif target is not None and target['kind'] == 'sketch' and body is not None and body.id == target['id']:
+                self.sfit['target'] = None
+            elif target is not None and target['kind'] == 'face':
+                hit = self.view.pick_face(x, y)
+                if not hit or hit[0] != target['id']:
+                    return False
+                self.sfit['target'] = None              # ściana-cel odznaczona
+            else:
+                return False
+            self.override = {}
+            self._sfit_update()
+            return True
+        source, target = self.salign['source'], self.salign['target']
+        if target is not None:
+            found = self._salign_target_at(x, y)
+            if found is not None and found[0][0] == target['id']:
+                self.salign['target'] = None
+                self.override = {}
+                self._salign_update()
+                return True
+        if source is not None and body is not None and body.id in source['ids']:
+            self.salign = dict(source=None, target=None)
+            self.override = {}
+            self._salign_update()
+            return True
+        return False
+
     def _splace_commit(self, changed, label):
         bodies = [changed.get(b.id, b) for b in self.document.bodies]
         ids = list(changed)
@@ -192,9 +228,23 @@ class SketchPlace:
             self.document.pending_label = label
             self.document.commit(result)
 
+        mode = self.mode
+
         def after():
-            self.selected = [i for i in ids if self.document.get(i) is not None]
-            self.set_mode(None)
+            # okno zostaje otwarte: można od razu wybrać kolejne szkice (zamyka je Zamknij albo inne narzędzie)
+            self.override = {}
+            if self.mode != mode:
+                return
+            if mode == 'sfit':
+                self.sfit = dict(ids=[], target=None, stage='shapes')
+                self.sfit_angle.blockSignals(True)
+                self.sfit_angle.setValue(0)
+                self.sfit_angle.blockSignals(False)
+                self._sfit_update()
+            else:
+                self.salign = dict(source=None, target=None)
+                self._salign_update()
+            self.toast(f'{label} - gotowe. Wybierz kolejne szkice albo Zamknij.', 2500)
         self.override = {}
         self.view.set_preview_mesh(None)
         self.run_operation(label, lambda: list(bodies), apply, after=after)

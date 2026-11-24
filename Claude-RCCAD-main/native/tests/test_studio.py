@@ -4229,11 +4229,74 @@ class StudioTests(unittest.TestCase):
         w.document.commit([*w.document.bodies,line]);w.refresh();w.choose_tool('sdim')
         for _ in range(5):self.app.processEvents()
         w.skt_click(*w.view.project_one((7,0,0)))                                      # bok prostokąta (poza punktami)
-        self.assertTrue(w.dim_panel.isVisible());self.assertEqual(w._dim_target['body'].id,r.id)
-        w.dim_panel.hide()
+        self.assertFalse(w.dim_panel.isVisible());self.assertIsNone(w.sd['a'])          # 0.5.47: Wymiar nie zmienia rozmiaru kształtów
         w.skt_click(*w.view.project_one((7,30,0)));self.assertEqual(w.sd['b'][0],line.id)
         self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
         e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
+
+    # 0.5.47: Wymiar - edycja wartości Enterem w otwartym szkicu, kilka wymiarów z jednego punktu, przeciąganie kształtu
+    # (linie wymiarów idą za nim na żywo), lewy przycisk nie obraca widoku, prawy klik odznacza punkt
+    def test_sketch_dimension_edit_enter_multi_and_drag(self):
+        from PySide6.QtTest import QTest
+        w=self.w;self.sketch('circle',(0,0),(3,0));self.sketch('circle',(20,0),(23,0));self.sketch('circle',(0,20),(3,20))
+        a,b,c=[x for x in w.document.bodies if x.kind=='sketch'];w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        P=lambda p:w.view.project_one(p)
+        for other,val in ((b,25),(c,15)):                                                 # dwa wymiary z jednego punktu (środek a)
+            oc=other.shape.Edges()[0].arcCenter()
+            w._sd_hook('press',*P((0,0,0)));w._sd_hook('release',*P((0,0,0)))
+            w._sd_hook('press',*P(oc.toTuple()));w._sd_hook('release',*P(oc.toTuple()))
+            self.assertEqual(w.sd['b'][0],other.id);w.sd_value.setValue(val);w.apply_sketch_dim();self.wait()
+        cl=[x for x in w.document.bodies if x.kind=='cline'];self.assertEqual(len(cl),2)
+        self.assertEqual({x.meta['dim']['a']['id'] for x in cl},{a.id})
+        self.assertEqual(sorted(round(i['value'],3) for i in w.view.dim_items),[15,25])
+        # edycja zatwierdzonego wymiaru: klik w wartość, wpisanie i Enter (w otwartym szkicu z narzędziem Wymiar)
+        cid=next(x.id for x in cl if x.meta['dim']['b']['id']==b.id)
+        w.view.dim_layout();rect=next(r for r,i in w.view.dim_rects if i==cid)
+        self.assertTrue(w.dim_label_press(rect.center().x(),rect.center().y()));self.assertTrue(w._dim_editor.isVisible())
+        w._dim_editor.setFocus();w._dim_editor.setText('32')
+        with patch.object(w,'isActiveWindow',return_value=True):
+            QTest.keyClick(w._dim_editor,Qt.Key_Return)
+        self.wait();self.assertAlmostEqual(w.document.get(b.id).shape.Edges()[0].arcCenter().x,32,4)
+        self.assertAlmostEqual(next(i['value'] for i in w.view.dim_items if i['id']==cid),32,4)
+        # przeciąganie kształtu: lewy przycisk przesuwa go (widok się nie obraca), wymiary zmieniają się na żywo
+        cam=dict(w.view.opts);ppm=w.view._cam_ppm()
+        start=np.asarray(P((0,18,0)),float)                                               # krawędź okręgu c (środek 0,15 po wymiarze)
+        self.assertTrue(w._sd_hook('press',*start))
+        w._sd_hook('move',*(start+[ppm*7.3,0]))
+        self.assertIn(c.id,w.override,(w._sd_drag,w.document.get(c.id).shape.Edges()[0].arcCenter().toTuple(),ppm))
+        live=next(i['value'] for i in w.view.dim_items if i['b'] is not None and i['id']!=cid)
+        oc=w.override[c.id].shape.Edges()[0].arcCenter();self.assertGreater(oc.x,2);self.assertAlmostEqual(oc.y,15,3)
+        self.assertAlmostEqual(live,math.hypot(oc.x,oc.y),4)                              # wymiar liczy się na żywo
+        w._sd_hook('release',*(start+[ppm*7.3,0]));self.wait()
+        self.assertEqual(w.override,{});self.assertEqual(w.view.opts['azimuth'],cam['azimuth']);self.assertEqual(w.view.opts['elevation'],cam['elevation'])
+        cc=w.document.get(c.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(cc.x,oc.x,6);self.assertAlmostEqual(cc.y,15,4)
+        self.assertEqual(w.document.get(c.id).meta['tool'],'circle')
+        # prawy klik na wybranym punkcie odznacza go
+        w._sd_hook('press',*P((0,0,0)));w._sd_hook('release',*P((0,0,0)));self.assertIsNotNone(w.sd['a'])
+        self.assertTrue(w.tool_right_deselect(*P((0,0,0))));self.assertIsNone(w.sd['a'])
+        self.assertFalse(w.tool_right_deselect(*P((50,50,0))))
+
+    # 0.5.47: Dopasowanie / Wyrównanie zostają otwarte po Zastosuj; prawy klik odznacza szkic, ścianę, linię
+    def test_sketch_place_tools_stay_open_and_right_click_deselects(self):
+        w=self.w;box=Body('Kostka',k.box(40,20,10)).prepared();bb=box.shape.BoundingBox()
+        s1=Body('A',k.sketch('circle','XY',6,x=60,y=0),'sketch','XY').prepared();s2=Body('B',k.sketch('circle','XY',6,x=80,y=0),'sketch','XY').prepared()
+        w.document.commit([box,s1,s2]);w.refresh();w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        P=lambda p:w.view.project_one(p);top=np.array([(bb.xmin+bb.xmax)/2,(bb.ymin+bb.ymax)/2,bb.zmax])
+        r=s1.shape.Edges()[0].radius()
+        w.selected=[s1.id];w.set_mode('sfit');w.splace_click(*P(top+[4,2,0]));self.assertIsNotNone(w.sfit['target'])
+        self.assertTrue(w.splace_right(*P(top+[4,2,0])));self.assertIsNone(w.sfit['target'])      # prawy klik: ściana odznaczona
+        w.splace_click(*P(top+[4,2,0]));w.apply_sfit();self.wait()
+        self.assertEqual(w.mode,'sfit');self.assertTrue(w.sfit_panel.isVisible())                   # okno zostaje
+        self.assertEqual((w.sfit['ids'],w.sfit['stage'],w.sfit['target']),([],'shapes',None))
+        w.splace_click(*P((80+r,0,0)));self.assertEqual(w.sfit['ids'],[s2.id])                     # od razu kolejny szkic
+        self.assertTrue(w.splace_right(*P((80+r,0,0))));self.assertEqual(w.sfit['ids'],[])          # prawy klik: szkic odznaczony
+        w.set_mode('salign');w.splace_click(*P((80,r,0)));self.assertIsNotNone(w.salign['source'])
+        self.assertTrue(w.dim_right_drag('press',*P((80,r,0))));self.assertIsNone(w.salign['source'])   # przez prawy przycisk widoku
+        w.dim_right_drag('release',*P((80,r,0)))
+        w.set_mode('plane');w.plane_picked('XY');w.choose_tool('sjoin');w.skt_click(*P((80+r,0,0)))
+        self.assertEqual(w.sj_ids,[s2.id]);self.assertTrue(w.tool_right_deselect(*P((80+r,0,0))));self.assertEqual(w.sj_ids,[])
 
     # 0.5.46: Dopasowanie szkicu - zaznaczony szkic na środek płaskiej ściany bryły albo zamkniętego szkicu
     def test_sketch_fit_to_face_and_closed_sketch(self):
