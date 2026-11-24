@@ -90,7 +90,7 @@ def _projector(allowed):
     return lambda d: (np.asarray(d, float) @ q) @ q.T
 
 
-LABELS = {'center': 'środek', 'end': 'wierzchołek', 'line': 'w linii', 'tangent': 'styczna'}
+LABELS = {'center': 'środek', 'end': 'wierzchołek', 'line': 'w linii', 'online': 'na linii', 'tangent': 'styczna'}
 
 
 def snap(offset, moving, static, allowed, threshold):
@@ -145,6 +145,31 @@ def snap(offset, moving, static, allowed, threshold):
                 continue                        # odcinki daleko od siebie wzdłuż linii
             if np.linalg.norm(d - proj(d)) < thr * .5:
                 consider(d, p0[i] + d + u[i] * float(np.clip((t0 + t1) / 2, 0, lu[i])), 'line', .9)
+    # punkt na prostej: wierzchołek / środek przesuwanego kształtu dosuwa się do linii innego szkicu (i odwrotnie -
+    # wierzchołek innego szkicu do przesuwanej linii); końce linii łapie już „punkt na punkt”
+    def point_on_lines(points, segs, sign):
+        if not len(points) or not len(segs):
+            return
+        lo, hi = points.min(axis=0) - thr, points.max(axis=0) + thr
+        smin, smax = np.minimum(segs[:, 0], segs[:, 1]), np.maximum(segs[:, 0], segs[:, 1])
+        near = np.all((smax >= lo) & (smin <= hi), axis=1)
+        segs = segs[near][:800]
+        if not len(segs):
+            return
+        a = segs[:, 0]
+        d = segs[:, 1] - a
+        dd = np.maximum(np.einsum('ij,ij->i', d, d), 1e-18)
+        for p in points[:300]:
+            t = np.clip(np.einsum('ij,ij->i', p - a, d) / dd, 0.0, 1.0)
+            foot = a + d * t[:, None]
+            gap = np.linalg.norm(foot - p, axis=1)
+            inner = (t > 1e-6) & (t < 1 - 1e-6) & (gap < thr) & (gap > 1e-9)
+            for k in np.nonzero(inner)[0][:20]:
+                corr = (foot[k] - p) * sign
+                consider(corr, foot[k] if sign > 0 else p, 'online', .95)
+
+    point_on_lines(mp + offset if len(mp) else mp, sl, 1.0)
+    point_on_lines(sp, ml + offset if len(ml) else ml, -1.0)
     # styczność: okrąg - prosta, prosta - okrąg, okrąg - okrąg
     mc, sc = moving['circles'], static['circles']
 

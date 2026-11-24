@@ -3558,4 +3558,17 @@ def sketch_points(shape):
             add(e.endPoint().toTuple(), 'end')
             if gt == 'LINE':
                 add(e.positionAt(.5).toTuple(), 'mid')
+    # środek całego kształtu (prostokąt, wielokąt, tekst, połączony szkic…): środek ciężkości zamkniętego obrysu, a kształtu
+    # otwartego z kilku linii - środek jego ramki. Dopisany na końcu, więc numery wcześniejszych punktów się nie zmieniają.
+    try:
+        import cadquery as cq
+        wires = shape.Wires()
+        for w in wires:
+            if w.IsClosed() and len(w.Edges()) > 1:
+                add(cq.Face.makeFromWires(w).Center().toTuple(), 'center')
+        if len(shape.Edges()) > 1 and not any(w.IsClosed() for w in wires):
+            box = shape.BoundingBox()
+            add(((box.xmin + box.xmax) / 2, (box.ymin + box.ymax) / 2, (box.zmin + box.zmax) / 2), 'center')
+    except Exception:
+        pass
     return out

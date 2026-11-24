@@ -1,14 +1,20 @@
-# RCCAD Desktop 0.5.47 — Wymiar: edycja, przesuwanie myszą, kilka wymiarów z punktu; odznaczanie prawym przyciskiem
+# RCCAD Desktop 0.5.48 — Anuluj liczenie, przyciąganie do prostych linii, środki szkiców w Wymiarze
+
+- **„Anuluj liczenie” pod kostką nawigacji**: przycisk widoczny tylko razem z paskiem postępu. Przerywa operację, podglądy i przygotowania w tle - procesy liczące są zamykane (także zawieszone na jednej operacji) i startują od nowa - zamyka bieżące narzędzie i zostawia projekt taki, jak przed liczoną zmianą. Spóźniony wynik przerwanej operacji jest pomijany.
+- **Przesuń myszą - przyciąganie do prostych linii**: wierzchołek albo środek przesuwanego szkicu (i bryły) klei się do prostej linii innego szkicu, a wierzchołek innego szkicu do przesuwanej linii (znacznik „na linii”) - obok wcześniejszych: środek, wierzchołek, proste w jednej linii, styczność. To samo przyciąganie działa przy przeciąganiu kształtu w narzędziu Wymiar.
+- **Wymiar - punkty w środkach wszystkich szkiców**: oprócz środków okręgów, końców i środków linii można wskazać środek każdego kształtu - prostokąta, wielokąta, połączonego szkicu (środek ciężkości obrysu), a łamanej otwartej środek jej ramki.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.47 — Wymiar: edycja, przesuwanie myszą, kilka wymiarów z punktu; odznaczanie prawym przyciskiem
 
 - **Poprawiona edycja wymiaru**: wpisanie nowej wartości po kliknięciu wymiaru i Enter w otwartym szkicu nie zmieniało odległości (Enter przejmowało narzędzie) - teraz zmienia.
 - **Wymiar - tylko wybór punktów i przesuwanie**: lewy przycisk nie obraca już widoku i nie otwiera zmiany rozmiaru kształtów. Przeciągnięcie kształtu przesuwa go w płaszczyźnie szkicu, linie wymiarów idą za nim, a wartości zmieniają się na bieżąco (z przyciąganiem do środków, linii i stycznych; Alt - bez). Widok przesuwasz prawym przyciskiem albo kółkiem.
 - **Kilka wymiarów z jednego punktu** (np. od środka jednego okręgu do kilku innych) - każdy da się potem edytować osobno.
 - **Odznaczanie prawym przyciskiem** w Lustrze, Połącz szkice, Wymiarze, Dopasowaniu i Wyrównaniu: prawy klik na wybranym szkicu, ścianie, linii albo punkcie odznacza go.
 - **Dopasowanie i Wyrównanie nie zamykają się po Zastosuj** - od razu można wybrać kolejne szkice i cel (wcześniej po ponownym otwarciu stare zaznaczenie blokowało wybór nowych). Okno zamyka Zamknij albo wybór innego narzędzia.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.46 — Dopasowanie i Wyrównanie szkiców, szybsze Zastosuj przy wyciąganiu
 

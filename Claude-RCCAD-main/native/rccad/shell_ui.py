@@ -733,6 +733,7 @@ class BusyBar(QWidget):
         self._active = active
         self._phase = 0.0
         self._idle = 0
+        self.companion = None          # przycisk „Anuluj liczenie” - widoczny tylko razem z paskiem
         self.setFixedSize(100, 6)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setToolTip('Liczenie w tle - okno działa normalnie, możesz obracać i oglądać model')
@@ -756,12 +757,17 @@ class BusyBar(QWidget):
                 self._phase = 0.0
                 self.show()
                 self.raise_()
+            if self.companion is not None and not self.companion.isVisible():
+                self.companion.show()
+                self.companion.raise_()
             self._phase = (self._phase + .035) % 1.0
             self.update()
         elif self.isVisible():
             self._idle += 1
             if self._idle > 4:            # krótkie przerwy między zadaniami nie migają paskiem
                 self.hide()
+                if self.companion is not None:
+                    self.companion.hide()
         elif self._timer.interval() != 200:
             self._timer.setInterval(200)          # nic się nie liczy: sprawdzanie 5 razy na sekundę zamiast 25
 

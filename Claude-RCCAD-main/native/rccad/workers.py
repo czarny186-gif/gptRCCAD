@@ -168,6 +168,52 @@ class Unavailable(Exception):
     """Procesy niegotowe albo zadanie nie dało się wykonać w procesie - policz w bieżącym procesie."""
 
 
+class Aborted(Exception):
+    """Liczenie przerwane przyciskiem „Anuluj liczenie” - wyniku nie ma i nie liczy się go od nowa w oknie."""
+
+
+_abort_gen = 0           # rośnie przy każdym przerwaniu: zadania wysłane wcześniej kończą się wyjątkiem Aborted
+
+
+def abort():
+    """Przerwanie wszystkiego, co liczy się w procesach: procesy są zamykane siłą (także zawieszone na jednej operacji),
+    oczekujące zadania kończą się wyjątkiem Aborted, a nowe procesy startują w tle."""
+    global _pools, _ready, _mesh_pool, _abort_gen
+    with _lock:
+        _abort_gen += 1
+        pools = [*_pools, *([_mesh_pool] if _mesh_pool is not None else [])]
+        _pools, _ready, _mesh_pool = [], False, None
+    for pool in pools:
+        for proc in list((getattr(pool, '_processes', None) or {}).values()):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+    _prepared.clear()
+    if count() > 0:
+        start()
+    return bool(pools)
+
+
+def _failed(exc, gen):
+    """Wyjątek z procesu: przerwane przyciskiem -> Aborted; zawieszony / zamknięty proces -> wyłączenie procesów; zawsze
+    bez wyniku z procesu."""
+    from concurrent.futures import TimeoutError as Timeout
+    from concurrent.futures.process import BrokenProcessPool
+    from concurrent.futures import CancelledError
+    if gen != _abort_gen:
+        return Aborted()
+    if isinstance(exc, (BrokenProcessPool, Timeout)):
+        _broken()              # zawieszony albo zamknięty proces: dalej liczy okno (nic nie czeka bez końca)
+    if isinstance(exc, CancelledError) and gen != _abort_gen:
+        return Aborted()
+    return Unavailable()
+
+
 def call_affine(key, function, *args):
     """Jedno zadanie w procesie przypisanym do klucza (np. ta sama blacha zawsze w tym samym procesie, który pamięta
     jej wcześniejsze wyniki). Wątek okna czeka bez blokady Pythona, więc okno się nie zacina.
@@ -175,17 +221,14 @@ def call_affine(key, function, *args):
     if not ready():
         raise Unavailable()
     from . import kernel
+    gen = _abort_gen
     try:
         future = _pool_for(key).submit(function, *args)
         return future.result(timeout=TIMEOUT)
     except kernel.CadError:
         raise
     except Exception as exc:
-        from concurrent.futures import TimeoutError as Timeout
-        from concurrent.futures.process import BrokenProcessPool
-        if isinstance(exc, (BrokenProcessPool, Timeout)):
-            _broken()              # zawieszony albo zamknięty proces: dalej liczy okno (nic nie czeka bez końca)
-        raise Unavailable() from exc
+        raise _failed(exc, gen) from exc
 
 
 _prepared = {}          # znacznik -> Future przygotowania w tle (np. rozwinięcie blachy w procesie rozwinięć)
@@ -219,16 +262,13 @@ def call_any(function, *args):
     if not ready():
         raise Unavailable()
     from . import kernel
+    gen = _abort_gen
     try:
         return _next_pool().submit(function, *args).result(timeout=TIMEOUT)
     except kernel.CadError:
         raise
     except Exception as exc:
-        from concurrent.futures import TimeoutError as Timeout
-        from concurrent.futures.process import BrokenProcessPool
-        if isinstance(exc, (BrokenProcessPool, Timeout)):
-            _broken()
-        raise Unavailable() from exc
+        raise _failed(exc, gen) from exc
 
 
 def submit_affine(key, function, *args):
@@ -247,6 +287,7 @@ def run_affine(jobs):
     if not ready():
         return None
     from . import kernel
+    gen = _abort_gen
     try:
         futures = [_pool_for(key).submit(function, *args) for key, function, args in jobs]
     except Exception:
@@ -259,10 +300,9 @@ def run_affine(jobs):
         except kernel.CadError:
             raise
         except Exception as exc:
-            from concurrent.futures import TimeoutError as Timeout
-            from concurrent.futures.process import BrokenProcessPool
-            if isinstance(exc, (BrokenProcessPool, Timeout)):
-                _broken()
+            error = _failed(exc, gen)
+            if isinstance(error, Aborted):
+                raise error from exc       # przerwane przyciskiem: bez liczenia od nowa w oknie
             return None             # nieoczekiwany kłopot w procesie: ta sama praca liczy się jeszcze raz tutaj
     return results
 

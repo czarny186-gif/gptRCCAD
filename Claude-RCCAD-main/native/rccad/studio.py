@@ -636,6 +636,19 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         # kostka orientacji (jak ViewCube w Fusion 360): obraca się z kamerą, ściana / narożnik = widok
         self.cube = ViewCube(self.view, v)
         self.busy_bar = ui.BusyBar(v, self.working)      # pasek pod kostką: coś liczy się w tle
+        self.busy_cancel = QPushButton('✕  Anuluj liczenie', v)     # tylko gdy pasek jest widoczny: przerwanie liczenia
+        self.busy_cancel.setObjectName('busycancel')
+        self.busy_cancel.setCursor(Qt.PointingHandCursor)
+        self.busy_cancel.setToolTip('Przerywa wszystko, co liczy się w tle, i wraca do projektu sprzed liczonej zmiany '
+                                    '(także gdy operacja się zawiesiła)')
+        self.busy_cancel.setStyleSheet('QPushButton#busycancel { background:white; color:#a8321e; border:1px solid #e3a99c;'
+                                       ' border-radius:9px; padding:2px 10px; font-size:11px; font-weight:600; }'
+                                       ' QPushButton#busycancel:hover { background:#fdeeea; border-color:#c9573f; }')
+        self.busy_cancel.setFixedHeight(22)
+        self.busy_cancel.adjustSize()
+        self.busy_cancel.hide()
+        self.busy_cancel.clicked.connect(lambda _=False: self.cancel_background())
+        self.busy_bar.companion = self.busy_cancel
         self.objects = ObjectsPanel(v)
         self.objects.select.connect(self.objects_select)
         self.objects.hide_toggled.connect(self.objects_hide)
@@ -1830,6 +1843,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.section_panel.raise_()
         self.cube.move(W - 160, 20)
         self.busy_bar.move(W - 160 + (138 - self.busy_bar.width()) // 2, 164)
+        self.busy_cancel.move(W - 160 + (138 - self.busy_cancel.width()) // 2, 175)
         self.objects.relayout()
         self.objects.move(W - (18 if self.objects.open else 0) - self.objects.width(), 212)   # zwinięta lista: pasek przy samej krawędzi
         self.pad.adjustSize()
@@ -10164,6 +10178,29 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             except Exception:
                 pass
         self._pv_next(key)
+
+    def cancel_background(self):
+        """Przycisk „Anuluj liczenie” pod kostką: przerywa operację, podglądy i przygotowania w tle (procesy liczące są
+        zamykane i startują od nowa), a projekt zostaje taki, jak przed liczoną zmianą. Wyciąga program z zawieszonej
+        operacji - okno od razu wraca do pracy."""
+        from . import workers
+        operation = self._cancel_op is not None
+        if operation:
+            self._cancel_op()                 # wynik operacji zostaje pominięty, okno przestaje czekać
+        self.cancel_previews()
+        for st in self._pv.values():
+            st['running'] = False             # następny podgląd może ruszyć od razu (stary wynik i tak jest pomijany)
+        self._extrude_spec_clear()
+        workers.abort()
+        self.override = {}
+        self.view.set_preview_mesh(None)
+        if self.mode == 'sketch':
+            self.choose_tool(None)
+        elif self.mode is not None:
+            self.set_mode(None)
+        self.refresh()
+        self.toast('Anulowano liczenie - projekt jest taki jak przed zmianą.', 3500)
+        return operation
 
     def cancel_previews(self):
         for st in self._pv.values():

@@ -4234,6 +4234,67 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
         e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
 
+    # 0.5.48: przycisk „Anuluj liczenie” pod kostką - widoczny tylko z paskiem, przerywa liczenie, projekt bez zmian
+    def test_busy_cancel_button_aborts_and_restores(self):
+        import threading,time
+        from rccad import workers
+        w=self.w;box=Body('Kostka',k.box(10,10,10)).prepared();w.document.commit([box]);w.refresh()
+        states=len(w.document.states()) if hasattr(w.document,'states') else None
+        for _ in range(8):w.busy_bar._tick()
+        self.assertFalse(w.busy_cancel.isVisibleTo(w))                                  # nic się nie liczy: przycisku nie ma
+        gate=threading.Event();applied=[]
+        w.selected=[box.id];w.set_mode('move')
+        w.run_operation('Długie liczenie',lambda:(gate.wait(30),[])[1],lambda bodies:(applied.append(1),w.document.commit(bodies)))
+        self.assertTrue(w.busy);w.busy_bar._tick()
+        self.assertTrue(w.busy_bar.isVisibleTo(w));self.assertTrue(w.busy_cancel.isVisibleTo(w))
+        w.busy_cancel.click()
+        self.assertFalse(w.busy);self.assertIsNone(w.mode);self.assertEqual([x.id for x in w.document.bodies],[box.id])
+        gate.set()
+        for _ in range(50):
+            self.app.processEvents();time.sleep(.01)
+        self.assertEqual(applied,[]);self.assertEqual([x.id for x in w.document.bodies],[box.id])   # spóźniony wynik pominięty
+        for _ in range(8):w.busy_bar._tick()
+        self.assertFalse(w.busy_cancel.isVisibleTo(w))                                  # pasek zniknął - przycisk też
+        # zawieszone zadanie w procesie liczącym: przerwanie kończy czekanie wyjątkiem Aborted (bez liczenia od nowa w oknie)
+        workers.start(wait=True)
+        if workers.ready():
+            out={}
+            def job():
+                try:out['v']=workers.call_any(time.sleep,30)
+                except Exception as exc:out['e']=exc
+            t=threading.Thread(target=job);t.start();time.sleep(.5)
+            t0=time.monotonic();workers.abort();t.join(20)
+            self.assertIsInstance(out.get('e'),workers.Aborted);self.assertLess(time.monotonic()-t0,15)
+            workers.start(wait=True);self.assertTrue(workers.ready())
+
+    # 0.5.48: Wymiar - punkty w środkach wszystkich szkiców (prostokąt, wielokąt, łamana), nie tylko okręgów
+    def test_sketch_dimension_points_at_centers_of_all_sketches(self):
+        import rccad.dims as dims
+        sq=k.polyline('XY',[(0,0),(10,0),(10,6),(0,6)],True);open_=k.polyline('XY',[(20,0),(30,0),(30,8)])
+        pts=k.sketch_points(sq);self.assertTrue(any(kind=='center' and np.allclose(p,(5,3,0)) for p,kind in pts))
+        self.assertEqual([kind for _,kind in pts][:8].count('center'),0)                     # środek dopisany na końcu listy
+        self.assertTrue(any(kind=='center' and np.allclose(p,(25,4,0)) for p,kind in k.sketch_points(open_)))
+        w=self.w;self.sketch('rect',(0,0),(20,10));self.sketch('rect',(40,0),(50,10))
+        a,b=[x for x in w.document.bodies if x.kind=='sketch'];w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        w._sd_hook('press',*w.view.project_one((10,5,0)));w._sd_hook('release',*w.view.project_one((10,5,0)))
+        self.assertEqual(w.sd['a'][2],'center');self.assertEqual(w.sd['a'][0],a.id)
+        w._sd_hook('press',*w.view.project_one((45,5,0)));w._sd_hook('release',*w.view.project_one((45,5,0)))
+        self.assertAlmostEqual(w.sd_value.value(),35,4);w.sd_value.setValue(50);w.apply_sketch_dim();self.wait()
+        bb=w.document.get(b.id).shape.BoundingBox();self.assertAlmostEqual((bb.xmin+bb.xmax)/2,60,4)
+        self.assertAlmostEqual(w.view.dim_items[0]['value'],50,4)
+
+    # 0.5.48: Przesuń - wierzchołek przesuwanego szkicu klei się do prostej linii innego szkicu (punkt na linii)
+    def test_move_drag_snaps_point_onto_line(self):
+        w=self.w
+        tri=Body('T',k.polyline('XY',[(0,0),(10,0),(5,8)],True),'sketch','XY').prepared()
+        ln=Body('L',k.polyline('XY',[(-50,20.4),(50,20.4)]),'sketch','XY').prepared()
+        w.document.commit([tri,ln]);w.refresh();w.view.set_view('XY');w.view.opts['distance']=120;w.refresh()
+        w.selected=[tri.id];w.set_mode('move')
+        w.handle_point_dragged('pxy',np.array([7,12.1,0]))
+        self.assertAlmostEqual(w.t_spins[0].value(),7,3);self.assertAlmostEqual(w.t_spins[1].value(),12.4,3)
+        self.assertEqual(w.view.snap_marker[1],'na linii')
+
     # 0.5.47: Wymiar - edycja wartości Enterem w otwartym szkicu, kilka wymiarów z jednego punktu, przeciąganie kształtu
     # (linie wymiarów idą za nim na żywo), lewy przycisk nie obraca widoku, prawy klik odznacza punkt
     def test_sketch_dimension_edit_enter_multi_and_drag(self):
