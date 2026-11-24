@@ -1260,6 +1260,20 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             else:
                 st(ink, 3.0); p.drawArc(QRectF(9, 9, 30, 30), 40 * 16, 270 * 16)
                 p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(36, 10), (38, 22), (27, 17)]))
+        elif name == 'cline':
+            # linia konstrukcyjna wymiaru: purpurowa przerywana z kreskami na końcach i wartością
+            pn = QPen(QColor('#9b30c8'), 3.0, Qt.DashLine, Qt.RoundCap); p.setPen(pn); p.drawLine(QPointF(7, 30), QPointF(41, 30))
+            st('#9b30c8', 3.0); p.drawLine(QPointF(7, 22), QPointF(7, 38)); p.drawLine(QPointF(41, 22), QPointF(41, 38))
+            p.setBrush(QColor('#ffffff')); p.setPen(QPen(QColor('#9b30c8'), 2.0)); p.drawRoundedRect(QRectF(14, 7, 20, 13), 3, 3)
+            st('#9b30c8', 2.2); p.drawLine(QPointF(19, 13.5), QPointF(29, 13.5))
+        elif name in ('step', 'stl', 'svg', 'dxf'):
+            # plik importu: kartka z zagiętym rogiem i rodzajem pliku
+            sheet = QPainterPath(); sheet.moveTo(10, 5); sheet.lineTo(30, 5); sheet.lineTo(39, 14); sheet.lineTo(39, 43); sheet.lineTo(10, 43); sheet.closeSubpath()
+            fl(sheet, soft)
+            st(ink, 2.0); p.drawPolyline(poly([(30, 5), (30, 14), (39, 14)]))
+            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawRoundedRect(QRectF(5, 22, 38, 15), 3, 3)
+            font = QFont('Segoe UI'); font.setPixelSize(11); font.setBold(True); p.setFont(font)
+            p.setPen(QColor('#ffffff')); p.drawText(QRectF(5, 22, 38, 15), Qt.AlignCenter, name.upper())
         elif name in ('eye', 'eyeoff'):
             eye = QPainterPath(); eye.moveTo(4, 24); eye.cubicTo(13, 9, 35, 9, 44, 24); eye.cubicTo(35, 39, 13, 39, 4, 24); eye.closeSubpath()
             fl(eye, soft)

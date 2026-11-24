@@ -22,7 +22,7 @@ icons_orange = '#f09a22'
 from .perfcache import LRU
 from .spatial import BoundsTree
 
-from .document import Body, Document
+from .document import Body, Document, source_of
 from . import history as hist
 from . import workers
 from functools import partial
@@ -40,6 +40,7 @@ from .stepedit_ui import StepEditTools
 from .tilt_ui import TiltTools
 from .twist_ui import TwistTools
 from .sketchtools_ui import SketchTools, SKETCH_TOOLS
+from . import dims
 from .gear_ui import GearTools
 from .gearpair_ui import GearPairTools
 from .gearsim_ui import GearSimTools
@@ -313,6 +314,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self.view.handleDragged.connect(self.handle_dragged)
         self.view.handleReleased.connect(self.handle_released)
         self.view.pointDragged.connect(self.handle_point_dragged)
+        self.view.label_hook = self.dim_label_press          # klik w wartość wymiaru - edycja
+        self.view.right_hook = self.dim_right_drag           # prawy przycisk na zaznaczonej linii wymiaru - przesuwanie wzdłuż niej
         self._build_overlays()
         self.view.installEventFilter(self)
         QApplication.instance().installEventFilter(self)
@@ -796,7 +799,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             pic = QLabel()
             pic.setFixedSize(40, 40)
             label = _label(axis, 'label')
-            spin = _spin(0, -1e6, 1e6, 3, 1.0)
+            spin = _spin(0, -1e6, 1e6, 4, 1.0)          # 0,0001 mm: dokładne przyciąganie środków i linii
             spin.valueChanged.connect(lambda *_: self._transform_changed())
             grid.addWidget(pic, i, 0)
             grid.addWidget(label, i, 1)
@@ -1862,6 +1865,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             self._last_input = time.monotonic()            # praca myszą / klawiaturą - zapis w tle czeka na bezczynność
         if not hasattr(self, '_dim_target'):
             return super().eventFilter(obj, event)
+        editor = self.__dict__.get('_dim_editor')
+        if editor is not None and obj is editor and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            editor.hide()                      # Esc w polu wartości wymiaru: bez zmian
+            return True
         if obj is self.dim_panel and event.type() == QEvent.Hide and self._dim_target is not None:
             self._dim_target = None
             self.view.set_preview_mesh(None)
@@ -6886,7 +6893,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
                 self.toast('Najpierw kliknij bryłę, w której ma powstać wycięcie (siatką STL nie da się wycinać w siatce).')
                 return
             if self.bool_ids and body.kind != 'mesh' and bid not in self.bool_ids:
-                self.toast('Narzędziem jest siatka STL - kliknij obiekt z grupy „Siatki STL”.')
+                self.toast('Narzędziem jest siatka STL - kliknij obiekt z grupy „STL”.')
                 return
             if bid in self.bool_ids:
                 self.bool_ids = [i for i in self.bool_ids if i != bid]
@@ -8937,12 +8944,64 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         values = self._hv[1].copy()
         for i in mask:
             values[i] += float(vec[i])
+        if hid == 'free':          # chwycona bryła / szkic: ruch w płaszczyźnie najbardziej zwróconej do kamery
+            plane = (self.view._handle_drag or {}).get('plane') if isinstance(getattr(self.view, '_handle_drag', None), dict) else None
+            normal = np.asarray(plane[1], float) if plane else np.asarray(self.view.camera_dir(), float)
+            allowed = [e for e in np.eye(3) if abs(e @ normal) < .5]
+        else:
+            allowed = [np.eye(3)[i] for i in mask]
+        values = np.round(values, 2)
+        values = self._move_snapped(values, allowed)
         for spin, value in zip(self.t_spins, values):
             spin.blockSignals(True)
-            spin.setValue(round(float(value), 2))
+            spin.setValue(round(float(value), 4))
             spin.blockSignals(False)
         self.update_transform_preview()
         self._place_gizmo()
+
+    MOVE_SNAP_PX = 10.0           # przyciąganie przy przesuwaniu myszą: odległość na ekranie (piksele)
+
+    def _move_snap_context(self):
+        """Cechy przesuwanych i pozostałych obiektów (środki, wierzchołki, proste, okręgi) - liczone raz na przeciągnięcie."""
+        ctx = self.__dict__.get('_msnap')
+        key = (self.t_target.id if self.t_target is not None else None, tuple(getattr(self, 't_group', ()) or ()), id(self.document.bodies))
+        if ctx is not None and ctx['key'] == key:
+            return ctx
+        from . import movesnap
+        group = set(getattr(self, 't_group', None) or [self.t_target.id])
+        hidden = self.shown_hidden()
+        moving = [b.shape for b in self.document.bodies if b.id in group and b.kind in ('solid', 'sketch')]
+        static = [b.shape for b in self.document.bodies if b.id not in group and b.kind in ('solid', 'sketch')
+                  and b.visible and b.id not in hidden]
+        ctx = self._msnap = dict(key=key, moving=movesnap.gather(moving), static=movesnap.gather(static))
+        return ctx
+
+    def _move_snapped(self, values, allowed):
+        """Przesunięcie myszą z przyciąganiem: gdy przesuwany kształt jest bardzo blisko innego, środki okręgów (i kształtów),
+        wierzchołki, proste w jednej linii i punkty styczne „kleją się”. Działa dla szkiców i brył. Alt - bez przyciągania."""
+        values = np.asarray(values, float)
+        if (self.t_target is None or getattr(self, 't_feature', None) or not allowed
+                or QApplication.keyboardModifiers() & Qt.AltModifier):
+            self.view.set_marker(None)
+            return values
+        from . import movesnap
+        try:
+            ctx = self._move_snap_context()
+            c = np.asarray(self.t_center, float) + values
+            base = self.view.project_one(c)
+            scale = max((float(np.linalg.norm(np.asarray(q, float) - base)) for q in
+                         (self.view.project_one(c + e) for e in np.eye(3)) if q is not None and base is not None), default=0.0)
+            if scale < 1e-6:
+                return values
+            hit = movesnap.snap(values, ctx['moving'], ctx['static'], allowed, self.MOVE_SNAP_PX / scale)
+        except Exception:
+            hit = None
+        if hit is None:
+            self.view.set_marker(None)
+            return values
+        corr, point, label = hit
+        self.view.set_marker(point, label=label)
+        return values + corr
     def _transform_changed(self):
         self.update_transform_preview()
         if self._hv is None:
@@ -9001,6 +9060,14 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             if self._hv is None or self._hv[0] != hid:
                 self._hv = (hid, self.t_spins[index].value())
             value = self._hv[1] + (delta if self.mode == 'move' else math.degrees(delta / max(self.t_radius, 1e-6)))
+            if self.mode == 'move':
+                vec = np.array([s.value() for s in self.t_spins], float)
+                vec[index] = round(value, 1)
+                axis = np.zeros(3)
+                axis[index] = 1.0
+                value = self._move_snapped(vec, [axis])[index]      # przyciąganie do środków, linii, stycznych
+                self.t_spins[index].setValue(round(value, 4))
+                return
             self.t_spins[index].setValue(round(value, 1))
 
     def _stretch_extrude(self):
@@ -9019,6 +9086,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         if hid=='section':
             self._section_drag_start=None;return
         self._hv = None
+        if self.mode == 'move' and self.__dict__.pop('_msnap', None) is not None:
+            self.view.set_marker(None)          # koniec przeciągania: znacznik przyciągania znika
         if hid in ('ex', 'ex2'):
             self._place_extrude_handle()
         elif hid == 'off':
@@ -9346,6 +9415,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         if self._obj_hover and self.mode not in ('sheet', 'flange', 'hem', 'tabwall'):
             highlighted = [*highlighted, self._obj_hover]
         self.view.default_color = self._color_view_default()
+        self.view.set_dims(dims.view_items(bodies, self.selected))        # wymiary: purpurowe linie konstrukcyjne nad modelem
+        bodies = [b for b in bodies if b.kind != 'cline']
         self.view.set_models(bodies, highlighted, self.edges)
         self.view.set_threads({b.id: b.threads for b in bodies if b.threads and b.visible})   # gwinty: lekkie linie, bez geometrii
         if getattr(self, 'th_pick', None) is not None:
@@ -10319,7 +10390,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         self.delete_selected()
 
     def delete_selected(self):
-        if not self.busy and self.selected and self.mode is None:
+        clines = bool(self.selected) and all((b := self.document.get(i)) is not None and b.kind == 'cline' for i in self.selected)
+        if not self.busy and self.selected and (self.mode is None or clines):     # linia wymiaru: Delete także w otwartym szkicu
             self.document.pending_op = dict(type='delete', ids=list(self.selected))
             self.document.commit([b for b in self.document.bodies if b.id not in self.selected])
             self.selected = []
@@ -10513,7 +10585,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             def build_svg():
                 wires = kernel.svg_profiles(path, 'XY')
                 folder = Path(path).stem[:60] if len(wires) > 1 else ''      # wiele konturów - razem w grupie na liście obiektów
-                return hist.prepared_many(Body(f'{Path(path).stem} {i + 1}', w, 'sketch', 'XY', folder=folder) for i, w in enumerate(wires))
+                return hist.prepared_many(Body(f'{Path(path).stem} {i + 1}', w, 'sketch', 'XY', folder=folder, source='svg') for i, w in enumerate(wires))
             self.run_operation('Importowanie SVG', build_svg, self.add_prepared_many, True)
             return
 
@@ -10522,7 +10594,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
             shapes = kernel.import_shapes(path)
             # wiele elementów pliku - razem w jednym folderze na liście obiektów, bryły w różnych kolorach
             return hist.prepared_many(imported((Body(Path(path).stem if i == 0 else f'{Path(path).stem} {i + 1}', s, kind)
-                                                for i, (s, kind) in enumerate(shapes)), Path(path).stem), lenient=True)
+                                                for i, (s, kind) in enumerate(shapes)), Path(path).stem, source_of(path)), lenient=True)
 
         def add(bodies):
             if not bodies:
@@ -10841,7 +10913,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, GearTools,
         """Co trafia do eksportu: tylko obiekty widoczne na polu roboczym (bez ukrytych na liście obiektów i wygaszonych
         szkiców); gdy któreś z nich są zaznaczone - tylko zaznaczone."""
         hidden = self.shown_hidden()
-        visible = [b for b in self.document.bodies if b.id not in hidden]
+        visible = [b for b in self.document.bodies if b.id not in hidden and b.kind != 'cline']     # linie wymiarów nie są geometrią
         chosen = [b for b in visible if b.id in self.selected]
         return chosen or visible
 

@@ -1,4 +1,18 @@
-# RCCAD Desktop 0.5.44 — Narzędzia szkicu: lustro, połącz, wymiar; strzałki w Przesuń / Obróć
+# RCCAD Desktop 0.5.45 — Wymiary jako linie konstrukcyjne, przyciąganie przy przesuwaniu, porządek w Obiektach
+
+- **Wymiar - „Rozsuń oba po równo”**: wpisany odstęp przesuwa oba wybrane kształty po połowie (środek między punktami stoi). Bez zaznaczenia - jak dotąd przesuwa się kształt drugiego punktu.
+- **Wymiar zostaje na polu roboczym** jako purpurowa przerywana linia konstrukcyjna z wartością (⇔ - wymiar rozsuwany po równo). Idzie za kształtami, gdy się przesuwają; nie jest geometrią (nie trafia do eksportu ani operacji).
+  - klik w wartość - pole do wpisania nowego wymiaru (Enter zatwierdza, Esc anuluje);
+  - zaznaczona linia + przytrzymany prawy przycisk myszy - przeciąganie przesuwa kształty wzdłuż linii, wymiar zmienia się na żywo, puszczenie zapisuje odległość;
+  - Delete usuwa samą linię - ustawiony odstęp zostaje (Cofnij przywraca linię).
+- **Lista Obiekty**: osobne pozycje „Linie konstrukcyjne” oraz STEP (także BREP), STL, SVG i DXF dla obiektów z importu - obok Szkiców, Tekstów i Brył. Rodzaj pliku zapisuje się w projekcie.
+- **Przyciąganie przy przesuwaniu myszą** (Przesuń - strzałki, kwadraty płaszczyzn, chwycony obiekt), dla szkiców i brył: środek okręgu na środek okręgu (także otwory brył), środki zamkniętych kształtów, wierzchołki, równoległe proste w jednej linii i styczność (okrąg - prosta, okrąg - okrąg). Pomarańczowy znacznik pokazuje, co złapano; Alt - bez przyciągania. Pola X / Y / Z mają teraz 4 miejsca po przecinku.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.44 — Narzędzia szkicu: lustro, połącz, wymiar; strzałki w Przesuń / Obróć
 
 - **Podświetlenie szkicu pod kursorem**: bez wybranego narzędzia oraz w Przesuń / Obróć (zanim wybierzesz obiekt) szkic pod kursorem świeci się na pomarańczowo - widać, który szkic zaznaczysz, przesuniesz albo obrócisz.
 - **Grupy na liście Obiekty z Shift**: Shift (albo Ctrl) + klik w nazwę grupy dodaje wszystkie jej obiekty do zaznaczenia - także na polu roboczym - więc można zaznaczyć kilka grup naraz; ponowny Shift + klik grupę odznacza. Nagłówek zaznaczonej grupy jest wyróżniony.
@@ -7,10 +21,6 @@
 - **Wymiar**: kliknij dwa punkty (koniec linii, środek okręgu / łuku, środek odcinka), wpisz odstęp - kształt drugiego punktu przesuwa się na tę odległość (najkrótsza, poziomo albo pionowo), z podglądem. Klik w samą linię / okrąg / prostokąt otwiera jego wymiary (długość, średnica, szerokość…), dwa końce pojedynczej linii zmieniają jej długość. Kształty z wymiarami zachowują je po przesunięciu.
 - **Strzałki klawiatury w Przesuń / Obróć**: wybierz kierunek X / Y / Z (wiersz „Strzałki” albo chwyć uchwyt osi) - → / ↑ przesuwają lub obracają o krok, ← / ↓ w drugą stronę, Shift ×10; krok ustawiasz obok.
 - Wszystkie nowe narzędzia są na górnym pasku (boczny pasek się nie wydłuża) i można je dodać do Ulubionych; kroki historii „Połączenie szkiców” i „Lustro szkicu” cofają się i przeliczają jak inne.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.43 — Zaokrąglenie narożników szkicu na górnym pasku
 

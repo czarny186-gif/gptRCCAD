@@ -36,6 +36,15 @@ def parse_color(value):
         return None
 
 
+SOURCES = ('step', 'stl', 'svg', 'dxf')
+
+
+def source_of(path):
+    """Rodzaj importowanego pliku dla listy Obiekty: STEP (także BREP), STL, SVG albo DXF."""
+    suffix = Path(str(path)).suffix.lower()
+    return {'.step': 'step', '.stp': 'step', '.brep': 'step', '.brp': 'step', '.stl': 'stl', '.svg': 'svg', '.dxf': 'dxf'}.get(suffix, '')
+
+
 @dataclass(frozen=True)
 class Body:
     name: str
@@ -50,6 +59,7 @@ class Body:
     folder: str = field(default='', compare=False)      # grupa (folder) na liście obiektów - tylko porządek na liście, nie zmienia geometrii
     threads: tuple = field(default=(), compare=False)   # gwinty kosmetyczne (opisy z rccad.threads) - przesuwają się razem z bryłą
     color: tuple | None = field(default=None, compare=False)   # własny kolor bryły (R, G, B 0..1); None - kolor domyślny projektu
+    source: str = field(default='', compare=False)      # skąd pochodzi obiekt: 'step' / 'stl' / 'svg' / 'dxf' (import) - osobne pozycje na liście Obiekty
 
     def prepared(self):
         return replace(self, mesh=_mesh(self.shape))
@@ -745,6 +755,8 @@ class Document:
             entry['group'] = body.group
         if body.folder:
             entry['folder'] = body.folder
+        if body.source:
+            entry['source'] = body.source
         if body.threads:
             entry['threads'] = [dict(t) for t in body.threads]
         if body.color:
@@ -888,7 +900,7 @@ class Document:
         plane = item.get('plane', 'XY')
         if plane == 'CUSTOM' and kind == 'sketch':
             plane = Frame.from_dict(item['frame'])
-        if kind not in ('solid', 'mesh', 'sketch') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
+        if kind not in ('solid', 'mesh', 'sketch', 'cline') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
             raise CadError("Nieprawidłowy typ obiektu lub płaszczyzna.")
         meta = item.get('meta')
         group = item.get('group', '')
@@ -898,7 +910,8 @@ class Document:
         threads = tuple(t for t in item.get('threads', ()) if isinstance(t, dict) and {'origin', 'axis', 'radius', 'start', 'end', 'pitch'} <= set(t))
         return Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)), mesh=mesh,
                     meta=meta if isinstance(meta, dict) else None, group=group, folder=folder, threads=threads,
-                    color=parse_color(item.get('color')))
+                    color=parse_color(item.get('color')),
+                    source=item.get('source') if item.get('source') in SOURCES else '')
 
     @classmethod
     def load(cls, path):

@@ -989,7 +989,7 @@ def _remote_bodies(module, name, bodies, args, kwargs):
     for b in result:
         source = sources.get(id(b.shape))
         if source is not None:
-            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder, threads=b.threads, color=b.color)))
+            packed.append(('keep', source, dict(id=b.id, name=b.name, kind=b.kind, plane=b.plane, visible=b.visible, meta=b.meta, group=b.group, folder=b.folder, threads=b.threads, color=b.color, source=b.source)))
         else:
             packed.append(('body', b))
     return packed, extra

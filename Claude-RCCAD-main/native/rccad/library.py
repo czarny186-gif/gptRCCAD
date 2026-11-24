@@ -165,7 +165,7 @@ def save_bodies(bodies, folder, name):
 
 def load_bodies(kind, path):
     """Obiekty zapisane w pliku biblioteki, gotowe do wstawienia (z siatkami)."""
-    from .document import Body, Document
+    from .document import Body, Document, source_of
     from . import kernel
     path = Path(path)
     suffix = path.suffix.lower()
@@ -173,12 +173,12 @@ def load_bodies(kind, path):
         bodies = [b for b in Document.load(path).bodies if b.visible]
         return [b if b.mesh is not None else b.prepared() for b in bodies]
     if suffix == '.svg':
-        return [Body(f'{path.stem} {i + 1}' if i else path.stem, w, 'sketch', 'XY').prepared() for i, w in enumerate(kernel.svg_profiles(str(path), 'XY'))]
+        return [Body(f'{path.stem} {i + 1}' if i else path.stem, w, 'sketch', 'XY', source='svg').prepared() for i, w in enumerate(kernel.svg_profiles(str(path), 'XY'))]
     from .colors import imported
     from . import history as hist
     shapes = kernel.import_shapes(path)
     return hist.prepared_many(imported((Body(path.stem if i == 0 else f'{path.stem} {i + 1}', s, k)
-                                        for i, (s, k) in enumerate(shapes)), path.stem), lenient=True)
+                                        for i, (s, k) in enumerate(shapes)), path.stem, source_of(path)), lenient=True)
 
 
 def export_item(kind, path, folder):

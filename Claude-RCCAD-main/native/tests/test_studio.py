@@ -4211,6 +4211,139 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
         e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
 
+    # 0.5.45: Wymiar zostaje jako purpurowa linia konstrukcyjna; „Rozsuń oba po równo”; klik w wartość - edycja; Delete - tylko linia
+    def test_sketch_dimension_line_symmetric_edit_delete(self):
+        from PySide6.QtTest import QTest
+        import rccad.dims as dims
+        w=self.w;self.sketch('circle',(0,0),(3,0));self.sketch('circle',(20,0),(23,0))
+        a,b=[x for x in w.document.bodies if x.kind=='sketch'];w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        w.skt_click(*w.view.project_one((0,0,0)));w.skt_click(*w.view.project_one((20,0,0)))
+        w.sd_sym.setChecked(True);w.sd_value.setValue(30)
+        self.assertEqual(set(w.override),{a.id,b.id})                                   # podgląd: oba kształty się rozsuwają
+        w.apply_sketch_dim();self.wait()
+        ca=w.document.get(a.id).shape.Edges()[0].arcCenter();cb=w.document.get(b.id).shape.Edges()[0].arcCenter()
+        self.assertAlmostEqual(ca.x,-5,4);self.assertAlmostEqual(cb.x,25,4)                # środek (10) zostaje, każdy po 5 mm
+        cl=[x for x in w.document.bodies if x.kind=='cline'];self.assertEqual(len(cl),1);cl=cl[0]
+        self.assertTrue(cl.meta['dim']['sym']);self.assertEqual(cl.name,'Wymiar 30 mm')
+        from rccad.objects import category
+        self.assertEqual(category(cl),'cline')
+        self.assertEqual([i['id'] for i in w.view.dim_items],[cl.id]);self.assertAlmostEqual(w.view.dim_items[0]['value'],30,4)
+        self.assertNotIn(cl.id,{x.id for x in w.view.bodies})                            # nie jest geometrią w widoku 3D
+        self.assertNotIn(cl.id,{x.id for x in w.export_bodies()})                         # ani w eksporcie
+        # klik w wartość: zaznacza linię i otwiera pole edycji
+        rect=w.view.dim_rects[0][0]
+        QTest.mouseClick(w.view,Qt.LeftButton,pos=rect.center().toPoint())
+        self.assertEqual(w.selected,[cl.id]);self.assertTrue(w._dim_editor.isVisible())
+        w._dim_editor.setText('40');w._dim_edit_done();self.wait()
+        ca=w.document.get(a.id).shape.Edges()[0].arcCenter();cb=w.document.get(b.id).shape.Edges()[0].arcCenter()
+        self.assertAlmostEqual(cb.x-ca.x,40,4);self.assertAlmostEqual((ca.x+cb.x)/2,10,4)
+        self.assertAlmostEqual(w.view.dim_items[0]['value'],40,4)
+        # linia idzie za kształtem przesuniętym innym narzędziem
+        moved=replace(w.document.get(b.id),shape=w.document.get(b.id).shape.translate((0,7,0)));moved=moved.prepared()
+        w.document.commit([moved if x.id==b.id else x for x in w.document.bodies]);w.refresh()
+        self.assertAlmostEqual(w.view.dim_items[0]['b'][1],7,4)
+        # Delete usuwa tylko linię wymiaru - odstęp zostaje
+        before=w.document.get(b.id).shape.Edges()[0].arcCenter()
+        w.selected=[cl.id];w.delete_selected()
+        self.assertIsNone(w.document.get(cl.id));self.assertEqual(w.view.dim_items,[])
+        after=w.document.get(b.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(after.x,before.x,6)
+        w.undo();self.wait();self.assertIsNotNone(w.document.get(cl.id))
+        # zapis i odczyt projektu zachowuje linię wymiaru
+        path=Path(tempfile.mkdtemp())/'dims.rccadx';w.document.save(path)
+        loaded=Document.load(path);lc=loaded.get(cl.id);self.assertEqual(lc.kind,'cline');self.assertEqual(lc.meta['dim']['b']['id'],b.id)
+
+    # 0.5.45: zaznaczona linia wymiaru + prawy przycisk: przeciąganie przesuwa kształt wzdłuż niej, puszczenie zapisuje wymiar
+    def test_dimension_line_right_drag(self):
+        from PySide6.QtTest import QTest
+        w=self.w;self.sketch('circle',(0,0),(3,0));self.sketch('circle',(20,0),(23,0))
+        a,b=[x for x in w.document.bodies if x.kind=='sketch'];w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        w.skt_click(*w.view.project_one((0,0,0)));w.skt_click(*w.view.project_one((20,0,0)));w.sd_value.setValue(20);w.apply_sketch_dim();self.wait()
+        cl=next(x for x in w.document.bodies if x.kind=='cline')
+        _,pa,pe=w.view.dim_segments[0];start=(pa*.25+pe*.75)
+        self.assertFalse(w.dim_right_drag('press',*start))                              # niezaznaczona: prawy przycisk przesuwa widok jak dotąd
+        w.selected=[cl.id];w.refresh()
+        _,pa,pe=w.view.dim_segments[0];start=(pa*.25+pe*.75)
+        px=float(np.linalg.norm(w.view.project_one((1,0,0))-np.asarray(w.view.project_one((0,0,0)))))
+        self.assertTrue(w.dim_right_drag('press',*start))
+        d=(pe-pa)/np.linalg.norm(pe-pa)
+        w.dim_right_drag('move',*(start+d*px*5))
+        self.assertIn(b.id,w.override);self.assertAlmostEqual(w.view.dim_items[0]['value'],25,1)    # wymiar na żywo
+        w.dim_right_drag('release',*(start+d*px*5));self.wait()
+        self.assertEqual(w.override,{})
+        cb=w.document.get(b.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(cb.x,25,1)
+        self.assertAlmostEqual(w.document.get(a.id).shape.Edges()[0].arcCenter().x,0,6)
+
+    # 0.5.45: lista Obiekty - osobne pozycje Linie konstrukcyjne, STEP, STL, SVG, DXF
+    def test_objects_sections_by_kind_and_source(self):
+        from rccad.objects import category, GROUPS
+        import rccad.dims as dims
+        w=self.w
+        sk=Body('Szkic',k.polyline('XY',[(0,0),(5,0)]),'sketch','XY').prepared()
+        step=Body('Płytka',k.box(5,5,5),source='step').prepared();stl=Body('Siatka',k.box(4,4,4),'mesh',source='stl').prepared()
+        svg=Body('Logo',k.polyline('XY',[(0,10),(5,10)]),'sketch','XY',source='svg').prepared()
+        dxf=Body('Rys',k.polyline('XY',[(0,20),(5,20)]),'sketch','XY',source='dxf').prepared()
+        solid=Body('Kostka',k.box(3,3,3)).prepared()
+        cl=dims.make('XY',dims.ref(sk,(0,0,0)),dims.ref(sk,(5,0,0)),None,False,[sk])
+        w.document.commit([sk,step,stl,svg,dxf,solid,cl]);w.refresh()
+        self.assertEqual([category(x) for x in (sk,cl,step,stl,svg,dxf,solid)],['sketch','cline','step','mesh','svg','dxf','solid'])
+        self.assertEqual([g[1] for g in GROUPS],['Szkice','Linie konstrukcyjne','Teksty','Bryły','STEP','STL','SVG','DXF'])
+        for _ in range(3):self.app.processEvents()
+        labels=[l.text() for l in w.objects.findChildren(QLabel) if l.objectName()=='group' and l.isVisibleTo(w.objects)]
+        for title in ('SZKICE','LINIE KONSTRUKCYJNE','BRYŁY','STEP','STL','SVG','DXF'):
+            self.assertTrue(any(t.startswith(title+'  ·') for t in labels),(title,labels))
+        path=Path(tempfile.mkdtemp())/'src.rccadx';w.document.save(path);loaded=Document.load(path)
+        self.assertEqual({x.name:x.source for x in loaded.bodies}['Płytka'],'step');self.assertEqual(loaded.get(svg.id).source,'svg')
+        w.objects_group_hide('cline');self.assertIn(cl.id,w.shown_hidden());self.assertEqual(w.view.dim_items,[])
+
+    # 0.5.45: import pliku zapisuje jego rodzaj - obiekt trafia do pozycji STEP / STL / SVG / DXF
+    def test_import_marks_source(self):
+        from rccad.document import source_of
+        self.assertEqual([source_of(n) for n in ('a.STEP','b.stp','c.brep','d.stl','e.svg','f.dxf','g.txt')],['step','step','step','stl','svg','dxf',''])
+        w=self.w;path=Path(tempfile.mkdtemp())/'box.step';k.export_shapes([k.box(5,5,5)],path)
+        with patch('rccad.studio.QFileDialog.getOpenFileName',return_value=(str(path),'')):
+            w.import_model();self.wait()
+        self.assertEqual([x.source for x in w.document.bodies],['step'])
+
+    # 0.5.45: Przesuń myszą - okrąg na okrąg: środki się kleją; proste w jednej linii; styczność; także bryły
+    def test_move_drag_snaps_centers_lines_tangent(self):
+        w=self.w
+        c1=Body('O1',k.sketch('circle','XY',10,x=0,y=0),'sketch','XY').prepared()
+        c2=Body('O2',k.sketch('circle','XY',10,x=40,y=.3),'sketch','XY').prepared()
+        ln=Body('L',k.polyline('XY',[(0,30),(20,30)]),'sketch','XY').prepared()
+        w.document.commit([c1,c2,ln]);w.refresh();w.view.set_view('XY');w.view.opts['distance']=120;w.refresh()
+        for _ in range(3):self.app.processEvents()
+        r=c1.shape.Edges()[0].radius()
+        w.selected=[c1.id];w.set_mode('move');self.assertEqual(w.t_target.id,c1.id)
+        w.handle_point_dragged('pxy',np.array([39.7,0,0]))                               # blisko drugiego okręgu
+        self.assertAlmostEqual(w.t_spins[0].value(),40,3);self.assertAlmostEqual(w.t_spins[1].value(),.3,3)
+        self.assertEqual(w.view.snap_marker[1],'środek')
+        w.handle_released('pxy');self.assertIsNone(w.view.snap_marker)
+        [sp.setValue(0) for sp in w.t_spins];w.handle_point_dragged('pxy',np.array([40-2*r-.25,.3,0]))            # z boku: styczne z zewnątrz
+        self.assertAlmostEqual(w.t_spins[0].value(),40-2*r,3);self.assertEqual(w.view.snap_marker[1],'styczna')
+        w.handle_released('pxy')
+        [sp.setValue(0) for sp in w.t_spins];w.handle_point_dragged('pxy',np.array([5,30-r+.3,0]))                 # okrąg dotyka prostej
+        self.assertAlmostEqual(w.t_spins[1].value(),30-r,3);self.assertEqual(w.view.snap_marker[1],'styczna')
+        w.handle_released('pxy')
+        with patch('rccad.studio.QApplication.keyboardModifiers',return_value=Qt.AltModifier):      # Alt - bez przyciągania
+            [sp.setValue(0) for sp in w.t_spins];w.handle_point_dragged('pxy',np.array([39.7,0,0]));self.assertAlmostEqual(w.t_spins[0].value(),39.7,3)
+        w.handle_released('pxy');w.set_mode(None)
+        # prosta do prostej (oś X zablokowana - strzałka Y): odcinek ustawia się w linii z drugim
+        l2=Body('L2',k.polyline('XY',[(5,52),(25,52)]),'sketch','XY').prepared();w.document.commit([*w.document.bodies,l2]);w.refresh()
+        w.selected=[ln.id];w.set_mode('move');w.handle_dragged('y',21.7)
+        self.assertAlmostEqual(w.t_spins[1].value(),22,3);self.assertEqual(w.view.snap_marker[1],'w linii')
+        w.handle_released('y');w.apply_transform();self.wait()
+        self.assertAlmostEqual(w.document.get(ln.id).shape.BoundingBox().ymin,52,3)
+        # bryły: otwór walca na otwór (środki okręgów krawędzi)
+        w.set_mode(None)
+        cy1=Body('W1',cq.Solid.makeCylinder(4,10,cq.Vector(100,0,0))).prepared();cy2=Body('W2',cq.Solid.makeCylinder(4,10,cq.Vector(130,.4,0))).prepared()
+        w.document.commit([*w.document.bodies,cy1,cy2]);w.refresh();w.selected=[cy1.id];w.set_mode('move')
+        w.handle_point_dragged('pxy',np.array([29.6,0,0]))
+        self.assertAlmostEqual(w.t_spins[0].value(),30,3);self.assertAlmostEqual(w.t_spins[1].value(),.4,3)
+        w.handle_released('pxy');w.apply_transform();self.wait()
+        cc=w.document.get(cy1.id).shape.Center();self.assertAlmostEqual(cc.x,130,3);self.assertAlmostEqual(cc.y,.4,3)
+
     # 0.5.44: Przesuń / Obróć - po wybraniu kierunku strzałki klawiatury przesuwają (obracają) o krok
     def test_transform_arrow_keys_nudge(self):
         from PySide6.QtTest import QTest

@@ -6,7 +6,8 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QSc
 
 from . import icons, shell_ui as ui
 
-GROUPS = (('sketch', 'Szkice', 'sketch'), ('text', 'Teksty', 'text'), ('solid', 'Bryły', 'solid'), ('mesh', 'Siatki STL', 'solid'))
+GROUPS = (('sketch', 'Szkice', 'sketch'), ('cline', 'Linie konstrukcyjne', 'cline'), ('text', 'Teksty', 'text'), ('solid', 'Bryły', 'solid'),
+          ('step', 'STEP', 'step'), ('mesh', 'STL', 'stl'), ('svg', 'SVG', 'svg'), ('dxf', 'DXF', 'dxf'))
 WIDTH = 292
 
 QSS = """
@@ -45,8 +46,17 @@ QFrame#objects QLabel#badge { background:#eef4fa; color:#5b7a93; border-radius:8
 
 
 def category(body):
-    if body.kind in ('solid', 'mesh'):
-        return body.kind            # siatka z pliku STL: osobna grupa (to nie szkic)
+    """Pozycja na liście Obiekty: linie konstrukcyjne (wymiary), obiekty z importu według rodzaju pliku (STEP, STL, SVG,
+    DXF), a reszta jak dotąd - szkice, teksty, bryły."""
+    if body.kind == 'cline':
+        return 'cline'
+    source = getattr(body, 'source', '')
+    if source in ('step', 'svg', 'dxf'):
+        return source
+    if source == 'stl' or body.kind == 'mesh':
+        return 'mesh'               # siatka z pliku STL: osobna grupa (to nie szkic)
+    if body.kind == 'solid':
+        return 'solid'
     return 'text' if body.name.startswith('Tekst') else 'sketch'
 
 

@@ -37,7 +37,7 @@ def name_of(rgb) -> str:
     return next((name for name, value in PALETTE if value == code), code.upper())
 
 
-def imported(bodies, name: str):
+def imported(bodies, name: str, source: str = ''):
     """Obiekty z jednego importowanego pliku: kilka obiektów razem w jednym folderze na liście obiektów (zamiast osobno
     na głównej liście), a bryły każda w innym kolorze z palety (powyżej 16 kolory się powtarzają)."""
     bodies = list(bodies)
@@ -48,6 +48,8 @@ def imported(bodies, name: str):
         changes = {}
         if folder and not b.folder:
             changes['folder'] = folder
+        if source and not b.source:
+            changes['source'] = source          # rodzaj pliku (STEP / STL / DXF) - osobna pozycja na liście Obiekty
         if b.kind == 'solid' and solids > 1 and b.color is None:
             changes['color'] = palette_rgb(IMPORT_ORDER[k % len(IMPORT_ORDER)])
             k += 1

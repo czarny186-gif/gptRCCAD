@@ -95,6 +95,13 @@ def camera_for_normal(n):
     return dict(elevation=elevation, azimuth=azimuth)
 
 
+def DIM_FONT():
+    font = QFont('Segoe UI')
+    font.setPixelSize(12)
+    font.setBold(True)
+    return font
+
+
 class Overlay2D(QWidget):
     """Przezroczysta warstwa 2D nad widokiem 3D (jak <canvas> w wersji HTML): strzałki i uchwyty są ZAWSZE na wierzchu,
     nigdy nie chowają się za bryłą. Rysuje też środki szkiców i znacznik przyciągania."""
@@ -105,6 +112,33 @@ class Overlay2D(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WA_NoSystemBackground)
         self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def _draw_dims(self, p, v):
+        """Wymiary szkicu: purpurowa przerywana linia z kreskami na końcach i wartością w ramce (klik - edycja)."""
+        if not v.dim_items:
+            v.dim_rects, v.dim_segments = [], []
+            return
+        purple = QColor('#9b30c8')
+        p.setFont(DIM_FONT())
+        for it, (pa, pe, pb, rect, text) in zip(v.dim_items, v.dim_layout(full=True)):
+            if pa is None:
+                continue
+            width = 3.2 if it['selected'] else 2.0
+            p.setPen(QPen(purple, width, Qt.DashLine, Qt.RoundCap))
+            p.drawLine(QPointF(*pa), QPointF(*pe))
+            if pb is not None and np.linalg.norm(np.asarray(pb) - pe) > 1:
+                p.setPen(QPen(purple, 1.2, Qt.DotLine))
+                p.drawLine(QPointF(*pe), QPointF(*pb))          # pomocnicza linia do punktu przy wymiarze poziomym / pionowym
+            d = pe - pa
+            n = np.array([-d[1], d[0]]) / max(float(np.linalg.norm(d)), 1e-9) * 7
+            p.setPen(QPen(purple, width))
+            for q in (pa, pe):
+                p.drawLine(QPointF(*(q - n)), QPointF(*(q + n)))
+            p.setPen(QPen(purple, 2.0 if it['selected'] else 1.4))
+            p.setBrush(QColor('#f6e9fc') if it['selected'] else QColor('#ffffff'))
+            p.drawRoundedRect(rect, 6, 6)
+            p.setPen(QColor('#4a1566'))
+            p.drawText(rect, Qt.AlignCenter, text)
 
     @staticmethod
     def _qc(color, alpha=None):
@@ -184,6 +218,7 @@ class Overlay2D(QWidget):
                 p.setPen(QPen(QColor('#1664b1'),1.4));p.setBrush(QColor('white'))
                 rect=QRectF(xy[0]+8,xy[1]-25,21,21);p.drawEllipse(rect)
                 p.drawText(rect,Qt.AlignCenter,label)
+            self._draw_dims(p, v)
             order = {'plane': 0, 'ring': 1, 'axis': 2, 'arrow': 3}
             for h in sorted(v.all_handles(), key=lambda h: order.get(h.get('kind', 'arrow'), 3)):
                 hot = v.hover_handle == h['id'] or (v._handle_drag is not None and v._handle_drag['id'] == h['id'])
@@ -673,6 +708,12 @@ class CadView(gl.GLViewWidget):
         self._dbl = False
         self.drag_hook = None
         self._hook_active = False
+        self.label_hook = None        # (x, y) -> bool: lewy klik w wartość wymiaru (Studio otwiera pole edycji)
+        self.right_hook = None        # (etap, x, y) -> bool: prawy przycisk na zaznaczonej linii wymiaru przesuwa kształty
+        self._right_active = False
+        self.dim_items = []           # linie wymiarów (rccad.dims.view_items) rysowane nad modelem
+        self.dim_rects = []           # [(QRectF wartości, id)] - do klikania
+        self.dim_segments = []        # [(id, punkt ekranu a, punkt ekranu b)]
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
         self.hover_handle = None
         self.free_drag = None         # (id bryły, środek): przeciąganie bryły lewym przyciskiem po płaszczyźnie najbardziej zwróconej do kamery
@@ -2139,11 +2180,45 @@ class CadView(gl.GLViewWidget):
         tolerance=1e-5 if hit is not None and hit[2] else .25
         return hit is None or hit[0] >= np.linalg.norm(point-origin)-tolerance
 
+    def dim_layout(self, full=False):
+        """Położenie linii wymiarów na ekranie: [(a, koniec, punkt b, ramka wartości, tekst)]; zapamiętuje ramki i odcinki
+        do klikania (dim_rects / dim_segments)."""
+        from PySide6.QtGui import QFontMetrics
+        metrics = QFontMetrics(DIM_FONT())
+        out, rects, segments = [], [], []
+        for it in self.dim_items:
+            a, b, axis = it['a'], it['b'], it['axis']
+            end = b if axis is None else a + axis * float((b - a) @ axis)
+            pa, pe = self.project_one(a), self.project_one(end)
+            pb = self.project_one(b) if axis is not None else None
+            if pa is None or pe is None:
+                out.append((None, None, None, None, None))
+                continue
+            pa, pe = np.asarray(pa, float), np.asarray(pe, float)
+            text = f'{it["value"]:.2f}'.rstrip('0').rstrip('.') + ' mm' + ('  ⇔' if it['sym'] else '')
+            w = metrics.horizontalAdvance(text) + 14
+            mid = (pa + pe) / 2
+            rect = QRectF(mid[0] - w / 2, mid[1] - 11, w, 22)
+            out.append((pa, pe, pb, rect, text))
+            rects.append((rect, it['id']))
+            segments.append((it['id'], pa, pe))
+        self.dim_rects, self.dim_segments = rects, segments
+        return out
+
+    def set_dims(self, items):
+        self.dim_items = list(items)
+        self.dim_layout()
+        self.overlay.update()
+
     def mouseMoveEvent(self, event):
         pos = event.position()
         buttons = event.buttons()
         if self._hook_active:
             self.drag_hook('move', pos.x(), pos.y())
+            event.accept()
+            return
+        if self._right_active:
+            self.right_hook('move', pos.x(), pos.y())
             event.accept()
             return
         if self._handle_drag is not None:
@@ -2229,6 +2304,17 @@ class CadView(gl.GLViewWidget):
             event.accept()
             return
         self._press = (event.position().x(), event.position().y(), event.button())
+        if self.label_hook is not None and event.button() == Qt.LeftButton and not event.modifiers() & Qt.ShiftModifier \
+                and self.label_hook(event.position().x(), event.position().y()):
+            self._press = None              # klik w wartość wymiaru: edycja wartości
+            event.accept()
+            return
+        if self.right_hook is not None and event.button() == Qt.RightButton and self.right_hook('press', event.position().x(), event.position().y()):
+            self._right_active = True       # prawy przycisk na zaznaczonej linii wymiaru: przesuwanie kształtów wzdłuż niej
+            self._press = None
+            self.setCursor(Qt.SizeAllCursor)
+            event.accept()
+            return
         if getattr(self,'section_picking',False) and event.button()==Qt.LeftButton:
             event.accept();return
         if self.drag_hook is not None and event.button() == Qt.LeftButton and not event.modifiers() & Qt.ShiftModifier:
@@ -2293,6 +2379,12 @@ class CadView(gl.GLViewWidget):
         if self._hook_active:
             self._hook_active = False
             self.drag_hook('release', event.position().x(), event.position().y())
+            event.accept()
+            return
+        if self._right_active:
+            self._right_active = False
+            self.unsetCursor()
+            self.right_hook('release', event.position().x(), event.position().y())
             event.accept()
             return
         if self._handle_drag is not None:

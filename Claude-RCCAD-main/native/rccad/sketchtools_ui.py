@@ -17,10 +17,11 @@ import uuid
 import numpy as np
 from dataclasses import replace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton
 
+from . import dims
 from . import history as hist
 from . import kernel
 from . import sketchmeta as sm
@@ -98,8 +99,8 @@ class SketchTools:
         # --- wymiar ---
         self.sd = dict(a=None, b=None)
         self.sd_panel, lay = self._panel(286, 'Wymiar', 'x_sdim', 'Odstęp między punktami szkicu', plain=True)
-        self.sd_step1 = ui.StepRow(1, 'x_sdim', 'Pierwszy punkt (zostaje)', plain=True)
-        self.sd_step2 = ui.StepRow(2, 'x_sdim', 'Drugi punkt (ruchomy)', plain=True)
+        self.sd_step1 = ui.StepRow(1, 'x_sdim', 'Pierwszy punkt', plain=True)
+        self.sd_step2 = ui.StepRow(2, 'x_sdim', 'Drugi punkt', plain=True)
         lay.addWidget(self.sd_step1)
         lay.addWidget(self.sd_step2)
         self.sd_kind = QComboBox()
@@ -110,6 +111,11 @@ class SketchTools:
         self.sd_value = _spin(10, 0, 1e6, 3, 1)
         self.sd_value.valueChanged.connect(lambda *_: self._sd_preview())
         self._field(lay, 'Wymiar (mm)', self.sd_value)
+        self.sd_sym = QCheckBox('Rozsuń oba po równo')
+        self.sd_sym.setToolTip('Wpisany wymiar rozsuwa (albo zsuwa) oba kształty po połowie - środek między punktami zostaje. '
+                               'Bez zaznaczenia przesuwa się tylko kształt drugiego punktu.')
+        self.sd_sym.toggled.connect(lambda *_: self._sd_preview())
+        lay.addWidget(self.sd_sym)
         self.sd_status = _label('Kliknij pierwszy punkt.', 'status')
         lay.addWidget(self.sd_status)
         lay.addWidget(_label('Klik w samą linię / okrąg: jego wymiary.', 'hint'))
@@ -394,19 +400,11 @@ class SketchTools:
 
     # ------------------------------------------------------------------ wymiar
     def _sd_candidates(self):
-        cache = self.__dict__.setdefault('_sd_cache', {})
         out = []
         for body in self.document.bodies:
             if not self._skt_body_ok(body):
                 continue
-            hit = cache.get(body.id)
-            if hit is None or hit[0] is not body.shape:
-                try:
-                    pts = kernel.sketch_points(body.shape)
-                except Exception:
-                    pts = []
-                hit = cache[body.id] = (body.shape, pts)
-            out.extend((body.id, p, kind) for p, kind in hit[1])
+            out.extend((body.id, p, kind, i) for i, (p, kind) in enumerate(dims.points_of(body.shape)))
         return out
 
     def _sd_point_at(self, x, y, radius=POINT_PICK_PX):
@@ -421,8 +419,8 @@ class SketchTools:
         j = min(range(len(cands)), key=lambda i: (round(float(dist[i]) / 3.0), order.get(cands[i][2], 3)))
         if dist[j] > radius:
             return None
-        bid, p, kind = cands[j]
-        return bid, np.asarray(p, float), kind
+        bid, p, kind, index = cands[j]
+        return bid, np.asarray(p, float), kind, index
 
     KIND_NAMES = {'center': 'środek', 'end': 'koniec', 'mid': 'środek odcinka'}
 
@@ -453,31 +451,37 @@ class SketchTools:
                 self.toast('Drugi punkt musi być w innym miejscu niż pierwszy.')
                 return
             self.sd['b'] = hit
-            self.sd_value.blockSignals(True)
-            self.sd_value.setValue(round(self._sd_current(), 3))
-            self.sd_value.blockSignals(False)
-            self.sd_value.setFocus()
-            self.sd_value.selectAll()
+            self._sd_value_now()
         self._sd_update()
+
+    def _sd_value_now(self):
+        self.sd_value.blockSignals(True)
+        self.sd_value.setValue(round(self._sd_current(), 3))
+        self.sd_value.blockSignals(False)
+        self.sd_value.setFocus()
+        self.sd_value.selectAll()
 
     def _sd_shape_dims(self, body, edge):
         """Kliknięta linia / okrąg bez punktu: wymiary samego kształtu (istniejące okno wymiarów szkicu)."""
-        if body.meta and body.meta.get('tool') in sm.EDITABLE:
+        if body.meta and body.meta.get('tool') in sm.EDITABLE and body.meta.get('tool') != 'line':
             self.selected = [body.id]
             self._last_sketch_id = body.id
             self.open_dim_edit()
             return
         e = body.shape.Edges()[edge]
-        if len(body.shape.Edges()) == 1 and e.geomType() == 'LINE':      # pojedyncza linia bez wymiarów: długość od jej końców
-            a, b = np.array(e.startPoint().toTuple(), float), np.array(e.endPoint().toTuple(), float)
-            self.sd = dict(a=(body.id, a, 'end'), b=(body.id, b, 'end'))
-            self.sd_kind.setCurrentIndex(0)
-            self.sd_value.blockSignals(True)
-            self.sd_value.setValue(round(float(np.linalg.norm(b - a)), 3))
-            self.sd_value.blockSignals(False)
-            self.sd_value.setFocus()
-            self.sd_value.selectAll()
-            self._sd_update()
+        if len(body.shape.Edges()) == 1 and e.geomType() == 'LINE':      # pojedyncza linia: długość od jej końców
+            pts = dims.points_of(body.shape)
+            ends = [i for i, (_, kind) in enumerate(pts) if kind == 'end'][:2]
+            if len(ends) == 2:
+                self.sd = dict(a=(body.id, pts[ends[0]][0], 'end', ends[0]), b=(body.id, pts[ends[1]][0], 'end', ends[1]))
+                self.sd_kind.setCurrentIndex(0)
+                self._sd_value_now()
+                self._sd_update()
+                return
+        if body.meta and body.meta.get('tool') in sm.EDITABLE:
+            self.selected = [body.id]
+            self._last_sketch_id = body.id
+            self.open_dim_edit()
             return
         self.toast('Ten kształt nie ma własnych wymiarów - kliknij dwa jego punkty (np. środek okręgu i koniec linii).')
 
@@ -490,9 +494,7 @@ class SketchTools:
         return x if kind == 'u' else np.cross(np.asarray(f.normal, float), x)
 
     def _sd_current(self):
-        a, b = self.sd['a'][1], self.sd['b'][1]
-        axis = self._sd_axis()
-        return float(np.linalg.norm(b - a)) if axis is None else abs(float((b - a) @ axis))
+        return dims.measure(self.sd['a'][1], self.sd['b'][1], self._sd_axis())
 
     def _sd_kind_changed(self):
         if self.sd['b'] is not None:
@@ -501,69 +503,22 @@ class SketchTools:
             self.sd_value.blockSignals(False)
         self._sd_preview()
 
-    def _sd_shift(self, value=None):
-        """Wektor przesunięcia kształtu drugiego punktu, po którym wymiar ma wartość value."""
-        a, b = self.sd['a'][1], self.sd['b'][1]
-        value = float(self.sd_value.value() if value is None else value)
-        axis = self._sd_axis()
-        if axis is None:
-            d = b - a
-            length = float(np.linalg.norm(d))
-            if length < 1e-12:
-                raise kernel.CadError('Punkty leżą w tym samym miejscu - nie wiadomo, w którą stronę przesunąć.')
-            return d / length * (value - length)
-        cur = float((b - a) @ axis)
-        sign = 1.0 if cur >= 0 else -1.0
-        return axis * (sign * value - cur)
-
-    def _sd_result(self, value=None):
-        """(stary kształt, nowy kształt, nowe meta) po ustawieniu wymiaru."""
+    def _sd_ends(self):
         if self.sd['a'] is None or self.sd['b'] is None:
             raise kernel.CadError('Kliknij dwa punkty szkicu.')
-        same = self.sd['a'][0] == self.sd['b'][0]
-        body = self.document.get(self.sd['b'][0])
-        if body is None:
-            raise kernel.CadError('Kształtu drugiego punktu już nie ma.')
-        shift = self._sd_shift(value)
-        if same:
-            return (body, *self._sd_same_body(body, shift))
-        return (body, *self._sd_moved(body, shift))
+        ends = []
+        for bid, p, _kind, index in (self.sd['a'], self.sd['b']):
+            body = self.document.get(bid)
+            if body is None:
+                raise kernel.CadError('Kształtu wybranego punktu już nie ma.')
+            ends.append(dims.ref(body, p, index))
+        return ends
 
-    def _sd_moved(self, body, shift):
-        meta = body.meta
-        if meta and meta.get('tool') in sm.EDITABLE and meta.get('points'):
-            p0 = np.asarray(kernel.uv_of(body.plane, (0.0, 0.0, 0.0)), float)
-            p1 = np.asarray(kernel.uv_of(body.plane, tuple(float(c) for c in shift)), float)
-            du, dv = (p1 - p0).tolist()
-            meta2 = dict(meta, points=[[round(float(p[0]) + du, 6), round(float(p[1]) + dv, 6)] for p in meta['points']])
-            return self._meta_shape(body.plane, meta2), meta2
-        return body.shape.translate(tuple(float(c) for c in shift)), None
-
-    def _sd_same_body(self, body, shift):
-        """Oba punkty na jednym kształcie: linia (z wymiarami albo pojedyncza) zmienia długość - przesuwa się drugi koniec."""
-        meta = body.meta
-        b = self.sd['b'][1]
-        if meta and meta.get('tool') == 'line' and len(meta.get('points') or ()) == 2:
-            ends = [np.asarray(kernel.to_world(body.plane, *p), float) for p in meta['points']]
-            k = int(np.argmin([np.linalg.norm(e - b) for e in ends]))
-            if np.linalg.norm(ends[k] - b) < 1e-4:
-                pts = [list(p) for p in meta['points']]
-                uv = kernel.uv_of(body.plane, tuple(float(c) for c in b + shift))
-                pts[k] = [round(float(uv[0]), 6), round(float(uv[1]), 6)]
-                meta2 = dict(meta, points=pts)
-                return self._meta_shape(body.plane, meta2), meta2
-        edges = body.shape.Edges()
-        if len(edges) == 1 and edges[0].geomType() == 'LINE':
-            s, e = np.array(edges[0].startPoint().toTuple(), float), np.array(edges[0].endPoint().toTuple(), float)
-            if np.linalg.norm(e - b) < np.linalg.norm(s - b):
-                e = e + shift
-            else:
-                s = s + shift
-            if np.linalg.norm(e - s) < 1e-6:
-                raise kernel.CadError('Wymiar musi być większy od zera.')
-            return cq_line(s, e), None
-        raise kernel.CadError('Oba punkty leżą na tym samym kształcie - wybierz punkty dwóch różnych kształtów '
-                              '(albo kliknij sam kształt, żeby zmienić jego wymiary).')
+    def _sd_result(self, value=None):
+        """{id: nowy kształt} po ustawieniu wymiaru (przesuwa się kształt drugiego punktu albo - przy „rozsuń po równo” - oba)."""
+        a_end, b_end = self._sd_ends()
+        value = float(self.sd_value.value() if value is None else value)
+        return dims.apply(self.document.bodies, a_end, b_end, value, self._sd_axis(), self.sd_sym.isChecked(), self._meta_shape)
 
     def _sd_update(self):
         a, b = self.sd['a'], self.sd['b']
@@ -586,11 +541,11 @@ class SketchTools:
             self.view.set_preview_mesh(None)
             return
         try:
-            body, shape, meta = self._sd_result()
-            self.override = {body.id: replace(body, shape=shape, mesh=kernel.display_mesh(shape), meta=meta if meta is not None else body.meta)}
-            a = self.sd['a'][1]
-            b = self.sd['b'][1] + self._sd_shift()
-            self.view.set_preview_mesh(kernel.display_mesh(cq_line(a, b)) if np.linalg.norm(b - a) > 1e-9 else None,
+            self.override = self._sd_result()
+            a_end, b_end = self._sd_ends()
+            bodies = [self.override.get(b.id, b) for b in self.document.bodies]
+            a, b = dims.end_point(a_end, bodies), dims.end_point(b_end, bodies)
+            self.view.set_preview_mesh(kernel.display_mesh(dims.line_shape(a, b)) if np.linalg.norm(b - a) > 1e-9 else None,
                                        line_color=PREVIEW, width=2, dashed=True)
         except Exception:
             self.override = {}
@@ -601,44 +556,170 @@ class SketchTools:
         if self.busy or self.mode != 'sketch':
             return
         try:
-            body, shape, meta = self._sd_result()
+            changed = self._sd_result()
+            a_end, b_end = self._sd_ends()
         except kernel.CadError as exc:
             self.toast(str(exc))
             return
         value = self.sd_value.value()
+        axis, sym = self._sd_axis(), self.sd_sym.isChecked()
         self.override = {}
         self.view.set_preview_mesh(None)
         self.sd = dict(a=None, b=None)
         self._sd_update()
-        if meta is not None:
-            self._commit_sketch_edit(body, shape, meta)          # wymiarowany kształt: zmiana zapisana razem z jego wymiarami
-        else:
-            self._sd_commit_plain(body, shape)
+        bodies = [changed.get(b.id, b) for b in self.document.bodies]
+        # odstęp zostaje na polu roboczym jako purpurowa linia konstrukcyjna z wartością (pozycja „Linie konstrukcyjne”)
+        cline = dims.make(self.sketch_plane, a_end, b_end, axis, sym, bodies)
+        self._dim_commit([*bodies, cline], 'Wymiar szkicu', select=[])
         self.toast(f'Wymiar {value:g} mm ustawiony.', 2500)
 
-    def _sd_commit_plain(self, body, shape):
-        """Kształt bez wymiarów (np. połączony albo z ofsetu): nowe położenie zapisane w kroku, który go utworzył, a gdy się
-        nie da - zwykły krok Przesuń (przesunięcie) albo zmiana kształtu."""
-        new = replace(body, shape=shape, mesh=kernel.display_mesh(shape), meta=None if not (body.meta or {}).get('surface') else body.meta)
-        if not self.document.merging and self.amend_objects({body.id: new}, 'Wymiar szkicu', select=[body.id]):
-            return
-        c0 = np.array(body.shape.Center().toTuple(), float)
-        c1 = np.array(shape.Center().toTuple(), float)
-        moved = body.shape.translate(tuple(float(c) for c in c1 - c0))
-        rigid = len(shape.Edges()) == len(body.shape.Edges()) and abs(moved.BoundingBox().DiagonalLength - shape.BoundingBox().DiagonalLength) < 1e-6
-        existing = list(self.document.bodies)
-        if rigid:
-            recipe = dict(type='transform', mode='move', id=body.id, v=[float(c) for c in c1 - c0])
-            build = lambda: list(hist.run_transform(existing, recipe))
-        else:
-            recipe = None
-            build = lambda: [new if b.id == body.id else b for b in existing]
+    def _dim_commit(self, bodies, label, select=None):
+        def apply(result):
+            self.document.pending_op = None
+            self.document.pending_label = label
+            self.document.commit(result)
 
-        def apply(bodies):
-            self.document.pending_op = recipe
-            self.document.pending_label = 'Wymiar szkicu'
-            self.document.commit(bodies)
-        self.run_operation('Wymiar szkicu', build, apply)
+        def after():
+            if select is not None:
+                self.selected = [i for i in select if self.document.get(i) is not None]
+            self.refresh()
+        self.run_operation(label, lambda: list(bodies), apply, after=after)
+
+    # ------------------------------------------------------------------ linie wymiarowe na polu roboczym
+    def dim_value_set(self, cid, value):
+        """Nowa wartość istniejącego wymiaru (edycja po kliknięciu wartości albo przeciągnięcie prawym przyciskiem)."""
+        cline = self.document.get(cid)
+        if cline is None or cline.kind != 'cline' or self.busy:
+            return False
+        d = cline.meta['dim']
+        try:
+            changed = dims.apply(self.document.bodies, d['a'], d['b'], float(value), d.get('axis'), d.get('sym'), self._meta_shape)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return False
+        bodies = [changed.get(b.id, b) for b in self.document.bodies]
+        bodies = [dims.refreshed(b, bodies) if b.id == cid else b for b in bodies]
+        self._dim_commit(bodies, 'Wymiar szkicu', select=[cid])
+        return True
+
+    def _dim_item_at(self, x, y, labels_only=False):
+        for rect, cid in reversed(getattr(self.view, 'dim_rects', [])):
+            if rect.adjusted(-3, -3, 3, 3).contains(x, y):
+                return cid
+        if labels_only:
+            return None
+        best = None
+        for cid, p, q in getattr(self.view, 'dim_segments', []):
+            d = q - p
+            t = float(np.clip(((np.array([x, y]) - p) @ d) / max(float(d @ d), 1e-9), 0, 1))
+            dist = float(np.linalg.norm(p + d * t - [x, y]))
+            if dist < 9 and (best is None or dist < best[0]):
+                best = (dist, cid)
+        return best[1] if best else None
+
+    def dim_label_press(self, x, y):
+        """Lewy klik w wartość wymiaru: zaznacza linię wymiaru i otwiera pole do wpisania nowej wartości."""
+        cid = self._dim_item_at(x, y, labels_only=True)
+        if cid is None or self.busy:
+            return False
+        self.selected = [cid]
+        self.refresh()
+        self._dim_edit_open(cid)
+        return True
+
+    def _dim_edit_open(self, cid):
+        from PySide6.QtWidgets import QLineEdit
+        item = next((it for it in getattr(self.view, 'dim_items', []) if it['id'] == cid), None)
+        rect = next((r for r, i in getattr(self.view, 'dim_rects', []) if i == cid), None)
+        if item is None or rect is None:
+            return
+        edit = getattr(self, '_dim_editor', None)
+        if edit is None:
+            edit = self._dim_editor = QLineEdit(self.view)
+            edit.setObjectName('dimedit')
+            edit.setAlignment(Qt.AlignCenter)
+            edit.setStyleSheet('QLineEdit#dimedit { border:2px solid %s; border-radius:6px; background:white; color:#3d1450;'
+                               ' font-weight:700; padding:1px 4px; }' % dims.COLOR)
+            edit.returnPressed.connect(self._dim_edit_done)
+            edit.editingFinished.connect(lambda: QTimer.singleShot(0, self._dim_edit_cancel_if_unfocused))
+        edit.cid = cid
+        edit.setText(f'{item["value"]:.3f}'.rstrip('0').rstrip('.'))
+        width = max(76, int(rect.width()) + 26)
+        edit.setGeometry(int(rect.center().x() - width / 2), int(rect.center().y() - 14), width, 28)
+        edit.show()
+        edit.raise_()
+        edit.setFocus()
+        edit.selectAll()
+
+    def _dim_edit_done(self):
+        edit = self._dim_editor
+        text = edit.text().replace(',', '.').replace('mm', '').strip()
+        edit.hide()
+        try:
+            value = float(text)
+        except ValueError:
+            self.toast('Wpisz liczbę (mm).')
+            return
+        if value <= 0:
+            self.toast('Wymiar musi być większy od zera.')
+            return
+        self.dim_value_set(edit.cid, value)
+
+    def _dim_edit_cancel_if_unfocused(self):
+        edit = getattr(self, '_dim_editor', None)
+        if edit is not None and edit.isVisible() and not edit.hasFocus():
+            edit.hide()
+
+    def dim_right_drag(self, stage, x, y):
+        """Prawy przycisk na zaznaczonej linii wymiaru: przeciąganie przesuwa kształty wzdłuż niej, wymiar zmienia się na
+        żywo; puszczenie zapisuje odległość."""
+        if stage == 'press':
+            cid = self._dim_item_at(x, y)
+            if cid is None or cid not in self.selected or self.busy:
+                return False
+            item = next((it for it in self.view.dim_items if it['id'] == cid), None)
+            if item is None:
+                return False
+            a, b = item['a'], item['b']
+            axis = item['axis']
+            direction = (b - a) if axis is None else axis * (1.0 if float((b - a) @ axis) >= 0 else -1.0)
+            length = float(np.linalg.norm(direction))
+            if length < 1e-9:
+                return False
+            direction = direction / length
+            pa, pb = self.view.project_one(b), self.view.project_one(b + direction)
+            if pa is None or pb is None:
+                return False
+            screen = np.asarray(pb, float) - np.asarray(pa, float)
+            px = float(np.linalg.norm(screen))
+            if px < 1e-6:
+                return False
+            self._dim_drag = dict(id=cid, x0=x, y0=y, value0=item['value'], screen=screen / px, px=px, sym=item['sym'], value=item['value'])
+            return True
+        drag = getattr(self, '_dim_drag', None)
+        if drag is None:
+            return False
+        moved_px = float(np.array([x - drag['x0'], y - drag['y0']]) @ drag['screen'])
+        value = drag['value0'] + moved_px / drag['px'] * (2.0 if drag['sym'] else 1.0)
+        value = max(.1, round(value, 1))
+        if stage == 'move':
+            if abs(value - drag['value']) > 1e-9:
+                drag['value'] = value
+                cline = self.document.get(drag['id'])
+                d = cline.meta['dim']
+                try:
+                    self.override = dims.apply(self.document.bodies, d['a'], d['b'], value, d.get('axis'), d.get('sym'), self._meta_shape)
+                except kernel.CadError:
+                    self.override = {}
+                self.refresh()
+            return True
+        self._dim_drag = None
+        self.override = {}
+        if abs(drag['value'] - drag['value0']) > 1e-9:
+            self.dim_value_set(drag['id'], drag['value'])
+        else:
+            self.refresh()
+        return True
 
 
 def cq_line(a, b):
