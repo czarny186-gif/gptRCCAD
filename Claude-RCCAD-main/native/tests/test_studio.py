@@ -2735,7 +2735,7 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),\
              patch.object(w.view,'pick_face',return_value=(a.id,None,k._face_point(face))):
             w.view_clicked(5,5,False,False)
-        self.assertEqual(w.document.infos()[1],2);self.assertAlmostEqual(w.mod_size.value(),3)
+        self.assertIsNotNone(w.mod_blend);self.assertAlmostEqual(w.mod_size.value(),3)       # 0.5.49: zaznaczone zaokrąglenie ze strzałką
         w.mod_size.setValue(1.5);w.apply_mod();self.wait();self.wait()
         infos=w.document.infos()[0]
         self.assertEqual([i['label'] for i in infos],labels);self.assertEqual(infos[3]['op']['size'],1.5)
@@ -4234,6 +4234,128 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
         e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
 
+    # 0.5.49: obiekty ukryte okiem nie biorą udziału: ukryty walec ani ukryty szkic okręgu nie dzielą prostokąta
+    # narysowanego na tej samej płaszczyźnie; wyciągnięcie bierze cały prostokąt, a przeliczenie kroku daje to samo
+    def test_hidden_objects_do_not_split_or_highlight_profiles(self):
+        w=self.w
+        circ=Body('Okrąg',k.sketch('circle','XY',40,x=0,y=0),'sketch','XY').prepared()
+        cyl=Body('Walec',cq.Solid.makeCylinder(20,30)).prepared()
+        rect=Body('Prostokąt',k.polyline('XY',[(-50,-40),(50,-40),(50,40),(-50,40)],True),'sketch','XY').prepared()
+        w.document.commit([circ,cyl,rect]);w.refresh();w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        w.set_mode('extrude')
+        src=w._profile_at(*w.view.project_one((40,30,0)));self.assertLess(src['face'].Area(),100*80-1)   # widoczne: obszar podzielony
+        w.set_mode(None);w.objects_hide(cyl.id);w.objects_hide(circ.id)
+        self.assertEqual(w._eye_hidden(),{cyl.id,circ.id})
+        w.set_mode('extrude')
+        for p in ((40,30,0),(0,0,0),(10,5,0)):
+            src=w._profile_at(*w.view.project_one(p));self.assertEqual(src['kind'],'region');self.assertAlmostEqual(src['face'].Area(),100*80,3)
+        w.ex_profiles=[src];w.ex_value.setValue(10);w._ex_spec_timer.stop();w.apply_extrude();self.wait()
+        new=[x for x in w.document.bodies if x.kind=='solid' and x.id!=cyl.id];self.assertEqual(len(new),1)
+        self.assertAlmostEqual(new[0].shape.Volume(),100*80*10,2)
+        op=w.document.infos()[0][-1]['op'];self.assertEqual(set(op['profiles'][0]['ignore']),{cyl.id,circ.id})
+        again=hist.run_extrude([circ,cyl,rect],op)                                         # przeliczenie kroku: tak samo
+        self.assertAlmostEqual(next(x for x in again if x.id==new[0].id).shape.Volume(),100*80*10,2)
+        # ukryty szkic nie przyciąga i nie jest wybierany w narzędziach szkicu
+        self.assertFalse(w._skt_body_ok(w.document.get(circ.id)))
+
+    # 0.5.49: Fasolka od środka - środek, koniec osi (drugi koniec odbija się na żywo), szerokość; strzałka wariantów przy fasolce
+    def test_center_slot_variant(self):
+        from PySide6.QtWidgets import QToolButton
+        w=self.w;w.set_mode('plane');w.plane_picked('XY')
+        row=w.shape_buttons['slot'].parentWidget()
+        self.assertTrue(any(b.objectName()=='shapeExpand' for b in row.findChildren(QToolButton)))   # strzałka jak przy okręgu i prostokącie
+        w.choose_tool('centerSlot',w.shape_buttons['slot']);self.assertEqual(w.tool,'centerSlot')
+        self.assertEqual(w._group_button('centerSlot'),'slot')
+        live=w._preview_points([(0,0),(15,3)]);bb=live.BoundingBox()                     # podgląd: oś w obie strony środka
+        self.assertAlmostEqual(bb.xmin,-15,6);self.assertAlmostEqual(bb.xmax,15,6);self.assertAlmostEqual(bb.ymin,-3,6)
+        for p in ((0,0),(20,0),(0,5)):w.sketch_clicked('XY',*p)
+        self.wait();sk=w.document.bodies[-1];bb=sk.shape.BoundingBox()
+        self.assertAlmostEqual(bb.xlen,50,5);self.assertAlmostEqual(bb.ylen,10,5);self.assertAlmostEqual((bb.xmin+bb.xmax)/2,0,6)
+        self.assertEqual(sk.meta['tool'],'slot');self.assertEqual([list(map(float,q)) for q in sk.meta['points']],[[-20,0],[20,0],[0,5]])
+        self.assertEqual([round(float(v),4) for v in sm.values(sk.meta)],[40,10])          # dalej wymiary jak zwykłej fasolki
+
+    # 0.5.49: rysunek techniczny ze szkicu (także kilku szkiców) - płaski rzut w płaszczyźnie szkicu
+    def test_drawing_from_sketches(self):
+        from rccad.drawing_window import DrawingWindow
+        w=self.w
+        sq=Body('Kwadrat',k.polyline('XY',[(0,0),(40,0),(40,30),(0,30)],True),'sketch','XY').prepared()
+        side=Body('Bok',k.polyline('XZ',[(0,0),(20,0),(20,10),(0,10)],True),'sketch','XZ').prepared()
+        w.document.commit([sq,side]);w.refresh();w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        flat=w.sketch_drawing_shape(side);bb=flat.BoundingBox()
+        self.assertAlmostEqual(bb.zlen,0,6);self.assertAlmostEqual(max(bb.xlen,bb.ylen),20,6);self.assertAlmostEqual(min(bb.xlen,bb.ylen),10,6)
+        w.set_mode('drawing');xy=w.view.project_one((20,0,0))
+        w.view_hover(*xy);self.assertEqual(w.view._hover_key,('body',sq.id))            # szkic podświetla się
+        before=len(w._drawing_windows)
+        w.pick_drawing(*xy);self.assertIsNone(w.mode)
+        self.assertEqual(len(w._drawing_windows),before+1);win=w._drawing_windows[-1];self.assertIsInstance(win,DrawingWindow)
+        win.close()
+        # kilka szkiców naraz: Shift + klik / lista Obiekty, Zastosuj
+        w.set_mode('drawing');w.dr_add([sq.id]);w.dr_add([side.id]);self.assertEqual(w.dr_ids,[sq.id,side.id])
+        self.assertEqual(set(w.selected),{sq.id,side.id})
+        w.apply_drawing();self.assertIsNot(w._drawing_windows[-1],win);self.assertTrue(w._drawing_windows[-1].isVisible());w._drawing_windows[-1].close()
+
+    # 0.5.49: Zaokrąglij / Fazuj - najechanie podświetla istniejące zaokrąglenie, klik daje strzałkę, przeciąganie zmienia
+    # rozmiar (podgląd), Zastosuj zapisuje; Delete usuwa (zostaje ostry narożnik); działa też dla fazy bez historii
+    def test_existing_fillet_hover_drag_resize_and_delete(self):
+        def mid(f):                                                                       # punkt w środku ściany (na powierzchni)
+            u0,u1,v0,v1=f._uvBounds();return np.array(f._geomAdaptor().Value((u0+u1)/2,(v0+v1)/2).Coord())
+        w=self.w;box=Body('Kostka',k.box(30,30,30)).prepared();w.document.commit([box]);w.refresh()
+        w.selected=[box.id];w.set_mode('mod')
+        w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        tops=[i for i,e in enumerate(box.shape.Edges()) if e.geomType()=='LINE' and abs(e.Center().z-box.shape.BoundingBox().zmax)<1e-6]
+        def seen(i):                                                                     # krawędź od strony kamery
+            c=np.array(box.shape.Edges()[i].Center().toTuple());hit=w.view.pick_face(*w.view.project_one(c))
+            return hit is not None and np.linalg.norm(np.asarray(hit[2])-c)<.5
+        top=next(i for i in tops if seen(i))
+        w.edges={box.id:{top}};w.mod_size.setValue(3);w.apply_mod();self.wait()
+        body=w.document.get(box.id);cyl=next(f for f in body.shape.Faces() if f.geomType()=='CYLINDER')
+        p=mid(cyl);w.view.set_view('iso');w.refresh()
+        w.set_mode('mod')
+        for _ in range(3):self.app.processEvents()
+        n=np.array(cyl.normalAt(cq.Vector(*p)).toTuple());xy=w.view.project_one(p)
+        blend=w._blend_under(*xy);self.assertIsNotNone(blend);self.assertEqual(blend['info']['kind'],'fillet');self.assertAlmostEqual(blend['info']['size'],3,6)
+        w.view_hover(*xy);self.assertTrue(w.view.hover_items)                           # podświetlenie pod kursorem
+        w.pick_edge(*xy,False,False)
+        self.assertIsNotNone(w.mod_blend);self.assertAlmostEqual(w.mod_size.value(),3,6)
+        self.assertEqual([h['id'] for h in w.view.handles],['mod'])                        # strzałka jak dla krawędzi
+        w.handle_dragged('mod',2.0);self.assertAlmostEqual(w.mod_size.value(),5,6)
+        w._timers['mod'].stop();w.update_mod_preview();self.wait()
+        for _ in range(100):
+            self.app.processEvents()
+            if box.id in w.override:break
+            time.sleep(.02)
+        self.assertIn(box.id,w.override)                                                 # podgląd zmienionego zaokrąglenia
+        steps=len(w.document.infos()[0])
+        w.handle_released('mod');w.apply_mod();self.wait();self.wait()
+        body=w.document.get(box.id);sizes=[k.blend_face_info(body.shape,f) for f in body.shape.Faces()]
+        self.assertEqual([round(i['size'],6) for i in sizes if i],[5.0])
+        infos=w.document.infos()[0];self.assertEqual(len(infos),steps);self.assertEqual(infos[-1]['op']['size'],5)   # krok zaokrąglenia poprawiony (bez duplikatu)
+        w.set_mode('mod')
+        # Delete usuwa zaokrąglenie: zostaje ostry narożnik (objętość pełnej kostki)
+        cyl=next(f for f in body.shape.Faces() if f.geomType()=='CYLINDER');p=mid(cyl)
+        xy=w.view.project_one(p)
+        w.pick_edge(*xy,False,False);self.assertIsNotNone(w.mod_blend)
+        w.delete_selected();self.wait()
+        self.assertAlmostEqual(w.document.get(box.id).shape.Volume(),30**3,4)
+        self.assertFalse(any(k.blend_face_info(w.document.get(box.id).shape,f) for f in w.document.get(box.id).shape.Faces()))
+        w.undo();self.wait();self.assertLess(w.document.get(box.id).shape.Volume(),30**3-1)
+        # faza bez historii (np. z importu): zmiana na zaokrąglenie
+        ch=Body('Faza',k.blend(k.box(20,20,20).translate((60,0,0)),{0},4,'chamfer')).prepared()
+        w.set_mode(None);w.document.commit([*w.document.bodies,ch]);w.refresh();w.set_mode('mod')
+        f=next(f for f in ch.shape.Faces() if k.blend_face_info(ch.shape,f));q=mid(f)
+        info=k.blend_at(ch.shape,q);self.assertEqual(info['kind'],'chamfer');self.assertAlmostEqual(info['size'],4,6)
+        hit=w._blend_under(*w.view.project_one(q));self.assertIsNotNone(hit)
+        if hit is not None:                                                               # faza bez kroku historii: nowy krok „Zmiana fazy”
+            w._mod_blend_select(hit);w.mod_size.setValue(6);w.apply_mod();self.wait()
+            last=w.document.infos()[0][-1];self.assertEqual(last['op']['type'],'reblend');self.assertEqual(last['label'],'Zmiana fazy')
+            self.assertEqual(w.mode,'mod')                                                 # narzędzie zostaje otwarte
+        out=hist.run_reblend([ch],dict(type='reblend',id=ch.id,point=list(q),size=2.5,kind='fillet'))[0]
+        self.assertEqual([round(i['size'],6) for i in (k.blend_face_info(out.shape,g) for g in out.shape.Faces()) if i],[2.5])
+        with self.assertRaises(k.CadError):k.reblend(k.box(5,5,5),(2.5,2.5,5),None)          # zwykła ściana to nie zaokrąglenie
+
     # 0.5.48: przycisk „Anuluj liczenie” pod kostką - widoczny tylko z paskiem, przerywa liczenie, projekt bez zmian
     def test_busy_cancel_button_aborts_and_restores(self):
         import threading,time
@@ -4971,7 +5093,7 @@ class StudioTests(unittest.TestCase):
             self.w.tools['sketch'].click();self.w.plane_picked('XY')
             for b in self.w.shape_bar.findChildren(__import__('PySide6.QtWidgets',fromlist=['QToolButton']).QToolButton):
                 if b.objectName()=='shapeExpand':b.click()
-        self.assertEqual(seen[:2],[('rich',9),('ctx',4)]);self.assertEqual([n for kind,n in seen[2:]],[3,4])
+        self.assertEqual(seen[:2],[('rich',9),('ctx',4)]);self.assertEqual([n for kind,n in seen[2:]],[3,4,2])      # 0.5.49: warianty fasolki
 
     def test_every_button_click_raises_no_exception(self):
         import sys

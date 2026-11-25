@@ -1452,6 +1452,14 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             fill(_circle(24, 24, 15), BLUE_SOFT, BLUE); thin(ORANGE, 1.8); p.drawLine(QPointF(9, 24), QPointF(39, 24)); dot(9, 24); dot(39, 24)
         elif kind == 'v_circle3':
             fill(_circle(24, 24, 15), BLUE_SOFT, BLUE); dot(24, 9); dot(10.8, 31.5); dot(37.2, 31.5)
+        elif kind == 'v_slot':
+            path = QPainterPath(); path.addRoundedRect(QRectF(5, 15, 38, 18), 9, 9); fill(path, BLUE_SOFT, BLUE)
+            thin(ORANGE, 1.8); p.drawLine(QPointF(14, 24), QPointF(34, 24)); dot(14, 24); dot(34, 24)
+        elif kind == 'v_slotC':
+            path = QPainterPath(); path.addRoundedRect(QRectF(5, 15, 38, 18), 9, 9); fill(path, BLUE_SOFT, BLUE)
+            thin(ORANGE, 1.8); p.drawLine(QPointF(24, 24), QPointF(34, 24))
+            pn = pen(ORANGE, 1.6); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(14, 24), QPointF(24, 24))
+            dot(24, 24, GREEN); dot(34, 24)
         elif kind == 'v_tan':
             thin(INK, 2.4); p.drawLine(QPointF(6, 42), QPointF(42, 42)); p.drawLine(QPointF(6, 42), QPointF(6, 6))
             fill(_circle(22, 26, 16), BLUE_SOFT, BLUE); dot(6, 26, GREEN); dot(22, 42, GREEN)

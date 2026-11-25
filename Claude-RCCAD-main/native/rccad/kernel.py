@@ -3572,3 +3572,221 @@ def sketch_points(shape):
     except Exception:
         pass
     return out
+
+
+# ---------- istniejące zaokrąglenia i fazy: rozpoznanie, zmiana rozmiaru, usunięcie (zostaje ostry narożnik) ----------
+BLEND_SURFACES = ('CYLINDER', 'TORUS', 'SPHERE', 'BSPLINE', 'BEZIER', 'REVOLUTION', 'OFFSET')
+CHAMFER_SURFACES = ('PLANE', 'CONE')
+
+
+def _face_neighbors(shape, face, edge_map=None):
+    """[(krawędź, sąsiednia ściana)] - ściany przylegające do ściany przez jej krawędzie."""
+    from OCP.TopoDS import TopoDS
+    edge_map = edge_map if edge_map is not None else _edge_faces(shape)
+    out = []
+    for e in face.Edges():
+        key = edge_map.FindIndex(e.wrapped)
+        if not key:
+            continue
+        for f in edge_map.FindFromIndex(key):
+            other = cq.Face(TopoDS.Face_s(f))
+            if not other.wrapped.IsSame(face.wrapped):
+                out.append((e, other))
+    return out
+
+
+def _normals_at(edge, f1, f2):
+    p = edge.positionAt(.5)
+    return np.array(f1.normalAt(p).toTuple(), float), np.array(f2.normalAt(p).toTuple(), float), p
+
+
+def blend_face_info(shape, face, edge_map=None):
+    """Czy ściana to zaokrąglenie albo faza: dict(kind='fillet' / 'chamfer', size=promień / odległość fazy) albo None.
+    Zaokrąglenie: zakrzywiona ściana gładko (stycznie) przechodząca w co najmniej dwie sąsiednie. Faza: płaski (albo
+    stożkowy) wąski pas między dwiema ścianami, które się na nim nie spotykają stycznie."""
+    try:
+        gt = face.geomType()
+        neighbors = _face_neighbors(shape, face, edge_map)
+        if len(neighbors) < 2:
+            return None
+        tangent, sharp = [], []
+        for e, other in neighbors:
+            n1, n2, _ = _normals_at(e, face, other)
+            (tangent if abs(float(n1 @ n2)) > .9986 else sharp).append((e, other, n1, n2))     # < ok. 3°
+        if gt in BLEND_SURFACES and len(tangent) >= 2:
+            ad = face._geomAdaptor()
+            if gt == 'CYLINDER':
+                r = ad.Cylinder().Radius()
+            elif gt == 'TORUS':
+                r = ad.Torus().MinorRadius()
+            elif gt == 'SPHERE':
+                r = ad.Sphere().Radius()
+            else:
+                from OCP.BRepLProp import BRepLProp_SLProps
+                from OCP.BRepAdaptor import BRepAdaptor_Surface
+                u0, u1, v0, v1 = face._uvBounds()
+                props = BRepLProp_SLProps(BRepAdaptor_Surface(face.wrapped), (u0 + u1) / 2, (v0 + v1) / 2, 2, 1e-6)
+                k = max(abs(props.MaxCurvature()), abs(props.MinCurvature()))
+                if k < 1e-9:
+                    return None
+                r = 1.0 / k
+            return dict(kind='fillet', size=float(r))
+        if gt in CHAMFER_SURFACES and len(sharp) >= 2 and not tangent:
+            edges = sorted(sharp, key=lambda item: -item[0].Length())
+            (e1, g1, n, na), (e2, g2, _, nb) = edges[0], edges[1]
+            if any(e1.wrapped.IsSame(x[0].wrapped) for x in edges[1:2]) or g1.wrapped.IsSame(g2.wrapped):
+                return None
+            width = float(e1.distance(e2))
+            longest = min(e1.Length(), e2.Length())
+            if width < 1e-6 or width > .6 * longest:
+                return None
+            if float(n @ na) < .15 or float(n @ nb) < .15:
+                return None                 # ściana nie leży „między” sąsiadami (zwykła ściana bryły)
+            alpha = np.pi - np.arccos(np.clip(float(na @ nb), -1, 1))       # kąt między ścianami sąsiednimi
+            if alpha < np.radians(10) or alpha > np.radians(170):
+                return None
+            return dict(kind='chamfer', size=float(width / (2 * np.sin(alpha / 2))))
+    except Exception:
+        return None
+    return None
+
+
+def face_at_point(shape, point, tol=1e-3):
+    """Ściana bryły w punkcie (numer, ściana) albo (None, None)."""
+    v = cq.Vertex.makeVertex(*[float(c) for c in point])
+    best = None
+    for i, f in enumerate(shape.Faces()):
+        try:
+            d = f.distance(v)
+        except Exception:
+            continue
+        if d < tol and (best is None or d < best[0]):
+            best = (d, i, f)
+    return (best[1], best[2]) if best else (None, None)
+
+
+def blend_at(shape, point):
+    """Zaokrąglenie / faza w klikniętym punkcie: dict(kind, size, face) albo None."""
+    index, face = face_at_point(shape, point)
+    if face is None:
+        return None
+    info = blend_face_info(shape, face)
+    if info is None:
+        return None
+    return dict(info, face=index)
+
+
+def _blend_chain(shape, face, info):
+    """Połączone ściany tego samego zaokrąglenia / fazy (np. zaokrąglenie wokół całej krawędzi z kilku ścian)."""
+    edge_map = _edge_faces(shape)
+    chain, todo = [face], [face]
+    while todo:
+        f = todo.pop()
+        for _e, other in _face_neighbors(shape, f, edge_map):
+            if any(other.wrapped.IsSame(c.wrapped) for c in chain):
+                continue
+            other_info = blend_face_info(shape, other, edge_map)
+            if other_info and other_info['kind'] == info['kind'] and abs(other_info['size'] - info['size']) < 1e-3 * max(1, info['size']):
+                chain.append(other)
+                todo.append(other)
+    return chain
+
+
+def _defeature(shape, faces):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Defeaturing
+    algo = BRepAlgoAPI_Defeaturing()
+    algo.SetShape(shape.wrapped)
+    for f in faces:
+        algo.AddFaceToRemove(f.wrapped)
+    algo.SetRunParallel(True)
+    algo.Build()
+    if not algo.IsDone():
+        return None
+    out = cq.Shape.cast(algo.Shape())
+    try:
+        if not out.isValid() or len(out.Solids()) != len(shape.Solids()):
+            return None
+    except Exception:
+        return None
+    return out
+
+
+def unblend(shape, point):
+    """Usuwa zaokrąglenie / fazę w punkcie: zostaje ostry narożnik, jakby jej nie było. (kształt, info, usunięte ściany)."""
+    info = blend_at(shape, point)
+    if info is None:
+        raise CadError('W tym miejscu nie ma zaokrąglenia ani fazy.')
+    face = shape.Faces()[info['face']]
+    out = _defeature(shape, [face])
+    removed = [face]
+    if out is None:                      # ściana jest częścią dłuższego zaokrąglenia: usuwa się całe
+        removed = _blend_chain(shape, face, info)
+        out = _defeature(shape, removed) if len(removed) > 1 else None
+    if out is None:
+        raise CadError('Nie udało się usunąć tego zaokrąglenia / fazy (bryła by się rozpadła).')
+    return out, info, removed
+
+
+def reblend(shape, point, size=None, kind=None):
+    """Zaokrąglenie / faza w punkcie: size=None - usunięta (ostry narożnik); inaczej nowy rozmiar (kind - zamiana
+    zaokrąglenia na fazę i odwrotnie). Krawędzie, które powstały po usunięciu, dostają nowe zaokrąglenie / fazę."""
+    sharp, info, removed = unblend(shape, point)
+    if size is None:
+        return sharp
+    kind = kind or info['kind']
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    zone = compound(removed)
+    reach = max(2.5 * info['size'], 1e-2)
+    old = compound(shape.Edges())
+    picked = set()
+    for i, e in enumerate(sharp.Edges()):
+        mid = cq.Vertex.makeVertex(*e.positionAt(.5).toTuple())
+        near = BRepExtrema_DistShapeShape(mid.wrapped, zone.wrapped)
+        if not near.IsDone() or near.Value() > reach:
+            continue
+        same = BRepExtrema_DistShapeShape(mid.wrapped, old.wrapped)
+        if same.IsDone() and same.Value() < 1e-5:
+            continue                     # ta krawędź była już wcześniej (nie jest nowym narożnikiem)
+        picked.add(i)
+    if not picked:
+        raise CadError('Nie znaleziono narożnika po usunięciu zaokrąglenia / fazy.')
+    return blend(sharp, picked, float(size), kind)
+
+
+def blend_handle(shape, point, face_index=None):
+    """Strzałka do zmiany istniejącego zaokrąglenia / fazy: (punkt na ścianie, kierunek do wnętrza bryły, info).
+    Punkt (np. z siatki ekranu) jest rzutowany dokładnie na ścianę, więc da się po nim tę ścianę znaleźć ponownie."""
+    if face_index is None:
+        index, face = face_at_point(shape, point, tol=.05)
+    else:
+        index, face = face_index, shape.Faces()[face_index]
+    if face is None:
+        return None
+    info = blend_face_info(shape, face)
+    if info is None:
+        return None
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    probe = BRepExtrema_DistShapeShape(cq.Vertex.makeVertex(*[float(c) for c in point]).wrapped, face.wrapped)
+    on = np.array(cq.Vector(probe.PointOnShape2(1)).toTuple(), float) if probe.IsDone() and probe.NbSolution() else np.asarray(point, float)
+    n = np.array(face.normalAt(cq.Vector(*on)).toTuple(), float)
+    return on, -n / max(np.linalg.norm(n), 1e-12), dict(info, face=index)
+
+
+def edge_is_smooth(shape, index):
+    """Krawędź, na której ściany przechodzą w siebie gładko (np. brzeg zaokrąglenia) - nie da się jej zaokrąglić."""
+    from OCP.TopoDS import TopoDS
+    try:
+        edge = shape.Edges()[index]
+        data = _edge_faces(shape)
+        key = data.FindIndex(edge.wrapped)
+        faces = []
+        for f in (data.FindFromIndex(key) if key else []):
+            face = cq.Face(TopoDS.Face_s(f))
+            if not any(face.wrapped.IsSame(g.wrapped) for g in faces):
+                faces.append(face)
+        if len(faces) != 2:
+            return False
+        n1, n2, _ = _normals_at(edge, faces[0], faces[1])
+        return abs(float(n1 @ n2)) > .9986
+    except Exception:
+        return False

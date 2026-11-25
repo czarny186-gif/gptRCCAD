@@ -51,7 +51,7 @@ from PySide6.QtWidgets import QSizePolicy
 from . import measurement
 from html import escape as html_escape
 
-NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
+NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'centerSlot': 3, 'polygon': 2,
         'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'offset': 1, 'sfillet': 1, 'smirror': 1, 'sjoin': 1, 'sdim': 1, 'line': 2, 'circleTangent2': 3}
 HINTS = {
     'rect': ['Kliknij pierwszy narożnik prostokąta.', 'Kliknij przeciwległy narożnik.'],
@@ -63,6 +63,8 @@ HINTS = {
     'circleTangent2': ['Kliknij pierwszą linię.', 'Kliknij drugą linię.', 'Kliknij, aby wskazać wielkość okręgu.'],
     'ellipse': ['Kliknij środek elipsy.', 'Kliknij narożnik opisanego prostokąta.'],
     'slot': ['Kliknij środek pierwszego końca.', 'Kliknij środek drugiego końca.', 'Kliknij punkt określający szerokość.'],
+    'centerSlot': ['Kliknij środek fasolki.', 'Kliknij koniec osi - drugi koniec odbija się lustrzanie po drugiej stronie środka.',
+                   'Kliknij punkt określający szerokość.'],
     'polygon': ['Kliknij środek wielokąta (liczbę kątów ustawisz strzałką przy wielokącie na pasku).',
                 'Wierzchołek idzie za kursorem (także przyciągniętym do kratki / punktu): odległość - wielkość, kierunek - obrót · klik zatwierdza · Tab - wymiary'],
     'arc': ['Kliknij początek łuku.', 'Kliknij punkt na łuku.', 'Kliknij koniec łuku.'],
@@ -79,7 +81,8 @@ HINTS = {
     'line': ['Kliknij początek linii.', 'Kliknij kolejny punkt. Enter lub ponowne kliknięcie kończy, kliknięcie w pierwszy punkt zamyka obrys.'],
 }
 VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '3 punkty', 'circle': 'Środek + promień',
-                  'circleTangent2': 'Styczny do 2 elementów', 'circle2': 'Od 2 punktów', 'circle3': 'Od 3 punktów'}
+                  'circleTangent2': 'Styczny do 2 elementów', 'circle2': 'Od 2 punktów', 'circle3': 'Od 3 punktów',
+                  'slot': 'Z 2 końców osi', 'centerSlot': 'Od środka'}
 DIM_LABELS = {'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
               'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Obrót (°)'), 'circle2': ('Średnica (mm)',),
               'line': ('Długość (mm)', 'Kąt (°)'), 'construction': ('Długość (mm)', 'Kąt (°)'), 'measure': ('Długość (mm)', 'Kąt (°)')}
@@ -955,10 +958,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     VARIANT_HINTS = {'rect': 'Przeciągnij przekątną', 'centerRect': 'Środek i narożnik', 'rect3': 'Podstawa i wysokość',
                      'circle': 'Środek i punkt na okręgu', 'circleTangent2': 'Kliknij dwie linie i wielkość', 'circle2': 'Końce średnicy',
-                     'circle3': 'Trzy punkty na okręgu'}
+                     'circle3': 'Trzy punkty na okręgu', 'slot': 'Końce osi i szerokość', 'centerSlot': 'Środek, koniec osi, szerokość'}
 
     VARIANT_ICONS = {'rect': 'v_rect2', 'centerRect': 'v_rectC', 'rect3': 'v_rect3', 'circle': 'v_circle', 'circle2': 'v_circle2', 'circle3': 'v_circle3',
-                     'circleTangent2': 'v_tan'}
+                     'circleTangent2': 'v_tan', 'slot': 'v_slot', 'centerSlot': 'v_slotC'}
 
     def _popup_toggle(self, anchor):
         """Strzałka przy otwartym okienku wariantów / liczby kątów: okienko się chowa i nie otwiera ponownie."""
@@ -1386,8 +1389,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.dr_panels, self.dr_status, self.dr_apply = {}, {}, {}
         self.dr_ids = []
         for key, title, kind, sub, desc in (
-                ('drawing', 'Rysunek techniczny', 'x_drawing', 'Wskaż bryłę', 'Kliknij bryłę (podświetla się na niebiesko). Otworzy się osobne okno: wybierzesz rzuty, wymiary i arkusz, zmierzysz dowolne miejsce rysunku i zapiszesz go jako PDF, DXF, SVG lub JPG.'),
-                ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę', 'Kliknij bryłę. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.'),
+                ('drawing', 'Rysunek techniczny', 'x_drawing', 'Wskaż bryłę albo szkic', 'Kliknij bryłę albo szkic (podświetla się). Szkic daje płaski rysunek w jego płaszczyźnie. Otworzy się osobne okno: wybierzesz rzuty, wymiary i arkusz, zmierzysz dowolne miejsce rysunku i zapiszesz go jako PDF, DXF, SVG lub JPG.'),
+                ('autodrawing', 'Rysunek automatyczny', 'x_autodrawing', 'Wskaż bryłę albo szkic', 'Kliknij bryłę albo szkic. Program sam dobierze rzuty, arkusz, skalę i wymiary, a zapyta tylko o format i miejsce zapisu.'),
                 ('sheetdrawing', 'Rysunek blachy do gięcia', 'x_sheetdrawing', 'Wskaż blachę', 'Kliknij blachę (zgiętą albo rozłożoną). Powstanie rozwinięcie widziane od góry blachy: wymiary całości, odległości linii gięcia od krawędzi i między sobą, kierunek, kąt i promień każdego gięcia oraz grubość blachy.'),
                 ('plydrawing', 'Rysunek płyt', 'x_plydrawing', 'Wskaż płytę pudełka', 'Kliknij dowolną płytę pudełka albo mebla ze sklejki. Wszystkie płyty z jego grupy zostaną rozłożone płasko obok siebie - każda z nazwą i wymiarami; widok izometryczny pokazuje całość złożoną.')):
             panel, lay = self._panel(312, title, kind, sub, plain=True)
@@ -2145,6 +2148,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.pat_picking = False
             self._pattern_pick_grid(False)
         self.mod_vertices = {}
+        self.mod_blend = None             # kliknięte istniejące zaokrąglenie / faza (zmiana rozmiaru strzałką, Delete - usunięcie)
         self.t_target = None
         self.t_feature = None
         self.t_group = []
@@ -2196,12 +2200,13 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.hint({'mdist': 'Odległość: kliknij pierwszy punkt.', 'mangle': 'Kąt: kliknij pierwszy punkt ramienia.',
                        'mrad': 'Kliknij okrągłą krawędź lub łuk.', 'mprops': 'Kliknij bryłę albo szkic.'}[mode])
         elif mode in DRAWING_MODES:
-            solids = [i for i in self.selected if (b := self.document.get(i)) is not None and b.kind == 'solid']
+            kinds = ('solid', 'sketch') if mode in ('drawing', 'autodrawing') else ('solid',)
+            solids = [i for i in self.selected if (b := self.document.get(i)) is not None and b.kind in kinds]
             self.dr_ids = solids if mode in ('drawing', 'autodrawing') and len(solids) > 1 else []   # kilka zaznaczonych - od razu wybrane
             self._dr_update(mode)
             self.dr_panels[mode].show()
             self.view.setCursor(Qt.PointingHandCursor)
-            self.hint('Rysunek techniczny: kliknij bryłę, z której ma powstać rysunek.')
+            self.hint('Rysunek techniczny: kliknij bryłę albo szkic, z którego ma powstać rysunek.')
         elif mode == 'sheet':
             self.sheet_panel.show()
             self.sheet_pick = None
@@ -2402,7 +2407,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     @staticmethod
     def _group_button(name):
-        return {'centerRect': 'rect', 'rect3': 'rect', 'circle2': 'circle', 'circle3': 'circle', 'circleTangent2': 'circle'}.get(name, name)
+        return {'centerRect': 'rect', 'rect3': 'rect', 'circle2': 'circle', 'circle3': 'circle', 'circleTangent2': 'circle',
+                'centerSlot': 'slot'}.get(name, name)
 
     def show_sketch_hint(self):
         texts = HINTS.get(self.tool, [''])
@@ -2519,9 +2525,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         """Przyciąganie w szkicu z opóźnieniem: kursor jest wolny w ruchu, a do punktu (narożnik kratki siatki, punkt szkicu, krawędź
         lub narożnik ścianki) przykleja się dopiero, gdy chwilę przy nim zostanie. Timer odświeża wtedy podgląd bez ruchu myszy."""
         key = (self.sketch_plane if isinstance(self.sketch_plane, str) else id(self.sketch_plane),
-               tuple((b.id, id(b.mesh), b.visible) for b in self.document.bodies if b.kind in ('sketch', 'solid')))
+               tuple((b.id, id(b.mesh), b.visible) for b in self.document.bodies if b.kind in ('sketch', 'solid')), self._eye_hidden())
         if self._snap_cache is None or self._snap_cache[0] != key:
-            self._snap_cache = (key, snapping.SketchGeometry(self.document.bodies, self.sketch_plane))
+            self._snap_cache = (key, snapping.SketchGeometry(self._pick_bodies(), self.sketch_plane))     # ukryte nie przyciągają
         if getattr(self, '_dwell', None) is None:
             self._dwell = snapping.Dwell()
             self._dwell_timer = QTimer(self)
@@ -2537,7 +2543,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     ALIGN_DEG = 5.0          # linia prostuje się do poziomu / pionu / 45°, gdy jest od nich bliżej niż tyle stopni
 
     LINE_ALIGN_TOOLS = ('line', 'construction', 'measure')      # każdy odcinek prowadzony kursorem
-    SEGMENT_ALIGN_TOOLS = ('arc', 'slot')                       # tylko pierwszy odcinek: końce łuku / oś fasolki
+    SEGMENT_ALIGN_TOOLS = ('arc', 'slot', 'centerSlot')                       # tylko pierwszy odcinek: końce łuku / oś fasolki
 
     def _line_align_active(self):
         """Poziom / pion / 45° działa przy rysowaniu linii, linii konstrukcyjnej, wymiaru szkicu oraz pierwszego odcinka łuku
@@ -2592,8 +2598,18 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         from PySide6.QtCore import QPointF
         self.view._hover(QPointF(pos))
 
+    @staticmethod
+    def _center_slot_points(points):
+        """Fasolka od środka: [środek, koniec osi, (szerokość)] -> punkty zwykłej fasolki [koniec odbity, koniec osi, (szerokość)]."""
+        if len(points) < 2:
+            return list(points)
+        c, e = points[0], points[1]
+        return [(2 * c[0] - e[0], 2 * c[1] - e[1]), tuple(e), *[tuple(p) for p in points[2:]]]
+
     def _wire(self, points):
         t = self.tool
+        if t == 'centerSlot':
+            return kernel.sketch_shape('slot', self.sketch_plane, self._center_slot_points(points), self.sides)
         if t in ('line', 'construction'):
             return kernel.polyline(self.sketch_plane, points, False)
         if t == 'arc':
@@ -2618,6 +2634,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             return kernel.sketch_shape('circle2', self.sketch_plane, pts)
         if t in ('arc', 'rect3', 'slot') and len(pts) == 2:
             return kernel.polyline(self.sketch_plane, pts)
+        if t == 'centerSlot' and len(pts) == 2:          # oś rysuje się w obie strony środka (odbicie na żywo)
+            return kernel.polyline(self.sketch_plane, self._center_slot_points(pts))
         return None
 
     def _show_sketch_preview(self, pts):
@@ -3082,7 +3100,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.toast(str(exc))
             self.show_sketch_hint()
             return
-        meta = dict(tool=self.tool, points=[list(p) for p in points], sides=self.sides) if self.tool in self.EDITABLE and self.tool not in ('line', 'text') else None
+        if self.tool == 'centerSlot':          # zapisana jak zwykła fasolka (te same wymiary i uchwyty)
+            meta = dict(tool='slot', points=[list(p) for p in self._center_slot_points(points)], sides=self.sides)
+        else:
+            meta = dict(tool=self.tool, points=[list(p) for p in points], sides=self.sides) if self.tool in self.EDITABLE and self.tool not in ('line', 'text') else None
         self.create_sketch([shape], 'Konstrukcja' if self.tool == 'construction' else ('Punkt' if self.tool == 'point' else None), meta)
 
     def create_sketch(self, shapes, label=None, meta=None, select=False, op=None):
@@ -3315,7 +3336,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def _sf_bodies(self):
         """Szkice w płaszczyźnie bieżącego szkicu, których narożniki można zaokrąglać."""
-        return [b for b in self.document.bodies if b.kind == 'sketch' and b.visible and not (b.meta or {}).get('surface')
+        hidden = self._eye_hidden()
+        return [b for b in self.document.bodies if b.kind == 'sketch' and b.visible and b.id not in hidden and not (b.meta or {}).get('surface')
                 and not b.name.startswith('Punkt') and self._same_plane(b.plane, self.sketch_plane)]
 
     def _sf_corner_at(self, x, y, radius=12.0):
@@ -3863,7 +3885,17 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             elif self.mode == 'mod':
                 vertex = self.view.nearest_vertex(x, y)
                 self.view.hover_vertex = vertex[1] if vertex else None
-                self.view._set_hover_edge(None if vertex else self.view.nearest_edge(x, y, True))
+                edge = None if vertex else self.view.nearest_edge(x, y, True)
+                blend = None if vertex else self._blend_under(x, y)
+                if edge is not None and blend is not None and not self._smooth_edge(edge):
+                    blend = None                      # ostra krawędź ma pierwszeństwo (nowe zaokrąglenie)
+                if blend is not None:
+                    edge = None                       # gładki brzeg zaokrąglenia: liczy się samo zaokrąglenie
+                self.view._set_hover_edge(edge)
+                mesh = blend['mesh'] if blend else None
+                if mesh is not getattr(self, '_blend_hover', None):        # zaokrąglenie / faza pod kursorem świeci się
+                    self._blend_hover = mesh
+                    self.view.set_hover_mesh(mesh, color=(.98, .62, .2, .5), line_color=(.85, .4, .05, 1))
                 self.view.overlay.update()
             elif self.mode is None:
                 sketch = self._hover_sketch(x, y)         # szkic pod kursorem podświetla się (wiadomo, który się zaznaczy / przesunie)
@@ -3881,7 +3913,11 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 self._measure_hover(x,y)
             elif self.mode == 'twist':
                 self.twist_hover(x, y)
+            elif self.mode in ('drawing', 'autodrawing') and self._hover_sketch(x, y) is not None:
+                pass                                   # rysunek: szkic pod kursorem też się podświetla (rysunek ze szkicu)
             elif self.mode in ('sheetpick', 'plyfoldpick', 'scale', 'color') or self.mode in DRAWING_MODES or (self.mode == 'rules' and self.rl_pick):
+                if self.mode in ('drawing', 'autodrawing'):
+                    self.view.set_hover_body(None)
                 self._hover_shell_solid(x, y)
             elif self.mode == 'matchsize':
                 self._mz_hover(x, y)
@@ -4153,20 +4189,35 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def _plane_key(plane):
         return plane if isinstance(plane, str) else (plane.origin, plane.xdir, plane.normal)
 
+    def _eye_hidden(self):
+        """Obiekty ukryte okiem na liście Obiekty (ich nie widać, więc nie biorą udziału we wskazywaniu i operacjach)."""
+        return frozenset(i for i in getattr(self, 'hidden_ids', ()) if self.document.get(i) is not None)
+
+    def _pick_bodies(self):
+        """Obiekty do wskazywania profili, obszarów i przyciągania: ukryte okiem są niewidoczne (visible=False)."""
+        hidden = self._eye_hidden()
+        cached = self.__dict__.get('_pick_cache')
+        if cached is not None and cached[0] is self.document.bodies and cached[1] == hidden:
+            return cached[2]
+        out = [replace(b, visible=False) if b.id in hidden and b.visible else b for b in self.document.bodies] if hidden else list(self.document.bodies)
+        self._pick_cache = (self.document.bodies, hidden, out)
+        return out
+
     def _drawn_sketches(self):
         """Szkice (bez konstrukcji i punktów) pogrupowane według płaszczyzn: klucz -> (płaszczyzna, [bryły])."""
         cached=getattr(self,'_drawn_cache',None)
-        if cached is not None and cached[0] is self.document.bodies:return cached[1]
+        hidden=self._eye_hidden()
+        if cached is not None and cached[0] is self.document.bodies and cached[2]==hidden:return cached[1]
         groups = {}
         for b in self.document.bodies:
-            if b.kind == 'sketch' and b.visible and not (b.meta or {}).get('surface') and not b.name.startswith(('Konstrukcja', 'Punkt')):
+            if b.kind == 'sketch' and b.visible and b.id not in hidden and not (b.meta or {}).get('surface') and not b.name.startswith(('Konstrukcja', 'Punkt')):
                 cache = self.__dict__.setdefault('_frame_cache', LRU(max_entries=8192))
                 hit = cache.get(id(b.shape))
                 if hit is None or hit[0] is not b.shape or hit[2] != b.plane:
                     hit = cache[id(b.shape)] = (b.shape, kernel.actual_frame(b.shape, b.plane), b.plane)
                 plane = hit[1]   # obrócony / przesunięty szkic ma własną płaszczyznę
                 groups.setdefault(self._plane_key(plane), (plane, []))[1].append(b)
-        self._drawn_cache=(self.document.bodies,groups)
+        self._drawn_cache=(self.document.bodies,groups,hidden)
         return groups
 
     def _prefetch_sketch_regions(self):
@@ -4175,12 +4226,13 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         if getattr(self,'_sketch_regions_snapshot',None) is snapshot or getattr(self,'_sketch_regions_running',False):return
         if sum(b.kind=='sketch' and b.visible for b in snapshot)<24:return
         self._sketch_regions_snapshot=snapshot;self._sketch_regions_running=True
-        work=self._sketch_regions_work=_Work(lambda:workers.call_any(hist.prepare_sketch_regions,hist.light(snapshot)))
+        hidden=self._eye_hidden();picked=self._pick_bodies()          # ukryte okiem nie dzielą obszarów
+        work=self._sketch_regions_work=_Work(lambda:workers.call_any(hist.prepare_sketch_regions,hist.light(picked)))
         def finished(value=None):
             self._sketch_regions_running=False
-            if value is not None and self.document.bodies is snapshot:
+            if value is not None and self.document.bodies is snapshot and self._eye_hidden()==hidden:
                 by_id={b.id:b for b in snapshot};groups={};fast_groups={}
-                solids=tuple((b.id,id(b.shape)) for b in snapshot if b.kind=='solid' and b.visible)
+                solids=tuple((b.id,id(b.shape)) for b in picked if b.kind=='solid' and b.visible)
                 for key,plane,ids,faces,fast in value:
                     members=[by_id[i] for i in ids];groups[key]=(plane,members)
                     self._region_cache[key]=((tuple((b.id,id(b.shape)) for b in members),solids),faces)
@@ -4192,14 +4244,15 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                     if body.group and body.kind=='sketch':expected.setdefault(body.group,set()).add(body.id)
                 fast_groups={group:profiles for group,profiles in fast_groups.items() if {p['source_id'] for p in profiles}==expected.get(group) and len(profiles)==len(expected[group])}
                 self._prepared_group_profiles=(snapshot,fast_groups)
-                self._drawn_cache=(snapshot,groups)
+                self._drawn_cache=(snapshot,groups,hidden)
             self._finish_pattern_picks()
             if self.document.bodies is not snapshot:self._prefetch_sketch_regions()
         work.signals.done.connect(finished);work.signals.failed.connect(lambda _error:finished())
         self.warm_pool.start(work,-1)
 
     def _regions_for(self, key, plane, bodies):
-        solids = tuple((b.id, id(b.shape)) for b in self.document.bodies if b.kind == 'solid' and b.visible)
+        hidden = self._eye_hidden()
+        solids = tuple((b.id, id(b.shape)) for b in self.document.bodies if b.kind == 'solid' and b.visible and b.id not in hidden)
         sig = (tuple((b.id, id(b.shape)) for b in bodies), solids)
         cached = self._region_cache.get(key)
         if cached and cached[0] == sig:
@@ -4211,7 +4264,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         if not faces:
             faces = [f for f in (profile_face(b.shape) for b in bodies if b.shape.IsClosed()) if f is not None]
         # szkic na ścianie bryły, wychodzący poza nią: część na ścianie i część poza nią to osobne obszary
-        faces = hist.split_on_solids(plane, faces, self.document.bodies)
+        faces = hist.split_on_solids(plane, faces, self._pick_bodies())      # ukryte bryły nie dzielą obszarów
         self._region_cache[key] = (sig, faces)
         return faces
 
@@ -4249,7 +4302,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def _face_with_holes(self, face, normal, point):
         """Wskazana ściana bryły z otworami po szkicach narysowanych na niej (okrąg, kwadrat, napis...): (obszar pod kursorem, pozostałe obszary ściany
         - np. wyspy wewnątrz liter o, a, d, p - oraz id szkiców-otworów). Wynik jest pamiętany, bo wskazywanie wywołuje to przy każdym ruchu myszy."""
-        sketches = hist.coplanar_sketches(face, normal, self.document.bodies)
+        sketches = hist.coplanar_sketches(face, normal, self._pick_bodies())      # ukryte szkice nie robią otworów w ścianie
         if not sketches:
             return face, [], []
         key = (tuple(round(float(c), 4) for c in face.Center().toTuple()), tuple(round(float(c), 4) for c in normal), tuple((b.id, id(b.shape)) for b in sketches))
@@ -4257,7 +4310,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         if key not in cache:
             if len(cache) > 40:
                 cache.clear()
-            cache[key] = hist.face_with_holes(face, normal, self.document.bodies)
+            cache[key] = hist.face_with_holes(face, normal, self._pick_bodies())
         regions, holes = cache[key]
         if not holes:
             return face, [], []
@@ -5086,7 +5139,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         skip = self._extent_skip() if op == 'join' and scope != 'target' else []      # wycięcie / część wspólna obejmują też bryłę-cel, w którą wchodzi narzędzie
         skip = sorted(set(skip) | self._protected())             # ukrytych brył operacja nie zmienia
         folder = self._new_folder(profiles, spent, len(makers), op, 'Wyciągnięcie')
-        described = hist.describe_profiles(profiles, existing)
+        described = hist.describe_profiles(profiles, existing, hidden=self._eye_hidden())
         key = repr((id(self.document.bodies), tuple(id(b.shape) for b in existing), op, direction, d1, d2, described, sorted(spent),
                     upto, scope, target.get('body') if target else None, skip, folder))
 
@@ -5200,7 +5253,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 or not doc.can_undo or any(p.get('kind') not in (None, 'face') and p.get('k') != 'face' for p in profiles)):
             return None
         try:
-            recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing),
+            recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing, hidden=self._eye_hidden()),
                           spent=[], skip=sorted(set(self._extent_skip() if op == 'join' else []) | self._protected()) or None)
             recipe = {k: v for k, v in recipe.items() if v is not None}
             return hist.extrude_fold(doc.states(), recipe)
@@ -5389,7 +5442,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
         def build():
             bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Obrót', skip=skip, folder=folder)
-            recipe = dict(type='revolve', mode=op, axis=axis, angle=angle, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            recipe = dict(type='revolve', mode=op, axis=axis, angle=angle, profiles=hist.describe_profiles(profiles, existing, hidden=self._eye_hidden()), spent=sorted(spent), out=out)
             if skip:
                 recipe['skip'] = skip
             if folder:
@@ -5741,8 +5794,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             return
         n = len(self.dr_ids)
         self.view.tints = {i: TINT_BASE for i in self.dr_ids}
+        if mode in ('drawing', 'autodrawing'):
+            self.selected = [i for i in self.dr_ids if (b := self.document.get(i)) is not None and b.kind == 'sketch']   # wybrane szkice świecą
         self.dr_apply[mode].setEnabled(n > 0)
-        self.dr_status[mode].setText(f'Wybrane bryły: {n} - Zastosuj zrobi z nich jeden rysunek (jak z jednej bryły). '
+        self.dr_status[mode].setText(f'Wybrane obiekty: {n} - Zastosuj zrobi z nich jeden rysunek (jak z jednej bryły). '
                                      'Ponowne kliknięcie odznacza.' if n else
                                      'Kilka brył naraz: zaznacz je (albo całą grupę) na liście Obiekty albo klikaj z Shift - '
                                      'Zastosuj zrobi z nich jeden rysunek.')
@@ -5750,9 +5805,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def dr_add(self, ids):
         """Lista Obiekty / Shift + klik w trybie rysunku: bryły (także cała grupa) dochodzą do rysunku; ponownie - odchodzą."""
-        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind == 'solid']
+        ids = [i for i in ids if (b := self.document.get(i)) is not None and b.kind in ('solid', 'sketch')]
         if not ids:
-            self.toast('Ta pozycja nie zawiera brył.')
+            self.toast('Ta pozycja nie zawiera brył ani szkiców.')
             return
         if all(i in self.dr_ids for i in ids):
             self.dr_ids = [i for i in self.dr_ids if i not in ids]
@@ -5771,6 +5826,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         auto = self.mode == 'autodrawing'
         if len(bodies) == 1:
             body = bodies[0]
+        elif all(b.kind == 'sketch' for b in bodies):
+            folders = {b.folder for b in bodies}
+            name = folders.pop() if len(folders) == 1 and next(iter({b.folder for b in bodies})) else f'{bodies[0].name} (+{len(bodies) - 1})'
+            body = replace(bodies[0], name=name, shape=kernel.compound([b.shape for b in bodies]))     # szkice: płaski rysunek w płaszczyźnie pierwszego
         else:
             folders = {b.folder for b in bodies}
             name = folders.pop() if len(folders) == 1 and next(iter({b.folder for b in bodies})) else f'{bodies[0].name} (+{len(bodies) - 1})'
@@ -5779,12 +5838,22 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.open_drawing(body, auto=auto)
 
     def pick_drawing(self, x, y, shift=False):
+        mode = self.mode
+        if mode in ('drawing', 'autodrawing'):
+            edge = self.view.nearest_edge(x, y, kinds=('sketch',))
+            sketch = self.document.get(edge[0]) if edge else None
+            if sketch is not None and sketch.kind == 'sketch':          # rysunek techniczny także ze szkicu (rzut w jego płaszczyźnie)
+                if shift or self.dr_ids:
+                    self.dr_add(self._group_ids(sketch.id))
+                    return
+                self.set_mode(None)
+                self.open_drawing(sketch, auto=mode == 'autodrawing')
+                return
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         if body is None or body.kind != 'solid':
-            self.toast('Kliknij bryłę (nie szkic).')
+            self.toast('Kliknij bryłę albo szkic.' if mode in ('drawing', 'autodrawing') else 'Kliknij bryłę (nie szkic).')
             return
-        mode = self.mode
         if mode in ('drawing', 'autodrawing') and (shift or self.dr_ids):
             self.dr_add(self._group_ids(body.id))      # rysunek z kilku brył: kliknięta dochodzi do wybranych
             return
@@ -5894,9 +5963,45 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         except Exception:
             return None
 
+    @staticmethod
+    def sketch_drawing_shape(body):
+        """Szkic do rysunku technicznego: przeniesiony z jego płaszczyzny na płaszczyznę XY (rzut z góry pokazuje prawdziwy
+        kształt i wymiary, także szkicu na pochylonej ścianie)."""
+        frame = kernel.frame_of(kernel.actual_frame(body.shape, body.plane))
+        x = np.asarray(frame.xdir, float)
+        n = np.asarray(frame.normal, float)
+        y = np.cross(n, x)
+        rot = np.vstack([x, y, n])                 # wiersze: osie płaszczyzny -> X, Y, Z
+        return kernel.transformed(body.shape, rot, -rot @ np.asarray(frame.origin, float))
+
     def open_drawing(self, body, auto=False):
         from . import drawing as dr
         from .drawing_window import DrawingWindow, FILTERS, export_drawing
+        if body.kind == 'sketch':                  # rysunek szkicu: płaski rzut z góry (wymiary, okręgi, zapis jak dla bryły)
+            flat = self.sketch_drawing_shape(body)
+            if not auto:
+                win = DrawingWindow(flat, body.name, self, views=('top',), checked=('top',))
+                self._drawing_windows = [w for w in self._drawing_windows if w.isVisible()] + [win]
+                win.show()
+                win.raise_()
+                return
+
+            def build_flat():
+                from . import FULL_VERSION
+                source = dr.DrawingSource(flat, body.name)
+                settings = dict(dr.auto_settings(source), views=('top',), hidden=False)
+                return dr.build_drawing(source, version=FULL_VERSION, **settings)
+
+            def save_flat(drawing):
+                path, _ = QFileDialog.getSaveFileName(self, 'Zapisz rysunek techniczny', f'{body.name}.pdf', FILTERS)
+                if not path:
+                    return
+                if not Path(path).suffix:
+                    path += '.pdf'
+                export_drawing(drawing, path)
+                self.toast('Zapisano rysunek: ' + path, 6000)
+            self.run_operation('Rysunek automatyczny', build_flat, save_flat)
+            return
         bends_of = self._flat_sheet_bends(body)
         if not auto:
             def show(result):
@@ -6839,7 +6944,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
         def build():
             bodies = hist.offloaded(hist.combine, existing, [m() for m in makers], op, spent, out, 'Przeciągnięcie', skip=skip, folder=folder)
-            recipe = dict(type='sweep', mode=op, path=path, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            recipe = dict(type='sweep', mode=op, path=path, profiles=hist.describe_profiles(profiles, existing, hidden=self._eye_hidden()), spent=sorted(spent), out=out)
             if skip:
                 recipe['skip'] = skip
             if folder:
@@ -7150,10 +7255,17 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             body = self.document.get(bid)
             if body is None or body.kind != 'solid':
                 return
+            self._mod_blend_clear()
             self._mod_vertex_select(bid, np.asarray(point, float), shift, ctrl)
             return
         hit = self.view.nearest_edge(x, y, True)
+        if hit is not None and self._smooth_edge(hit) and self._blend_under(x, y) is not None:
+            hit = None                            # gładki brzeg zaokrąglenia: klik wybiera samo zaokrąglenie
         if hit is None:
+            blend = self._blend_under(x, y)
+            if blend is not None:
+                self._mod_blend_select(blend)      # istniejące zaokrąglenie / faza: strzałka zmienia rozmiar, Delete usuwa
+                return
             if not self._mod_edit_existing(x, y):
                 self.update_mod_status()          # kliknięcie obok nie kasuje wybranych krawędzi i narożników
             return
@@ -7161,6 +7273,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         body = self.document.get(bid)
         if body is None or body.kind != 'solid':
             return
+        self._mod_blend_clear()
         self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl, mark=index)
 
     def _mod_edit_existing(self, x, y):
@@ -7178,6 +7291,174 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.history_edit(step)
         self.toast(f'Zmieniasz zaokrąglenie / fazę z kroku {step}: ustaw nową wartość i kliknij Zastosuj - krok zostanie poprawiony.', 6000)
         return True
+
+    # ---------- istniejące zaokrąglenia i fazy: najechanie podświetla, klik - strzałka, Delete - usunięcie ----------
+    def _blend_under(self, x, y):
+        """Zaokrąglenie / faza bryły pod kursorem: dict(bid, point, face, info, mesh) albo None (wyniki zapamiętane)."""
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid' or body.id in self._protected():
+            return None
+        hint = getattr(self.view, '_face_hint', None)
+        ids = getattr(body.mesh, 'face_ids', None)
+        cache = self.__dict__.setdefault('_blend_cache', {})
+        if cache.get('shape') is not body.shape:
+            cache.clear()
+            cache['shape'] = body.shape
+            cache['faces'] = body.shape.Faces()
+        faces = cache['faces']
+        index = None
+        if hint is not None and ids is not None and hint[0] == body.id and hint[1] < len(ids):
+            index = int(ids[hint[1]])
+        if index is None or index >= len(faces):
+            index, _face = kernel.face_at_point(body.shape, hit[2])
+            if index is None:
+                return None
+        if index not in cache:
+            info = kernel.blend_face_info(body.shape, faces[index])
+            cache[index] = None if info is None else dict(info=info, mesh=kernel.display_mesh(faces[index]))
+        found = cache[index]
+        if found is None:
+            return None
+        return dict(bid=body.id, point=np.asarray(hit[2], float), face=index, info=found['info'], mesh=found['mesh'])
+
+    def _smooth_edge(self, hit):
+        body = self.document.get(hit[0])
+        if body is None or body.kind != 'solid':
+            return False
+        cache = self.__dict__.setdefault('_smooth_cache', {})
+        key = (id(body.shape), hit[1])
+        if key not in cache:
+            if len(cache) > 4000:
+                cache.clear()
+            cache[key] = kernel.edge_is_smooth(body.shape, hit[1])
+        return cache[key]
+
+    def _mod_blend_select(self, blend):
+        """Klik w istniejące zaokrąglenie / fazę: zaznaczona (jak krawędź) - strzałka zmienia jej rozmiar na żywo,
+        Zastosuj / Enter zapisuje, Delete usuwa (zostaje ostry narożnik)."""
+        body = self.document.get(blend['bid'])
+        try:
+            found = kernel.blend_handle(body.shape, blend['point'], blend['face'])
+        except Exception:
+            found = None
+        if found is None:
+            self.toast('Nie udało się zaznaczyć tego zaokrąglenia / fazy.')
+            return
+        point, direction, info = found
+        self.edges, self.mod_vertices = {}, {}
+        self.view.sel_vertices = []
+        self.mod_blend = dict(blend, point=np.asarray(point, float), dir=np.asarray(direction, float), info=info)
+        for widget, value in ((self.mod_kind, None), (self.mod_size, round(info['size'], 3))):
+            widget.blockSignals(True)
+        self.mod_kind.setCurrentIndex(self.mod_kind.findData(info['kind']))
+        self.mod_size.setValue(round(info['size'], 3))
+        self.mod_kind.blockSignals(False)
+        self.mod_size.blockSignals(False)
+        self._mod_kind_label()
+        name = 'Zaokrąglenie' if info['kind'] == 'fillet' else 'Faza'
+        self.mod_status.setText(f'{name} {info["size"]:.3g} mm: przeciągnij strzałkę albo wpisz nowy rozmiar i Zastosuj; '
+                                'Delete usuwa (zostaje ostry narożnik).')
+        self.view.set_selection_meshes([blend['mesh']])
+        self.view.set_hover_mesh(None)
+        self._blend_hover = None
+        self.override = {}
+        self.refresh()
+        self._place_mod_handle()
+
+    def _mod_kind_label(self):
+        fillet = self.mod_kind.currentData() == 'fillet'
+        self.mod_label.setText('Promień zaokrąglenia (mm)' if fillet else 'Odległość fazy (mm)')
+        self.mod_size_pic.setPixmap(ui.icons.pixmap('md_fillet' if fillet else 'md_chamfer', 48))
+
+    def _mod_blend_clear(self):
+        if getattr(self, 'mod_blend', None) is not None:
+            self.mod_blend = None
+            self.override = {}
+            self.view.set_selection_meshes(None)
+            self.view.set_preview_mesh(None)
+            self.refresh()
+
+    def _mod_blend_preview(self):
+        """Podgląd zmienionego zaokrąglenia / fazy: cała bryła po zmianie (liczona w tle)."""
+        b = self.mod_blend
+        body = self.document.get(b['bid'])
+        if body is None:
+            return
+        size, kind = self.mod_size.value(), self.mod_kind.currentData()
+        sig = ('blend', b['bid'], id(body.shape), tuple(np.round(b['point'], 6)), size, kind)
+        self._mod_sig = sig
+        if abs(size - b['info']['size']) < 1e-9 and kind == b['info']['kind']:
+            self.override = {}
+            self.refresh()
+            return
+        shape, point = body.shape, [float(c) for c in b['point']]
+
+        def compute():
+            return hist.offloaded_shape(kernel.reblend, shape, point, size, kind)
+
+        def show(value, error):
+            if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig or self.mod_blend is None:
+                return
+            if error or value is None:
+                self.override = {}
+                self.refresh()
+                self.mod_status.setText(str(error) if error else 'Ta wartość jest za duża dla tego miejsca.')
+                return
+            new_shape, mesh = value
+            self.override = {body.id: replace(body, shape=new_shape, mesh=mesh if mesh is not None else kernel.display_mesh(new_shape))}
+            self.refresh()
+            name = 'Zaokrąglenie' if kind == 'fillet' else 'Faza'
+            self.mod_status.setText(f'{name}: {b["info"]["size"]:.3g} → {size:g} mm. Zastosuj / Enter zapisuje, Delete usuwa.')
+
+        self.run_preview('mod', compute, show)
+
+    def apply_blend_edit(self, size):
+        """Zapis zmiany istniejącego zaokrąglenia / fazy (size=None - usunięcie). Narzędzie zostaje otwarte: można od razu
+        kliknąć kolejne zaokrąglenie."""
+        b = self.mod_blend
+        body = self.document.get(b['bid']) if b else None
+        if body is None or self.busy:
+            return
+        kind = self.mod_kind.currentData()
+        if size is not None and kind == b['info']['kind'] and not self.step_editing and not self.document.can_redo:
+            # zaokrąglenie zrobione krokiem historii: zmiana rozmiaru poprawia ten krok (bez nowego kroku i bez duplikatu)
+            step = hist.blend_step(self.document.states(), body.id, b['point'])
+            if step is not None:
+                self.mod_blend = None
+                self.override = {}
+                self.view.set_selection_meshes(None)
+                self.history_edit(step)
+                if self.step_editing and self.mode == 'mod':
+                    self.mod_size.setValue(float(size))
+                    self.apply_mod()
+                    return
+        recipe = dict(type='reblend', id=body.id, point=[float(c) for c in b['point']], size=None if size is None else float(size), kind=kind)
+        old = b['info']['kind']
+        label = ('Usunięcie ' if size is None else 'Zmiana ') + ('zaokrąglenia' if old == 'fillet' else 'fazy')
+
+        def work():
+            shape, mesh = hist.offloaded_shape(kernel.reblend, body.shape, recipe['point'], recipe['size'], kind)
+            return body.changed(shape, mesh) if mesh is not None else body.changed(shape)
+
+        def apply(new):
+            self.document.pending_op = recipe
+            self.document.pending_label = label
+            self.document.pending_icon = 'mod'
+            self.document.commit([new if x.id == body.id else x for x in self.document.bodies])
+
+        def after():
+            self.mod_blend = None
+            self.override = {}
+            self.view.set_selection_meshes(None)
+            self.view.set_preview_mesh(None)
+            if self.mode == 'mod':
+                self.update_mod_status()
+        self.mod_blend = None
+        self.override = {}
+        self.view.set_handles([])
+        self.view.set_selection_meshes(None)
+        self.run_operation(label, work, apply, after=after)
 
     def _mod_reset_size(self):
         if not any(self.mod_vertices.values()) and not any(self.edges.values()):
@@ -7288,6 +7569,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def _place_mod_handle(self):
         if self.mode!='mod':self.view.set_handles([]);return
+        if self.mod_blend is not None:          # strzałka na klikniętym zaokrągleniu / fazie (do wnętrza bryły = większe)
+            b=self.mod_blend;d=b['dir']
+            start=b['point']-d*b['info']['size']
+            self.view.set_handles([dict(id='mod',start=start,tip=start+d*self.mod_size.value(),dir=d,color=(.94,.6,.13,1))]);return
         order=[]
         for kind,bid,value in getattr(self,'_mod_pick_order',[]):
             alive=(value in self.edges.get(bid,())) if kind=='edge' else any(np.linalg.norm(np.asarray(value)-q)<1e-3 for q in self.mod_vertices.get(bid,()))
@@ -7312,6 +7597,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.view.set_handles([dict(id='mod',start=mid,tip=mid+d*self.mod_size.value(),dir=d,color=(.94,.6,.13,1))])
     def update_mod_preview(self):
         if self.mode != 'mod':
+            return
+        if self.mod_blend is not None:
+            self._mod_blend_preview()
             return
         items = self._mod_items()
         if not items:
@@ -7415,6 +7703,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def apply_mod(self):
         if self.busy:
+            return
+        if self.mod_blend is not None:
+            self.apply_blend_edit(self.mod_size.value())
             return
         items = self._mod_items()
         if not items:
@@ -10523,6 +10814,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.delete_selected()
 
     def delete_selected(self):
+        if self.mode == 'mod' and getattr(self, 'mod_blend', None) is not None and not self.busy:
+            self.apply_blend_edit(None)          # Delete: zaokrąglenie / faza znika, zostaje ostry narożnik
+            return
         clines = bool(self.selected) and all((b := self.document.get(i)) is not None and b.kind == 'cline' for i in self.selected)
         if not self.busy and self.selected and (self.mode is None or clines):     # linia wymiaru: Delete także w otwartym szkicu
             self.document.pending_op = dict(type='delete', ids=list(self.selected))
@@ -11188,6 +11482,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             elif self.mode == 'sketch' and self.tool == 'sfillet' and self.sf:
                 self._sf_clear()
                 self.show_sketch_hint()
+            elif self.mode == 'mod' and getattr(self, 'mod_blend', None) is not None:
+                self._mod_blend_clear()             # Esc: odznacza kliknięte zaokrąglenie / fazę
+                self.update_mod_status()
             elif self.mode == 'sketch' and self.tool in SKETCH_TOOLS and self.skt_escape():
                 self.show_sketch_hint()
             elif self.mode is not None:

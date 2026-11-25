@@ -142,9 +142,9 @@ class SketchPlace:
             self.hint('Wyrównanie szkicu: kliknij linię szkicu (albo okrąg), potem krawędź bryły albo linię innego szkicu.')
         self.view.setCursor(Qt.PointingHandCursor)
 
-    @staticmethod
-    def _splace_sketch_ok(body):
-        return body is not None and body.kind == 'sketch' and body.visible and not (body.meta or {}).get('surface')
+    def _splace_sketch_ok(self, body):
+        return (body is not None and body.kind == 'sketch' and body.visible and body.id not in self._eye_hidden()
+                and not (body.meta or {}).get('surface'))
 
     def _splace_sketch_at(self, x, y):
         hit = self.view.nearest_edge(x, y, kinds=('sketch',))

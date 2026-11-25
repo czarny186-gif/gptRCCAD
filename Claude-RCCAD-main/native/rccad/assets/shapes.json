@@ -85,10 +85,24 @@
  },
  {
   "shape": "slot",
-  "title": "Fasolka / szczelina",
+  "title": "Fasolka / szczelina — wybierz wariant strzałką",
   "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M10 7H22A9 9 0 0 1 22 25H10A9 9 0 0 1 10 7Z\"></path></svg>",
-  "group": null,
+  "group": "slot",
   "variant": false
+ },
+ {
+  "shape": "slot",
+  "title": "Fasolka z dwóch końców osi",
+  "svg": null,
+  "group": "slot",
+  "variant": true
+ },
+ {
+  "shape": "centerSlot",
+  "title": "Fasolka od środka — środek, koniec osi (drugi koniec odbija się lustrzanie) i szerokość",
+  "svg": null,
+  "group": "slot",
+  "variant": true
  },
  {
   "shape": "polygon",

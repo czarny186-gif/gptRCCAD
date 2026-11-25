@@ -153,7 +153,7 @@ class SketchTools:
             self._sd_update()
 
     def _skt_body_ok(self, body):
-        return (body is not None and body.kind == 'sketch' and body.visible and not (body.meta or {}).get('surface')
+        return (body is not None and body.kind == 'sketch' and body.visible and body.id not in self._eye_hidden() and not (body.meta or {}).get('surface')
                 and self._same_plane(body.plane, self.sketch_plane))
 
     def _skt_cursor(self):

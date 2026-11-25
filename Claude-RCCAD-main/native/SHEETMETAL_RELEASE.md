@@ -1,12 +1,24 @@
-# RCCAD Desktop 0.5.48 — Anuluj liczenie, przyciąganie do prostych linii, środki szkiców w Wymiarze
+# RCCAD Desktop 0.5.49 — Edycja i usuwanie zaokrągleń i faz, ukryte obiekty bez wpływu, rysunek ze szkiców, fasolka od środka
 
-- **„Anuluj liczenie” pod kostką nawigacji**: przycisk widoczny tylko razem z paskiem postępu. Przerywa operację, podglądy i przygotowania w tle - procesy liczące są zamykane (także zawieszone na jednej operacji) i startują od nowa - zamyka bieżące narzędzie i zostawia projekt taki, jak przed liczoną zmianą. Spóźniony wynik przerwanej operacji jest pomijany.
-- **Przesuń myszą - przyciąganie do prostych linii**: wierzchołek albo środek przesuwanego szkicu (i bryły) klei się do prostej linii innego szkicu, a wierzchołek innego szkicu do przesuwanej linii (znacznik „na linii”) - obok wcześniejszych: środek, wierzchołek, proste w jednej linii, styczność. To samo przyciąganie działa przy przeciąganiu kształtu w narzędziu Wymiar.
-- **Wymiar - punkty w środkach wszystkich szkiców**: oprócz środków okręgów, końców i środków linii można wskazać środek każdego kształtu - prostokąta, wielokąta, połączonego szkicu (środek ciężkości obrysu), a łamanej otwartej środek jej ramki.
+- **Zaokrąglij / Fazuj - istniejące zaokrąglenia i fazy**: po najechaniu kursorem podświetlają się na pomarańczowo (także w bryłach z importu STEP, bez historii).
+  - kliknięcie zaznacza je jak krawędź - pojawia się strzałka; przeciąganie (albo wpisanie wartości) powiększa lub pomniejsza zaokrąglenie / fazę z podglądem na żywo, Zastosuj / Enter zapisuje; przełącznik Zaokrąglij / Fazuj zamienia rodzaj;
+  - Delete usuwa zaokrąglenie / fazę - zostaje ostry narożnik, jakby jej nie było;
+  - kroki historii „Zmiana zaokrąglenia / fazy” i „Usunięcie zaokrąglenia / fazy” (Cofnij działa); narzędzie zostaje otwarte, Esc odznacza.
+- Gładki brzeg zaokrąglenia nie podświetla się już jako krawędź do zaokrąglenia - kliknięcie w jego okolicy wybiera samo zaokrąglenie.
+- Zaokrąglenie zrobione krokiem historii: zmiana rozmiaru poprawia ten krok (bez duplikatu); zaokrąglenie / faza z importu dostaje nowy krok, a narzędzie zostaje otwarte.
+- **Poprawka: ukryte obiekty nie przeszkadzają.** Obiekty ukryte okiem na liście Obiekty nie podświetlają się pod kursorem, nie dzielą obszarów szkiców (ukryty walec albo okrąg pod prostokątem dzielił go i nie dało się wyciągnąć całego prostokąta), nie robią otworów w ścianach i nie przyciągają. Krok wyciągnięcia zapamiętuje ukryte obiekty - przeliczenie historii daje ten sam wynik.
+- **Fasolka od środka** (pasek boczny szkicu, strzałka przy fasolce - jak przy okręgu i prostokącie): klikasz środek, potem koniec osi - drugi koniec rysuje się na żywo jako odbicie po drugiej stronie środka - a na końcu szerokość. Gotowa fasolka ma zwykłe wymiary (długość, szerokość).
+- **Rysunek techniczny ze szkiców**: Rysunek i Rysunek automatyczny przyjmują też szkice (podświetlenie, klik, Shift + klik, lista Obiekty) - płaski rzut w płaszczyźnie szkicu z wymiarami i okręgami.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.48 — Anuluj liczenie, przyciąganie do prostych linii, środki szkiców w Wymiarze
+
+- **„Anuluj liczenie” pod kostką nawigacji**: przycisk widoczny tylko razem z paskiem postępu. Przerywa operację, podglądy i przygotowania w tle - procesy liczące są zamykane (także zawieszone na jednej operacji) i startują od nowa - zamyka bieżące narzędzie i zostawia projekt taki, jak przed liczoną zmianą. Spóźniony wynik przerwanej operacji jest pomijany.
+- **Przesuń myszą - przyciąganie do prostych linii**: wierzchołek albo środek przesuwanego szkicu (i bryły) klei się do prostej linii innego szkicu, a wierzchołek innego szkicu do przesuwanej linii (znacznik „na linii”) - obok wcześniejszych: środek, wierzchołek, proste w jednej linii, styczność. To samo przyciąganie działa przy przeciąganiu kształtu w narzędziu Wymiar.
+- **Wymiar - punkty w środkach wszystkich szkiców**: oprócz środków okręgów, końców i środków linii można wskazać środek każdego kształtu - prostokąta, wielokąta, połączonego szkicu (środek ciężkości obrysu), a łamanej otwartej środek jej ramki.
 
 ### 0.5.47 — Wymiar: edycja, przesuwanie myszą, kilka wymiarów z punktu; odznaczanie prawym przyciskiem
 

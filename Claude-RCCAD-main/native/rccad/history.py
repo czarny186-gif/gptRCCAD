@@ -22,14 +22,15 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'gear': 'gear', 'gear_pair': 'gearpair', 'sketch_fillet': 's_sfillet', 'sketch_join': 's_sjoin', 'sketch_mirror': 's_smirror', 'twist': 'twist', 'link': 'link'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'gear': 'gear', 'gear_pair': 'gearpair', 'sketch_fillet': 's_sfillet', 'sketch_join': 's_sjoin', 'sketch_mirror': 's_smirror', 'reblend': 'mod', 'twist': 'twist', 'link': 'link'}
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
                'Zaokrąglanie': 'mod', 'Skorupa': 'shell', 'Fazowanie': 'mod', 'Odbicie lustrzane': 'mirror', 'Przecięcie': 'split', 'Szyk': 'pattern', 'Przekształcenie': 'move', 'Dopasowanie': 'mate', 'Wyrównanie': 'align',
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file', 'Koło zębate': 'gear', 'Para kół zębatych': 'gearpair',
                'Zaokrąglenie szkicu': 's_sfillet', 'Fazowanie szkicu': 's_sfillet', 'Skręcenie (TWIST)': 'twist',
-               'Połączenie szkiców': 's_sjoin', 'Lustro szkicu': 's_smirror', 'Wymiar szkicu': 's_sdim'}
+               'Połączenie szkiców': 's_sjoin', 'Lustro szkicu': 's_smirror', 'Wymiar szkicu': 's_sdim',
+               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod'}
 
 
 def _num(value, unit=''):
@@ -450,9 +451,19 @@ def face_with_holes(face, normal, bodies):
     return [face], []
 
 
-def describe_profiles(profiles, bodies=(), merge=True):
+def describe_profiles(profiles, bodies=(), merge=True, hidden=()):
     """Przepis na wybrane profile wyciągnięcia (src z Studio) -> lista słowników JSON. Obszar zapamiętuje też szkic-kotwicę
-    i przesunięcie względem jego środka, więc podąża za szkicem po zmianie jego wymiarów."""
+    i przesunięcie względem jego środka, więc podąża za szkicem po zmianie jego wymiarów.
+    hidden: obiekty ukryte okiem na liście Obiekty - nie dzielą obszarów (ani ścian) i przepis to zapamiętuje ('ignore')."""
+    hidden = sorted(set(hidden))
+    if hidden:
+        bodies = [b for b in bodies if b.id not in hidden]
+        found = _describe(profiles, bodies, merge)
+        return [dict(spec, ignore=hidden) if spec.get('k') in ('region', 'face', 'textgroup') else spec for spec in found]
+    return _describe(profiles, bodies, merge)
+
+
+def _describe(profiles, bodies=(), merge=True):
     out = []
     profiles = [p for p in profiles if not p.get('sibling')]      # pozostałe obszary tej samej ściany (wyspy): przepis odtwarza je razem z główną
     owners={b.id:b for b in bodies}
@@ -558,6 +569,9 @@ def match_cylinder(shape, spec):
 
 def resolve_profile(bodies, spec):
     """Odtwarza profil (wire, normal, plane, face) w podanym stanie albo rzuca CadError."""
+    if spec.get('ignore'):                 # obiekty ukryte przy wyborze profilu nie dzielą obszarów ani ścian
+        ignore = set(spec['ignore'])
+        bodies = [b for b in bodies if b.id not in ignore]
     by_id = {b.id: b for b in bodies}
     if spec['k'] == 'surface':
         body = by_id.get(spec['id'])
@@ -623,6 +637,9 @@ def resolve_profile(bodies, spec):
 
 def resolve_profiles(bodies, spec):
     """Lista profili dla jednej pozycji przepisu (napis = wszystkie jego obszary, reszta = jeden profil)."""
+    if spec.get('ignore'):                 # obiekty ukryte przy wyborze profilu nie dzielą obszarów ani ścian
+        ignore = set(spec['ignore'])
+        bodies = [b for b in bodies if b.id not in ignore]
     if spec['k'] == 'surfacetext':
         members = [b for b in bodies if b.kind == 'sketch' and text_group_of(b.id) == spec['group'] and (b.meta or {}).get('surface')]
         if not members:
@@ -1756,6 +1773,15 @@ def joint_blend(states, body_id, ids, size, kind):
     label = ('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie') + f' (połączone z {count - 1} wcześniejszymi)'
     timeline.append((tuple(result), {'label': label, 'icon': 'mod', 'op': recipe}))
     return timeline
+
+
+def run_reblend(bodies, recipe):
+    """Zmiana istniejącego zaokrąglenia / fazy (kliknięta ściana, punkt `point`): size=None - usunięcie (zostaje ostry
+    narożnik), inaczej nowy rozmiar; kind - zaokrąglenie albo faza."""
+    body = _body(bodies, recipe['id'])
+    size = recipe.get('size')
+    shape = kernel.reblend(body.shape, recipe['point'], None if size is None else float(size), recipe.get('kind'))
+    return _replace(bodies, body.changed(shape))
 
 
 def run_mod(bodies, recipe):
@@ -4146,7 +4172,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link, 'gear': run_gear, 'gear_pair': run_gear_pair, 'sketch_fillet': run_sketch_fillet, 'sketch_join': run_sketch_join, 'sketch_mirror': run_sketch_mirror, 'twist': run_twist}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link, 'gear': run_gear, 'gear_pair': run_gear_pair, 'sketch_fillet': run_sketch_fillet, 'sketch_join': run_sketch_join, 'sketch_mirror': run_sketch_mirror, 'reblend': run_reblend, 'twist': run_twist}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -4295,6 +4321,8 @@ def reads(recipe, current):
         return {item['id'] for item in recipe.get('items') or ()}
     if kind in ('sketch_join', 'sketch_mirror'):
         return set(recipe['ids'])
+    if kind == 'reblend':
+        return {recipe['id']}
     if kind == 'gear':
         return {recipe['replace']} if recipe.get('replace') else set()
     if kind == 'gear_pair':
