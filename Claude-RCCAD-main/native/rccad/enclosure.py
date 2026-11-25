@@ -21,10 +21,19 @@ import numpy as np
 
 from . import kernel
 
-SPEC_VERSION = 1
+SPEC_VERSION = 2               # 1 - definicja (etap 1); 2 - prostokątna obudowa jako bryła (etap 2)
 FRAME_MODES = ('global', 'local', 'face')
 FRAME_LABELS = {'global': 'Globalny (osie X, Y, Z)', 'local': 'Lokalny (dopasowany do elementów)', 'face': 'Ze ściany (wskazana ściana)'}
 SOURCE_KINDS = ('solid', 'mesh')
+MODES = ('open', 'closed', 'solid')
+MODE_LABELS = {'open': 'Otwarta (bez górnej ścianki)', 'closed': 'Całkowicie zamknięta', 'solid': 'Pełna bryła zewnętrzna'}
+SIDES = ('x-', 'x+', 'y-', 'y+', 'z-', 'z+')                # odstępy od elementów
+WALLS = ('x-', 'x+', 'y-', 'y+', 'bottom', 'top')            # ścianki: cztery boczne, dno (Z-), górna (Z+)
+SIDE_LABELS = {'x-': 'X−', 'x+': 'X+', 'y-': 'Y−', 'y+': 'Y+', 'z-': 'Z−', 'z+': 'Z+', 'bottom': 'Dno', 'top': 'Góra'}
+DEFAULT_CLEARANCE = 2.0
+DEFAULT_WALL = 2.0
+MIN_WALL = 0.2                 # cieńsza ścianka nie daje sensownej bryły (i jest niewykonalna)
+MAX_VALUE = 10000.0
 
 
 @dataclass
@@ -69,8 +78,9 @@ class EnclosureSpec:
     frame: FrameSpec = field(default_factory=FrameSpec)
     envelope: Envelope = field(default_factory=Envelope)
     shape: str = 'box'                                    # kształt obudowy (kolejne etapy: zaokrąglona, walec, pulpit, kontur)
-    clearance: dict = field(default_factory=dict)         # odstępy od elementów: +X, -X, +Y, -Y, +Z, -Z (etap 2)
-    walls: dict = field(default_factory=dict)             # grubość ścianek, dna, pokrywy
+    mode: str = 'closed'                                  # 'open' | 'closed' | 'solid'
+    clearance: dict = field(default_factory=dict)         # odstępy od elementów: x-, x+, y-, y+, z-, z+ (+ 'linked')
+    walls: dict = field(default_factory=dict)             # grubości: x-, x+, y-, y+, bottom, top (+ 'linked')
     split: dict = field(default_factory=dict)             # podział obudowy
     mounts: list = field(default_factory=list)            # mocowania
     openings: list = field(default_factory=list)          # otwory na złącza, wyświetlacze, przyciski
@@ -85,7 +95,7 @@ class EnclosureSpec:
     def from_json(data):
         data = copy.deepcopy(data or {})
         spec = EnclosureSpec()
-        spec.version = int(data.get('version', SPEC_VERSION))
+        spec.version = int(data.get('version', 1))
         spec.units = data.get('units', 'mm')
         spec.sources = [SourceRef(**{k: v for k, v in s.items() if k in ('id', 'name', 'kind', 'source')}) for s in data.get('sources', [])]
         fr = data.get('frame') or {}
@@ -93,7 +103,7 @@ class EnclosureSpec:
         env = data.get('envelope') or {}
         spec.envelope = Envelope(center=list(env.get('center', [0, 0, 0])), axes=[list(a) for a in env.get('axes', Envelope().axes)],
                                  size=list(env.get('size', [0, 0, 0])))
-        for key in ('shape', 'clearance', 'walls', 'split', 'mounts', 'openings', 'vents', 'closure', 'process'):
+        for key in ('shape', 'mode', 'clearance', 'walls', 'split', 'mounts', 'openings', 'vents', 'closure', 'process'):
             if key in data:
                 setattr(spec, key, data[key])
         return spec
@@ -242,6 +252,106 @@ def dimension_items(env, prefix='enc'):
     return out
 
 
+# ---------------------------------------------------------------------------------------------- etap 2: prostokątna obudowa
+def clearance_of(spec):
+    c = spec.clearance or {}
+    return {k: float(c.get(k, DEFAULT_CLEARANCE)) for k in SIDES}
+
+
+def walls_of(spec):
+    w = spec.walls or {}
+    return {k: float(w.get(k, DEFAULT_WALL)) for k in WALLS}
+
+
+def box_layout(env, spec):
+    """Prostopadłościany obudowy w układzie przestrzeni (środek przestrzeni = 0): dict(inner=(lo, hi), outer=(lo, hi),
+    inner_size, outer_size). Wnętrze = przestrzeń elementów + odstępy; zewnętrze = wnętrze + grubości ścianek (obudowa
+    otwarta nie ma górnej ścianki). Wartości niepozwalające na poprawną bryłę -> CadError (z opisem)."""
+    c, w = clearance_of(spec), walls_of(spec)
+    for key, value in c.items():
+        if not np.isfinite(value) or value < 0 or value > MAX_VALUE:
+            raise kernel.CadError(f'Odstęp {SIDE_LABELS[key]} musi być od 0 do {MAX_VALUE:g} mm.')
+    for key, value in w.items():
+        if spec.mode == 'open' and key == 'top':
+            continue
+        if not np.isfinite(value) or value < MIN_WALL or value > MAX_VALUE:
+            raise kernel.CadError(f'Grubość ścianki {SIDE_LABELS[key]} musi być od {MIN_WALL:g} do {MAX_VALUE:g} mm.')
+    if spec.mode not in MODES:
+        raise kernel.CadError('Nieznany rodzaj obudowy.')
+    half = np.asarray(env.size, float) / 2
+    lo = -half - np.array([c['x-'], c['y-'], c['z-']])
+    hi = half + np.array([c['x+'], c['y+'], c['z+']])
+    inner = hi - lo
+    if float(inner.min()) <= 1e-6:
+        raise kernel.CadError('Wnętrze obudowy musi mieć dodatnie wymiary.')
+    top = 0.0 if spec.mode == 'open' else w['top']
+    olo = lo - np.array([w['x-'], w['y-'], w['bottom']])
+    ohi = hi + np.array([w['x+'], w['y+'], top])
+    return dict(inner=(lo, hi), outer=(olo, ohi), inner_size=inner, outer_size=ohi - olo)
+
+
+def _make_box(lo, hi):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+    maker = BRepPrimAPI_MakeBox(gp_Pnt(*map(float, lo)), gp_Pnt(*map(float, hi)))
+    maker.Build()
+    if not maker.IsDone():
+        raise kernel.CadError('Nie udało się utworzyć prostopadłościanu obudowy.')
+    return maker.Shape()
+
+
+def check_solid(shape):
+    """BRepCheck_Analyzer + bryła o dodatniej objętości - inaczej CadError."""
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    import cadquery as cq
+    if shape is None or shape.IsNull():
+        raise kernel.CadError('Obudowa nie powstała.')
+    if not BRepCheck_Analyzer(shape).IsValid():
+        raise kernel.CadError('Obudowa ma niepoprawną geometrię (BRepCheck).')
+    out = cq.Shape.cast(shape)
+    if not out.Solids() or float(out.Volume()) <= 1e-9:
+        raise kernel.CadError('Obudowa nie jest bryłą.')
+    return out
+
+
+def box_enclosure(env, spec):
+    """Prostokątna obudowa jako bryła B-Rep: zewnętrzny prostopadłościan (BRepPrimAPI_MakeBox) minus wnętrze
+    (BRepAlgoAPI_Cut); obudowa otwarta - wnętrze wychodzi ponad górną krawędź; pełna bryła - sam zewnętrzny. Geometria
+    elementów nie jest odejmowana. Wynik w położeniu przestrzeni (osie i środek z envelope)."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    lay = box_layout(env, spec)
+    outer = _make_box(*lay['outer'])
+    if spec.mode == 'solid':
+        local = outer
+    else:
+        lo, hi = lay['inner']
+        if spec.mode == 'open':
+            hi = hi + np.array([0.0, 0.0, 1.0 + float(lay['outer_size'][2])])        # wnętrze przechodzi przez górę
+        cut = BRepAlgoAPI_Cut(outer, _make_box(lo, hi))
+        cut.Build()
+        if not cut.IsDone():
+            raise kernel.CadError('Wycięcie wnętrza obudowy nie powiodło się.')
+        local = cut.Shape()
+    import cadquery as cq
+    shape = kernel.transformed(cq.Shape.cast(local), np.asarray(env.axes, float).T, np.asarray(env.center, float))
+    return check_solid(shape.wrapped)
+
+
+def outer_dimension_items(env, spec, prefix='enc'):
+    """Wymiary zewnętrzne X / Y / Z wzdłuż krawędzi obudowy (nakładka wymiarów widoku)."""
+    lay = box_layout(env, spec)
+    lo, hi = lay['outer']
+    c = np.asarray(env.center, float)
+    ax = np.asarray(env.axes, float)
+    world = lambda p: c + ax.T @ np.asarray(p, float)
+    out = []
+    for i, name in enumerate('XYZ'):
+        b = np.array(lo, float)
+        b[i] = hi[i]
+        out.append(dict(id=f'{prefix}:{name}', a=world(lo), b=world(b), axis=None, value=float(hi[i] - lo[i]), sym=False, selected=False, label=name))
+    return out
+
+
 def run(bodies, recipe):
     """Krok historii 'enclosure': definicja obudowy (obiekt 'encl' z krawędziami przestrzeni i przepisem w meta).
     Przy przeliczaniu przestrzeń liczy się od nowa z aktualnego położenia elementów źródłowych."""
@@ -252,9 +362,14 @@ def run(bodies, recipe):
     spec.envelope = env
     ident = recipe['out']
     name = recipe.get('name') or 'Obudowa'
-    shape = envelope_shape(env, solid=False)
-    old = next((b for b in bodies if b.id == ident), None)
     meta = dict(enclosure=spec.to_json())
-    body = (replace(old, shape=shape, meta=meta, mesh=None) if old is not None
-            else Body(name, shape, 'encl', 'XY', id=ident, meta=meta)).prepared()
+    old = next((b for b in bodies if b.id == ident), None)
+    if spec.version >= 2:              # etap 2: prostokątna obudowa jako bryła (nowy element dokumentu)
+        shape = box_enclosure(env, spec)
+        body = (replace(old, shape=shape, meta=meta, mesh=None) if old is not None
+                else Body(name, shape, 'solid', 'XY', id=ident, meta=meta)).prepared()
+    else:                              # definicja z etapu 1 (starsze projekty)
+        shape = envelope_shape(env, solid=False)
+        body = (replace(old, shape=shape, meta=meta, mesh=None) if old is not None
+                else Body(name, shape, 'encl', 'XY', id=ident, meta=meta)).prepared()
     return [body if b.id == ident else b for b in bodies] if old is not None else [*bodies, body]

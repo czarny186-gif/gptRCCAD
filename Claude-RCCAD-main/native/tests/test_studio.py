@@ -4314,36 +4314,76 @@ class StudioTests(unittest.TestCase):
         QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode);self.assertEqual(w.view.tints,{})
         self.assertFalse([i for i in w.view.dim_items if str(i['id']).startswith('enc:')])
 
-    # Generator obudów, etap 1: Zastosuj zapisuje definicję obudowy (krok historii, obiekt „Obudowa”, Cofnij / Ponów,
-    # zapis projektu); przeliczenie kroku liczy przestrzeń z aktualnego położenia elementów; struktura danych z miejscem na dalsze etapy
-    def test_enclosure_stage1_apply_history_and_spec(self):
+    # Generator obudów, etap 2: prostokątna obudowa jako bryła B-Rep (zewnętrzny prostopadłościan minus wnętrze), odstępy
+    # i grubości (6 + 6, z powiązaniem jednym parametrem), trzy tryby, wymiary wewnętrzne / zewnętrzne, blokada złych wartości,
+    # nowy element dokumentu (Cofnij / Ponów, zapis), elementy źródłowe bez zmian; przeliczenie kroku idzie za elementami
+    def test_enclosure_stage2_box_modes_params_and_history(self):
         from rccad import enclosure as encm
-        from rccad.objects import category
+        from OCP.BRepCheck import BRepCheck_Analyzer
         w=self.w;a=Body('A',k.box(40,20,10)).prepared();b=Body('B',k.box(10,10,10).translate((60,0,0))).prepared()
         w.document.commit([a,b]);w.refresh()
-        w.selected=[a.id,b.id];w.set_mode('enclosure');size=list(w.enc['env'].size)
+        w.selected=[a.id,b.id];w.set_mode('enclosure');env=w.enc['env']
+        es=np.asarray(env.size)
+        # powiązane odstępy / grubości: zmiana jednej wartości zmienia wszystkie
+        self.assertTrue(w.enc_clear_link.isChecked());w.enc_clear['x-'].setValue(3)
+        self.assertEqual({round(x.value(),3) for x in w.enc_clear.values()},{3.0})
+        w.enc_wall_link.setChecked(False);w.enc_wall['bottom'].setValue(4);w.enc_wall['top'].setValue(1.5)
+        self.assertEqual(w.enc_wall['x-'].value(),2.0)
+        lay=w.enc['layout'];self.assertTrue(np.allclose(lay['inner_size'],es+6))
+        self.assertTrue(np.allclose(lay['outer_size'],es+6+[4,4,5.5]))
+        self.assertIn('Zewnątrz:',w.enc_sizes.text());self.assertIn(f"{lay['outer_size'][0]:.2f}",w.enc_sizes.text())
+        self.assertEqual({i['label'] for i in w.view.dim_items if str(i['id']).startswith('enc:')},{'X','Y','Z'})
+        # blokada złych wartości: pole nie przyjmie cieńszej ścianki niż minimum ani ujemnego odstępu
+        w.enc_wall['x+'].setValue(0);self.assertAlmostEqual(w.enc_wall['x+'].value(),encm.MIN_WALL)
+        w.enc_clear_link.setChecked(False);w.enc_clear['y+'].setValue(-5);self.assertEqual(w.enc_clear['y+'].value(),0.0)
+        with self.assertRaises(k.CadError):encm.box_layout(env,encm.EnclosureSpec(walls={'x-':0.0}))
+        with self.assertRaises(k.CadError):encm.box_layout(env,encm.EnclosureSpec(clearance={'z+':-1}))
+        w.enc_wall['x+'].setValue(2.0);w.enc_clear['y+'].setValue(3.0)
+        # trzy tryby: poprawna bryła (BRepCheck_Analyzer), objętości zgodne z wymiarami
+        inner=np.prod(es+6);outer=np.prod(es+6+[4,4,5.5])
+        for mode,vol in (('closed',outer-inner),('solid',outer)):
+            sp=w.enc_spec();sp.mode=mode;shape=encm.box_enclosure(env,sp)
+            self.assertTrue(BRepCheck_Analyzer(shape.wrapped).IsValid());self.assertAlmostEqual(shape.Volume(),vol,3)
+        sp=w.enc_spec();sp.mode='open';op_=encm.box_enclosure(env,sp)
+        bb=op_.BoundingBox();self.assertAlmostEqual(bb.zlen,es[2]+6+4,4)                     # bez górnej ścianki
+        self.assertAlmostEqual(op_.Volume(),np.prod(es+6+[4,4,4])-np.prod(es+6)-0,3)
+        w.enc_mode.setCurrentIndex(w.enc_mode.findData('open'));self.assertFalse(w.enc_wall['top'].isEnabled())
+        w.enc_mode.setCurrentIndex(w.enc_mode.findData('closed'))
+        # podgląd: nic w dokumencie; Zastosuj (Enter) - nowa bryła
+        self.assertEqual(len(w.document.bodies),2)
         from PySide6.QtTest import QTest
         with patch.object(w,'isActiveWindow',return_value=True):
             QTest.keyClick(w,Qt.Key_Return)
         self.wait();self.assertIsNone(w.mode)
-        en=[x for x in w.document.bodies if x.kind=='encl'];self.assertEqual(len(en),1);en=en[0]
-        self.assertEqual(category(en),'encl');self.assertEqual(en.name,'Obudowa 1')
-        spec=encm.EnclosureSpec.from_json(en.meta['enclosure'])
-        self.assertEqual([s.id for s in spec.sources],[a.id,b.id]);self.assertTrue(np.allclose(spec.envelope.size,size))
-        for key in ('clearance','walls','split','mounts','openings','vents','closure','process'):self.assertTrue(hasattr(spec,key))
-        self.assertEqual(encm.EnclosureSpec.from_json(spec.to_json()).to_json(),spec.to_json())
-        self.assertIs(w.document.get(a.id).shape,a.shape)                                    # elementy źródłowe bez zmian
-        op=w.document.infos()[0][-1];self.assertEqual(op['op']['type'],'enclosure');self.assertEqual(op['label'],'Definicja obudowy')
-        self.assertNotIn(en.id,{x.id for x in w.export_bodies()})
-        moved=[a,replace(b,shape=b.shape.translate((20,0,0))).prepared()]                    # przeliczenie: przestrzeń za elementami
-        out=hist.RUNNERS['enclosure'](moved,op['op']);e2=encm.EnclosureSpec.from_json(next(x for x in out if x.id==en.id).meta['enclosure'])
-        self.assertAlmostEqual(e2.envelope.size[0],size[0]+20,5)
-        path=Path(tempfile.mkdtemp())/'enc.rccadx';w.document.save(path);loaded=Document.load(path)
-        self.assertEqual(loaded.get(en.id).kind,'encl');self.assertEqual(loaded.get(en.id).meta['enclosure']['sources'][0]['id'],a.id)
-        w.undo();self.wait();self.assertFalse(any(x.kind=='encl' for x in w.document.bodies))
-        w.redo();self.wait();self.assertTrue(any(x.kind=='encl' for x in w.document.bodies))
-        with self.assertRaises(k.CadError):encm.envelope([],encm.EnclosureSpec(sources=[encm.SourceRef(id='x')]))
-        w.set_mode('enclosure');w.apply_enclosure();self.assertEqual(len([x for x in w.document.bodies if x.kind=='encl']),1)   # pusta lista: nic
+        en=[x for x in w.document.bodies if (x.meta or {}).get('enclosure')];self.assertEqual(len(en),1);en=en[0]
+        self.assertEqual(en.kind,'solid');self.assertEqual(en.name,'Obudowa 1');self.assertEqual(w.selected,[en.id])
+        self.assertTrue(BRepCheck_Analyzer(en.shape.wrapped).IsValid());self.assertAlmostEqual(en.shape.Volume(),outer-inner,3)
+        self.assertIs(w.document.get(a.id).shape,a.shape);self.assertIs(w.document.get(b.id).shape,b.shape)   # źródła bez zmian
+        for p in (a.shape.Center(),b.shape.Center()):self.assertEqual(k.point_state(en.shape,p.toTuple()),'out')  # elementy nie wycięte
+        spec=encm.EnclosureSpec.from_json(en.meta['enclosure']);self.assertEqual(spec.version,2);self.assertEqual(spec.walls['bottom'],4)
+        info=w.document.infos()[0][-1];self.assertEqual(info['label'],'Obudowa prostokątna');self.assertEqual(info['op']['type'],'enclosure')
+        self.assertIn(en.id,{x.id for x in w.export_bodies()})                               # zwykła bryła: eksport, inne narzędzia
+        moved=[a,replace(b,shape=b.shape.translate((20,0,0))).prepared()]
+        out=next(x for x in hist.RUNNERS['enclosure'](moved,info['op']) if x.id==en.id)
+        self.assertAlmostEqual(out.shape.BoundingBox().xlen,en.shape.BoundingBox().xlen+20,4)
+        path=Path(tempfile.mkdtemp())/'enc2.rccadx';w.document.save(path);loaded=Document.load(path)
+        self.assertEqual(loaded.get(en.id).kind,'solid');self.assertEqual(loaded.get(en.id).meta['enclosure']['mode'],'closed')
+        w.undo();self.wait();self.assertIsNone(w.document.get(en.id))
+        w.redo();self.wait();self.assertIsNotNone(w.document.get(en.id))
+        # starszy przepis (etap 1, wersja 1) dalej daje definicję obudowy
+        old=dict(info['op'],spec=dict(info['op']['spec'],version=1),out='old1')
+        self.assertEqual(next(x for x in hist.RUNNERS['enclosure']([a,b],old) if x.id=='old1').kind,'encl')
+        # obrócona bryła w układzie lokalnym: obudowa obrócona razem z nią
+        rot=np.array([[np.cos(.5),-np.sin(.5),0],[np.sin(.5),np.cos(.5),0],[0,0,1]])
+        r=Body('R',k.transformed(k.box(30,10,6),rot,np.array([0,80,0]))).prepared()
+        w.document.commit([*w.document.bodies,r]);w.selected=[r.id];w.set_mode('enclosure')
+        w.enc_frame.setCurrentIndex(w.enc_frame.findData('local'))
+        self.assertTrue(np.allclose(w.enc['layout']['inner_size'],[36,16,12],atol=1e-4))   # odstępy 3 mm (ustawienia zostają z poprzedniego razu)
+        self.assertTrue(np.allclose(w.enc['layout']['outer_size'],[40,20,17.5],atol=1e-4))
+        w.apply_enclosure();self.wait()
+        e2=w.document.get(w.selected[0]);self.assertAlmostEqual(e2.shape.Volume(),40*20*17.5-36*16*12,2)
+        w.set_mode('enclosure');w.enc_set_ids([]);self.assertFalse(w.enc_apply.isEnabled())
+        QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode)
 
     # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
     # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)

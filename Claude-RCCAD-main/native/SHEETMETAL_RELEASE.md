@@ -1,4 +1,18 @@
-# RCCAD Desktop 0.5.51 — Generator obudów, etap 1: elementy, układ, przestrzeń
+# RCCAD Desktop 0.5.52 — Generator obudów, etap 2: prostokątna obudowa
+
+- **Obudowy → Utwórz obudowę** tworzy teraz prostokątną obudowę jako bryłę B-Rep: zewnętrzny prostopadłościan (BRepPrimAPI_MakeBox) minus wnętrze (BRepAlgoAPI_Cut), sprawdzona BRepCheck_Analyzer.
+  - odstępy od elementów X−, X+, Y−, Y+, Z−, Z+ i grubości czterech ścianek bocznych, dna i góry; „Jednakowe” wiąże wszystkie odstępy (albo wszystkie grubości) jednym parametrem;
+  - trzy rodzaje: otwarta (bez górnej ścianki), całkowicie zamknięta (pusta w środku), pełna bryła zewnętrzna;
+  - wymiary wewnętrzne (przestrzeń elementów + odstępy) i zewnętrzne (+ grubości ścianek) w okienku, zewnętrzne także na widoku;
+  - złe wartości zablokowane (odstęp ≥ 0, ścianka ≥ 0,2 mm; Zastosuj wyłączone, gdy obudowa nie może powstać);
+  - podgląd liczony w tle, półprzezroczysty - nic nie trafia do projektu; Zastosuj / Enter dodaje nową bryłę „Obudowa N” (krok „Obudowa prostokątna”, Cofnij / Ponów, zapis), elementy źródłowe bez zmian i nieodejmowane od obudowy;
+  - przeliczenie historii buduje obudowę z aktualnego położenia elementów; projekty z etapu 1 (definicja obudowy) wczytują się jak dotąd.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.51 — Generator obudów, etap 1: elementy, układ, przestrzeń
 
 - **Nowa zakładka Obudowy → Utwórz obudowę.**
   - elementy: bryły zaznaczone przed uruchomieniem od razu na liście; klik w widoku albo na liście Obiekty dodaje / usuwa (cała grupa razem); „Usuń z listy”, „Wyczyść”; obsługa brył z RCCAD i z importu STEP (oznaczone „STEP”); elementy podświetlone na niebiesko;
@@ -6,10 +20,6 @@
   - wymiary X, Y, Z w okienku i na widoku (linie wymiarowe przestrzeni), tymczasowy podgląd przestrzeni - nic nie trafia do projektu do czasu Zastosuj;
   - Zastosuj / Enter zapisuje definicję obudowy (obiekt „Obudowa”, lista Obiekty → Obudowy, krok historii „Definicja obudowy”; Cofnij / Ponów, zapis projektu). Elementy źródłowe nie są zmieniane; przy przeliczaniu historii przestrzeń liczy się z aktualnego położenia elementów. Esc / Anuluj - bez zmian.
 - Ścianki obudowy, odstępy, podział, mocowania, otwory i zamknięcia - kolejne etapy (struktura danych definicji ma na nie miejsce).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.50 — Wymiar do punktu na siatce
 

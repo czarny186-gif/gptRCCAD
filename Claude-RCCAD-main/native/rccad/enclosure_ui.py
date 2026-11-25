@@ -12,7 +12,7 @@ import uuid
 import numpy as np
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton
 
 from . import enclosure as enc
 from . import kernel
@@ -34,7 +34,7 @@ class EnclosureTools:
     # ------------------------------------------------------------------ panel
     def _build_enclosure_panel(self):
         self.enc = dict(ids=[], face=None, picking_face=False, env=None, error=None)
-        self.enc_panel, lay = self._panel(300, 'Utwórz obudowę', 'x_enclosure', 'Elementy → układ → przestrzeń', plain=True)
+        self.enc_panel, lay = self._panel(300, 'Utwórz obudowę', 'x_enclosure', 'Elementy → układ → obudowa', plain=True, scroll=True)
         self.enc_step1 = ui.StepRow(1, 'x_enclosure', 'Elementy w obudowie', plain=True)
         lay.addWidget(self.enc_step1)
         self.enc_list = QListWidget()
@@ -66,13 +66,69 @@ class EnclosureTools:
         self.enc_face_button.setToolTip('Następne kliknięcie płaskiej ściany wyznaczy układ: Z - normalna ściany, X - jej najdłuższa krawędź')
         self.enc_face_button.clicked.connect(lambda _=False: self._enc_pick_face(True))
         lay.addWidget(self.enc_face_button)
-        self.enc_dims = _label('X —   Y —   Z —', 'value')
-        self.enc_dims.setStyleSheet('font-weight:700; font-size:13px; color:#17314a;')
+        self.enc_dims = _label('Elementy: X —   Y —   Z —', 'value')
+        self.enc_dims.setStyleSheet('font-weight:600; color:#17314a;')
         lay.addWidget(self.enc_dims)
+        # --- etap 2: prostokątna obudowa ---
+        self.enc_step3 = ui.StepRow(3, 'x_enclosure', 'Obudowa prostokątna', plain=True)
+        lay.addWidget(self.enc_step3)
+        self.enc_mode = QComboBox()
+        for mode in enc.MODES:
+            self.enc_mode.addItem(enc.MODE_LABELS[mode], mode)
+        self.enc_mode.setCurrentIndex(self.enc_mode.findData('closed'))
+        self.enc_mode.currentIndexChanged.connect(lambda *_: self._enc_params_changed())
+        lay.addWidget(self.enc_mode)
+        self.enc_clear, self.enc_clear_link = self._enc_grid(lay, 'Odstępy od elementów (mm)', enc.SIDES, 0.0, enc.DEFAULT_CLEARANCE)
+        self.enc_wall, self.enc_wall_link = self._enc_grid(lay, 'Grubości ścianek (mm)', enc.WALLS, enc.MIN_WALL, enc.DEFAULT_WALL)
+        self.enc_sizes = _label('Wnętrze: —\nZewnątrz: —', 'value')
+        self.enc_sizes.setStyleSheet('font-weight:700; font-size:13px; color:#17314a;')
+        lay.addWidget(self.enc_sizes)
         self.enc_status = _label('Klikaj bryły (także z importu STEP) - kliknięcie dodaje albo usuwa z listy.', 'status')
         lay.addWidget(self.enc_status)
-        self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_enclosure, lambda: self.set_mode(None))
+        self.enc_apply, _ = self._buttons(self.enc_panel.footer, 'Zastosuj', 'Anuluj', self.apply_enclosure, lambda: self.set_mode(None))
         return self.enc_panel
+
+    def _enc_grid(self, lay, title, keys, low, value):
+        """Sześć pól (X−, X+, Y−, Y+, …) z przełącznikiem „Jednakowe” - jedna wartość dla wszystkich."""
+        head = QHBoxLayout()
+        head.addWidget(_label(title, 'label'), 1)
+        link = QCheckBox('Jednakowe')
+        link.setChecked(True)
+        link.setToolTip('Wszystkie wartości powiązane jednym parametrem - zmiana jednej zmienia pozostałe')
+        head.addWidget(link)
+        lay.addLayout(head)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(5)
+        spins = {}
+        for n, key in enumerate(keys):
+            box = QDoubleSpinBox()
+            box.setRange(low, enc.MAX_VALUE)          # wartości dające złą geometrię są zablokowane już w polu
+            box.setDecimals(2)
+            box.setSingleStep(.5)
+            box.setValue(value)
+            box.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            box.setKeyboardTracking(False)
+            box.valueChanged.connect(lambda v, k=key, group=spins, l=link: self._enc_value_changed(group, l, k, v))
+            grid.addWidget(_label(enc.SIDE_LABELS[key], 'label'), n // 2, (n % 2) * 2)
+            grid.addWidget(box, n // 2, (n % 2) * 2 + 1)
+            spins[key] = box
+        lay.addLayout(grid)
+        link.toggled.connect(lambda on, group=spins, k=keys[0]: on and self._enc_value_changed(group, link, k, group[k].value()))
+        return spins, link
+
+    def _enc_value_changed(self, group, link, key, value):
+        if link.isChecked():
+            for k, box in group.items():
+                if k != key and box.isEnabled() and abs(box.value() - value) > 1e-12:
+                    box.blockSignals(True)
+                    box.setValue(value)
+                    box.blockSignals(False)
+        self._enc_params_changed()
+
+    def _enc_params_changed(self):
+        self.enc_wall['top'].setEnabled(self.enc_mode.currentData() != 'open')     # obudowa otwarta nie ma górnej ścianki
+        self._enc_update()
 
     # ------------------------------------------------------------------ tryb
     def _enclosure_begin(self, previous=()):
@@ -187,6 +243,9 @@ class EnclosureTools:
         mode = self.enc_frame.currentData()
         face = self.enc['face']
         spec.frame = enc.FrameSpec(mode=mode, face=dict(id=face['id'], point=face['point']) if (mode == 'face' and face) else None)
+        spec.mode = self.enc_mode.currentData()
+        spec.clearance = dict({k: float(b.value()) for k, b in self.enc_clear.items()}, linked=self.enc_clear_link.isChecked())
+        spec.walls = dict({k: float(b.value()) for k, b in self.enc_wall.items()}, linked=self.enc_wall_link.isChecked())
         return spec
 
     def _enc_update(self):
@@ -216,24 +275,59 @@ class EnclosureTools:
                 error = str(exc)
             except Exception as exc:                  # nieoczekiwany kłopot geometrii - komunikat zamiast wyjątku
                 error = f'Nie udało się wyznaczyć przestrzeni: {exc}'
-        self.enc.update(env=env, error=error)
+        layout = None
+        if env is not None:
+            try:
+                spec = self.enc_spec()
+                layout = enc.box_layout(env, spec)
+            except kernel.CadError as exc:
+                error = str(exc)
+        self.enc.update(env=env, error=error, layout=layout)
+        self.enc_apply.setEnabled(layout is not None)       # niepoprawne wartości: Zastosuj zablokowane
+        self.enc_step3.set_state('done' if layout is not None else ('active' if env is not None else 'pending'),
+                                 self.enc_mode.currentText().split(' (')[0].lower() if layout is not None else (error or '') if env is not None else '')
         if env is not None:
             sx, sy, sz = env.size
-            self.enc_dims.setText(f'X {sx:.2f}   Y {sy:.2f}   Z {sz:.2f}  mm')
-            self.enc_status.setText('Enter albo Zastosuj zapisuje definicję obudowy (ścianki - w kolejnym etapie).')
-            try:
-                mesh = kernel.display_mesh(enc.envelope_shape(env))
-            except Exception:
-                mesh = None
-            self.view.set_preview_mesh(mesh, color=PREVIEW_FILL, line_color=PREVIEW_LINE, width=2, dashed=True)
+            self.enc_dims.setText(f'Elementy: X {sx:.2f}   Y {sy:.2f}   Z {sz:.2f} mm')
+        if layout is not None:
+            i, o = layout['inner_size'], layout['outer_size']
+            self.enc_sizes.setText(('Wnętrze: —' if spec.mode == 'solid' else f'Wnętrze: {i[0]:.2f} × {i[1]:.2f} × {i[2]:.2f}')
+                                   + f'\nZewnątrz: {o[0]:.2f} × {o[1]:.2f} × {o[2]:.2f} mm')
+            self.enc_status.setText('Enter albo Zastosuj dodaje obudowę jako nową bryłę (elementy zostają bez zmian).')
+            self.enc_items = enc.outer_dimension_items(env, spec)
+            self._enc_preview(env, spec)
+        elif env is not None:
+            self.enc_sizes.setText('Wnętrze: —\nZewnątrz: —')
+            self.enc_status.setText(error)
+            self.view.set_preview_mesh(None)
             self.enc_items = enc.dimension_items(env)
         else:
-            self.enc_dims.setText('X —   Y —   Z —')
+            self.enc_dims.setText('Elementy: X —   Y —   Z —')
+            self.enc_sizes.setText('Wnętrze: —\nZewnątrz: —')
             self.enc_status.setText(error or ('Kliknij płaską ścianę orientacji.' if (ids and mode == 'face') else
                                               'Klikaj bryły (także z importu STEP) - kliknięcie dodaje albo usuwa z listy.'))
             self.view.set_preview_mesh(None)
             self.enc_items = []
         self.refresh()
+
+    def _enc_preview(self, env, spec):
+        """Podgląd obudowy (ta sama bryła co po Zastosuj) liczony w tle - nic nie trafia do dokumentu."""
+        sig = repr(spec.to_json()) + repr(env.center) + repr(env.size)
+        self._enc_sig = sig
+        self.view.set_preview_mesh(kernel.display_mesh(enc.envelope_shape(env)), color=PREVIEW_FILL, line_color=PREVIEW_LINE, width=2, dashed=True)
+
+        def compute():
+            return kernel.display_mesh(enc.box_enclosure(env, spec))
+
+        def show(mesh, error):
+            if self.mode != 'enclosure' or getattr(self, '_enc_sig', None) != sig:
+                return
+            if error or mesh is None:
+                self.enc_status.setText(str(error) if error else 'Nie udało się policzyć obudowy.')
+                self.enc_apply.setEnabled(False)
+                return
+            self.view.set_preview_mesh(mesh, color=(.98, .62, .2, .32), line_color=PREVIEW_LINE, width=2)
+        self.run_preview('enclosure', compute, show)
 
     # ------------------------------------------------------------------ zapis
     def apply_enclosure(self):
@@ -244,11 +338,11 @@ class EnclosureTools:
         if not self.enc['ids']:
             self.toast('Wybierz co najmniej jedną bryłę.')
             return
-        if self.enc['env'] is None:
+        if self.enc['env'] is None or self.enc.get('layout') is None:
             self.toast(self.enc['error'] or 'Wskaż ścianę orientacji.')
             return
         spec = self.enc_spec()
-        count = 1 + sum(1 for b in self.document.bodies if b.kind == 'encl')
+        count = 1 + sum(1 for b in self.document.bodies if b.kind == 'encl' or (b.meta or {}).get('enclosure'))
         recipe = dict(type='enclosure', spec=spec.to_json(), out=uuid.uuid4().hex, name=f'Obudowa {count}')
         existing = list(self.document.bodies)
 
@@ -257,9 +351,15 @@ class EnclosureTools:
 
         def apply(bodies):
             self.document.pending_op = recipe
-            self.document.pending_label = 'Definicja obudowy'
+            self.document.pending_label = 'Obudowa prostokątna'
             self.document.pending_icon = 'enclosure'
             self.document.commit(bodies)
 
+        def after():
+            self.set_mode(None)
+            if self.document.get(recipe['out']) is not None:
+                self.selected = [recipe['out']]
+                self.refresh()
+
         self.view.set_preview_mesh(None)
-        self.run_operation('Definicja obudowy', build, apply, after=lambda: self.set_mode(None))
+        self.run_operation('Obudowa prostokątna', build, apply, after=after)
