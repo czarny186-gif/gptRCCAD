@@ -4229,7 +4229,8 @@ class StudioTests(unittest.TestCase):
         w.document.commit([*w.document.bodies,line]);w.refresh();w.choose_tool('sdim')
         for _ in range(5):self.app.processEvents()
         w.skt_click(*w.view.project_one((7,0,0)))                                      # bok prostokąta (poza punktami)
-        self.assertFalse(w.dim_panel.isVisible());self.assertIsNone(w.sd['a'])          # 0.5.47: Wymiar nie zmienia rozmiaru kształtów
+        self.assertFalse(w.dim_panel.isVisible())                                        # 0.5.47: Wymiar nie zmienia rozmiaru kształtów
+        self.assertIsNone(w.sd['a'][0]);w.sd=dict(a=None,b=None)                            # 0.5.49: klik obok punktów = stały punkt (jak przy linii)
         w.skt_click(*w.view.project_one((7,30,0)));self.assertEqual(w.sd['b'][0],line.id)
         self.assertAlmostEqual(w.sd_value.value(),10,4);w.sd_value.setValue(25);w.apply_sketch_dim();self.wait()
         e=w.document.get(line.id).shape.Edges()[0];self.assertAlmostEqual(e.Length(),25,4)
@@ -4258,6 +4259,31 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(next(x for x in again if x.id==new[0].id).shape.Volume(),100*80*10,2)
         # ukryty szkic nie przyciąga i nie jest wybierany w narzędziach szkicu
         self.assertFalse(w._skt_body_ok(w.document.get(circ.id)))
+
+    # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
+    # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)
+    def test_sketch_dimension_to_grid_point(self):
+        w=self.w;self.sketch('circle',(0,0),(3,0));c=next(x for x in w.document.bodies if x.kind=='sketch');w.choose_tool('sdim')
+        for _ in range(5):self.app.processEvents()
+        P=lambda p:w.view.project_one(p)
+        with patch.object(w,'_snapper',side_effect=lambda x,y,raw:(round(raw[0]),round(raw[1]),'siatka')):
+            w._sd_hover(*P((30.2,0.3,0)));self.assertIsNotNone(w.view.snap_marker)
+            w._sd_click(*P((0,0,0)));self.assertEqual(w.sd['a'][0],c.id)
+            w._sd_hover(*P((30.2,0.3,0)))
+            self.assertIsNotNone(w.view.preview_items if hasattr(w.view,'preview_items') else True)
+            w._sd_click(*P((30.2,0.3,0)))
+        self.assertIsNone(w.sd['b'][0]);self.assertTrue(np.allclose(w.sd['b'][1],(30,0,0)))      # punkt siatki
+        self.assertAlmostEqual(w.sd_value.value(),30,4);w.sd_value.setValue(50);w.apply_sketch_dim();self.wait()
+        cc=w.document.get(c.id).shape.Edges()[0].arcCenter();self.assertAlmostEqual(cc.x,-20,4)     # okrąg odsunął się od stałego punktu
+        cl=next(x for x in w.document.bodies if x.kind=='cline');self.assertIsNone(cl.meta['dim']['b']['id'])
+        self.assertAlmostEqual(w.view.dim_items[0]['value'],50,4)
+        self.assertTrue(w.dim_value_set(cl.id,40));self.wait()
+        self.assertAlmostEqual(w.document.get(c.id).shape.Edges()[0].arcCenter().x,-10,4)
+        with patch.object(w,'_snapper',side_effect=lambda x,y,raw:(round(raw[0]),round(raw[1]),'siatka')):   # dwa stałe punkty: pomiar
+            w._sd_click(*P((0,20,0)));w._sd_click(*P((10,20,0)))
+        w.apply_sketch_dim();self.wait()
+        self.assertEqual(len([x for x in w.document.bodies if x.kind=='cline']),2)
+        self.assertAlmostEqual(w.document.get(c.id).shape.Edges()[0].arcCenter().x,-10,4)
 
     # 0.5.49: Fasolka od środka - środek, koniec osi (drugi koniec odbija się na żywo), szerokość; strzałka wariantów przy fasolce
     def test_center_slot_variant(self):

@@ -1,4 +1,15 @@
-# RCCAD Desktop 0.5.49 — Edycja i usuwanie zaokrągleń i faz, ukryte obiekty bez wpływu, rysunek ze szkiców, fasolka od środka
+# RCCAD Desktop 0.5.50 — Wymiar do punktu na siatce
+
+- **Wymiar - punkt w dowolnym miejscu**: oprócz punktów kształtów (końce, środki) można kliknąć dowolne miejsce szkicu. Kursor przyciąga się tak jak przy rysowaniu zwykłej linii: do narożników kratki siatki, krawędzi i punktów szkicu, a od pierwszego punktu linia prostuje się poziomo, pionowo albo pod 45° (wtedy robi się czerwona). Od pierwszego punktu do kursora widać linię wymiaru.
+  - stały punkt (np. siatka) nie przesuwa się - wpisany wymiar przesuwa kształt z drugiego końca;
+  - dwa stałe punkty dają samą linię wymiaru (pomiar), nic się nie przesuwa;
+  - pojedyncza linia kliknięta poza punktami - jak dotąd wymiar jej długości.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.49 — Edycja i usuwanie zaokrągleń i faz, ukryte obiekty bez wpływu, rysunek ze szkiców, fasolka od środka
 
 - **Zaokrąglij / Fazuj - istniejące zaokrąglenia i fazy**: po najechaniu kursorem podświetlają się na pomarańczowo (także w bryłach z importu STEP, bez historii).
   - kliknięcie zaznacza je jak krawędź - pojawia się strzałka; przeciąganie (albo wpisanie wartości) powiększa lub pomniejsza zaokrąglenie / fazę z podglądem na żywo, Zastosuj / Enter zapisuje; przełącznik Zaokrąglij / Fazuj zamienia rodzaj;
@@ -9,10 +20,6 @@
 - **Poprawka: ukryte obiekty nie przeszkadzają.** Obiekty ukryte okiem na liście Obiekty nie podświetlają się pod kursorem, nie dzielą obszarów szkiców (ukryty walec albo okrąg pod prostokątem dzielił go i nie dało się wyciągnąć całego prostokąta), nie robią otworów w ścianach i nie przyciągają. Krok wyciągnięcia zapamiętuje ukryte obiekty - przeliczenie historii daje ten sam wynik.
 - **Fasolka od środka** (pasek boczny szkicu, strzałka przy fasolce - jak przy okręgu i prostokącie): klikasz środek, potem koniec osi - drugi koniec rysuje się na żywo jako odbicie po drugiej stronie środka - a na końcu szerokość. Gotowa fasolka ma zwykłe wymiary (długość, szerokość).
 - **Rysunek techniczny ze szkiców**: Rysunek i Rysunek automatyczny przyjmują też szkice (podświetlenie, klik, Shift + klik, lista Obiekty) - płaski rzut w płaszczyźnie szkicu z wymiarami i okręgami.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.48 — Anuluj liczenie, przyciąganie do prostych linii, środki szkiców w Wymiarze
 

@@ -424,27 +424,60 @@ class SketchTools:
         bid, p, kind, index = cands[j]
         return bid, np.asarray(p, float), kind, index
 
-    KIND_NAMES = {'center': 'środek', 'end': 'koniec', 'mid': 'środek odcinka'}
+    KIND_NAMES = {'center': 'środek', 'end': 'koniec', 'mid': 'środek odcinka', 'free': 'punkt'}
+
+    def _sd_free_point(self, x, y):
+        """Punkt poza kształtami: przyciąga się jak przy rysowaniu linii (narożnik kratki siatki, krawędź, punkt szkicu; od
+        pierwszego punktu poziomo / pionowo / pod 45°). (None, punkt 3D, 'free', -1, etykieta) albo None."""
+        uv = self.view.plane_point(self.sketch_plane, x, y)
+        if uv is None:
+            return None
+        saved = self.points
+        a = self.sd.get('a') if self.sd.get('b') is None else None
+        self.points = [tuple(kernel.uv_of(self.sketch_plane, tuple(float(c) for c in a[1]))[:2])] if a is not None else []
+        try:
+            u, v, label = self._snapper(x, y, uv)
+        finally:
+            self.points = saved
+        p = np.asarray(kernel.to_world(self.sketch_plane, float(u), float(v)), float)
+        return None, p, 'free', -1, label
 
     def _sd_hover(self, x, y):
         hit = self._sd_point_at(x, y)
+        point = None
         if hit is not None:
             self.view.set_hover_body(hit[0] if self.sd['a'] is not None else None)
             self.view.set_marker(hit[1], label=self.KIND_NAMES.get(hit[2], 'punkt'))
-            return
-        self.view.set_marker(None)
-        body, _ = self._skt_body_at(x, y)
-        self.view.set_hover_body(body.id if body is not None and self.sd['a'] is None else None)
+            point = hit[1]
+        else:
+            free = self._sd_free_point(x, y)           # jak przy rysowaniu linii: siatka, krawędzie, poziom / pion / 45°
+            self.view.set_hover_body(None)
+            if free is not None:
+                point = free[1]
+                self.view.set_marker(point, label=free[4] or 'punkt')
+            else:
+                self.view.set_marker(None)
+        a = self.sd.get('a')
+        if a is not None and self.sd.get('b') is None:          # linia od pierwszego punktu do kursora (jak rysowana linia)
+            mesh = None
+            if point is not None and np.linalg.norm(point - a[1]) > 1e-9:
+                mesh = kernel.display_mesh(dims.line_shape(a[1], point))
+            aligned = getattr(self, '_line_aligned', None)
+            self.view.set_preview_mesh(mesh, line_color=(.92, .12, .12, 1) if aligned else PREVIEW, width=2.4, dashed=not aligned)
 
     def _sd_click(self, x, y):
         hit = self._sd_point_at(x, y)
         if hit is None:
             body, edge = self._skt_body_at(x, y)
-            if body is None:
-                self.toast('Kliknij punkt szkicu (koniec linii, środek okręgu) albo linię / okrąg.')
+            if body is not None and self.sd['a'] is None and len(body.shape.Edges()) == 1 \
+                    and body.shape.Edges()[0].geomType() == 'LINE':
+                self._sd_shape_dims(body, edge)          # pojedyncza linia: wymiar jej długości
                 return
-            self._sd_shape_dims(body, edge)
-            return
+            free = self._sd_free_point(x, y)
+            if free is None:
+                self.toast('Kliknij punkt szkicu albo miejsce na siatce.')
+                return
+            hit = free[:4]                               # stały punkt (siatka / krawędź): przesuwa się kształt drugiego końca
         if self.sd['a'] is None or self.sd['b'] is not None:
             self.override = {}
             self.sd = dict(a=hit, b=None)
@@ -614,6 +647,9 @@ class SketchTools:
             raise kernel.CadError('Kliknij dwa punkty szkicu.')
         ends = []
         for bid, p, _kind, index in (self.sd['a'], self.sd['b']):
+            if bid is None:
+                ends.append(dims.ref_free(p))
+                continue
             body = self.document.get(bid)
             if body is None:
                 raise kernel.CadError('Kształtu wybranego punktu już nie ma.')
@@ -628,7 +664,8 @@ class SketchTools:
 
     def _sd_update(self):
         a, b = self.sd['a'], self.sd['b']
-        name = lambda hit: f'{self.KIND_NAMES.get(hit[2], "punkt")} · {self.document.get(hit[0]).name}' if self.document.get(hit[0]) else ''
+        name = lambda hit: (f'{self.KIND_NAMES.get(hit[2], "punkt")} · {self.document.get(hit[0]).name}' if self.document.get(hit[0])
+                            else 'stały punkt (siatka)')
         self.sd_step1.set_state('done' if a else 'active', name(a) if a else 'kliknij punkt')
         self.sd_step2.set_state('done' if b else ('active' if a else 'pending'), name(b) if b else ('kliknij drugi punkt' if a else ''))
         if a is None:
@@ -662,8 +699,11 @@ class SketchTools:
         if self.busy or self.mode != 'sketch':
             return
         try:
-            changed = self._sd_result()
             a_end, b_end = self._sd_ends()
+            if a_end['id'] is None and b_end['id'] is None:
+                changed = {}                 # dwa stałe punkty: sama linia wymiaru (pomiar), nic się nie przesuwa
+            else:
+                changed = self._sd_result()
         except kernel.CadError as exc:
             self.toast(str(exc))
             return

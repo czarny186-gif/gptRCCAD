@@ -57,6 +57,11 @@ def ref(body, point, index=None):
     return dict(id=body.id, i=int(index), p=[float(c) for c in point])
 
 
+def ref_free(point):
+    """Koniec wymiaru w stałym miejscu (punkt siatki, krawędzi, dowolny punkt szkicu) - nie należy do kształtu."""
+    return dict(id=None, i=-1, p=[float(c) for c in point])
+
+
 def end_point(end, bodies):
     """Aktualne położenie końca wymiaru (kształt mógł się przesunąć)."""
     body = bodies.get(end['id']) if isinstance(bodies, dict) else next((b for b in bodies if b.id == end['id']), None)
@@ -142,8 +147,16 @@ def apply(bodies, a_end, b_end, value, axis, sym, meta_shape):
     by_id = {b.id: b for b in bodies}
     a, b = end_point(a_end, by_id), end_point(b_end, by_id)
     total = total_shift(a, b, value, axis)
-    shift_a, shift_b = (-total / 2, total / 2) if sym else (np.zeros(3), total)
     body_a, body_b = by_id.get(a_end['id']), by_id.get(b_end['id'])
+    if a_end['id'] is None and b_end['id'] is None:
+        raise kernel.CadError('Oba końce wymiaru to stałe punkty (siatka) - ten wymiar tylko mierzy.')
+    if b_end['id'] is None:                  # drugi koniec stały (punkt siatki): przesuwa się kształt pierwszego punktu
+        if body_a is None:
+            raise kernel.CadError('Kształtu, do którego prowadzi wymiar, już nie ma.')
+        return {body_a.id: moved(body_a, -total, meta_shape)}
+    if a_end['id'] is None:
+        sym = False                          # pierwszy koniec stały: rusza się tylko kształt drugiego punktu
+    shift_a, shift_b = (-total / 2, total / 2) if sym else (np.zeros(3), total)
     if body_b is None or (sym and body_a is None):
         raise kernel.CadError('Kształtu, do którego prowadzi wymiar, już nie ma.')
     if a_end['id'] == b_end['id']:

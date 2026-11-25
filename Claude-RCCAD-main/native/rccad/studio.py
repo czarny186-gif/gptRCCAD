@@ -2542,7 +2542,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     ALIGN_DEG = 5.0          # linia prostuje się do poziomu / pionu / 45°, gdy jest od nich bliżej niż tyle stopni
 
-    LINE_ALIGN_TOOLS = ('line', 'construction', 'measure')      # każdy odcinek prowadzony kursorem
+    LINE_ALIGN_TOOLS = ('line', 'construction', 'measure', 'sdim')      # każdy odcinek prowadzony kursorem
     SEGMENT_ALIGN_TOOLS = ('arc', 'slot', 'centerSlot')                       # tylko pierwszy odcinek: końce łuku / oś fasolki
 
     def _line_align_active(self):
