@@ -2195,7 +2195,7 @@ class CadView(gl.GLViewWidget):
                 out.append((None, None, None, None, None))
                 continue
             pa, pe = np.asarray(pa, float), np.asarray(pe, float)
-            text = f'{it["value"]:.2f}'.rstrip('0').rstrip('.') + ' mm' + ('  ⇔' if it['sym'] else '')
+            text = (f'{it["label"]}: ' if it.get('label') else '') + f'{it["value"]:.2f}'.rstrip('0').rstrip('.') + ' mm' + ('  ⇔' if it['sym'] else '')
             w = metrics.horizontalAdvance(text) + 14
             mid = (pa + pe) / 2
             rect = QRectF(mid[0] - w / 2, mid[1] - 11, w, 22)

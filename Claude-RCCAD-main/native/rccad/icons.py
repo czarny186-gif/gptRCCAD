@@ -936,6 +936,17 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setPen(pen(BLUE, 3.4)); p.drawLine(QPointF(4, 41), QPointF(44, 41))
         p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4)); p.drawRect(QRectF(12, 15, 24, 24))
         p.setPen(pen(ORANGE, 2.4)); p.drawLine(QPointF(24, 3), QPointF(24, 11)); p.drawPolyline(QPolygonF([QPointF(20, 8), QPointF(24, 12), QPointF(28, 8)]))
+    elif kind == 'x_enclosure':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(13, 21, 11, 13)); p.drawEllipse(QPointF(31, 28), 6, 6)
+        pn = pen(INK, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRect(QRectF(5, 11, 38, 31))
+        p.setPen(pen(ORANGE, 3.2))
+        for x, y, dx, dy in ((5, 11, 1, 1), (43, 11, -1, 1), (5, 42, 1, -1), (43, 42, -1, -1)):
+            p.drawLine(QPointF(x, y), QPointF(x + 7 * dx, y)); p.drawLine(QPointF(x, y), QPointF(x, y + 7 * dy))
+    elif kind == 'x_axes':
+        p.setPen(pen(INK, 2.6)); p.drawLine(QPointF(14, 36), QPointF(40, 36)); p.drawLine(QPointF(14, 36), QPointF(14, 8))
+        p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(14, 36), QPointF(4, 44))
+        p.setBrush(QColor(INK)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(44, 36), QPointF(37, 32), QPointF(37, 40)])); p.drawPolygon(QPolygonF([QPointF(14, 4), QPointF(10, 11), QPointF(18, 11)]))
     elif kind == 'x_smirror':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPolygon(QPolygonF([QPointF(20, 8), QPointF(6, 40), QPointF(20, 40)]))
         p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4)); p.drawPolygon(QPolygonF([QPointF(28, 8), QPointF(42, 40), QPointF(28, 40)]))
@@ -1161,6 +1172,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             _draw_tilt(p, ink, acc, soft, pen)
         elif name == 'twist':
             _draw_twist(p, ink, acc, soft, pen)
+        elif name == 'enclosure':
+            # obudowa: przerywana ramka (przestrzeń) wokół dwóch elementów, pomarańczowe narożniki
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(14, 22, 10, 12)); p.drawEllipse(QPointF(31, 28), 5, 5)
+            pn = pen(ink, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRect(QRectF(7, 13, 34, 28))
+            p.setPen(pen(acc, 3.0))
+            for x, y, dx, dy in ((7, 13, 1, 1), (41, 13, -1, 1), (7, 41, 1, -1), (41, 41, -1, -1)):
+                p.drawLine(QPointF(x, y), QPointF(x + 6 * dx, y)); p.drawLine(QPointF(x, y), QPointF(x, y + 6 * dy))
         elif name == 'gear':
             _draw_gear(p, 'tool', ink, acc, soft, pen)
         elif name == 'gearpair':

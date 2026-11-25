@@ -766,8 +766,8 @@ class SketchTools:
     def dim_label_press(self, x, y):
         """Lewy klik w wartość wymiaru: zaznacza linię wymiaru i otwiera pole do wpisania nowej wartości."""
         cid = self._dim_item_at(x, y, labels_only=True)
-        if cid is None or self.busy:
-            return False
+        if cid is None or self.busy or self.document.get(cid) is None:
+            return False                         # wymiary tylko do odczytu (np. przestrzeń obudowy) nie otwierają edycji
         self.selected = [cid]
         self.refresh()
         self._dim_edit_open(cid)

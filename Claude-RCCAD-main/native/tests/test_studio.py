@@ -4260,6 +4260,91 @@ class StudioTests(unittest.TestCase):
         # ukryty szkic nie przyciąga i nie jest wybierany w narzędziach szkicu
         self.assertFalse(w._skt_body_ok(w.document.get(circ.id)))
 
+    # Generator obudów, etap 1: zakładka Obudowy, lista elementów (zaznaczone wcześniej, klik dodaje / usuwa, lista Obiekty),
+    # podświetlenie, wspólna ramka (AABB), zorientowana (OBB), układ ze ściany, wymiary X / Y / Z, podgląd bez zmian w dokumencie
+    def test_enclosure_stage1_selection_frames_and_preview(self):
+        import rccad.studio as st
+        from rccad import enclosure as encm
+        w=self.w
+        self.assertEqual(st.TABS['Obudowy'],['enclosure']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
+        a=Body('Płytka',k.box(40,20,10)).prepared()
+        rot=np.array([[np.cos(.5),-np.sin(.5),0],[np.sin(.5),np.cos(.5),0],[0,0,1]])
+        r=Body('Obrócona',k.transformed(k.box(30,10,6),rot,np.array([80,0,0]))).prepared()
+        path=Path(tempfile.mkdtemp())/'mod.step';k.export_shapes([k.box(12,8,4).translate((0,50,0))],path)
+        w.document.commit([a,r]);w.refresh()
+        with patch('rccad.studio.QFileDialog.getOpenFileName',return_value=(str(path),'')):
+            w.import_model();self.wait()
+        step=next(x for x in w.document.bodies if x.source=='step')
+        before=[(x.id,x.shape) for x in w.document.bodies]
+        w.view.set_view('iso');w.refresh()
+        for _ in range(3):self.app.processEvents()
+        # zaznaczenie przed uruchomieniem
+        w.selected=[a.id,step.id];w.set_mode('enclosure')
+        self.assertEqual(w.mode,'enclosure');self.assertTrue(w.enc_panel.isVisible());self.assertEqual(w.enc['ids'],[a.id,step.id])
+        self.assertEqual(w.enc_list.count(),2);self.assertIn('STEP',w.enc_list.item(1).text())
+        self.assertEqual(set(w.view.tints),{a.id,step.id})                                  # elementy źródłowe podświetlone
+        env=w.enc['env'];bb=k.compound([a.shape,step.shape]).BoundingBox()
+        self.assertTrue(np.allclose(env.size,[bb.xlen,bb.ylen,bb.zlen],atol=1e-6))
+        self.assertIn('X 40.00',w.enc_dims.text())
+        self.assertEqual({i['label'] for i in w.view.dim_items if str(i['id']).startswith('enc:')},{'X','Y','Z'})
+        self.assertIsNotNone(w.view.preview_mesh if hasattr(w.view,'preview_mesh') else True)
+        # klik w widoku dodaje / usuwa, lista Obiekty też
+        cr=np.array(r.shape.Center().toTuple());xy=w.view.project_one(cr+[0,0,3])
+        w.enclosure_click(*xy);self.assertIn(r.id,w.enc['ids'])
+        w.enclosure_click(*xy);self.assertNotIn(r.id,w.enc['ids'])
+        w.objects_select(r.id,Qt.NoModifier);self.assertIn(r.id,w.enc['ids'])
+        w.objects_select(step.id,Qt.NoModifier);self.assertNotIn(step.id,w.enc['ids'])
+        w.enc_list.item(0).setSelected(True);w.enc_remove.click();self.assertEqual(w.enc['ids'],[r.id])
+        # obrócona bryła: globalna ramka większa, lokalna (OBB) - prawdziwe wymiary
+        g=w.enc['env'].size;self.assertGreater(g[0],30)
+        w.enc_frame.setCurrentIndex(w.enc_frame.findData('local'));loc=w.enc['env']
+        self.assertTrue(np.allclose(sorted(loc.size),[6,10,30],atol=1e-4));self.assertTrue(np.allclose(np.abs(loc.axes[2]),[0,0,1],atol=1e-6))
+        # ściana definiująca orientację: boczna ściana obróconej bryły
+        w.enc_frame.setCurrentIndex(w.enc_frame.findData('face'));self.assertTrue(w.enc['picking_face']);self.assertIsNone(w.enc['env'])
+        side=max((f for f in r.shape.Faces() if abs(f.normalAt(f.Center()).z)<1e-6),key=lambda f:f.Area())
+        sp=np.array(side.Center().toTuple());n=np.array(side.normalAt(side.Center()).toTuple())
+        w.enc['picking_face']=True
+        with patch.object(w.view,'pick_face',return_value=(r.id,n,sp)):w.enclosure_click(0,0)
+        self.assertEqual(w.enc['face']['id'],r.id);fe=w.enc['env']
+        self.assertTrue(np.allclose(fe.axes[2],n,atol=1e-6));self.assertTrue(np.allclose(sorted(fe.size),[6,10,30],atol=1e-4))
+        # podgląd nie zmienia dokumentu, elementy źródłowe bez zmian; Esc anuluje
+        self.assertEqual([(x.id,x.shape) for x in w.document.bodies],before)
+        self.assertFalse(any(x.kind=='encl' for x in w.document.bodies))
+        from PySide6.QtTest import QTest
+        QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode);self.assertEqual(w.view.tints,{})
+        self.assertFalse([i for i in w.view.dim_items if str(i['id']).startswith('enc:')])
+
+    # Generator obudów, etap 1: Zastosuj zapisuje definicję obudowy (krok historii, obiekt „Obudowa”, Cofnij / Ponów,
+    # zapis projektu); przeliczenie kroku liczy przestrzeń z aktualnego położenia elementów; struktura danych z miejscem na dalsze etapy
+    def test_enclosure_stage1_apply_history_and_spec(self):
+        from rccad import enclosure as encm
+        from rccad.objects import category
+        w=self.w;a=Body('A',k.box(40,20,10)).prepared();b=Body('B',k.box(10,10,10).translate((60,0,0))).prepared()
+        w.document.commit([a,b]);w.refresh()
+        w.selected=[a.id,b.id];w.set_mode('enclosure');size=list(w.enc['env'].size)
+        from PySide6.QtTest import QTest
+        with patch.object(w,'isActiveWindow',return_value=True):
+            QTest.keyClick(w,Qt.Key_Return)
+        self.wait();self.assertIsNone(w.mode)
+        en=[x for x in w.document.bodies if x.kind=='encl'];self.assertEqual(len(en),1);en=en[0]
+        self.assertEqual(category(en),'encl');self.assertEqual(en.name,'Obudowa 1')
+        spec=encm.EnclosureSpec.from_json(en.meta['enclosure'])
+        self.assertEqual([s.id for s in spec.sources],[a.id,b.id]);self.assertTrue(np.allclose(spec.envelope.size,size))
+        for key in ('clearance','walls','split','mounts','openings','vents','closure','process'):self.assertTrue(hasattr(spec,key))
+        self.assertEqual(encm.EnclosureSpec.from_json(spec.to_json()).to_json(),spec.to_json())
+        self.assertIs(w.document.get(a.id).shape,a.shape)                                    # elementy źródłowe bez zmian
+        op=w.document.infos()[0][-1];self.assertEqual(op['op']['type'],'enclosure');self.assertEqual(op['label'],'Definicja obudowy')
+        self.assertNotIn(en.id,{x.id for x in w.export_bodies()})
+        moved=[a,replace(b,shape=b.shape.translate((20,0,0))).prepared()]                    # przeliczenie: przestrzeń za elementami
+        out=hist.RUNNERS['enclosure'](moved,op['op']);e2=encm.EnclosureSpec.from_json(next(x for x in out if x.id==en.id).meta['enclosure'])
+        self.assertAlmostEqual(e2.envelope.size[0],size[0]+20,5)
+        path=Path(tempfile.mkdtemp())/'enc.rccadx';w.document.save(path);loaded=Document.load(path)
+        self.assertEqual(loaded.get(en.id).kind,'encl');self.assertEqual(loaded.get(en.id).meta['enclosure']['sources'][0]['id'],a.id)
+        w.undo();self.wait();self.assertFalse(any(x.kind=='encl' for x in w.document.bodies))
+        w.redo();self.wait();self.assertTrue(any(x.kind=='encl' for x in w.document.bodies))
+        with self.assertRaises(k.CadError):encm.envelope([],encm.EnclosureSpec(sources=[encm.SourceRef(id='x')]))
+        w.set_mode('enclosure');w.apply_enclosure();self.assertEqual(len([x for x in w.document.bodies if x.kind=='encl']),1)   # pusta lista: nic
+
     # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
     # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)
     def test_sketch_dimension_to_grid_point(self):
@@ -4645,7 +4730,7 @@ class StudioTests(unittest.TestCase):
         cl=dims.make('XY',dims.ref(sk,(0,0,0)),dims.ref(sk,(5,0,0)),None,False,[sk])
         w.document.commit([sk,step,stl,svg,dxf,solid,cl]);w.refresh()
         self.assertEqual([category(x) for x in (sk,cl,step,stl,svg,dxf,solid)],['sketch','cline','step','mesh','svg','dxf','solid'])
-        self.assertEqual([g[1] for g in GROUPS],['Szkice','Linie konstrukcyjne','Teksty','Bryły','STEP','STL','SVG','DXF'])
+        self.assertEqual([g[1] for g in GROUPS],['Szkice','Linie konstrukcyjne','Teksty','Bryły','STEP','STL','SVG','DXF','Obudowy'])
         for _ in range(3):self.app.processEvents()
         labels=[l.text() for l in w.objects.findChildren(QLabel) if l.objectName()=='group' and l.isVisibleTo(w.objects)]
         for title in ('SZKICE','LINIE KONSTRUKCYJNE','BRYŁY','STEP','STL','SVG','DXF'):

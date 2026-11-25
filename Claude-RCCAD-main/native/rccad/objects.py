@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QSc
 from . import icons, shell_ui as ui
 
 GROUPS = (('sketch', 'Szkice', 'sketch'), ('cline', 'Linie konstrukcyjne', 'cline'), ('text', 'Teksty', 'text'), ('solid', 'Bryły', 'solid'),
-          ('step', 'STEP', 'step'), ('mesh', 'STL', 'stl'), ('svg', 'SVG', 'svg'), ('dxf', 'DXF', 'dxf'))
+          ('step', 'STEP', 'step'), ('mesh', 'STL', 'stl'), ('svg', 'SVG', 'svg'), ('dxf', 'DXF', 'dxf'), ('encl', 'Obudowy', 'enclosure'))
 WIDTH = 292
 
 QSS = """
@@ -50,6 +50,8 @@ def category(body):
     DXF), a reszta jak dotąd - szkice, teksty, bryły."""
     if body.kind == 'cline':
         return 'cline'
+    if body.kind == 'encl':
+        return 'encl'             # definicja obudowy (Generator obudów)
     source = getattr(body, 'source', '')
     if source in ('step', 'svg', 'dxf'):
         return source

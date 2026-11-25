@@ -900,7 +900,7 @@ class Document:
         plane = item.get('plane', 'XY')
         if plane == 'CUSTOM' and kind == 'sketch':
             plane = Frame.from_dict(item['frame'])
-        if kind not in ('solid', 'mesh', 'sketch', 'cline') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
+        if kind not in ('solid', 'mesh', 'sketch', 'cline', 'encl') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
             raise CadError("Nieprawidłowy typ obiektu lub płaszczyzna.")
         meta = item.get('meta')
         group = item.get('group', '')

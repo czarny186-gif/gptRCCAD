@@ -1,13 +1,22 @@
-# RCCAD Desktop 0.5.50 — Wymiar do punktu na siatce
+# RCCAD Desktop 0.5.51 — Generator obudów, etap 1: elementy, układ, przestrzeń
+
+- **Nowa zakładka Obudowy → Utwórz obudowę.**
+  - elementy: bryły zaznaczone przed uruchomieniem od razu na liście; klik w widoku albo na liście Obiekty dodaje / usuwa (cała grupa razem); „Usuń z listy”, „Wyczyść”; obsługa brył z RCCAD i z importu STEP (oznaczone „STEP”); elementy podświetlone na niebiesko;
+  - układ współrzędnych: Globalny (wspólna ramka Bnd_Box), Lokalny (zorientowana ramka Bnd_OBB, oś Z najbliżej pionu) albo Ze ściany (wskazana płaska ściana: Z - jej normalna, X - najdłuższa krawędź); rzeczywiste położenie i obrót każdej bryły uwzględnione;
+  - wymiary X, Y, Z w okienku i na widoku (linie wymiarowe przestrzeni), tymczasowy podgląd przestrzeni - nic nie trafia do projektu do czasu Zastosuj;
+  - Zastosuj / Enter zapisuje definicję obudowy (obiekt „Obudowa”, lista Obiekty → Obudowy, krok historii „Definicja obudowy”; Cofnij / Ponów, zapis projektu). Elementy źródłowe nie są zmieniane; przy przeliczaniu historii przestrzeń liczy się z aktualnego położenia elementów. Esc / Anuluj - bez zmian.
+- Ścianki obudowy, odstępy, podział, mocowania, otwory i zamknięcia - kolejne etapy (struktura danych definicji ma na nie miejsce).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.50 — Wymiar do punktu na siatce
 
 - **Wymiar - punkt w dowolnym miejscu**: oprócz punktów kształtów (końce, środki) można kliknąć dowolne miejsce szkicu. Kursor przyciąga się tak jak przy rysowaniu zwykłej linii: do narożników kratki siatki, krawędzi i punktów szkicu, a od pierwszego punktu linia prostuje się poziomo, pionowo albo pod 45° (wtedy robi się czerwona). Od pierwszego punktu do kursora widać linię wymiaru.
   - stały punkt (np. siatka) nie przesuwa się - wpisany wymiar przesuwa kształt z drugiego końca;
   - dwa stałe punkty dają samą linię wymiaru (pomiar), nic się nie przesuwa;
   - pojedyncza linia kliknięta poza punktami - jak dotąd wymiar jej długości.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.49 — Edycja i usuwanie zaokrągleń i faz, ukryte obiekty bez wpływu, rysunek ze szkiców, fasolka od środka
 
