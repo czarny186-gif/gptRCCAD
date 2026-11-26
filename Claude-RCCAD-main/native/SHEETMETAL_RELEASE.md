@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.5.53 — Generator obudów, etapy 3 i 4: manipulatory, podgląd, podstawa i pokrywa
+# RCCAD Desktop 0.5.54 — Generator obudów, etap 5: kształty obudowy
+
+- **Obudowy → Utwórz obudowę → Kształt obudowy**: prostokątna, z zaokrąglonymi narożnikami, ze sfazowanymi narożnikami, cylindryczna, eliptyczna, wielokątna, trapezowa, pulpitowa (pochylona góra).
+  - parametry: promień narożników, wielkość fazowania, średnica, średnice X / Y, liczba boków, kąt pochylenia, wysokość przedniej i tylnej ścianki, orientacja kształtu (oś Z / X / Y, kierunek pochylenia, strona przodu);
+  - „Dopasuj automatycznie do elementów”: wymiary wyznaczane z rzeczywistej geometrii elementów (punkty siatek w okręgu / elipsie / wielokącie / narożnikach / pochyleniach) i sprawdzane operacją Boolean - nie z samej ramki; ręczne wymiary są sprawdzane (za małe - komunikat z najmniejszą wartością);
+  - profile 2D tworzone przed wyciągnięciem (zaokrąglenia narożników na profilu - BRepFilletAPI_MakeFillet2d), walce - BRepPrimAPI_MakeCylinder, wyciągnięcia - BRepPrimAPI_MakePrism, wnętrze - Boolean Cut;
+  - grubości ścianek zachowane, podział na podstawę i pokrywę (etap 4) działa dla każdego kształtu; walidacja geometrii po każdej zmianie kształtu.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.53 — Generator obudów, etapy 3 i 4: manipulatory, podgląd, podstawa i pokrywa
 
 - **Etap 3 - interaktywny podgląd obudowy** (Obudowy → Utwórz obudowę):
   - sześć strzałek na ścianach obudowy (X−, X+, Y−, Y+, Z−, Z+) - przeciąganie zmienia tylko tę stronę, pozostałe ściany stoją;
@@ -14,10 +26,6 @@
   - widok złożony / rozstrzelony z regulowaną odległością - tylko w podglądzie, położenie brył w projekcie bez zmian;
   - Zastosuj / Enter: dwie osobne bryły „Obudowa N - podstawa” i „Obudowa N - pokrywa” w grupie „Obudowa N” (krok „Obudowa z pokrywą”, Cofnij / Ponów, zapis projektu); elementy źródłowe bez zmian.
 - Obudowy z generatora są na liście Obiekty w pozycji „Obudowy”.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.52 — Generator obudów, etap 2: prostokątna obudowa
 

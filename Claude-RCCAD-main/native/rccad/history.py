@@ -30,7 +30,7 @@ LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymi
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file', 'Koło zębate': 'gear', 'Para kół zębatych': 'gearpair',
                'Zaokrąglenie szkicu': 's_sfillet', 'Fazowanie szkicu': 's_sfillet', 'Skręcenie (TWIST)': 'twist',
                'Połączenie szkiców': 's_sjoin', 'Lustro szkicu': 's_smirror', 'Wymiar szkicu': 's_sdim',
-               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod', 'Definicja obudowy': 'enclosure', 'Obudowa prostokątna': 'enclosure', 'Obudowa z pokrywą': 'enclosure'}
+               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod', 'Definicja obudowy': 'enclosure', 'Obudowa prostokątna': 'enclosure', 'Obudowa z pokrywą': 'enclosure', 'Obudowa (kształt)': 'enclosure'}
 
 
 def _num(value, unit=''):

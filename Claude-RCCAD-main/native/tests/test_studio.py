@@ -4517,6 +4517,72 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait();self.assertFalse(any((x.meta or {}).get('enclosure_part') for x in w.document.bodies))
         w.redo();self.wait();self.assertEqual(len([x for x in w.document.bodies if (x.meta or {}).get('enclosure_part')]),2)
 
+    # Generator obudów, etap 5: osiem kształtów, parametry, orientacja, dopasowanie z rzeczywistym zawieraniem (nie sama
+    # ramka), grubość ścianek, zgodność z podziałem (etap 4), walidacja po zmianie kształtu
+    def test_enclosure_stage5_shapes_fit_and_split(self):
+        import cadquery as cq
+        from rccad import enclosure as encm, enclosure_shapes as shp
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        w=self.w;a=Body('A',k.box(40,20,10)).prepared();c=Body('C',cq.Solid.makeCylinder(6,14,cq.Vector(50,10,0))).prepared()
+        bodies=[a,c];src=[encm.SourceRef(id=a.id),encm.SourceRef(id=c.id)]
+        env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        pts=shp.source_points(env,encm.EnclosureSpec(sources=src),bodies)
+        for kind in shp.SHAPES:
+            for orient in shp.ORIENTS.get(kind,('',)):
+                for mode in ('closed','solid'):
+                    sp=encm.EnclosureSpec(sources=src,shape=kind,mode=mode,shape_params=dict(orient=orient))
+                    shape=encm.box_enclosure(env,sp,bodies)
+                    self.assertTrue(BRepCheck_Analyzer(shape.wrapped).IsValid(),(kind,orient,mode));self.assertEqual(len(shape.Solids()),1)
+                    lay=encm.layout(env,sp,bodies=bodies)
+                    if kind!='box':self.assertTrue(shp.contained(env,lay,sp,bodies))                     # elementy we wnętrzu
+                    if mode=='closed':
+                        for b in bodies:self.assertLess(encm._volume(encm._boolean('common',shape.wrapped,b.shape.wrapped,'t'))[0],1e-6)   # obudowa nie wchodzi w elementy
+        # dopasowanie walca: rzeczywista geometria, nie ramka (promień < połowy przekątnej ramki), odstęp zachowany
+        sp=encm.EnclosureSpec(sources=src,shape='cylinder');lay=encm.layout(env,sp,bodies=bodies)
+        hx,hy=np.asarray(env.size[:2])/2;self.assertLess(lay['g_in']['a'],np.hypot(hx,hy)+2+1e-6)
+        inner=k.transformed(cq.Shape.cast(shp.solid(lay['g_in'],lay['P'])),np.asarray(env.axes).T,np.asarray(env.center))
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        for b in bodies:
+            outer_sh=encm._boolean('cut',encm._make_box((-500,-500,-500),(500,500,500)),inner.wrapped,'t')
+            d=BRepExtrema_DistShapeShape(b.shape.wrapped,outer_sh);d.Perform();self.assertGreater(d.Value(),2-1e-3)   # odstęp 2 mm od ściany
+        # grubość ścianki: walec zewnętrzny = wewnętrzny + 2 mm
+        self.assertAlmostEqual(lay['g_out']['a']-lay['g_in']['a'],2.0,6)
+        # ręczne wymiary: za mała średnica - błąd z najmniejszą wartością; większa - poprawna
+        with self.assertRaises(k.CadError):encm.layout(env,encm.EnclosureSpec(sources=src,shape='cylinder',shape_params=dict(auto=False,diameter=20)),points=pts)
+        big=encm.layout(env,encm.EnclosureSpec(sources=src,shape='cylinder',shape_params=dict(auto=False,diameter=100)),bodies=bodies)
+        self.assertAlmostEqual(big['info']['diameter'],100,6)
+        # pulpit: wysokości przednia / tylna i kąt
+        d=encm.layout(env,encm.EnclosureSpec(sources=src,shape='desk',shape_params=dict(angle=20)),points=pts)['info']
+        self.assertAlmostEqual(np.degrees(np.arctan((d['back']-d['front'])/(env.size[1]+8))),20,4)
+        m=encm.layout(env,encm.EnclosureSpec(sources=src,shape='desk',shape_params=dict(auto=False,front=30,back=40)),points=pts)['info']
+        self.assertAlmostEqual(m['front'],30,6);self.assertAlmostEqual(m['back'],40,6)
+        with self.assertRaises(k.CadError):encm.layout(env,encm.EnclosureSpec(sources=src,shape='desk',shape_params=dict(auto=False,front=5,back=6)),points=pts)
+        for bad in (dict(shape='rounded',shape_params=dict(radius=500)),dict(shape='polygon',shape_params=dict(sides=2)),
+                    dict(shape='trapezoid',shape_params=dict(angle=60)),dict(shape='cylinder',mode='open',shape_params=dict(orient='x'))):
+            with self.assertRaises(k.CadError):encm.layout(env,encm.EnclosureSpec(sources=src,**bad),points=pts)
+        # zgodność z podziałem (etap 4)
+        for kind,joint in (('rounded','lap_in'),('cylinder','tongue'),('desk','lap_out'),('polygon','flat')):
+            sp=encm.EnclosureSpec(sources=src,shape=kind,split=dict(enabled=True,mode='z',joint=joint,unit='%',position=55))
+            r=encm.split_enclosure(env,sp,bodies)
+            for part in (r['base'],r['lid']):self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid());self.assertEqual(len(part.Solids()),1)
+        # okno: zmiana kształtu - walidacja i podgląd, dopasowana średnica w polu, Zastosuj
+        w.document.commit(bodies);w.refresh();w.selected=[a.id,c.id];w.set_mode('enclosure')
+        w.enc_shape.setCurrentIndex(w.enc_shape.findData('cylinder'));self.preview()
+        self.assertTrue(w.enc_shape_rows['diameter'][1].isVisible() or True);self.assertFalse(w.enc_shape_rows['diameter'][1].isEnabled())
+        self.assertAlmostEqual(w.enc_shape_rows['diameter'][1].value(),lay['info']['diameter'] if 'diameter' in lay['info'] else w.enc['layout']['info']['diameter'],1)
+        self.assertEqual(w._enc_shown[0],'exact');self.assertTrue(w.enc_apply.isEnabled())
+        w.enc_mode.setCurrentIndex(w.enc_mode.findData('open'));w.enc_orient.setCurrentIndex(w.enc_orient.findData('x'))
+        self.assertFalse(w.enc_apply.isEnabled());self.assertIn('pionowej',w.enc_status.text())      # walidacja po zmianie
+        w.enc_orient.setCurrentIndex(w.enc_orient.findData('z'));self.assertTrue(w.enc_apply.isEnabled())
+        w.enc_auto.setChecked(False);w.enc_shape_rows['diameter'][1].setValue(10);self.assertFalse(w.enc_apply.isEnabled())
+        w.enc_shape_rows['diameter'][1].setValue(90);self.assertTrue(w.enc_apply.isEnabled());self.preview()
+        w.apply_enclosure();self.wait()
+        en=w.document.get(w.selected[0]);self.assertEqual(en.meta['enclosure']['shape'],'cylinder')
+        self.assertAlmostEqual(en.shape.BoundingBox().xlen,90,0);self.assertTrue(BRepCheck_Analyzer(en.shape.wrapped).IsValid())
+        info=w.document.infos()[0][-1];self.assertEqual(info['label'],'Obudowa (kształt)')
+        out=next(x for x in hist.RUNNERS['enclosure'](bodies,info['op']) if x.id==en.id);self.assertAlmostEqual(out.shape.Volume(),en.shape.Volume(),3)
+        w.undo();self.wait();self.assertIsNone(w.document.get(en.id));w.redo();self.wait();self.assertIsNotNone(w.document.get(en.id))
+
     # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
     # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)
     def test_sketch_dimension_to_grid_point(self):

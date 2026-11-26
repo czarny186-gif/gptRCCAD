@@ -21,7 +21,7 @@ import numpy as np
 
 from . import kernel
 
-SPEC_VERSION = 3               # 1 - definicja (etap 1); 2 - prostokątna obudowa jako bryła (etap 2); 3 - podział (etap 4)
+SPEC_VERSION = 4               # 1 - definicja (etap 1); 2 - prostokątna obudowa (etap 2); 3 - podział (etap 4); 4 - kształty (etap 5)
 FRAME_MODES = ('global', 'local', 'face')
 FRAME_LABELS = {'global': 'Globalny (osie X, Y, Z)', 'local': 'Lokalny (dopasowany do elementów)', 'face': 'Ze ściany (wskazana ściana)'}
 SOURCE_KINDS = ('solid', 'mesh')
@@ -90,7 +90,8 @@ class EnclosureSpec:
     sources: list = field(default_factory=list)          # [SourceRef]
     frame: FrameSpec = field(default_factory=FrameSpec)
     envelope: Envelope = field(default_factory=Envelope)
-    shape: str = 'box'                                    # kształt obudowy (kolejne etapy: zaokrąglona, walec, pulpit, kontur)
+    shape: str = 'box'                                    # kształt obudowy: rccad.enclosure_shapes.SHAPES
+    shape_params: dict = field(default_factory=dict)      # parametry kształtu (promień, faza, średnica, boki, kąt, wysokości, orientacja)
     mode: str = 'closed'                                  # 'open' | 'closed' | 'solid'
     clearance: dict = field(default_factory=dict)         # odstępy od elementów: x-, x+, y-, y+, z-, z+ (+ 'linked')
     walls: dict = field(default_factory=dict)             # grubości: x-, x+, y-, y+, bottom, top (+ 'linked')
@@ -116,7 +117,7 @@ class EnclosureSpec:
         env = data.get('envelope') or {}
         spec.envelope = Envelope(center=list(env.get('center', [0, 0, 0])), axes=[list(a) for a in env.get('axes', Envelope().axes)],
                                  size=list(env.get('size', [0, 0, 0])))
-        for key in ('shape', 'mode', 'clearance', 'walls', 'split', 'mounts', 'openings', 'vents', 'closure', 'process'):
+        for key in ('shape', 'shape_params', 'mode', 'clearance', 'walls', 'split', 'mounts', 'openings', 'vents', 'closure', 'process'):
             if key in data:
                 setattr(spec, key, data[key])
         return spec
@@ -327,19 +328,19 @@ def check_solid(shape):
     return out
 
 
-def box_enclosure(env, spec):
+def box_enclosure(env, spec, bodies=None):
     """Prostokątna obudowa jako bryła B-Rep: zewnętrzny prostopadłościan (BRepPrimAPI_MakeBox) minus wnętrze
     (BRepAlgoAPI_Cut); obudowa otwarta - wnętrze wychodzi ponad górną krawędź; pełna bryła - sam zewnętrzny. Geometria
     elementów nie jest odejmowana. Wynik w położeniu przestrzeni (osie i środek z envelope)."""
-    local, _lay = local_enclosure(env, spec)
+    local, _lay = local_enclosure(env, spec, bodies)
     import cadquery as cq
     shape = kernel.transformed(cq.Shape.cast(local), np.asarray(env.axes, float).T, np.asarray(env.center, float))
     return check_solid(shape.wrapped)
 
 
-def outer_dimension_items(env, spec, prefix='enc'):
+def outer_dimension_items(env, spec, prefix='enc', lay=None):
     """Wymiary zewnętrzne X / Y / Z wzdłuż krawędzi obudowy (nakładka wymiarów widoku)."""
-    lay = box_layout(env, spec)
+    lay = lay or box_layout(env, spec)
     lo, hi = lay['outer']
     c = np.asarray(env.center, float)
     ax = np.asarray(env.axes, float)
@@ -377,7 +378,7 @@ def run(bodies, recipe, check_sources=False):
             out = [made if b.id == pid else b for b in out] if prev is not None else [*out, made]
         return out
     if spec.version >= 2:              # etap 2: prostokątna obudowa jako bryła (nowy element dokumentu)
-        shape = box_enclosure(env, spec)
+        shape = box_enclosure(env, spec, bodies)
         body = (replace(old, shape=shape, meta=meta, mesh=None) if old is not None
                 else Body(name, shape, 'solid', 'XY', id=ident, meta=meta)).prepared()
     else:                              # definicja z etapu 1 (starsze projekty)
@@ -436,12 +437,18 @@ def moved_mesh(mesh, shift):
                               tuple(np.asarray(mesh.center, float) + shift), mesh.size, mesh.fine, mesh.face_ids)
 
 
-def quick_mesh(env, spec, explode=0.0):
+def quick_mesh(env, spec, explode=0.0, lay=None):
     """Uproszczony podgląd obudowy (bez Boolean): zewnętrzny prostopadłościan z krawędziami wnętrza; przy podziale wzdłuż
     osi - dwie części (pokrywa odsunięta o explode mm)."""
-    lay = box_layout(env, spec)
+    lay = lay or box_layout(env, spec)
     (ilo, ihi), (olo, ohi) = lay['inner'], lay['outer']
     top = spec.mode != 'open'
+    if 'g_in' in lay:                    # etap 5: kształt z profilu - graniastosłup z obrysu (wnętrze - same krawędzie)
+        from . import enclosure_shapes as shapes
+        world = _world(env)
+        outer = shapes.mesh(lay['g_out'], lay['P'], world, caps=(True, top or lay['g_out']['t'] in ('trap', 'desk')))
+        inner = None if spec.mode == 'solid' else shapes.mesh(lay['g_in'], lay['P'], world, key0=1000, faces=False)
+        return merge_meshes([outer, inner])
     inner = None if spec.mode == 'solid' else box_mesh(ilo, ihi, env, top=True, key0=100)
     if inner is not None:
         inner = kernel.DisplayMesh(inner.vertices, np.empty((0, 3), np.uint32), inner.edges, inner.center, inner.size)
@@ -493,7 +500,7 @@ def side_dimension_items(env, spec, lay, kind, prefix='encv'):
     """Wymiary przy strzałkach: odstęp (od elementów do wnętrza) albo grubość ścianki (od wnętrza do zewnątrz) w osi
     strzałki; kind='outer' - wymiary zewnętrzne X / Y / Z (wartości do wpisania)."""
     if kind == 'outer':
-        return [dict(it, id=f'{prefix}:{it["label"]}') for it in outer_dimension_items(env, spec, prefix)]
+        return [dict(it, id=f'{prefix}:{it["label"]}') for it in outer_dimension_items(env, spec, prefix, lay)]
     world = _world(env)
     half = np.asarray(env.size, float) / 2
     (ilo, ihi), (olo, ohi) = lay['inner'], lay['outer']
@@ -629,7 +636,14 @@ def _cq(shape):
 
 def _boolean(kind, a, b, what):
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
-    op = {'cut': BRepAlgoAPI_Cut, 'common': BRepAlgoAPI_Common, 'fuse': BRepAlgoAPI_Fuse}[kind](a, b)
+    from OCP.TopTools import TopTools_ListOfShape
+    op = {'cut': BRepAlgoAPI_Cut, 'common': BRepAlgoAPI_Common, 'fuse': BRepAlgoAPI_Fuse}[kind]()
+    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(a)
+    tools.Append(b)
+    op.SetArguments(args)
+    op.SetTools(tools)
+    op.SetRunParallel(True)
     op.Build()
     if not op.IsDone():
         raise kernel.CadError(f'Operacja Boolean nie powiodła się ({what}).')
@@ -677,9 +691,27 @@ def _unified(shape):
         return shape
 
 
-def local_enclosure(env, spec):
+def layout(env, spec, points=None, bodies=None):
+    """Układ obudowy: prostopadłościan (box_layout) albo inny kształt (etap 5) - dopasowany do elementów; z bryłami
+    źródłowymi sprawdzane jest rzeczywiste zawieranie (Boolean)."""
+    if (spec.shape or 'box') == 'box':
+        return box_layout(env, spec)
+    from . import enclosure_shapes as shapes
+    if points is None and bodies is not None:
+        points = shapes.source_points(env, spec, bodies)
+    return shapes.fitted_layout(env, spec, points, bodies)
+
+
+def local_enclosure(env, spec, bodies=None, points=None):
     """Obudowa w układzie przestrzeni (TopoDS) - przed przeniesieniem do świata."""
-    lay = box_layout(env, spec)
+    lay = layout(env, spec, points, bodies)
+    if 'g_in' in lay:
+        from . import enclosure_shapes as shapes
+        outer = shapes.solid(lay['g_out'], lay['P'])
+        if spec.mode == 'solid':
+            return outer, lay
+        inner = shapes.open_inner(lay, spec) if spec.mode == 'open' else shapes.solid(lay['g_in'], lay['P'])
+        return _boolean('cut', outer, inner, 'wycięcie wnętrza'), lay
     outer = _make_box(*lay['outer'])
     if spec.mode == 'solid':
         return outer, lay
@@ -718,7 +750,7 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
     from OCP.TopTools import TopTools_ListOfShape
     from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
     sp = split_of(spec)
-    E, lay = local_enclosure(env, spec)
+    E, lay = local_enclosure(env, spec, bodies)
     point, n_world, _rng, _d = split_check(env, spec, lay, bodies)
     c = np.asarray(env.center, float)
     ax = np.asarray(env.axes, float)
@@ -751,7 +783,19 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
         w, h, d, g = (float(sp[k]) for k in ('width', 'height', 'depth', 'gap'))
         t_lo, t_hi = _thick(spec)
         big = np.ones(3)
-        if joint == 'lap_in':
+        if 'g_in' in lay:                # etap 5: kształt z profilu - pierścienie z odsuniętych profili wnętrza
+            from . import enclosure_shapes as shapes
+            t = lay['tr'] if lay['g_in']['t'] in ('ellipse', 'ngon') else lay['tmin']
+            ring = lambda a, b: _boolean('cut', shapes.solid(shapes.grow(lay['g_in'], b), lay['P']),
+                                         shapes.solid(shapes.grow(lay['g_in'], a), lay['P']), 'pierścień połączenia')
+            if joint == 'lap_in':
+                region, seat = ring(0.0, w), shapes.solid(shapes.grow(lay['g_in'], w + g), lay['P'])
+            elif joint == 'lap_out':
+                region, seat = ring(t - w, t + 1.0), ring(t - w - g, t + 1.0)
+            else:
+                a = (t - w) / 2
+                region, seat = ring(a, a + w), ring(a - g, a + w + g)
+        elif joint == 'lap_in':
             region = _ring(lay, np.zeros(3), np.zeros(3), np.full(3, w), np.full(3, w))
             seat = _ring(lay, None, None, np.full(3, w + g), np.full(3, w + g))
         elif joint == 'lap_out':
@@ -761,7 +805,9 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
             a_lo, a_hi = (t_lo - w) / 2, (t_hi - w) / 2
             region = _ring(lay, a_lo, a_hi, a_lo + w, a_hi + w)
             seat = _ring(lay, a_lo - g, a_hi - g, a_lo + w + g, a_hi + w + g)
-        lip = _boolean('common', _boolean('common', region, _slab(p, n, -h, 0.0, size), 'występ połączenia'), E, 'występ w ściance')
+        lip = _boolean('common', region, _slab(p, n, -h, 0.0, size), 'występ połączenia')
+        if 'g_in' not in lay or spec.mode == 'open' or joint == 'lap_out':
+            lip = _boolean('common', lip, E, 'występ w ściance')       # kształty z profilu: pierścień i tak leży w ściance
         if _volume(lip)[0] <= 1e-6:
             raise kernel.CadError('Połączenie nie trafia w ścianki obudowy - zmień płaszczyznę podziału.')
         cut = _boolean('common', seat, _slab(p, n, -d, 1.0, size), 'gniazdo połączenia')

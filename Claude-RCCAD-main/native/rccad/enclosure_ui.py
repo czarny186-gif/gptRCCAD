@@ -23,10 +23,11 @@ import numpy as np
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
-                               QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
+                               QListWidgetItem, QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
 from . import dims
 from . import enclosure as enc
+from . import enclosure_shapes as shapes
 from . import kernel
 from . import shell_ui as ui
 
@@ -106,7 +107,7 @@ class EnclosureTools:
         self.enc_dims.setStyleSheet('font-weight:600; color:#17314a;')
         lay.addWidget(self.enc_dims)
         # --- etap 2: prostokątna obudowa ---
-        self.enc_step3 = ui.StepRow(3, 'x_enclosure', 'Obudowa prostokątna', plain=True)
+        self.enc_step3 = ui.StepRow(3, 'x_enclosure', 'Obudowa', plain=True)
         lay.addWidget(self.enc_step3)
         self.enc_mode = QComboBox()
         for mode in enc.MODES:
@@ -114,6 +115,7 @@ class EnclosureTools:
         self.enc_mode.setCurrentIndex(self.enc_mode.findData('closed'))
         self.enc_mode.currentIndexChanged.connect(lambda *_: self._enc_params_changed())
         lay.addWidget(self.enc_mode)
+        self._build_enc_shape(lay)
         self.enc_clear, self.enc_clear_link = self._enc_grid(lay, 'Odstępy od elementów (mm)', enc.SIDES, 0.0, enc.DEFAULT_CLEARANCE)
         self.enc_wall, self.enc_wall_link = self._enc_grid(lay, 'Grubości ścianek (mm)', enc.WALLS, enc.MIN_WALL, enc.DEFAULT_WALL)
         self.enc_sizes = _label('Wnętrze: —\nZewnątrz: —', 'value')
@@ -236,6 +238,90 @@ class EnclosureTools:
         self.enc_apply, _ = self._buttons(self.enc_panel.footer, 'Zastosuj', 'Anuluj', self.apply_enclosure, lambda: self.set_mode(None))
         return self.enc_panel
 
+    def _build_enc_shape(self, lay):
+        """Etap 5: kształt obudowy, jego parametry, orientacja i dopasowanie do elementów."""
+        lay.addWidget(_label('Kształt obudowy', 'label'))
+        self.enc_shape = QComboBox()
+        for kind in shapes.SHAPES:
+            self.enc_shape.addItem(shapes.SHAPE_LABELS[kind], kind)
+        self.enc_shape.currentIndexChanged.connect(lambda *_: self._enc_shape_changed())
+        lay.addWidget(self.enc_shape)
+        self.enc_orient = QComboBox()
+        self.enc_orient.setToolTip('Orientacja kształtu względem osi obudowy')
+        self.enc_orient.currentIndexChanged.connect(lambda *_: self._enc_params_changed())
+        lay.addWidget(self.enc_orient)
+        self.enc_auto = QCheckBox('Dopasuj automatycznie do elementów')
+        self.enc_auto.setChecked(True)
+        self.enc_auto.setToolTip('Średnice / wysokości wyznaczane tak, by wszystkie elementy z odstępami mieściły się we wnętrzu '
+                                 '(sprawdzane na rzeczywistej geometrii). Wyłączone - wpisane wymiary (zewnętrzne) są sprawdzane.')
+        self.enc_auto.toggled.connect(lambda *_: self._enc_params_changed())
+        lay.addWidget(self.enc_auto)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(5)
+        self.enc_shape_rows = {}
+        rows = (('radius', 'Promień narożników', _spin(shapes.SHAPE_DEFAULTS['radius'], .1, enc.MAX_VALUE, 2, .5, ' mm')),
+                ('chamfer', 'Fazowanie', _spin(shapes.SHAPE_DEFAULTS['chamfer'], .1, enc.MAX_VALUE, 2, .5, ' mm')),
+                ('sides', 'Liczba boków', QSpinBox()),
+                ('diameter', 'Średnica', _spin(0, 0, enc.MAX_VALUE, 2, 1, ' mm')),
+                ('dx', 'Średnica X', _spin(0, 0, enc.MAX_VALUE, 2, 1, ' mm')),
+                ('dy', 'Średnica Y', _spin(0, 0, enc.MAX_VALUE, 2, 1, ' mm')),
+                ('angle', 'Kąt pochylenia', _spin(shapes.SHAPE_DEFAULTS['angle'], -shapes.MAX_ANGLE + .1, shapes.MAX_ANGLE - .1, 1, 1, ' °')),
+                ('front', 'Wysokość przednia', _spin(0, 0, enc.MAX_VALUE, 2, 1, ' mm')),
+                ('back', 'Wysokość tylna', _spin(0, 0, enc.MAX_VALUE, 2, 1, ' mm')))
+        for n, (key, title, box) in enumerate(rows):
+            if key == 'sides':
+                box.setRange(3, 64)
+                box.setValue(shapes.SHAPE_DEFAULTS['sides'])
+                box.setButtonSymbols(QSpinBox.NoButtons)
+                box.setKeyboardTracking(False)
+            box.valueChanged.connect(lambda *_: self._enc_params_changed())
+            label = _label(title, 'label')
+            grid.addWidget(label, n, 0)
+            grid.addWidget(box, n, 1)
+            self.enc_shape_rows[key] = (label, box)
+        lay.addLayout(grid)
+        self._enc_shape_changed(update=False)
+
+    SHAPE_FIELDS = {'box': (), 'rounded': ('radius',), 'chamfer': ('chamfer',), 'cylinder': ('diameter',), 'ellipse': ('dx', 'dy'),
+                    'polygon': ('sides', 'diameter'), 'trapezoid': ('angle',), 'desk': ('angle', 'front', 'back')}
+    AUTO_FIELDS = ('diameter', 'dx', 'dy', 'front', 'back')
+
+    def _enc_shape_changed(self, update=True):
+        kind = self.enc_shape.currentData()
+        self.enc_orient.blockSignals(True)
+        self.enc_orient.clear()
+        labels = shapes.TRAP_ORIENT_LABELS if kind == 'trapezoid' else shapes.ORIENT_LABELS
+        for o in shapes.ORIENTS.get(kind, ()):
+            self.enc_orient.addItem(labels[o], o)
+        self.enc_orient.blockSignals(False)
+        self.enc_orient.setVisible(kind in shapes.ORIENTS)
+        self.enc_auto.setVisible(kind in ('cylinder', 'ellipse', 'polygon', 'desk'))
+        fields = self.SHAPE_FIELDS.get(kind, ())
+        for key, (label, box) in self.enc_shape_rows.items():
+            label.setVisible(key in fields)
+            box.setVisible(key in fields)
+        self._enc_auto_widgets()
+        if update:
+            self._enc_params_changed()          # walidacja geometrii po każdej zmianie kształtu
+
+    def _enc_auto_widgets(self):
+        kind = self.enc_shape.currentData()
+        auto = self.enc_auto.isChecked() or kind not in ('cylinder', 'ellipse', 'polygon', 'desk')
+        for key in self.AUTO_FIELDS:
+            self.enc_shape_rows[key][1].setEnabled(not auto)
+        self.enc_shape_rows['angle'][1].setEnabled(kind != 'desk' or self.enc_auto.isChecked())   # pulpit ręcznie: kąt z wysokości
+
+    def _enc_shape_info(self, info):
+        """Dopasowane wymiary kształtu w polach (przy dopasowaniu automatycznym - tylko do odczytu)."""
+        auto = self.enc_auto.isChecked()
+        for key, value in (info or {}).items():
+            box = self.enc_shape_rows.get(key, (None, None))[1]
+            if box is None or (key != 'angle' and not auto) or (key == 'angle' and auto):
+                continue
+            if abs(box.value() - float(value)) > 5e-3:
+                self._enc_set(box, round(float(value), 2))
+
     def _enc_grid(self, lay, title, keys, low, value):
         """Sześć pól (X−, X+, Y−, Y+, …) z przełącznikiem „Jednakowe” - jedna wartość dla wszystkich."""
         head = QHBoxLayout()
@@ -270,6 +356,8 @@ class EnclosureTools:
 
     def _enc_params_changed(self):
         self.enc_wall['top'].setEnabled(self.enc_mode.currentData() != 'open')     # obudowa otwarta nie ma górnej ścianki
+        if hasattr(self, 'enc_shape_rows'):
+            self._enc_auto_widgets()
         self._enc_live()
 
     # ------------------------------------------------------------------ tryb
@@ -422,6 +510,10 @@ class EnclosureTools:
         face = self.enc['face']
         spec.frame = enc.FrameSpec(mode=mode, face=dict(id=face['id'], point=face['point']) if (mode == 'face' and face) else None)
         spec.mode = self.enc_mode.currentData()
+        spec.shape = self.enc_shape.currentData()
+        if spec.shape != 'box':
+            spec.shape_params = dict({k: (int(b.value()) if k == 'sides' else float(b.value())) for k, (_l, b) in self.enc_shape_rows.items()},
+                                     orient=self.enc_orient.currentData() or '', auto=self.enc_auto.isChecked())
         spec.clearance = dict({k: float(b.value()) for k, b in self.enc_clear.items()}, linked=self.enc_clear_link.isChecked())
         spec.walls = dict({k: float(b.value()) for k, b in self.enc_wall.items()}, linked=self.enc_wall_link.isChecked())
         cut = self.enc.get('split_face')
@@ -463,7 +555,13 @@ class EnclosureTools:
                 error = str(exc)
             except Exception as exc:                  # nieoczekiwany kłopot geometrii - komunikat zamiast wyjątku
                 error = f'Nie udało się wyznaczyć przestrzeni: {exc}'
-        self.enc.update(env=env, env_error=error)
+        points = None
+        if env is not None:
+            try:
+                points = shapes.source_points(env, self.enc_spec(), self.document.bodies)
+            except Exception:
+                points = None
+        self.enc.update(env=env, env_error=error, points=points)
         if env is not None:
             sx, sy, sz = env.size
             self.enc_dims.setText(f'Elementy: X {sx:.2f}   Y {sy:.2f}   Z {sz:.2f} mm')
@@ -488,9 +586,11 @@ class EnclosureTools:
         layout, plane = None, None
         if env is not None:
             try:
-                layout = enc.box_layout(env, spec)
+                layout = enc.layout(env, spec, points=self.enc.get('points'))      # bez Boolean - szybko (dokładnie: w tle)
             except kernel.CadError as exc:
                 error = str(exc)
+            if layout is not None and layout.get('info'):
+                self._enc_shape_info(layout['info'])
         sp = enc.split_of(spec)
         split_error = None
         if layout is not None and sp['enabled']:
@@ -502,7 +602,8 @@ class EnclosureTools:
         ok = layout is not None and split_error is None and not self.enc.get('exact_error_sig') == self._enc_sig_of(spec)
         self.enc_apply.setEnabled(ok)       # niepoprawne wartości: Zastosuj zablokowane
         self.enc_step3.set_state('done' if layout is not None else ('active' if env is not None else 'pending'),
-                                 self.enc_mode.currentText().split(' (')[0].lower() if layout is not None else (error or '') if env is not None else '')
+                                 (self.enc_shape.currentText().lower() + ' · ' + self.enc_mode.currentText().split(' (')[0].lower())
+                                 if layout is not None else (error or '') if env is not None else '')
         self._enc_split_widgets(sp)
         if sp['enabled']:
             self.enc_step4.set_state('done' if plane is not None else 'active', enc.JOINT_LABELS[sp['joint']].lower() if plane is not None else (split_error or ''))
@@ -513,7 +614,7 @@ class EnclosureTools:
             self.enc_sizes.setText(('Wnętrze: —' if spec.mode == 'solid' else f'Wnętrze: {i[0]:.2f} × {i[1]:.2f} × {i[2]:.2f}')
                                    + f'\nZewnątrz: {o[0]:.2f} × {o[1]:.2f} × {o[2]:.2f} mm')
             kind = self.enc_handles.currentData()
-            items = [] if kind == 'outer' else enc.outer_dimension_items(env, spec)
+            items = [] if kind == 'outer' else enc.outer_dimension_items(env, spec, lay=layout)
             self.enc_items = items + enc.side_dimension_items(env, spec, layout, kind)
             if split_error:
                 self.enc_status.setText(split_error)
@@ -743,7 +844,7 @@ class EnclosureTools:
             return
         try:
             explode = self.enc_explode_dist.value() if self.enc_explode.isChecked() else 0.0
-            mesh = enc.quick_mesh(env, spec, explode)
+            mesh = enc.quick_mesh(env, spec, explode, self.enc.get('layout'))
         except kernel.CadError:
             mesh = None
         self._enc_shown = ('quick', sig)
@@ -769,7 +870,7 @@ class EnclosureTools:
             if split:
                 parts = enc.split_enclosure(env, spec, bodies, check_sources=True)
                 return dict(base=kernel.display_mesh(parts['base']), lid=kernel.display_mesh(parts['lid']), normal=parts['normal'])
-            return dict(mesh=kernel.display_mesh(enc.box_enclosure(env, spec)))
+            return dict(mesh=kernel.display_mesh(enc.box_enclosure(env, spec, bodies)))     # kształty: zawieranie sprawdzone Boolean
 
         def show(value, error):
             if self.mode != 'enclosure' or getattr(self, '_enc_sig', None) != sig:
@@ -808,7 +909,7 @@ class EnclosureTools:
     def _enc_quick_only(self, spec):
         try:
             explode = self.enc_explode_dist.value() if self.enc_explode.isChecked() else 0.0
-            mesh = enc.quick_mesh(self.enc['env'], spec, explode)
+            mesh = enc.quick_mesh(self.enc['env'], spec, explode, self.enc.get('layout'))
         except kernel.CadError:
             mesh = None
         self.view.set_preview_mesh(mesh, color=(*PREVIEW_RGB, self._enc_alpha() * .7), line_color=PREVIEW_LINE, width=1.6, dashed=True)
@@ -865,7 +966,7 @@ class EnclosureTools:
         recipe = dict(type='enclosure', spec=spec.to_json(), out=uuid.uuid4().hex, name=name)
         if split:
             recipe.update(out_lid=uuid.uuid4().hex, folder=name)
-        label = 'Obudowa z pokrywą' if split else 'Obudowa prostokątna'
+        label = 'Obudowa z pokrywą' if split else ('Obudowa prostokątna' if spec.shape == 'box' else 'Obudowa (kształt)')
         existing = list(self.document.bodies)
 
         def build():
