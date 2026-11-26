@@ -5,7 +5,6 @@ zmienne ścianki, import STEP / SVG / DXF, własny szkic, przerwanie, zapis i od
 import faulthandler
 import math
 import os
-import resource
 import sys
 import tempfile
 import time
@@ -20,6 +19,30 @@ import numpy as np
 from rccad import kernel as k
 from rccad import vent_feature as VF, vent_layout as VLy, vent_library as VL, vent_cut as VC
 from rccad.document import Body
+
+
+def peak_mb():
+    """Szczytowe zużycie pamięci procesu (MB) - Linux / macOS: resource, Windows: GetProcessMemoryInfo."""
+    try:
+        import resource
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return r / 1024 / (1024 if sys.platform == 'darwin' else 1)
+    except ImportError:
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD), ('PeakWorkingSetSize', ctypes.c_size_t),
+                        ('WorkingSetSize', ctypes.c_size_t), ('QuotaPeakPagedPoolUsage', ctypes.c_size_t), ('QuotaPagedPoolUsage', ctypes.c_size_t),
+                        ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t), ('QuotaNonPagedPoolUsage', ctypes.c_size_t),
+                        ('PagefileUsage', ctypes.c_size_t), ('PeakPagefileUsage', ctypes.c_size_t)]
+        c = PMC()
+        c.cb = ctypes.sizeof(PMC)
+        k32 = ctypes.WinDLL('kernel32')
+        psapi = ctypes.WinDLL('psapi')
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb)
+        return c.PeakWorkingSetSize / 2 ** 20
 
 
 def body(shape, ident):
@@ -248,7 +271,7 @@ class VentEngineTests(unittest.TestCase):
             res = VF.build([big], recipe(big, top, [dict(C, w=w, h=w, fill='B', count=n, bridge=.5, margin=1, margin_holes=.5, min_area=.3)]))
             dt = time.time() - t0
             got = res['stats']['count']
-            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+            rss = peak_mb()
             rows.append((n, got, dt, rss))
             self.assertGreaterEqual(got, .9 * n)
             self.assertLessEqual(got, n)
