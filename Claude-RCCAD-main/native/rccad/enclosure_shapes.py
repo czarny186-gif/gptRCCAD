@@ -21,17 +21,18 @@ import numpy as np
 
 from . import kernel
 
-SHAPES = ('box', 'rounded', 'chamfer', 'cylinder', 'ellipse', 'polygon', 'trapezoid', 'desk')
+SHAPES = ('box', 'rounded', 'chamfer', 'cylinder', 'ellipse', 'polygon', 'trapezoid', 'desk', 'contour')
 SHAPE_LABELS = {'box': 'Prostokątna', 'rounded': 'Prostokątna z zaokrąglonymi narożnikami', 'chamfer': 'Prostokątna ze sfazowanymi narożnikami',
                 'cylinder': 'Cylindryczna', 'ellipse': 'Eliptyczna', 'polygon': 'Wielokątna', 'trapezoid': 'Trapezowa',
-                'desk': 'Pulpitowa (pochylona góra)'}
+                'desk': 'Pulpitowa (pochylona góra)', 'contour': 'Dopasowana do konturu'}
 ORIENTS = {'rounded': ('z', 'x', 'y'), 'chamfer': ('z', 'x', 'y'), 'cylinder': ('z', 'x', 'y'), 'ellipse': ('z', 'x', 'y'),
-           'polygon': ('z', 'x', 'y'), 'trapezoid': ('x', 'y'), 'desk': ('y-', 'y+', 'x-', 'x+')}
+           'polygon': ('z', 'x', 'y'), 'trapezoid': ('x', 'y'), 'desk': ('y-', 'y+', 'x-', 'x+'), 'contour': ('z', 'x', 'y')}
 ORIENT_LABELS = {'z': 'Oś Z (pionowo)', 'x': 'Oś X (poziomo)', 'y': 'Oś Y (poziomo)', 'y-': 'Przód: Y−', 'y+': 'Przód: Y+',
                  'x-': 'Przód: X−', 'x+': 'Przód: X+'}
 TRAP_ORIENT_LABELS = {'x': 'Pochylone ścianki X', 'y': 'Pochylone ścianki Y'}
 SHAPE_DEFAULTS = dict(radius=5.0, chamfer=4.0, diameter=0.0, dx=0.0, dy=0.0, sides=6, angle=15.0, front=0.0, back=0.0,
-                      orient='', auto=True)
+                      orient='', auto=True, cmode='concave', degree=6.0, min_radius=2.0, min_neck=0.0, accuracy=.1, simplify=0.0,
+                      min_fragment=.5, connect=True, sketch=None)
 MAX_ANGLE = 60.0
 MIN_SIZE = 0.2
 SQ2 = math.sqrt(2.0)
@@ -108,6 +109,9 @@ def grow(g, d):
     elif t == 'trap':
         cos = 1 / math.sqrt(1 + g['tan'] ** 2)
         g.update(hb=g['hb'] + d / cos + d * g['tan'], w0=g['w0'] - d, w1=g['w1'] + d, v0=g['v0'] - d, v1=g['v1'] + d)
+    elif t == 'face':
+        from .enclosure_contour import offset
+        g.update(face=offset(g['face'], d, 'odsunięcie profilu') if abs(d) > 1e-12 else g['face'], w0=g['w0'] - d, w1=g['w1'] + d)
     elif t == 'desk':
         cos = 1 / math.sqrt(1 + g['tan'] ** 2)
         g.update(h0=g['h0'] + d / cos - d * g['tan'] + d, u0=g['u0'] - d, u1=g['u1'] + d, v0=g['v0'] - d, v1=g['v1'] + d, w0=g['w0'] - d)
@@ -151,6 +155,11 @@ def profile(g, samples=48):
     if t == 'desk':
         v0, v1, w0, h0, tan = g['v0'], g['v1'], g['w0'], g['h0'], g['tan']
         return np.array([(v0, w0), (v1, w0), (v1, w0 + h0 + (v1 - v0) * tan), (v0, w0 + h0)]), (1, 2), 0, (g['u0'], g['u1']), [0, 1, 2, 3]
+    if t == 'face':
+        from .enclosure_contour import polyline
+        pts = polyline(g['face'], max(.05, g.get('acc', .1)))
+        step = max(1, len(pts) // 16)
+        return pts, (0, 1), 2, (g['w0'], g['w1']), list(range(0, len(pts), step))
     raise kernel.CadError('Nieznany kształt obudowy.')
 
 
@@ -178,6 +187,8 @@ def mesh(g, P, world, caps=(True, True), key0=0, faces=True):
     b = _shape_pts(pts2, axes, along, s1) @ P
     v = np.array([world(p) for p in np.vstack([a, b])], np.float32)
     tris = []
+    if g['t'] == 'face':
+        caps = (False, False)                      # kontur może być wklęsły - podgląd bez den (same ścianki)
     if faces:
         for k in range(n):
             j = (k + 1) % n
@@ -205,6 +216,12 @@ def solid(g, P):
         raise kernel.CadError('Obudowa ma zerową długość.')
     vec = np.zeros(3)
     vec[along] = s1 - s0
+    if t == 'face':
+        mk = BRepPrimAPI_MakePrism(_moved_face(g['face'], s0), gp_Vec(0, 0, float(s1 - s0)))
+        mk.Build()
+        if not mk.IsDone():
+            raise kernel.CadError('Wyciągnięcie profilu konturu nie powiodło się.')
+        return kernel.transformed(cq.Shape.cast(mk.Shape()), P.T, np.zeros(3)).wrapped
     if t == 'ellipse' and abs(g['a'] - g['b']) < 1e-9:
         if g['a'] <= 1e-6:
             raise kernel.CadError('Średnica obudowy musi być większa od zera.')
@@ -242,6 +259,14 @@ def solid(g, P):
             raise kernel.CadError('Wyciągnięcie profilu obudowy nie powiodło się.')
         shape = mk.Shape()
     return kernel.transformed(cq.Shape.cast(shape), P.T, np.zeros(3)).wrapped
+
+
+def _moved_face(face, z):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Trsf, gp_Vec
+    t = gp_Trsf()
+    t.SetTranslation(gp_Vec(0, 0, float(z)))
+    return BRepBuilderAPI_Transform(face, t, True).Shape()
 
 
 def _fillet_profile(face, r):
@@ -292,7 +317,7 @@ def _rounded_growth(S, U, V, r, cc):
     return hi
 
 
-def shape_layout(env, spec, points=None, margin=0.0):
+def shape_layout(env, spec, points=None, margin=0.0, bodies=None):
     """Układ obudowy o kształcie spec.shape: profil wnętrza dopasowany do elementów (z odstępami) i profil zewnętrza
     (z grubościami ścianek). Zwraca dict jak box_layout (inner / outer - ramki w układzie przestrzeni, rozmiary) oraz
     g_in, g_out (opis profili), P (orientacja), info (wartości do pokazania w oknie). Złe wartości - CadError."""
@@ -304,7 +329,7 @@ def shape_layout(env, spec, points=None, margin=0.0):
         raise kernel.CadError('Nieznany rodzaj obudowy.')
     p = params_of(spec)
     P = frame(kind, p['orient'])
-    if spec.mode == 'open' and kind in ('rounded', 'chamfer', 'cylinder', 'ellipse', 'polygon') and p['orient'] != 'z':
+    if spec.mode == 'open' and kind in ('rounded', 'chamfer', 'cylinder', 'ellipse', 'polygon', 'contour') and p['orient'] != 'z':
         raise kernel.CadError('Obudowa otwarta tego kształtu wymaga orientacji pionowej (oś Z).')
     c, w = clearance_of(spec), walls_of(spec)
     for key, value in c.items():
@@ -446,6 +471,9 @@ def shape_layout(env, spec, points=None, margin=0.0):
         h0o = (w0 + h0 + ttop / cos + (v0o - v0) * tan) - w0o
         g_out = dict(t='desk', u0=g_in['u0'] - t_lo[0], u1=g_in['u1'] + t_hi[0], v0=v0o, v1=v1o, w0=w0o, h0=h0o, tan=tan)
         info.update(front=h0o, back=h0o + (v1o - v0o) * tan, angle=math.degrees(math.atan(tan)))
+    elif kind == 'contour':
+        from . import enclosure_contour as contour
+        g_in, g_out, info = contour.layout(env, spec, p, P, c_lo, c_hi, t_lo, t_hi, hs, bodies, points, margin)
     else:
         raise kernel.CadError('Nieznany kształt obudowy.')
     ilo, ihi = bbox(g_in, P)
@@ -460,7 +488,7 @@ def open_inner(lay, spec):
     """Wnętrze obudowy otwartej - wychodzi ponad górę (bez górnej ścianki)."""
     g = dict(lay['g_in'])
     T = 2.0 + float(np.max(lay['outer_size']))
-    if g['t'] in ('rrect', 'ellipse', 'ngon'):
+    if g['t'] in ('rrect', 'ellipse', 'ngon', 'face'):
         g['w1'] += T
         return solid(g, lay['P'])
     if g['t'] == 'desk':
@@ -492,12 +520,14 @@ def contained(env, lay, spec, bodies):
     return True
 
 
-def fitted_layout(env, spec, points=None, bodies=None):
+def fitted_layout(env, spec, points=None, bodies=None, verify=True):
     """Układ z dopasowaniem; z bryłami źródłowymi - sprawdzone zawieranie (przy niedokładnej siatce zakrzywionych
     powierzchni wnętrze powiększa się o małe zapasy aż do zawierania; ręczne wymiary - tylko sprawdzenie)."""
-    auto = bool(params_of(spec).get('auto', True)) or spec.shape in ('rounded', 'chamfer', 'trapezoid')
+    if not verify:                                  # podgląd na żywo: bez sprawdzania Boolean (to robi dokładny wynik w tle)
+        return shape_layout(env, spec, points, 0.0, bodies=bodies)
+    auto = bool(params_of(spec).get('auto', True)) or spec.shape in ('rounded', 'chamfer', 'trapezoid', 'contour')
     for margin in ((0.0, .05, .15, .4, 1.0) if auto else (0.0,)):
-        lay = shape_layout(env, spec, points, margin)
+        lay = shape_layout(env, spec, points, margin, bodies=bodies)
         if bodies is None or contained(env, lay, spec, bodies):
             return lay
     raise kernel.CadError('Elementy nie mieszczą się we wnętrzu obudowy - zwiększ wymiary kształtu.')

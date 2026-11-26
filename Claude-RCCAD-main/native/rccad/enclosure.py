@@ -354,18 +354,84 @@ def outer_dimension_items(env, spec, prefix='enc', lay=None):
     return out
 
 
-def build_parts(env, spec, bodies, check_sources=True):
-    """Części obudowy: {'body'} albo (podział, etap 4) {'base', 'lid'}, z mocowaniami (etap 7) dołączonymi do części,
-    której ściankę trafiają. Zwraca (części cq, gwinty kosmetyczne na część, opis mocowań)."""
+def build_parts(env, spec, bodies, check_sources=True, report=None, extra=None):
+    """Części obudowy: {'body'} albo (podział, etap 4) {'base', 'lid'}, z systemami zamykania (etap 9) i mocowaniami
+    (etap 7). Technologia (etap 14): blacha, CNC i laser mają własne reguły geometrii (części zastępują ogólną bryłę),
+    druk 3D - ogólna bryła + analiza i podział na kawałki. Zwraca (części cq, gwinty kosmetyczne, opis mocowań);
+    `extra` dostaje stany blach i rozwinięcia / rozkroje, `report` - wyniki analizy technologii."""
+    from . import enclosure_tech as tech
+    kind = tech.tech_of(spec)
+    tp = tech.params(spec)
+    if kind == 'sheet':
+        parts, meta, flats, rep = tech.sheet_parts(env, spec, tp)
+        if report is not None:
+            report.extend(rep)
+        if extra is not None:
+            extra['sheet'] = meta
+            for name, (flat, lines, _pattern) in flats.items():
+                extra.setdefault('flats', {})[f'flat_{name}'] = flat
+                if lines is not None:
+                    extra.setdefault('lines', {})[f'bends_{name}'] = lines
+        return parts, {}, []
+    if kind == 'cnc':
+        parts = tech.cnc_parts(env, spec, tp)
+        if report is not None:
+            report.extend(tech.cnc_analysis(env, {k: v.wrapped for k, v in parts.items()}, tp))
+        return parts, {}, []
+    if kind == 'laser':
+        parts, flats = tech.laser_parts(env, spec, tp, spec.mounts or ())
+        if report is not None:
+            report.extend(tech.laser_analysis({k: v.wrapped for k, v in parts.items()}))
+        if extra is not None:
+            extra['flats'] = flats
+        return parts, {}, []
     if split_of(spec)['enabled']:
         split = split_enclosure(env, spec, bodies, check_sources=check_sources)
         parts = {'base': split['base'], 'lid': split['lid']}
+        if [s for s in (spec.closure or {}).get('systems', []) if s.get('enabled', True)]:      # etap 9: systemy zamykania
+            from . import enclosure_closure
+            lay = layout(env, spec, bodies=bodies)
+            plane = split_plane(env, spec, lay, bodies)
+            parts, rep = enclosure_closure.apply(env, spec, parts, bodies, lay, plane, check=check_sources)
+            if report is not None:
+                report.extend(rep)
     else:
         parts = {'body': box_enclosure(env, spec, bodies)}
+    threads, info = {}, []
     if spec.posts and spec.mounts:
         from . import enclosure_posts
-        return enclosure_posts.apply(env, spec, parts, bodies, check=check_sources)
-    return parts, {}, []
+        parts, threads, info = enclosure_posts.apply(env, spec, parts, bodies, check=check_sources)
+    if kind == 'print':
+        if report is not None:
+            report.extend(tech.print_analysis(env, {k: v.wrapped for k, v in parts.items()}, tp))
+        if tp.get('split'):
+            raw = {k: v.wrapped for k, v in parts.items()}
+            split_parts = tech.print_split(env, raw, tp)
+            if set(split_parts) != set(parts):
+                parts = split_parts
+                if report is not None:
+                    report.append(('warning', f'Części większe niż drukarka podzielono na {sum(1 for k in parts if not k.startswith("pin"))} kawałki '
+                                              f'z {sum(1 for k in parts if k.startswith("pin"))} kołkami ustalającymi.', None))
+    return parts, threads, info
+
+
+PART_TITLES = {'base': 'podstawa', 'lid': 'pokrywa', 'flat_base': 'rozwinięcie podstawy', 'flat_lid': 'rozwinięcie pokrywy',
+               'bends_base': 'linie gięcia podstawy', 'bends_lid': 'linie gięcia pokrywy'}
+
+
+def part_title(name):
+    if name in PART_TITLES:
+        return PART_TITLES[name]
+    if name.startswith('panel_') or name.startswith('flat_'):
+        from .enclosure_tech import PANEL_LABELS
+        key = name.split('_', 1)[1]
+        return ('płyta ' if name.startswith('panel_') else 'rozkrój - ') + PANEL_LABELS.get(key, key)
+    if name.startswith('pin'):
+        return f'kołek {name[3:]}'
+    if '_' in name:
+        a, b = name.rsplit('_', 1)
+        return f'{PART_TITLES.get(a, a)} {b}'
+    return name
 
 
 def run(bodies, recipe, check_sources=False):
@@ -378,26 +444,43 @@ def run(bodies, recipe, check_sources=False):
     spec.envelope = env
     ident = recipe['out']
     name = recipe.get('name') or 'Obudowa'
-    meta = dict(enclosure=spec.to_json())
+    from .enclosure_param import signature
+    try:
+        sig = signature(bodies, spec)                     # podpis elementów: wykrycie zmian i przeniesienie referencji (etap 13)
+    except Exception:
+        sig = None
+    meta = dict(enclosure=spec.to_json(), enclosure_sig=sig)
     old = next((b for b in bodies if b.id == ident), None)
-    if spec.version >= 2 and (split_of(spec)['enabled'] or spec.posts):
-        parts, threads, _info = build_parts(env, spec, bodies, check_sources)
-        if 'body' in parts:                       # bez podziału, z mocowaniami (etap 7)
+    from . import enclosure_tech as tech
+    if spec.version >= 2 and (split_of(spec)['enabled'] or spec.posts or tech.tech_of(spec) != 'none'):
+        extra = {}
+        parts, threads, _info = build_parts(env, spec, bodies, check_sources, extra=extra)
+        if set(parts) == {'body'} and not extra:              # bez podziału, z mocowaniami (etap 7)
             body = (replace(old, shape=parts['body'], meta=meta, mesh=None, threads=tuple(threads.get('body', ())))
                     if old is not None else Body(name, parts['body'], 'solid', 'XY', id=ident, meta=meta,
                                                  threads=tuple(threads.get('body', ())))).prepared()
-            return [body if b.id == ident else b for b in bodies] if old is not None else [*bodies, body]
+            return _finish([body if b.id == ident else b for b in bodies] if old is not None else [*bodies, body], recipe)
         lid_id = recipe.get('out_lid') or ident + '-lid'
         folder = recipe.get('folder') or name
+        ids = lambda n: ident if n in ('base', 'body') else (lid_id if n == 'lid' else f'{ident}-{n}')
+        made_ids = set()
         out = list(bodies)
-        for pid, part, title in ((ident, 'base', 'podstawa'), (lid_id, 'lid', 'pokrywa')):
+        items = [(n, s_, 'solid') for n, s_ in parts.items()] + [(n, s_, 'solid') for n, s_ in (extra.get('flats') or {}).items()] \
+            + [(n, s_, 'sketch') for n, s_ in (extra.get('lines') or {}).items()]
+        for part, shape, kind in items:
+            pid = ids(part)
+            made_ids.add(pid)
             prev = next((b for b in out if b.id == pid), None)
-            pmeta = dict(enclosure=spec.to_json(), enclosure_part=part)
+            pmeta = dict(enclosure=spec.to_json(), enclosure_part=part, enclosure_sig=sig)
+            if part in (extra.get('sheet') or {}):
+                pmeta['sheet'] = extra['sheet'][part]
             th = tuple(threads.get(part, ()))
-            made = (replace(prev, shape=parts[part], meta=pmeta, mesh=None, threads=th) if prev is not None
-                    else Body(f'{name} - {title}', parts[part], 'solid', 'XY', id=pid, meta=pmeta, folder=folder, threads=th)).prepared()
+            made = (replace(prev, shape=shape, meta=pmeta, mesh=None, threads=th, kind=kind) if prev is not None
+                    else Body(f'{name} - {part_title(part)}', shape, kind, 'XY', id=pid, meta=pmeta, folder=folder, threads=th)).prepared()
             out = [made if b.id == pid else b for b in out] if prev is not None else [*out, made]
-        return out
+        stale_ids = {b.id for b in out if b.id.startswith(ident + '-') and b.id not in made_ids and b.id != lid_id}
+        out = [b for b in out if b.id not in stale_ids]          # kawałki / płyty z poprzedniej wersji, których już nie ma
+        return _finish(out, recipe)
     if spec.version >= 2:              # etap 2: prostokątna obudowa jako bryła (nowy element dokumentu)
         shape = box_enclosure(env, spec, bodies)
         body = (replace(old, shape=shape, meta=meta, mesh=None) if old is not None
@@ -406,7 +489,17 @@ def run(bodies, recipe, check_sources=False):
         shape = envelope_shape(env, solid=False)
         body = (replace(old, shape=shape, meta=meta, mesh=None) if old is not None
                 else Body(name, shape, 'encl', 'XY', id=ident, meta=meta)).prepared()
-    return [body if b.id == ident else b for b in bodies] if old is not None else [*bodies, body]
+    out = [body if b.id == ident else b for b in bodies] if old is not None else [*bodies, body]
+    return _finish(out, recipe)
+
+
+def _finish(out, recipe):
+    """Edycja obudowy: usunięcie zbędnej pokrywy (podział wyłączony) i zachowanie trybu obudowy."""
+    from dataclasses import replace
+    drop = set(recipe.get('drop') or ())
+    keep = recipe.get('keep') or {}
+    ids = {recipe.get('out'), recipe.get('out_lid')}
+    return [replace(b, meta=dict(b.meta or {}, **keep)) if (keep and b.id in ids) else b for b in out if b.id not in drop]
 
 
 # ---------------------------------------------------------------------------------------------- etap 3: manipulatory i podgląd
@@ -712,7 +805,7 @@ def _unified(shape):
         return shape
 
 
-def layout(env, spec, points=None, bodies=None):
+def layout(env, spec, points=None, bodies=None, verify=True):
     """Układ obudowy: prostopadłościan (box_layout) albo inny kształt (etap 5) - dopasowany do elementów; z bryłami
     źródłowymi sprawdzane jest rzeczywiste zawieranie (Boolean)."""
     if (spec.shape or 'box') == 'box':
@@ -720,7 +813,7 @@ def layout(env, spec, points=None, bodies=None):
     from . import enclosure_shapes as shapes
     if points is None and bodies is not None:
         points = shapes.source_points(env, spec, bodies)
-    return shapes.fitted_layout(env, spec, points, bodies)
+    return shapes.fitted_layout(env, spec, points, bodies, verify)
 
 
 def local_enclosure(env, spec, bodies=None, points=None):

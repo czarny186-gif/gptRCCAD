@@ -942,6 +942,23 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setPen(pen(ORANGE, 3.2))
         for x, y, dx, dy in ((5, 11, 1, 1), (43, 11, -1, 1), (5, 42, 1, -1), (43, 42, -1, -1)):
             p.drawLine(QPointF(x, y), QPointF(x + 7 * dx, y)); p.drawLine(QPointF(x, y), QPointF(x, y + 7 * dy))
+    elif kind == 'x_enchole':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(6, 8, 30, 34))
+        p.setBrush(QColor(255, 255, 255)); p.setPen(pen(INK, 2.2)); p.drawRoundedRect(QRectF(12, 19, 18, 9), 4, 4)
+        p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(44, 23.5), QPointF(33, 23.5))
+        p.drawPolyline(QPolygonF([QPointF(37, 19.5), QPointF(32.5, 23.5), QPointF(37, 27.5)]))
+    elif kind == 'x_encvent':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 7, 38, 34))
+        p.setBrush(QColor(255, 255, 255)); p.setPen(pen(INK, 1.8))
+        for y in (14, 22, 30):
+            for x in (12, 20, 28, 36):
+                p.drawEllipse(QPointF(x, y + (4 if x in (20, 36) else 0) - 2), 2.6, 2.6)
+        p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(10, 44), QPointF(38, 44))
+    elif kind == 'x_enccheck':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
+        p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(39, 37), 7, 7)
+        p.setPen(pen(QColor(255, 255, 255), 2.2)); p.drawLine(QPointF(39, 33), QPointF(39, 38)); p.drawPoint(QPointF(39, 41))
     elif kind == 'x_axes':
         p.setPen(pen(INK, 2.6)); p.drawLine(QPointF(14, 36), QPointF(40, 36)); p.drawLine(QPointF(14, 36), QPointF(14, 8))
         p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(14, 36), QPointF(4, 44))
@@ -1179,6 +1196,28 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setPen(pen(acc, 3.0))
             for x, y, dx, dy in ((7, 13, 1, 1), (41, 13, -1, 1), (7, 41, 1, -1), (41, 41, -1, -1)):
                 p.drawLine(QPointF(x, y), QPointF(x + 6 * dx, y)); p.drawLine(QPointF(x, y), QPointF(x, y + 6 * dy))
+        elif name == 'enccheck':
+            # kontrola obudowy: obudowa z zielonym znacznikiem poprawności i pomarańczowym wykrzyknikiem
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(6, 11, 28, 26))
+            p.setPen(pen(ink, 3.0)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(29, 17)]))
+            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(38, 36), 7, 7)
+            p.setPen(pen(QColor(255, 255, 255), 2.2)); p.drawLine(QPointF(38, 32), QPointF(38, 37)); p.drawPoint(QPointF(38, 40))
+        elif name == 'encvent':
+            # wentylacja: ścianka z rzędami otworów i pomarańczowe strzałki przepływu powietrza
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(7, 8, 26, 32))
+            p.setBrush(QColor(255, 255, 255)); p.setPen(pen(ink, 1.6))
+            for y in (15, 24, 33):
+                for x in (14, 26):
+                    p.drawEllipse(QPointF(x, y), 2.8, 2.8)
+            p.setPen(pen(acc, 2.6))
+            for y in (17, 31):
+                p.drawLine(QPointF(36, y), QPointF(44, y)); p.drawPolyline(QPolygonF([QPointF(41, y - 3), QPointF(44, y), QPointF(41, y + 3)]))
+        elif name == 'enchole':
+            # otwór na element: ścianka z wycięciem złącza i pomarańczowa strzałka kierunku wycięcia
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(8, 9, 26, 32))
+            p.setBrush(QColor(255, 255, 255)); p.drawRoundedRect(QRectF(13, 20, 16, 9), 4, 4)
+            p.setPen(pen(acc, 3.0)); p.drawLine(QPointF(43, 24.5), QPointF(32, 24.5))
+            p.drawPolyline(QPolygonF([QPointF(36, 20.5), QPointF(31.5, 24.5), QPointF(36, 28.5)]))
         elif name == 'gear':
             _draw_gear(p, 'tool', ink, acc, soft, pen)
         elif name == 'gearpair':

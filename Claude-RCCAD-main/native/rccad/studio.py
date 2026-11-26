@@ -42,6 +42,9 @@ from .twist_ui import TwistTools
 from .sketchtools_ui import SketchTools, SKETCH_TOOLS
 from .sketchplace_ui import SketchPlace
 from .enclosure_ui import EnclosureTools
+from .enclosure_hole_ui import EnclosureHoleTools
+from .enclosure_vent_ui import EnclosureVentTools
+from .enclosure_check_ui import EnclosureCheckTools
 from . import dims
 from .gear_ui import GearTools
 from .gearpair_ui import GearPairTools
@@ -215,7 +218,7 @@ def _label(text, name='label'):
 
 # zakładki paska narzędzi: nazwa -> narzędzia w kolejności (nowe funkcje dopisujemy do pasującej zakładki)
 TABS = {'Ulubione': ['toolbox'], 'Szkic': ['sketch', 'wrapsketch', 'wrapcorner', 'matchsize', 'sfillet', 'smirror', 'sjoin', 'sdim', 'sfit', 'salign', 'surface'], 'Bryła': ['extrude', 'revolve', 'sweep', 'loft'], 'Edycja': ['mod', 'shell', 'tilt', 'twist', 'thread', 'bool', 'link', 'split', 'mate', 'align', 'color'], 'Blacha': ['sheet', 'flange', 'hem', 'tabwall', 'rules', 'unfold_sheet', 'fold_sheet', 'flat'],
-        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear', 'gearpair', 'gearsim'], 'Obudowy': ['enclosure'],
+        'Sklejka': ['ply', 'ply_wall', 'ply_between', 'ply_joints', 'ply_cut', 'ply_unfold', 'ply_fold'], 'Przekładnie': ['gear', 'gearpair', 'gearsim'], 'Obudowy': ['enclosure', 'enchole', 'encvent', 'enccheck'],
         'Wzory': ['mirror', 'pattern'], 'Pomiary': ['mdist', 'mangle', 'mrad', 'mprops'], 'Rysunek': ['drawing', 'autodrawing', 'sheetdrawing', 'plydrawing', 'importdrawing'],
         'Biblioteka': ['libimport', 'libobj', 'libsketch']}
 TAB_OF = {tool: tab for tab, tools in TABS.items() for tool in tools}
@@ -229,7 +232,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlace, EnclosureTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlace, EnclosureTools, EnclosureHoleTools, EnclosureVentTools, EnclosureCheckTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()
@@ -493,6 +496,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                  ('tilt', ui.style_icon('tilt', 38), 'Pochylenie ścianki — pochyl płaską ścianę strzałkami, bryła się dopasuje'),
                  ('twist', ui.style_icon('twist', 38), 'TWIST – Skręcanie brył — skręć bryłę wokół osi X, Y albo Z o zadany kąt'),
                  ('enclosure', ui.style_icon('enclosure', 38), 'Utwórz obudowę — wybierz bryły (także z importu STEP), układ współrzędnych i zobacz zajmowaną przestrzeń'),
+                 ('enccheck', ui.style_icon('enccheck', 38), 'Kontrola obudowy — kolizje, odstępy, grubości, poprawność brył, montaż i otwieranie gotowej obudowy'),
+                 ('encvent', ui.style_icon('encvent', 38), 'Wentylacja — otwory wentylacyjne we wskazanej ściance obudowy (wzory, kratki pod wentylatory, powierzchnia otwarta)'),
+                 ('enchole', ui.style_icon('enchole', 38), 'Otwór na element — otwór w ściance obudowy dla złącza, przycisku albo wyświetlacza (rzut konturu, obrys albo profil z biblioteki)'),
                  ('surface', ui.style_icon('surface', 38), 'Inna powierzchnia — wskaż inną ścianę bryły albo płaszczyznę do rysowania'),
                  ('wrapsketch', ui.style_icon('wrapsketch', 38), 'Szkic na powierzchni — walec i zaokrąglona ściana'),
                  ('wrapcorner', ui.style_icon('wrapcorner', 38), 'Szkic na narożniku — ostry albo wypukły lub wklęsły zaokrąglony'),
@@ -1804,6 +1810,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self._build_sketch_tool_panels()
         self._build_sketch_place_panels()
         self._build_enclosure_panel()
+        self._build_enchole_panel()
+        self._build_encvent_panel()
+        self._build_enccheck_panel()
         self._build_ply_panels()
         self._build_scale_panel()
         self._build_color_panel()
@@ -1815,7 +1824,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self._build_gearsim_panel()
         self._build_link_panel()
         self._build_section()
-        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.sketch_tool_panels(), *self.sketch_place_panels(), self.enc_panel, *self.mt_panels.values())
+        self.panels = (*self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel, *self.ms_panels.values(), *self.dr_panels.values(), self.ex_panel, self.ex_bar, self.rev_panel, self.sweep_panel, self.loft_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.text_panel, self.off_panel, self.sf_panel, *self.sketch_tool_panels(), *self.sketch_place_panels(), self.enc_panel, self.eh_panel, self.ev_panel, self.chk_panel, *self.mt_panels.values())
         for p in self.panels:
             p.adjustSize()
 
@@ -1865,7 +1874,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.sketch_place_panels(), self.enc_panel, *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel):
+        for p in (self.bool_panel, self.mod_panel, self.sp_panel, self.mir_panel, self.pat_panel, self.rev_panel, self.shell_panel, self.thread_panel, self.sheet_panel, self.flange_panel, self.hem_panel, self.rules_panel, self.sweep_panel, self.loft_panel, *self.ms_panels.values(), *self.mt_panels.values(), *self.sketch_place_panels(), self.enc_panel, self.eh_panel, self.ev_panel, self.chk_panel, *self.ply_panels(), self.scale_panel, self.color_panel, self.matchsize_panel, self.tilt_panel, self.twist_panel, self.gear_panel, self.gearpair_panel, self.gearsim_panel, self.link_panel):
             self._fit_panel(p, 88 + TOOLS_TOP - 18)
             p.move(18, 88 + TOOLS_TOP - 18)
         self._fit_panel(self.text_panel, 88 + TOOLS_TOP - 18)
@@ -1930,7 +1939,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'revolve': self.apply_revolve, 'shell': self.apply_shell, 'sweep': self.apply_sweep, 'loft': self.apply_loft, 'bool': self.apply_bool, 'mod': self.apply_mod, 'split': self.apply_split, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
-                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'sfit': self.apply_sfit, 'salign': self.apply_salign, 'enclosure': self.apply_enclosure, 'tilt': self.apply_tilt, 'twist': self.apply_twist, 'gear': self.apply_gear, 'gearpair': self.apply_gearpair, 'gearsim': self.toggle_gearsim, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
+                      'move': self.apply_transform, 'rotate': self.apply_transform, 'mate': self.apply_mate, 'align': self.apply_mate, 'scale': self.apply_scale, 'color': self.apply_color, 'matchsize': self.apply_matchsize, 'sfit': self.apply_sfit, 'salign': self.apply_salign, 'enclosure': self.apply_enclosure, 'enchole': self.apply_enchole, 'encvent': self.apply_encvent, 'enccheck': self.enccheck_run, 'tilt': self.apply_tilt, 'twist': self.apply_twist, 'gear': self.apply_gear, 'gearpair': self.apply_gearpair, 'gearsim': self.toggle_gearsim, 'link': self.apply_link, 'drawing': self.apply_drawing, 'autodrawing': self.apply_drawing,
                       'ply': self.apply_ply_panel, 'ply_wall': self.apply_ply_wall, 'ply_between': self.apply_ply_between, 'ply_joints': self.apply_ply_joints}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -2269,6 +2278,12 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self._matchsize_enter()
         elif mode == 'enclosure':
             self._enclosure_begin(list(self.selected))        # Generator obudów: zaznaczone bryły od razu na liście
+        elif mode == 'enchole':
+            self._enchole_begin()                             # Generator obudów: otwór na element
+        elif mode == 'encvent':
+            self._encvent_begin()                             # Generator obudów: wentylacja
+        elif mode == 'enccheck':
+            self._enccheck_begin()                            # Generator obudów: kontrola obudowy
         elif mode in ('sfit', 'salign'):
             self._splace_begin(mode)          # Dopasowanie / Wyrównanie szkicu
         elif mode == 'tilt':
@@ -3934,6 +3949,12 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 self.splace_hover(x, y)
             elif self.mode == 'enclosure':
                 self.enclosure_hover(x, y)
+            elif self.mode == 'enchole':
+                self.enchole_hover(x, y)
+            elif self.mode == 'encvent':
+                self.encvent_hover(x, y)
+            elif self.mode == 'enccheck':
+                self.enccheck_hover(x, y)
             elif self.mode == 'link':
                 self.link_hover(x, y)
             elif self.mode == 'tilt' and self.tl_face is None:
@@ -4129,6 +4150,12 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.splace_click(x, y, shift)
         elif self.mode == 'enclosure':
             self.enclosure_click(x, y, shift)
+        elif self.mode == 'enchole':
+            self.enchole_click(x, y, shift)
+        elif self.mode == 'encvent':
+            self.encvent_click(x, y, shift)
+        elif self.mode == 'enccheck':
+            self.enccheck_click(x, y, shift)
         elif self.mode == 'tilt':
             self.pick_tilt(x, y)
         elif self.mode == 'twist':
@@ -7532,6 +7559,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 self.edit_gear(body.id)
             elif body is not None and body.kind == 'solid' and (body.meta or {}).get('twist'):
                 self.edit_twist(body.id)            # skręcona bryła: okno TWIST z parametrami (krok historii albo przebudowa)
+            elif body is not None and body.kind == 'solid' and (body.meta or {}).get('enclosure'):
+                self.edit_enclosure(body.id)        # obudowa z Generatora: okno z zachowanymi parametrami
             return
         if self.busy or self.mode != 'mod':
             return
@@ -9850,6 +9879,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                     self.view.set_thread_preview(None)
         if fit:
             self.view.fit_all()
+        if not self.busy and self.mode is None and any((b.meta or {}).get('enclosure_sig') for b in self.document.bodies):
+            QTimer.singleShot(300, self.enc_watch)             # Generator obudów: zmienione elementy - aktualizacja obudowy
         if hasattr(self, '_history_timer') and not self.busy:
             self._history_timer.start()
         if hasattr(self, '_refine_timer') and any(b.mesh is not None and not b.mesh.fine for b in self.document.bodies):

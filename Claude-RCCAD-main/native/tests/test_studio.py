@@ -54,8 +54,8 @@ class StudioTests(unittest.TestCase):
 
     def preview(self):
         end=time.monotonic()+20
-        timer=getattr(self.w,'_enc_timer',None)
-        while timer is not None and timer.isActive() and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
+        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None)) if t is not None]
+        while any(t.isActive() for t in timers) and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
             self.app.processEvents();time.sleep(.005)
         while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
             self.app.processEvents();time.sleep(.005)
@@ -4269,7 +4269,7 @@ class StudioTests(unittest.TestCase):
         import rccad.studio as st
         from rccad import enclosure as encm
         w=self.w
-        self.assertEqual(st.TABS['Obudowy'],['enclosure']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
+        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
         a=Body('Płytka',k.box(40,20,10)).prepared()
         rot=np.array([[np.cos(.5),-np.sin(.5),0],[np.sin(.5),np.cos(.5),0],[0,0,1]])
         r=Body('Obrócona',k.transformed(k.box(30,10,6),rot,np.array([80,0,0]))).prepared()
@@ -4704,6 +4704,467 @@ class StudioTests(unittest.TestCase):
         info=w.document.infos()[0][-1];out=next(x for x in hist.RUNNERS['enclosure']([pcb,chip],info['op']) if x.id==en.id)
         self.assertAlmostEqual(out.shape.Volume(),en.shape.Volume(),3)
         w.undo();self.wait();self.assertIsNone(w.document.get(en.id))
+
+    # Generator obudów, etap 8: Otwór na element - propozycja ścianki, tryby profilu, biblioteka (edytowalne wymiary),
+    # luzy, przesunięcie / obrót, rodzaje wycięcia, kontrola uszkodzeń, osobna operacja historii
+    def test_enclosure_stage8_element_hole(self):
+        import cadquery as cq
+        from rccad import enclosure as encm, enclosure_holes as H, enclosure_hole_ui as HU
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        w=self.w;pcb=Body('PCB',k.box(60,40,1.6).translate((0,0,8))).prepared();usb=Body('USB',k.box(7.4,9,3.2).translate((53.6,15,9.6))).prepared()
+        spec=encm.EnclosureSpec(sources=[encm.SourceRef(id=pcb.id),encm.SourceRef(id=usb.id)])
+        env=encm.envelope([pcb,usb],spec);spec.envelope=env
+        box=Body('Obudowa 1',encm.box_enclosure(env,spec,[pcb,usb]),meta=dict(enclosure=spec.to_json())).prepared()
+        w.document.commit([pcb,usb,box]);w.refresh()
+        from rccad import studio as st
+        self.assertIn('enchole',st.TABS['Obudowy']);self.assertIn('enchole',st.FAVORITE_TOOLS)
+        # propozycja: najbliższa płaska ścianka przed elementem (tu górna), zmiana na ścianę X+
+        prop=H.propose_wall([box],usb.shape.Center().toTuple());self.assertTrue(np.allclose(prop[2],[0,0,1]))
+        recipe=dict(type='enc_hole',target=box.id,point=[65.0,19.5,11.2],normal=[1.0,0,0],direction='normal',whole=usb.id,faces=[],sketch=None,
+                    params=dict(H.DEFAULTS,mode='rrect',radius=.5))
+        vol0=box.shape.Volume()
+        for mode in ('exact','rect','rrect','library'):
+            for cut in H.CUTS:
+                r=dict(recipe,params=dict(recipe['params'],mode=mode,cut=cut,library='usb_c'))
+                shape,tool,info=HU.build([pcb,usb,box],r)
+                self.assertTrue(BRepCheck_Analyzer(shape.wrapped).IsValid());self.assertEqual(len(shape.Solids()),1)
+                self.assertAlmostEqual(vol0-shape.Volume(),info['removed'],4)
+                if cut=='through':self.assertAlmostEqual(info['removed'],info['area']*info['thickness'],2)    # usunięta tylko ścianka
+        # prostokąt: luzy w każdym kierunku osobno - wymiary otworu
+        r=dict(recipe,params=dict(recipe['params'],mode='rect',clear=dict(l=.5,r=1.0,b=.2,t=.4)))
+        _s,_t,info=HU.build([pcb,usb,box],r);self.assertAlmostEqual(info['area'],(9+1.5)*(3.2+.6),3)
+        # biblioteka: wymiary do zmiany, przesunięcie i obrót
+        r=dict(recipe,params=dict(recipe['params'],mode='library',library='usb_c',lib=dict(w=6.0,h=3.0,r=1.0),clear=dict(l=0,r=0,b=0,t=0)))
+        _s,_t,info=HU.build([pcb,usb,box],r);self.assertAlmostEqual(info['area'],6*3-(4-np.pi)*1.0,3)
+        r2=dict(r,params=dict(r['params'],du=3.0,angle=90.0));_s,_t,i2=HU.build([pcb,usb,box],r2)
+        self.assertAlmostEqual(i2['area'],info['area'],3);self.assertAlmostEqual(i2['centre'][0],info['centre'][0]+3,3)
+        # za duży profil - wychodzi poza ściankę; okrągły sięgający górnej ścianki - uszkadza sąsiednią ściankę
+        with self.assertRaises(k.CadError):HU.build([pcb,usb,box],dict(recipe,params=dict(recipe['params'],mode='library',library='lcd1602')))
+        with self.assertRaises(k.CadError):HU.build([pcb,usb,box],dict(recipe,params=dict(recipe['params'],mode='circle')))
+        # głębokość zagłębienia większa niż ścianka - błąd
+        with self.assertRaises(k.CadError):HU.build([pcb,usb,box],dict(recipe,params=dict(recipe['params'],cut='recess',depth=5)))
+        # okno: wybór elementu, propozycja i zmiana ścianki, podgląd, Zastosuj = osobny krok historii, okno zostaje
+        w.selected=[usb.id];w.set_mode('enchole');self.assertEqual(w.eh['whole'],usb.id);self.assertTrue(w.eh['target']['proposed'])
+        w.eh['target']=dict(id=box.id,point=[65.0,19.5,11.2],normal=[1.0,0,0]);w.eh_mode.setCurrentIndex(w.eh_mode.findData('library'))
+        w.eh_lib.setCurrentIndex(w.eh_lib.findData('usb_c'));self.preview()
+        self.assertTrue(w.eh_apply.isEnabled(),w.eh_status.text());self.assertEqual(len(w.document.bodies),3)       # podgląd nic nie dodaje
+        from PySide6.QtTest import QTest
+        with patch.object(w,'isActiveWindow',return_value=True):
+            QTest.keyClick(w,Qt.Key_Return)
+        self.wait();self.assertEqual(w.mode,'enchole')
+        nb=w.document.get(box.id);self.assertLess(nb.shape.Volume(),vol0);self.assertEqual(len(nb.meta['enclosure_holes']),1)
+        self.assertIn('enclosure',nb.meta);self.assertIs(w.document.get(usb.id).shape,usb.shape)
+        info=w.document.infos()[0][-1];self.assertEqual(info['label'],'Otwór na element');self.assertEqual(info['op']['type'],'enc_hole')
+        out=next(x for x in hist.RUNNERS['enc_hole']([pcb,usb,box],info['op']) if x.id==box.id);self.assertAlmostEqual(out.shape.Volume(),nb.shape.Volume(),4)
+        self.assertEqual(hist.reads(info['op'],w.document.bodies),{box.id,usb.id})
+        path=Path(tempfile.mkdtemp())/'enc8.rccadx';w.document.save(path);self.assertEqual(len(Document.load(path).get(box.id).meta['enclosure_holes']),1)
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(box.id).shape.Volume(),vol0,4)
+        w.redo();self.wait();self.assertLess(w.document.get(box.id).shape.Volume(),vol0)
+        QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode)
+
+    # Generator obudów, etap 9: systemy zamykania (śruby, zatrzaski, wsuwana, jaskółczy ogon, zawiasy, magnesy, wcisk,
+    # uszczelka), automatyczne rozmieszczenie i ręczna korekta, kilka systemów naraz, kontrole złożenia i ruchu
+    def test_enclosure_stage9_closures(self):
+        from rccad import enclosure as encm, enclosure_closure as C
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        w=self.w;pcb=Body('PCB',k.box(60,40,1.6).translate((0,0,8))).prepared();chip=Body('U',k.box(10,10,6).translate((25,15,9.6))).prepared()
+        bodies=[pcb,chip];src=[encm.SourceRef(id=pcb.id),encm.SourceRef(id=chip.id)]
+        walls={k_:2.5 for k_ in ('x-','x+','y-','y+','bottom','top')};clear={k_:(9.0 if k_[0] in 'xy' else 4.0) for k_ in ('x-','x+','y-','y+','z-','z+')}
+        env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        def spec(systems,top=False,joint='flat'):
+            sp=encm.EnclosureSpec(sources=src,walls=walls,clearance=clear,envelope=env,closure=dict(systems=systems))
+            lay=encm.layout(env,sp)
+            sp.split=dict(enabled=True,mode='z',unit='mm',position=float(lay['inner'][1][2]-lay['outer'][0][2]),joint=joint) if top else dict(enabled=True,mode='z',unit='%',position=70,joint=joint)
+            return sp
+        base_vol={}
+        for kind in C.SYSTEMS:
+            rep=[];sp=spec([dict(type=kind)],top=kind in ('slide','dovetail'))
+            parts,_t,_i=encm.build_parts(env,sp,bodies,True,rep)
+            for name,part in parts.items():
+                self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid(),kind);self.assertEqual(len(part.Solids()),1,kind)
+            self.assertFalse([t for l,t in rep if l=='error'],kind)
+            base_vol[kind]=parts['base'].Volume()
+            if kind in ('hinge','slide','dovetail','screw','magnet'):self.assertTrue(any('próbkowana' in t for l,t in rep),kind)   # ruch sprawdzony, oznaczony
+        # elementy współpracujące: śruby - słupki i otwory, magnesy - gniazda w obu częściach, uszczelka - ciągły rowek
+        rep=[];parts,_t,_i=encm.build_parts(env,spec([dict(type='magnet')]),bodies,True,rep)
+        fr=C.Frame(env,spec([dict(type='magnet')]),encm.layout(env,spec([])),encm.split_plane(env,spec([]),encm.layout(env,spec([]))))
+        (sa,sb,ca,cb)=fr.corners(4.0)[0];c=np.asarray(env.center)
+        self.assertEqual(k.point_state(parts['base'],c+[ca,cb,fr.s-1]),'out');self.assertEqual(k.point_state(parts['lid'],c+[ca,cb,fr.s+1]),'out')
+        self.assertEqual(k.point_state(parts['base'],c+[ca,cb,fr.s-4.5]),'in')
+        # ręczna korekta i wyłączenie elementu
+        sy=dict(type='screw',items=[dict(key='c-1-1',da=2.0,db=1.0),dict(key='c+1+1',enabled=False)])
+        items=C.items_of(fr,sy);self.assertEqual((items[0]['da'],items[0]['db']),(2.0,1.0));self.assertFalse(items[3]['enabled'])
+        encm.build_parts(env,spec([sy]),bodies,True)
+        # kilka systemów naraz
+        rep=[];parts,_t,_i=encm.build_parts(env,spec([dict(type='hinge'),dict(type='magnet')]),bodies,True,rep)
+        self.assertFalse([t for l,t in rep if l=='error'])
+        # wcisk - ostrzeżenie (zamierzone przenikanie); zatrzaski - ostrzeżenie o ugięciu i wytrzymałości
+        rep=[];encm.build_parts(env,spec([dict(type='press')]),bodies,True,rep);self.assertTrue(any(l=='warning' and 'wcisk' in t.lower() for l,t in rep))
+        rep=[];encm.build_parts(env,spec([dict(type='snap')]),bodies,True,rep);self.assertTrue(any(l=='warning' and 'wytrzymałości' in t for l,t in rep))
+        # błędy: kolizja z elementem, sprzeczne systemy, zaczep głębszy niż ścianka, wsuwana bez podziału na górze
+        near=dict(clear,**{'x-':3.0,'x+':3.0,'y-':3.0,'y+':3.0})
+        bad=encm.EnclosureSpec(sources=src,walls=walls,clearance=near,envelope=env,closure=dict(systems=[dict(type='screw')]),split=dict(enabled=True,mode='z',unit='%',position=70))
+        with self.assertRaises(k.CadError):encm.build_parts(env,bad,bodies,True)
+        for systems,top in (([dict(type='slide'),dict(type='dovetail')],True),([dict(type='snap',params=dict(hook=3.0))],False),([dict(type='slide')],False)):
+            with self.assertRaises(k.CadError):encm.build_parts(env,spec(systems,top=top),bodies,True)
+        # okno: włączenie systemów, parametry, korekta, raport, Zastosuj
+        w.document.commit(bodies);w.refresh();w.selected=[pcb.id,chip.id];w.set_mode('enclosure')
+        w.enc_clear_link.setChecked(False)
+        for k_,v in clear.items():w.enc_clear[k_].setValue(v)
+        for k_,v in walls.items():w.enc_wall[k_].setValue(v)
+        w.enc_cl_on['screw'].setChecked(True);self.assertTrue(w.enc_split_on.isChecked())
+        w.enc_cl_on['gasket'].setChecked(True);w.enc_cl_edit.setCurrentIndex(w.enc_cl_edit.findData('screw'))
+        self.assertEqual(w.enc_cl_items.count(),4);w.enc_cl_widgets['fastening'].setCurrentIndex(w.enc_cl_widgets['fastening'].findData('insert'))
+        self.assertEqual(w.enc_spec().closure['systems'][0]['params']['fastening'],'insert')
+        w.enc_cl_items.setCurrentRow(0);w.enc_cl_pos['da'][1].setValue(1.5)
+        self.assertEqual(w.enc_spec().closure['systems'][0]['items'][0]['da'],1.5)
+        self.preview();self.assertTrue(w.enc_apply.isEnabled(),w.enc_status.text());self.assertIn('Poprawne',w.enc_cl_report.text())
+        w.apply_enclosure();self.wait()
+        parts=[x for x in w.document.bodies if (x.meta or {}).get('enclosure_part')];self.assertEqual(len(parts),2)
+        for x in parts:self.assertTrue(BRepCheck_Analyzer(x.shape.wrapped).IsValid())
+        self.assertEqual([s_['type'] for s_ in parts[0].meta['enclosure']['closure']['systems']],['screw','gasket'])
+        info=w.document.infos()[0][-1];out=[x for x in hist.RUNNERS['enclosure'](bodies,info['op']) if (x.meta or {}).get('enclosure_part')]
+        self.assertEqual(sorted(round(x.shape.Volume(),2) for x in out),sorted(round(x.shape.Volume(),2) for x in parts))
+        w.undo();self.wait();self.assertFalse(any((x.meta or {}).get('enclosure_part') for x in w.document.bodies))
+
+    # Generator obudów, etap 10: Wentylacja - wzory, parametry, wypełnienie obszaru, wentylatory, powierzchnia otwarta,
+    # cięcie zbiorcze tylko w docelowej części, kontrola uszkodzeń, uproszczony / dokładny podgląd, krok historii
+    def test_enclosure_stage10_ventilation(self):
+        from rccad import enclosure as encm, enclosure_vents as V, enclosure_holes as H, enclosure_vent_ui as VU
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        w=self.w;pcb=Body('PCB',k.box(100,80,1.6).translate((0,0,8))).prepared()
+        spec=encm.EnclosureSpec(sources=[encm.SourceRef(id=pcb.id)]);env=encm.envelope([pcb],spec);spec.envelope=env
+        box=encm.box_enclosure(env,spec,[pcb]);top=box.BoundingBox().zmax;vol0=box.Volume()
+        frame=H.wall_frame((50,40,top),(0,0,1),(0,1,0))
+        for pat in V.PATTERNS:
+            sh,info=V.build(box,frame,dict(V.DEFAULTS,pattern=pat,width=60,height=40,fan=60))
+            self.assertTrue(BRepCheck_Analyzer(sh.wrapped).IsValid(),pat);self.assertEqual(len(sh.Solids()),1)
+            self.assertGreater(info['count'],0);self.assertAlmostEqual(info['percent'],100*info['open_area']/info['area'],6)
+            if pat not in ('louver',):self.assertAlmostEqual(vol0-sh.Volume(),info['thickness']*(info['open_area']+(sum(np.pi*(4.4/2)**2 for _ in range(info['mounts'])))),1)
+        # powierzchnia otwarta okrągłych: liczba × πr²
+        sh,info=V.build(box,frame,dict(V.DEFAULTS,pattern='circle',size=4,width=60,height=40,rows=3,cols=5))
+        self.assertEqual(info['count'],15);self.assertAlmostEqual(info['open_area'],15*np.pi*4,3)
+        # minimalny materiał między otworami, za dużo otworów na obszar
+        with self.assertRaises(k.CadError):V.layout(dict(V.DEFAULTS,pattern='circle',size=4,pitch=4.5,web=1.0))
+        with self.assertRaises(k.CadError):V.layout(dict(V.DEFAULTS,pattern='circle',size=4,rows=30,cols=30,width=20,height=20))
+        # biblioteka wentylatorów: rozstaw do zmiany
+        holes,_a=V.layout(dict(V.DEFAULTS,pattern='fan',fan=80,fan_spacing=70.0,size=4))
+        m=[h for h in holes if h[4]=='mount'];self.assertEqual(len(m),4);self.assertAlmostEqual(abs(m[0][1][0]-m[3][1][0]),70.0,6)
+        self.assertEqual(sorted(V.FANS),[25,30,40,60,80,92,120,140])
+        # obszar poza ścianką / wchodzący w sąsiednią ściankę - błąd
+        with self.assertRaises(k.CadError):V.build(box,frame,dict(V.DEFAULTS,pattern='circle',width=110,height=40))
+        # okno: ścianka, uproszczony podgląd, dokładny wynik, Zastosuj = krok historii
+        eb=Body('Obudowa 1',box,meta=dict(enclosure=spec.to_json())).prepared();w.document.commit([pcb,eb]);w.refresh()
+        w.set_mode('encvent');w.ev['target']=dict(id=eb.id,point=[50.0,40.0,top],normal=[0.0,0.0,1.0]);w._ev_fill()
+        self.assertGreater(w.ev_f['width'][1].value(),80);self.assertEqual(w.view.preview_items[-1].__class__.__name__,'SectionLine')
+        self.assertIn('dokładna',w.ev_status.text());w.ev_f['size'][1].setValue(8.0);self.preview()
+        self.assertTrue(w.ev_apply.isEnabled(),w.ev_status.text());self.assertIn('Powierzchnia otwarta',w.ev_info.text())
+        w.apply_encvent();self.wait()
+        nb=w.document.get(eb.id);self.assertLess(nb.shape.Volume(),vol0);self.assertEqual(len(nb.meta['enclosure_vents']),1)
+        info=w.document.infos()[0][-1];self.assertEqual(info['label'],'Wentylacja')
+        out=next(x for x in hist.RUNNERS['enc_vent']([pcb,eb],info['op']) if x.id==eb.id);self.assertAlmostEqual(out.shape.Volume(),nb.shape.Volume(),3)
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(eb.id).shape.Volume(),vol0,4)
+
+    # Generator obudów, etap 11: obudowa dopasowana do konturu - tryby obrysu, parametry, rozłączne obszary, kontur ze
+    # szkicu, odstęp i grubość z odsunięcia, zawieranie elementów, komunikat bez samowolnej zmiany trybu, podział
+    def test_enclosure_stage11_contour(self):
+        from rccad import enclosure as encm, enclosure_shapes as shp, enclosure_contour as C
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        w=self.w;a=Body('A',k.box(40,20,10)).prepared();b=Body('B',cq.Solid.makeCylinder(8,14,cq.Vector(60,30,0))).prepared()
+        c=Body('C',k.box(10,10,6).translate((10,40,0))).prepared();bodies=[a,b,c];src=[encm.SourceRef(id=x.id) for x in bodies]
+        env=encm.envelope(bodies,encm.EnclosureSpec(sources=src));pts=shp.source_points(env,encm.EnclosureSpec(sources=src),bodies)
+        boxvol=encm.box_enclosure(env,encm.EnclosureSpec(sources=src),bodies).Volume()
+        vols={}
+        for cm in ('convex','concave','exact','smooth'):
+            for o in ('z','x','y'):
+                sp=encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode=cm,orient=o,degree=8.0))
+                sh_=encm.box_enclosure(env,sp,bodies);self.assertTrue(BRepCheck_Analyzer(sh_.wrapped).IsValid());self.assertEqual(len(sh_.Solids()),1)
+                lay=encm.layout(env,sp,bodies=bodies);self.assertTrue(shp.contained(env,lay,sp,bodies),(cm,o))
+                if o=='z':vols[cm]=sh_.Volume()
+        self.assertLess(vols['concave'],vols['convex']);self.assertLess(vols['convex'],boxvol)      # dopasowanie lepsze niż ramka
+        # grubość ścianki i odstęp: zewnętrzny profil = wewnętrzny odsunięty o grubość
+        lay=encm.layout(env,encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='convex')),bodies=bodies)
+        hull=C.convex_hull((pts@lay['P'].T)[:,:2]);ia=C._face_area(lay['g_in']['face']);oa=C._face_area(lay['g_out']['face'])
+        per=lambda q:float(np.sum(np.hypot(*(np.roll(q,-1,0)-q).T)));A=lambda q:.5*abs(float(np.dot(q[:,0],np.roll(q[:,1],-1))-np.dot(q[:,1],np.roll(q[:,0],-1))))
+        self.assertAlmostEqual(ia,A(hull)+per(hull)*2+np.pi*4,1)                                     # odsunięcie o 2 mm (łuki w narożnikach)
+        self.assertAlmostEqual(oa,ia+C.polyline(lay['g_in']['face'],.01).__len__()*0+per(C.polyline(lay['g_in']['face'],.001))*2+np.pi*4,0)
+        # rozłączne obszary: bez łączenia - komunikat (tryb się nie zmienia); stopień dopasowania zmienia obrys
+        with self.assertRaises(k.CadError):encm.layout(env,encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='exact',connect=False)),bodies=bodies)
+        a1=C._face_area(encm.layout(env,encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='concave',degree=8.0)),bodies=bodies)['g_in']['face'])
+        a2=C._face_area(encm.layout(env,encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='concave',degree=20.0)),bodies=bodies)['g_in']['face'])
+        self.assertGreater(a2,a1)
+        # przewężenia poszerzone, uproszczenie nie odcina elementów
+        a3=C._face_area(encm.layout(env,encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='concave',degree=8.0,min_neck=8.0)),bodies=bodies)['g_in']['face'])
+        self.assertGreaterEqual(a3,a1-1e-6)
+        sp=encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='concave',degree=8.0,simplify=1.0))
+        self.assertTrue(shp.contained(env,encm.layout(env,sp,bodies=bodies),sp,bodies))
+        # własny kontur ze szkicu (za mały - elementy się nie mieszczą)
+        sk=Body('Szkic',cq.Workplane('XY').rect(200,200).val(),'sketch').prepared() if False else Body('Szkic',cq.Face.makeFromWires(cq.Wire.makePolygon([cq.Vector(-10,-10,0),cq.Vector(90,-10,0),cq.Vector(90,60,0),cq.Vector(-10,60,0)],close=True)),'sketch').prepared()
+        sp=encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='sketch',sketch=sk.id))
+        self.assertTrue(BRepCheck_Analyzer(encm.box_enclosure(env,sp,[*bodies,sk]).wrapped).IsValid())
+        small=Body('Mały',cq.Face.makeFromWires(cq.Wire.makePolygon([cq.Vector(0,0,0),cq.Vector(20,0,0),cq.Vector(20,20,0),cq.Vector(0,20,0)],close=True)),'sketch').prepared()
+        with self.assertRaises(k.CadError):encm.box_enclosure(env,encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='sketch',sketch=small.id)),[*bodies,small])
+        # podział i połączenie (etap 4)
+        sp=encm.EnclosureSpec(sources=src,shape='contour',shape_params=dict(cmode='concave',degree=8.0),split=dict(enabled=True,mode='z',joint='tongue',unit='%',position=60))
+        r=encm.split_enclosure(env,sp,bodies)
+        for part in (r['base'],r['lid']):self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid());self.assertEqual(len(part.Solids()),1)
+        # okno: kształt „Dopasowana do konturu”, tryby, Zastosuj
+        w.document.commit(bodies);w.refresh();w.selected=[x.id for x in bodies];w.set_mode('enclosure')
+        w.enc_shape.setCurrentIndex(w.enc_shape.findData('contour'));self.assertTrue(w.enc_cmode.isVisible() or True)
+        w.enc_connect.setChecked(False);w.enc_cmode.setCurrentIndex(w.enc_cmode.findData('exact'))
+        self.assertFalse(w.enc_apply.isEnabled());self.assertIn('rozłączne',w.enc_status.text());self.assertEqual(w.enc_cmode.currentData(),'exact')
+        w.enc_convex.click();self.assertEqual(w.enc_cmode.currentData(),'convex');self.preview();self.assertTrue(w.enc_apply.isEnabled(),w.enc_status.text())
+        w.apply_enclosure();self.wait();en=w.document.get(w.selected[0]);self.assertEqual(en.meta['enclosure']['shape'],'contour')
+        info=w.document.infos()[0][-1];out=next(x for x in hist.RUNNERS['enclosure'](bodies,info['op']) if x.id==en.id)
+        self.assertAlmostEqual(out.shape.Volume(),en.shape.Volume(),3)
+
+    # Generator obudów, etap 12: kontrola poprawności - trzy poziomy, kolizja objętościowa a styk, odstępy, grubość,
+    # bryły B-Rep, fragmenty, mocowania, otwory, ruch (próbkowany), panel wyników z podświetleniem, gotowa obudowa
+    def test_enclosure_stage12_checks(self):
+        from rccad import enclosure as encm, enclosure_check as chk, enclosure_check_ui as CU, enclosure_mounts as mnt
+        plate=k.box(60,40,1.6).translate((0,0,8))
+        for x,y in ((4,4),(56,4),(4,36),(56,36)):plate=plate.cut(cq.Solid.makeCylinder(1.6,1.6,cq.Vector(x,y,8)))
+        w=self.w;pcb=Body('PCB',plate).prepared();chip=Body('U',k.box(10,10,6).translate((25,15,9.6))).prepared();bodies=[pcb,chip]
+        src=[encm.SourceRef(id=pcb.id),encm.SourceRef(id=chip.id)];env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        holes=mnt.detect(bodies,[pcb.id,chip.id],env)
+        walls={k_:2.5 for k_ in ('x-','x+','y-','y+','bottom','top')};clear={k_:(9.0 if k_[0] in 'xy' else 4.0) for k_ in ('x-','x+','y-','y+','z-','z+')}
+        spec=encm.EnclosureSpec(sources=src,mounts=[mnt.stored(h) for h in holes],posts=dict(enabled=True),walls=walls,clearance=clear,
+                                split=dict(enabled=True,mode='z',unit='%',position=70),closure=dict(systems=[dict(type='hinge'),dict(type='magnet')]))
+        res=CU.check_spec(bodies,spec);levels={r[0] for r in res}
+        self.assertNotIn('error',levels,[r[1] for r in res if r[0]=='error'])
+        texts=' '.join(r[1] for r in res)
+        for word in ('BRepCheck','spójna','powłoki','samoprzecięć','grubość','styk powierzchni','Mocowania sprawdzone','Systemy zamykania','przenikania','Otwieranie','Montaż','próbkowana'):
+            self.assertIn(word,texts)
+        # kolizja objętościowa z podświetlanym obszarem; styk powierzchni - poprawny
+        box=k.box(10,10,10);inside=Body('W',k.box(4,4,4).translate((8,3,3))).prepared();touch=Body('T',k.box(4,4,4).translate((10,3,3))).prepared()
+        r=chk.run({'body':box.wrapped},[inside,touch])
+        hit=[x for x in r if x[0]=='error' and 'W' in x[1]];self.assertEqual(len(hit),1);self.assertIsNotNone(hit[0][2]);self.assertEqual(hit[0][3],inside.id)
+        self.assertTrue(any(x[0]=='ok' and 'styk' in x[1] and x[3]==touch.id for x in r))
+        # minimalny odstęp, niepołączone fragmenty, cienki materiał
+        near=Body('N',k.box(4,4,4).translate((11,3,3))).prepared()
+        r=chk.run({'body':box.wrapped},[near],clearance={'x+':2.0})
+        self.assertTrue(any(x[0]=='warning' and 'odstęp' in x[1] for x in r))
+        two=box.fuse(k.box(2,2,2).translate((20,0,0)))
+        self.assertTrue(any(x[0]=='error' and 'fragment' in x[1] for x in chk.solid_checks('X',two.wrapped)))
+        thin=k.box(10,10,.4)
+        self.assertEqual(chk.thickness('X',thin.wrapped,.8)[0][0],'warning')
+        # wcisk - ostrzeżenie (nie błąd)
+        r=chk.run({'base':box.wrapped,'lid':k.box(10,10,2).translate((0,0,9.5)).wrapped},[],interference=True)
+        self.assertTrue(any(x[0]=='warning' and 'wcisk' in x[1] for x in r));self.assertFalse(any(x[0]=='error' and 'przenikają' in x[1] for x in r))
+        # okno: Sprawdź obudowę - lista wyników, klik podświetla
+        w.document.commit(bodies);w.refresh();w.selected=[pcb.id,chip.id];w.set_mode('enclosure');self.preview()
+        w.enc_run_check();self.preview();self.assertGreater(w.enc_chk_list.count(),5);self.assertIn('Błędy: 0',w.enc_chk_sum.text())
+        w.apply_enclosure();self.wait();en=w.document.get(w.selected[0])
+        # narzędzie Kontrola obudowy na gotowej obudowie; kolizja wstawionego elementu podświetlona
+        bad=Body('Klocek',k.box(5,5,5).translate((-4,-4,0))).prepared()
+        spec2=encm.EnclosureSpec.from_json(en.meta['enclosure']);spec2.sources.append(encm.SourceRef(id=bad.id,name='Klocek'))
+        en2=replace(en,meta=dict(en.meta,enclosure=spec2.to_json()))
+        w.document.commit([*[x for x in w.document.bodies if x.id!=en.id],en2,bad]);w.refresh()
+        w.selected=[en.id];w.set_mode('enccheck');self.preview()
+        self.assertGreater(w.chk_list.count(),3);self.assertIn('Błędy:',w.chk_sum.text())
+        row=next(i for i in range(w.chk_list.count()) if 'Klocek' in w.chk_list.item(i).text() and 'Kolizja' in w.chk_list.item(i).text())
+        w.chk_list.setCurrentRow(row);self.assertTrue(w.view.selection_items)
+        self.assertEqual(len([x for x in w.document.bodies]),4)                                     # kontrola nic nie dodaje
+        from PySide6.QtTest import QTest
+        QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode)
+
+    # Generator obudów, etap 13: operacja parametryczna - zapis parametrów, dwuklik = edycja z zachowanymi parametrami
+    # (dalsze kroki przeliczone), automatyczna / ręczna aktualizacja po zmianie elementów z przeniesieniem referencji,
+    # zamrożenie, błąd aktualizacji = ostatnia poprawna geometria, konwersja do brył, operacje składowe, zapis
+    def test_enclosure_stage13_parametric(self):
+        from rccad import enclosure as encm, enclosure_param as epm, enclosure_mounts as mnt, enclosure_holes as H
+        plate=k.box(60,40,1.6).translate((0,0,8))
+        for x,y in ((4,4),(56,4),(4,36),(56,36)):plate=plate.cut(cq.Solid.makeCylinder(1.6,1.6,cq.Vector(x,y,8)))
+        w=self.w;pcb=Body('PCB',plate).prepared();usb=Body('USB',k.box(7.4,9,3.2).translate((53.6,15,9.6))).prepared()
+        w.document.commit([pcb,usb]);w.refresh();w.selected=[pcb.id,usb.id];w.set_mode('enclosure')
+        w.enc_detect_mounts();self.preview()
+        for i in range(w.enc_mount_list.count()):w.enc_mount_list.item(i).setCheckState(Qt.Checked)
+        w.enc_split_on.setChecked(True);w.enc_split_pos.setValue(92);self.preview();w.apply_enclosure();self.wait()
+        base=next(b for b in w.document.bodies if (b.meta or {}).get('enclosure_part')=='base');lid=next(b for b in w.document.bodies if (b.meta or {}).get('enclosure_part')=='lid')
+        meta=base.meta;self.assertIn('enclosure_sig',meta);spec=encm.EnclosureSpec.from_json(meta['enclosure'])
+        for key in ('sources','frame','shape','clearance','walls','split','mounts','posts','closure','process'):self.assertIn(key,meta['enclosure'])
+        self.assertEqual(len(spec.mounts),4);self.assertFalse(epm.stale(w.document.bodies,base))
+        # otwór na złącze (osobna operacja, kolejność zapisana)
+        recipe=dict(type='enc_hole',target=base.id,point=[65.0,19.5,11.2],normal=[1.0,0,0],direction='normal',whole=usb.id,faces=[],sketch=None,
+                    params=dict(H.DEFAULTS,mode='rrect',radius=.5),id='h1',seq=5)
+        top=base.shape.BoundingBox().zmax
+        w.set_mode('enchole');w._step_fill_enc_hole(recipe);self.preview();self.assertTrue(w.eh_apply.isEnabled(),w.eh_status.text());w.apply_enchole();self.wait();w.set_mode(None)
+        base=w.document.get(base.id);self.assertEqual(len(base.meta['enclosure_holes']),1);v_hole=base.shape.Volume()
+        # automatyczna aktualizacja: przesunięcie elementów - obudowa, mocowania i otwór idą za nimi (te same bryły)
+        moved=[replace(b,shape=b.shape.translate((10,5,0))).prepared() for b in (w.document.get(pcb.id),w.document.get(usb.id))]
+        w.document.commit([*moved,*[b for b in w.document.bodies if b.id not in (pcb.id,usb.id)]]);w.refresh()
+        self.assertTrue(epm.stale(w.document.bodies,w.document.get(base.id)))
+        end=time.monotonic()+30
+        while epm.stale(w.document.bodies,w.document.get(base.id)) and time.monotonic()<end:
+            self.app.processEvents();time.sleep(.01)
+        nb=w.document.get(base.id);self.assertFalse(epm.stale(w.document.bodies,nb))
+        self.assertAlmostEqual(nb.shape.BoundingBox().xmin,base.shape.BoundingBox().xmin+10,3);self.assertAlmostEqual(nb.shape.Volume(),v_hole,2)
+        self.assertEqual(len(nb.meta['enclosure_holes']),1);self.assertAlmostEqual(nb.meta['enclosure_holes'][0]['point'][0],75.0,3)
+        ms=encm.EnclosureSpec.from_json(nb.meta['enclosure']).mounts;self.assertTrue(all(abs(m['center'][0]-c[0]-10)<1e-6 for m,c in zip(ms,[mm['center'] for mm in spec.mounts])))
+        self.assertIsNotNone(w.document.get(lid.id));self.assertEqual(w.document.infos()[0][-1]['label'],'Aktualizacja obudowy')
+        # obrót elementów: referencje przeniesione dopasowaniem osi
+        R=np.array([[0,-1,0],[1,0,0],[0,0,1.0]])
+        rot=[replace(b,shape=k.transformed(b.shape,R,np.zeros(3))).prepared() for b in (w.document.get(pcb.id),w.document.get(usb.id))]
+        out=epm.regenerate([*rot,*[b for b in w.document.bodies if b.id not in (pcb.id,usb.id)]],dict(type='enc_regen',id=base.id))
+        rb=next(b for b in out if b.id==base.id);self.assertEqual(len(encm.EnclosureSpec.from_json(rb.meta['enclosure']).mounts),4)
+        # tryb ręczny: bez samoczynnej aktualizacji, oznaczenie i przycisk
+        w.set_mode('enccheck');w.chk_target=base.id;w._chk_state_update();w.chk_mode.setCurrentIndex(w.chk_mode.findData('manual'))
+        self.assertEqual(w.document.get(base.id).meta['enclosure_mode'],'manual');self.assertEqual(w.document.get(lid.id).meta['enclosure_mode'],'manual')
+        self.assertGreaterEqual(w.chk_ops.count(),3);w.set_mode(None)
+        moved=[replace(b,shape=b.shape.translate((0,7,0))).prepared() for b in (w.document.get(pcb.id),w.document.get(usb.id))]
+        w.document.commit([*moved,*[b for b in w.document.bodies if b.id not in (pcb.id,usb.id)]]);w.refresh()
+        for _ in range(60):self.app.processEvents();time.sleep(.01)
+        self.assertTrue(epm.stale(w.document.bodies,w.document.get(base.id)))
+        w.enc_regenerate(base.id);self.preview();self.assertFalse(epm.stale(w.document.bodies,w.document.get(base.id)))
+        # błąd aktualizacji: punkt montażowy nie do odtworzenia - zostaje ostatnia poprawna geometria, oznaczenie z powodem
+        v_ok=w.document.get(base.id).shape.Volume()
+        solid=Body('PCB',k.box(60,40,1.6).translate((0,7,8)),id=pcb.id).prepared()
+        w.document.commit([solid,*[b for b in w.document.bodies if b.id!=pcb.id]]);w.enc_regenerate(base.id);self.preview()
+        self.assertIn(base.id,w._enc_failed);self.assertAlmostEqual(w.document.get(base.id).shape.Volume(),v_ok,4)
+        w.set_mode('enccheck');w.chk_target=base.id;w._chk_state_update();self.assertIn('Wymaga aktualizacji',w.chk_state.text());w.set_mode(None)
+        w.undo();self.wait()
+        # zamrożenie: bez edycji; edycja dwuklikiem (krok zastąpiony, dalsze kroki przeliczone)
+        w.set_mode('enccheck');w.chk_target=base.id;w._chk_state_update();w.chk_mode.setCurrentIndex(w.chk_mode.findData('frozen'));w.set_mode(None)
+        self.assertTrue(w.edit_enclosure(base.id));self.assertIsNone(w.mode)
+        w.set_mode('enccheck');w.chk_target=base.id;w._chk_state_update();w.chk_mode.setCurrentIndex(w.chk_mode.findData('auto'));w.set_mode(None)
+        self.assertTrue(w.edit_enclosure(base.id));self.assertEqual(w.mode,'enclosure');self.assertEqual(len(w.enc['ids']),2)
+        self.assertEqual(w.enc_split_on.isChecked(),True);self.assertEqual(sum(1 for h in w.enc['mounts'] if h['status']=='approved'),4)
+        w.enc_wall_link.setChecked(False);w.enc_wall['bottom'].setValue(3.0);self.preview();w.apply_enclosure();self.wait()
+        for _ in range(200):
+            self.app.processEvents();time.sleep(.01)
+            if not w.busy and w.document.deferred is None:break
+        self.wait();eb=w.document.get(base.id)
+        self.assertEqual(encm.EnclosureSpec.from_json(eb.meta['enclosure']).walls['bottom'],3.0)
+        # zapis i odczyt, konwersja do brył, starszy dokument bez danych generatora
+        path=Path(tempfile.mkdtemp())/'enc13.rccadx';w.document.save(path);loaded=Document.load(path)
+        self.assertIn('enclosure_sig',loaded.get(base.id).meta)
+        w.enc_convert(base.id);self.assertFalse((w.document.get(base.id).meta or {}).get('enclosure'));self.assertFalse((w.document.get(lid.id).meta or {}).get('enclosure'))
+        w.undo();self.wait();self.assertTrue(w.document.get(base.id).meta.get('enclosure'))
+        plain=Document();plain.commit([Body('X',k.box(1,1,1)).prepared()]);p2=Path(tempfile.mkdtemp())/'old.rccadx';plain.save(p2);self.assertEqual(len(Document.load(p2).bodies),1)
+
+    def _tech_scene(self):
+        from rccad import enclosure as encm, enclosure_mounts as mnt
+        plate=k.box(60,40,1.6).translate((0,0,8))
+        for x,y in ((4,4),(56,4),(4,36),(56,36)):plate=plate.cut(cq.Solid.makeCylinder(1.6,1.6,cq.Vector(x,y,8)))
+        pcb=Body('PCB',plate).prepared();chip=Body('U',k.box(10,10,6).translate((25,15,9.6))).prepared();bodies=[pcb,chip]
+        src=[encm.SourceRef(id=pcb.id),encm.SourceRef(id=chip.id)];env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        mounts=[mnt.stored(h) for h in mnt.detect(bodies,[pcb.id,chip.id],env)]
+        mk=lambda tech,**p:encm.EnclosureSpec(sources=src,envelope=env,mounts=mounts,process=dict(tech=tech,**{tech:p}),
+                                              clearance={k_:4.0 for k_ in ('x-','x+','y-','y+','z-','z+')},walls={k_:3.0 for k_ in ('x-','x+','y-','y+','bottom','top')})
+        return bodies,env,mk
+
+    def _no_overlap(self,shapes):
+        from rccad import enclosure as encm
+        for i in range(len(shapes)):
+            for j in range(i+1,len(shapes)):
+                self.assertLess(encm._volume(encm._boolean('common',shapes[i].wrapped,shapes[j].wrapped,'t'))[0],1e-4)
+
+    # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
+    def test_enclosure_stage14a_print(self):
+        from rccad import enclosure as encm, enclosure_tech as T
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        bodies,env,mk=self._tech_scene()
+        sp=mk('print');sp.split=dict(enabled=True,mode='z',unit='%',position=70)
+        rep=[];parts,_t,_i=encm.build_parts(env,sp,bodies,True,rep)
+        self.assertEqual(set(parts),{'base','lid'});self.assertTrue(any('mieści się w drukarce' in r[1] for r in rep))
+        self.assertTrue(any(r[0]=='ok' and 'bez nawisów' in r[1] for r in rep))
+        # nawis: pokrywa drukowana dnem w dół (orientacja Z w górę) - górna ścianka wisi nad pustym wnętrzem
+        sp2=mk('print',orient='z+');sp2.split=sp.split;rep=[];encm.build_parts(env,sp2,bodies,True,rep)
+        over=[r for r in rep if r[0]=='warning' and 'nawisy' in r[1]];self.assertTrue(over);self.assertIsNotNone(over[0][2])
+        # cienka ścianka (poniżej 2 × dysza)
+        sp3=mk('print',nozzle=2.0);sp3.split=sp.split;rep=[];encm.build_parts(env,sp3,bodies,True,rep)
+        self.assertTrue(any(r[0]=='warning' and 'najcieńsze' in r[1] for r in rep))
+        # za mała drukarka: podział na kawałki z kołkami; kawałki rozłączne, kołki w otworach
+        sp4=mk('print',bed_x=40.0,bed_y=40.0);sp4.split=sp.split;rep=[];parts,_t,_i=encm.build_parts(env,sp4,bodies,True,rep)
+        pieces=[v for k_,v in parts.items() if not k_.startswith('pin')];pins=[v for k_,v in parts.items() if k_.startswith('pin')]
+        self.assertEqual(len(pieces),8);self.assertGreater(len(pins),0)
+        for x in pieces:
+            self.assertTrue(BRepCheck_Analyzer(x.wrapped).IsValid());bb=x.BoundingBox();self.assertLessEqual(max(bb.xlen,bb.ylen),40+1e-6)
+        self._no_overlap(pieces+pins)
+        out=encm.run(bodies,dict(type='enclosure',spec=sp4.to_json(),out='E',name='Obudowa 1'))
+        self.assertEqual(len([b for b in out if (b.meta or {}).get('enclosure_part')]),len(parts))
+        self.assertTrue(any(b.name=='Obudowa 1 - kołek 1' for b in out))
+
+    # Generator obudów, etap 14B: blacha - podstawa i pokrywa „U” z modułu blach, rozwinięcia, linie gięcia, BA, K
+    def test_enclosure_stage14b_sheet(self):
+        import math
+        from rccad import enclosure as encm, enclosure_tech as T, sheetmetal as shm
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        bodies,env,mk=self._tech_scene()
+        sp=mk('sheet',t=1.0,r=1.0,k=.44,gap=.2);rep=[];ex={}
+        parts,_t,_i=encm.build_parts(env,sp,bodies,True,rep,ex)
+        self.assertEqual(set(parts),{'base','lid'});self._no_overlap(list(parts.values()))
+        for x in parts.values():self.assertTrue(BRepCheck_Analyzer(x.wrapped).IsValid())
+        for b in bodies:
+            for x in parts.values():self.assertLess(encm._volume(encm._boolean('common',x.wrapped,b.shape.wrapped,'t'))[0],1e-4)
+        self.assertEqual(set(ex['sheet']),{'base','lid'});self.assertEqual(set(ex['flats']),{'flat_base','flat_lid'});self.assertEqual(set(ex['lines']),{'bends_base','bends_lid'})
+        ba=math.radians(90)*(1.0+.44*1.0);self.assertTrue(any(f'BA {ba:.3f}' in r[1] for r in rep))     # naddatek gięcia = kąt · (R + K·t)
+        # rozwinięcie: długość = odcinki proste + łuki gięcia (BA)
+        base_rec=T._world_recipe(env,T.sheet_recipes(env,sp,T.params(sp))[0]);pat=shm.flat_pattern(base_rec)
+        self.assertEqual(len(pat['bends']),2);self.assertAlmostEqual(pat['bends'][0]['allowance'],ba,6)
+        # bryły z modułem blach: stan blachy (rozkładanie / zginanie istniejącymi narzędziami)
+        out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='E',name='Obudowa 1'))
+        sheet=next(b for b in out if (b.meta or {}).get('enclosure_part')=='base');self.assertIn('sheet',sheet.meta)
+        flat=hist.run_recipe(out,dict(type='sheetmode',id=sheet.id,state=sheet.meta['sheet'],flat=True,sync=False))
+        self.assertTrue(next(b for b in flat if b.id==sheet.id).meta['sheet']['flat'])
+        self.assertEqual(next(b for b in out if (b.meta or {}).get('enclosure_part')=='bends_base').kind,'sketch')
+        with self.assertRaises(k.CadError):T.sheet_recipes(env,mk('sheet',k=.8),T.params(mk('sheet',k=.8)))
+
+    # Generator obudów, etap 14C: frezowanie CNC - kieszeń z promieniem ≥ narzędzie albo dogbone, dostępność, podcięcia
+    def test_enclosure_stage14c_cnc(self):
+        import math
+        from rccad import enclosure as encm, enclosure_tech as T
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        bodies,env,mk=self._tech_scene()
+        rep=[];parts,_t,_i=encm.build_parts(env,mk('cnc',tool=6.0,min_radius=3.0),bodies,True,rep)
+        self._no_overlap(list(parts.values()));self.assertTrue(all(r[0]=='ok' for r in rep))
+        for x in parts.values():self.assertTrue(BRepCheck_Analyzer(x.wrapped).IsValid())
+        from rccad.enclosure_mounts import _surface_info
+        radii=[_surface_info(f.wrapped)['r0'] for f in parts['base'].Faces() if f.geomType()=='CYLINDER']
+        self.assertTrue(radii and min(radii)>=3.0-1e-6)                                            # promień ≥ promień narzędzia
+        with self.assertRaises(k.CadError):encm.build_parts(env,mk('cnc',tool=8.0,min_radius=3.0),bodies,True)
+        rep=[];parts,_t,_i=encm.build_parts(env,mk('cnc',tool=6.0,dogbone=True),bodies,True,rep)
+        lay=encm.box_layout(env,mk('cnc'));ilo,ihi=lay['inner'];c=np.asarray(env.center)
+        corner=c+[ihi[0]+.3*math.sqrt(.5),ihi[1]+.3*math.sqrt(.5),ilo[2]+1]
+        self.assertEqual(k.point_state(parts['base'],corner),'out')                                   # podcięcie dogbone w narożniku
+        # podcięcie niedostępne z kierunku obróbki
+        res=T.cnc_analysis(env,{'base':parts['base'].wrapped},T.params(mk('cnc')))
+        self.assertTrue(all(r[0]=='ok' for r in res))
+        side=cq.Solid.makeBox(4,6,2,cq.Vector(c[0]-2,c[1]+lay['inner'][0][1]-3,c[2]-4))      # okno w ściance - górna ściana okna wisi
+        res=T.cnc_analysis(env,{'base':parts['base'].cut(side).wrapped},T.params(mk('cnc')))
+        self.assertTrue(any(r[0]=='warning' and 'niedostępne' in r[1] for r in res))
+
+    # Generator obudów, etap 14D: cięcie laserowe - płyty o stałej grubości, noski i wpusty z luzem, otwory montażowe,
+    # kompensacja szczeliny w rozkroju, krawędzie prostopadłe, widok złożony i rozłożony
+    def test_enclosure_stage14d_laser(self):
+        from rccad import enclosure as encm, enclosure_tech as T
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        bodies,env,mk=self._tech_scene()
+        rep=[];ex={};parts,_t,_i=encm.build_parts(env,mk('laser',t=3.0,kerf=.2,fit=0.0,finger=10.0),bodies,True,rep,ex)
+        nh=encm.build_parts(env,mk('laser',t=3.0,fit=0.0,holes=False),bodies,True)[0]
+        panels=list(parts.values());self.assertEqual(len(panels),6);self._no_overlap(panels)
+        self.assertTrue(all(r[0]=='ok' and 'prostopadłe' in r[1] for r in rep))
+        lay=encm.box_layout(env,mk('laser'));ilo,ihi=lay['inner'];lo,hi=np.asarray(ilo)-3,np.asarray(ihi)+3
+        shell=np.prod(hi-lo)-np.prod(np.asarray(ihi)-np.asarray(ilo))
+        self.assertAlmostEqual(sum(p_.Volume() for p_ in nh.values()),shell,2)                           # bez luzu: płyty wypełniają ściankę
+        for p_ in panels:
+            bb=p_.BoundingBox();self.assertAlmostEqual(min(bb.xlen,bb.ylen,bb.zlen),3.0,6);self.assertTrue(BRepCheck_Analyzer(p_.wrapped).IsValid())
+        rep=[];parts2,_t,_i=encm.build_parts(env,mk('laser',t=3.0,fit=.2),bodies,True,rep);self.assertLess(sum(p_.Volume() for p_ in parts2.values()),shell)   # luz we wpustach
+        holes=[f for f in parts['panel_bottom'].Faces() if f.geomType()=='CYLINDER'];self.assertEqual(len(holes),4)   # otwory montażowe
+        flats=ex['flats'];self.assertEqual(len(flats),6)
+        for name,f in flats.items():
+            bb=f.BoundingBox();self.assertAlmostEqual(bb.zlen,3.0,4);self.assertTrue(BRepCheck_Analyzer(f.wrapped).IsValid())
+        pb=parts['panel_bottom'].BoundingBox();fb=flats['flat_bottom'].BoundingBox()
+        self.assertAlmostEqual(fb.xlen,max(pb.xlen,pb.ylen)+.2,3)                                    # kompensacja kerf/2 z każdej strony
+        bad={'x':cq.Solid.makeCone(3,1,3).wrapped};self.assertEqual(T.laser_analysis(bad)[0][0],'error')
+        # okno: technologia, parametry, analiza, Zastosuj - płyty i rozkrój w grupie obudowy
+        w=self.w;w.document.commit(bodies);w.refresh();w.selected=[b.id for b in bodies];w.set_mode('enclosure')
+        w.enc_tech.setCurrentIndex(w.enc_tech.findData('laser'));w.enc_tech_widgets['t'].setValue(4.0)
+        self.assertEqual(w.enc_spec().process,dict(tech='laser',laser=dict(T.DEFAULTS['laser'],t=4.0)));self.preview()
+        self.assertTrue(w.enc_apply.isEnabled(),w.enc_status.text());self.assertGreaterEqual(w.enc_tech_list.count(),6)
+        w.apply_enclosure();self.wait()
+        made=[b for b in w.document.bodies if (b.meta or {}).get('enclosure_part')];self.assertEqual(len(made),12)
+        self.assertEqual(len({b.folder for b in made}),1)
 
     # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
     # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)

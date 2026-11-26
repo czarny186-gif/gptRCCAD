@@ -1,4 +1,18 @@
-# RCCAD Desktop 0.5.55 — Generator obudów, etapy 6 i 7: otwory montażowe i mocowania
+# RCCAD Desktop 0.5.56 — Generator obudów, etapy 8-14
+
+- **Etap 8 - Otwór na element** (Obudowy → Otwór na element): element (bryła / ściany), proponowana najbliższa ścianka obudowy (do zmiany), kierunek wycięcia; tryby: dokładny rzut konturu, obrys prostokątny, okrągły, prostokąt zaokrąglony, biblioteka (USB-A, USB-C, Micro USB, HDMI, RJ45, DC, SD, microSD, przyciski, przełączniki, wyświetlacze - wymiary do zmiany), własny szkic; luzy w czterech kierunkach, przesunięcie, obrót; otwór przelotowy, zagłębienie, podfrezowanie, wycięcie stopniowane; miejsce na wtyczkę, przewód i dostęp palca; wycinane tylko narzędzie, kontrola uszkodzeń mocowań / zamknięć / sąsiednich ścianek; każdy otwór - osobny krok.
+- **Etap 9 - systemy zamykania**: śruby (słupki, otwory, pogłębienia, nakrętki / inserty), zatrzaski elastyczne (ramiona, haki, najazdy, gniazda), pokrywa wsuwana i jaskółczy ogon (prowadnice, ogranicznik, luzy), zawiasy (współosiowe kostki, otwór na sworzeń), magnesy, połączenia wciskane, rowek uszczelki; rozmieszczenie automatyczne z ręczną korektą, kilka systemów naraz, kontrola kolizji i otwierania (próbkowana).
+- **Etap 10 - Wentylacja** (Obudowy → Wentylacja): 9 wzorów (okrągłe, kwadratowe, prostokątne, sześciokątne, szczeliny, szczeliny zaokrąglone, promieniowy, żaluzje, kratka pod wentylator 25-140 mm z edytowalnym rozstawem), wypełnianie obszaru, powierzchnia otwarta i jej udział, cięcie zbiorcze tylko w docelowej części, kontrola kolizji, uproszczony podgląd i dokładna geometria po zmianie.
+- **Etap 11 - obudowa dopasowana do konturu**: obrys wypukły, wklęsły (stopień dopasowania), dokładna suma rzutów, wygładzony, własny szkic; przewężenia, dokładność, uproszczenie, fragmenty, łączenie obszarów; odsunięcia BRepOffsetAPI_MakeOffset, kontrola samoprzecięć, podpowiedź obrysu wypukłego (tryb nie zmienia się sam).
+- **Etap 12 - Kontrola obudowy**: kolizje (objętościowe vs styk), odstępy, grubości, poprawność B-Rep, fragmenty, powłoki, samoprzecięcia, montaż i otwieranie (próbkowane); wyniki Poprawne / Ostrzeżenie / Błąd z podświetleniem; w oknie tworzenia i jako osobne narzędzie.
+- **Etap 13 - obudowa parametryczna**: dwuklik = edycja z zachowanymi parametrami, tryby: automatyczna / ręczna aktualizacja, zamrożenie, konwersja do brył; przeniesienie referencji po zmianie elementów, ostatnia poprawna geometria przy błędzie, operacje składowe do edycji.
+- **Etap 14 - technologia produkcji**: 14A druk 3D (nawisy, cienkie ścianki, przestrzeń robocza, podział z kołkami), 14B blacha (moduł blach RCCAD, rozwinięcia, linie gięcia, BA, K), 14C frezowanie CNC (promienie, dogbone, dostępność), 14D cięcie laserowe (płyty z noskami i wpustami, kerf, luz, otwory, rozkrój).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.55 — Generator obudów, etapy 6 i 7: otwory montażowe i mocowania
 
 - **Etap 6 - punkty montażowe** (Obudowy → Utwórz obudowę → Punkty montażowe):
   - „Wykryj otwory montażowe”: analiza topologii B-Rep (TopExp_Explorer, BRepAdaptor_Surface) - powierzchnie cylindryczne i stożkowe grupowane po wspólnej osi; otwór tylko przy wklęsłych ścianach o pełnym obwodzie z otwartym końcem (wałki, łuki i zaokrąglenia pomijane);
@@ -12,10 +26,6 @@
   - wysokość automatyczna (od powierzchni montażowej elementu do wewnętrznej powierzchni dna / pokrywy / ściany w kierunku mocowania) z ręcznym nadpisaniem; mocowania od dna, pokrywy i ścian bocznych;
   - wspólna edycja wszystkich mocowań i indywidualna edycja wybranego punktu;
   - słupek wchodzi w ściankę i po BRepAlgoAPI_Fuse tworzy z częścią obudowy jedną poprawną bryłę; kolizje z elementami blokują Zastosuj.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.54 — Generator obudów, etap 5: kształty obudowy
 
