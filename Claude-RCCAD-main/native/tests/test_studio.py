@@ -4583,6 +4583,128 @@ class StudioTests(unittest.TestCase):
         out=next(x for x in hist.RUNNERS['enclosure'](bodies,info['op']) if x.id==en.id);self.assertAlmostEqual(out.shape.Volume(),en.shape.Volume(),3)
         w.undo();self.wait();self.assertIsNone(w.document.get(en.id));w.redo();self.wait();self.assertIsNotNone(w.document.get(en.id))
 
+    # Generator obudów, etap 6: wykrywanie otworów montażowych (zwykłe, ślepe, pogłębione, stopniowane; nie wałki ani łuki),
+    # filtry, znaczniki, zatwierdzanie / odrzucanie, ręczny walec i punkt, zmiana kierunku, zapis punktów w definicji
+    def test_enclosure_stage6_mount_detection(self):
+        import cadquery as cq
+        from rccad import enclosure as encm, enclosure_mounts as mnt
+        plate=cq.Workplane('XY').box(60,40,4,centered=False).edges('|Z').fillet(3).val()
+        C=lambda r,h,x,y,z=0:cq.Solid.makeCylinder(r,h,cq.Vector(x,y,z))
+        s=plate.cut(C(1.6,4,5,5)).cut(C(1.6,4,55,5)).cut(C(3,2,55,5,2)).cut(C(1.6,4,55,35))
+        s=s.cut(cq.Solid.makeCone(1.6,3.25,1.65,cq.Vector(55,35,2.35))).cut(C(1.25,2.5,5,35,1.5))
+        s=s.cut(C(1.6,4,30,5)).cut(C(2.5,1.5,30,5,1.25)).fuse(C(3,6,30,20,4)).cut(C(.75,4,30,20,6)).cut(C(20,4,30,60))
+        w=self.w;pcb=Body('PCB',s).prepared();other=Body('Blok',k.box(10,10,10).translate((0,0,-20))).prepared()
+        w.document.commit([pcb,other]);w.refresh()
+        env=encm.envelope([pcb,other],encm.EnclosureSpec(sources=[encm.SourceRef(id=pcb.id),encm.SourceRef(id=other.id)]))
+        found=mnt.detect([pcb,other],[pcb.id,other.id],env)
+        kinds=sorted((round(h['diameter'],2),h['kind']) for h in found)
+        self.assertEqual(kinds,sorted([(3.2,'plain'),(3.2,'counterbore'),(3.2,'counterbore'),(2.5,'blind'),(3.2,'stepped'),(1.5,'blind')]))
+        plain=next(h for h in found if h['kind']=='plain');self.assertTrue(plain['through']);self.assertAlmostEqual(plain['depth'],4,6)
+        self.assertEqual(plain['side'],'z-');self.assertEqual(plain['center'],[5.0,5.0,0.0])
+        self.assertFalse(plain['accessible'])                                              # pod otworem stoi inny element
+        cb=next(h for h in found if h['kind']=='counterbore' and abs(h['entry_diameter']-6)<1e-6)
+        self.assertEqual(cb['side'],'z+');self.assertAlmostEqual(cb['center'][2],4,6);self.assertTrue(cb['accessible'])
+        blind=next(h for h in found if h['kind']=='blind' and abs(h['diameter']-1.5)<1e-6)
+        self.assertAlmostEqual(blind['depth'],4,6);self.assertFalse(blind['through'])
+        fl=mnt.flipped(plain,env,[pcb,other]);self.assertEqual(fl['center'],[5.0,5.0,4.0]);self.assertEqual(fl['side'],'z+')
+        self.assertTrue(mnt.passes(plain,{}));self.assertFalse(mnt.passes(plain,dict(dmin=4)))
+        self.assertFalse(mnt.passes(plain,dict(axis='x')));self.assertFalse(mnt.passes(plain,dict(kinds=('blind',))))
+        # okno: wykrywanie, filtry, znaczniki, decyzje
+        w.selected=[pcb.id,other.id];w.set_mode('enclosure');w.enc_detect_mounts();self.preview()
+        self.assertEqual(w.enc_mount_list.count(),6);self.assertTrue(w.view.selection_items)
+        w.enc_dmin.setValue(2.0);self.assertEqual(w.enc_mount_list.count(),5);w.enc_dmin.setValue(1.0)
+        w.enc_mkinds['blind'].setChecked(False);self.assertEqual(w.enc_mount_list.count(),4);w.enc_mkinds['blind'].setChecked(True)
+        ids=[w.enc_mount_list.item(i).data(Qt.UserRole) for i in range(w.enc_mount_list.count())]
+        w.enc_mount_set('approved',ids[0]);w.enc_mount_set('rejected',ids[1])
+        w.enc_mount_list.item(2).setCheckState(Qt.Checked)
+        self.assertEqual(sum(1 for h in w.enc['mounts'] if h['status']=='approved'),2)
+        first=w._enc_mount(ids[0]);axis0=list(first['axis']);w.enc_mount_flip(ids[0]);self.assertEqual(w._enc_mount(ids[0])['axis'],[-c for c in axis0])
+        # klik w znacznik wybiera otwór
+        p=w.view.project_one(np.asarray(w._enc_mount(ids[3])['center']))
+        if p is not None:
+            self.assertTrue(w._enc_mount_click(*p));self.assertEqual(w._enc_current_mount_id(),ids[3])
+        # ręczny walec (wałek / otwór) i ręczny punkt
+        face=next(f for f in pcb.shape.Faces() if f.geomType()=='CYLINDER' and abs(f.Center().x-30)<1e-6 and abs(f.Center().y-20)<1e-6 and f.Center().z>4.5 and mnt._surface_info(f.wrapped)['r0']>2)
+        h=mnt.from_face(pcb,face,w.document.bodies,env);self.assertTrue(h['manual']);self.assertEqual(h['status'],'approved')
+        pt=mnt.manual_point(pcb,(40,30,4),(0,0,1),w.document.bodies,env);self.assertEqual(pt['side'],'z+');self.assertEqual(pt['kind'],'point')
+        w.enc['mounts']+= [h,pt];w._enc_mounts_show();w.enc_mount_delete(pt['id'])
+        self.assertNotIn(pt['id'],[x['id'] for x in w.enc['mounts']])
+        # zapis: zatwierdzone punkty w definicji obudowy (parametry geometryczne), bez geometrii słupków
+        w.enc_posts_on.setChecked(False)                                                   # etap 6: same punkty, bez mocowań
+        before=len(w.document.bodies);w.apply_enclosure();self.wait()
+        en=w.document.get(w.selected[0]);ms=en.meta['enclosure']['mounts'];self.assertEqual(len(ms),3)
+        for m_ in ms:
+            for key in ('diameter','center','axis','depth','through','kind','side','source'):self.assertIn(key,m_)
+        self.assertEqual(len(w.document.bodies),before+1);self.assertIs(w.document.get(pcb.id).shape,pcb.shape)
+        info=w.document.infos()[0][-1];self.assertEqual(len(info['op']['spec']['mounts']),3)
+        w.undo();self.wait();self.assertIsNone(w.document.get(en.id))
+
+    # Generator obudów, etap 7: mocowania z punktów montażowych - rodzaje słupków, otwory (wkręt, przelotowy, nakrętka,
+    # insert, gwint kosmetyczny), automatyczna / ręczna wysokość, dno / pokrywa / ściana, wspólna i indywidualna edycja,
+    # jedna bryła z obudową, kolizje z elementami
+    def test_enclosure_stage7_posts(self):
+        import cadquery as cq
+        from rccad import enclosure as encm, enclosure_mounts as mnt, enclosure_posts as po
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        plate=k.box(60,40,1.6).translate((0,0,8))
+        for x,y in ((4,4),(56,4),(4,36),(56,36)):plate=plate.cut(cq.Solid.makeCylinder(1.6,1.6,cq.Vector(x,y,8)))
+        w=self.w;pcb=Body('PCB',plate).prepared();chip=Body('Układ',k.box(10,10,3).translate((25,15,9.6))).prepared()
+        w.document.commit([pcb,chip]);w.refresh()
+        src=[encm.SourceRef(id=pcb.id),encm.SourceRef(id=chip.id)]
+        env=encm.envelope([pcb,chip],encm.EnclosureSpec(sources=src))
+        holes=mnt.detect([pcb,chip],[pcb.id,chip.id],env);self.assertEqual(len(holes),4);self.assertTrue(all(h['side']=='z-' for h in holes))
+        spec=encm.EnclosureSpec(sources=src,envelope=env,mounts=[mnt.stored(h) for h in holes])
+        for typ in po.POST_TYPES:
+            for f in (po.FASTENINGS if typ in ('cylinder','rect','cone','ribbed') else ('pilot',)):
+                if typ=='guide':continue
+                spec.posts=dict(enabled=True,type=typ,fastening=f,thread=True)
+                for split in (False,True):
+                    spec.split=dict(enabled=split,mode='z',unit='%',position=70,joint='lap_in')
+                    parts,th,info=encm.build_parts(env,spec,[pcb,chip],True)
+                    for name,part in parts.items():
+                        self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid(),(typ,f,split));self.assertEqual(len(part.Solids()),1)   # słupki zrośnięte z częścią
+                    self.assertEqual(len(info),4);self.assertTrue(all(abs(i['height']-2.0)<1e-2 for i in info))       # od dna do spodu płytki (odstęp 2 mm)
+                    self.assertTrue(all(i['part']==('base' if split else 'body') for i in info))
+                    if f=='tapped':self.assertEqual(sum(len(v) for v in th.values()),4)
+        # otwór pod wkręt: średnica wstępna M3 i głębokość; nakrętka - gniazdo od zewnątrz dna
+        spec.split={};spec.posts=dict(enabled=True,type='cylinder',fastening='pilot',screw='M3')
+        body=encm.build_parts(env,spec,[pcb,chip],True)[0]['body']
+        self.assertEqual(k.point_state(body,(4,4,7)),'out');self.assertEqual(k.point_state(body,(4,4+1.4,7)),'in')
+        spec.posts=dict(enabled=True,type='cylinder',fastening='nut',screw='M3')
+        nb=encm.build_parts(env,spec,[pcb,chip],True)[0]['body'];zb=nb.BoundingBox().zmin
+        self.assertEqual(k.point_state(nb,(4+2.5,4,zb+.5)),'out')                                     # sześciokąt nakrętki w dnie
+        # wysokość ręczna (nadpisanie) i indywidualne ustawienia jednego punktu
+        spec.posts=dict(enabled=True,type='cylinder',height=5.0)
+        with self.assertRaises(k.CadError):encm.build_parts(env,spec,[pcb,chip],True)                 # wyższy słupek wchodzi w płytkę
+        spec.posts=dict(enabled=True,type='cylinder');spec.mounts[0]=dict(spec.mounts[0],post=dict(type='rect',width=6.0))
+        parts,_t,info=encm.build_parts(env,spec,[pcb,chip],True);self.assertEqual(info[0]['type'],'rect');self.assertEqual(info[1]['type'],'cylinder')
+        # mocowanie od pokrywy i ze ściany bocznej (podpora i prowadnica)
+        top=mnt.manual_point(chip,(30,20,12.6),(0,0,1),[pcb,chip],env);side=mnt.manual_point(pcb,(60,20,8.8),(1,0,0),[pcb,chip],env)
+        spec.mounts=[mnt.stored(top),dict(mnt.stored(side),post=dict(type='guide',groove=1.6,hole_depth=2))]
+        spec.posts=dict(enabled=True,type='support');spec.split=dict(enabled=True,mode='z',unit='%',position=50,joint='flat')
+        parts,_t,info=encm.build_parts(env,spec,[pcb,chip],True)
+        self.assertEqual(info[0]['part'],'lid');self.assertAlmostEqual(info[0]['height'],2.0,2);self.assertEqual(info[1]['type'],'guide')
+        for part in parts.values():self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid())
+        # kolizja: słupek w miejscu elementu
+        bad=mnt.manual_point(pcb,(30,20,8),(0,0,-1),[pcb,chip],env);spec.split={};spec.mounts=[mnt.stored(bad)]
+        spec.posts=dict(enabled=True,type='cylinder',height=4.0)
+        with self.assertRaises(k.CadError):encm.build_parts(env,spec,[pcb,chip],True)
+        # okno: wspólna edycja, indywidualna edycja, Zastosuj, historia
+        w.selected=[pcb.id,chip.id];w.set_mode('enclosure');w.enc_detect_mounts();self.preview()
+        for i in range(w.enc_mount_list.count()):w.enc_mount_list.item(i).setCheckState(Qt.Checked)
+        w.enc_post_type.setCurrentIndex(w.enc_post_type.findData('ribbed'));self.preview()
+        self.assertEqual(w.enc_spec().posts['type'],'ribbed');self.assertIn('Wysokości',w.enc_post_info.text())
+        w.enc_mount_list.setCurrentRow(0);w.enc_post_single.setChecked(True)
+        w.enc_post_fasten.setCurrentIndex(w.enc_post_fasten.findData('insert'))
+        mid=w.enc_mount_list.item(0).data(Qt.UserRole);self.assertEqual(w._enc_mount(mid)['post'],{'fastening':'insert'})
+        self.assertEqual(w.enc_spec().posts['fastening'],'pilot');self.preview();self.assertTrue(w.enc_apply.isEnabled())
+        w.apply_enclosure();self.wait()
+        en=w.document.get(w.selected[0]);self.assertTrue(BRepCheck_Analyzer(en.shape.wrapped).IsValid());self.assertEqual(len(en.shape.Solids()),1)
+        self.assertEqual(en.meta['enclosure']['posts']['type'],'ribbed');self.assertIs(w.document.get(pcb.id).shape,pcb.shape)
+        info=w.document.infos()[0][-1];out=next(x for x in hist.RUNNERS['enclosure']([pcb,chip],info['op']) if x.id==en.id)
+        self.assertAlmostEqual(out.shape.Volume(),en.shape.Volume(),3)
+        w.undo();self.wait();self.assertIsNone(w.document.get(en.id))
+
     # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
     # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)
     def test_sketch_dimension_to_grid_point(self):

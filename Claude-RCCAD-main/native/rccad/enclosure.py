@@ -96,7 +96,8 @@ class EnclosureSpec:
     clearance: dict = field(default_factory=dict)         # odstępy od elementów: x-, x+, y-, y+, z-, z+ (+ 'linked')
     walls: dict = field(default_factory=dict)             # grubości: x-, x+, y-, y+, bottom, top (+ 'linked')
     split: dict = field(default_factory=dict)             # podział obudowy
-    mounts: list = field(default_factory=list)            # mocowania
+    mounts: list = field(default_factory=list)            # punkty montażowe (etap 6) z nadpisaniami mocowań ('post', etap 7)
+    posts: dict = field(default_factory=dict)             # wspólne parametry mocowań (etap 7): rccad.enclosure_posts.DEFAULTS
     openings: list = field(default_factory=list)          # otwory na złącza, wyświetlacze, przyciski
     vents: list = field(default_factory=list)             # wentylacja
     closure: dict = field(default_factory=dict)           # system zamykania
@@ -117,7 +118,7 @@ class EnclosureSpec:
         env = data.get('envelope') or {}
         spec.envelope = Envelope(center=list(env.get('center', [0, 0, 0])), axes=[list(a) for a in env.get('axes', Envelope().axes)],
                                  size=list(env.get('size', [0, 0, 0])))
-        for key in ('shape', 'shape_params', 'mode', 'clearance', 'walls', 'split', 'mounts', 'openings', 'vents', 'closure', 'process'):
+        for key in ('shape', 'shape_params', 'posts', 'mode', 'clearance', 'walls', 'split', 'mounts', 'openings', 'vents', 'closure', 'process'):
             if key in data:
                 setattr(spec, key, data[key])
         return spec
@@ -353,6 +354,20 @@ def outer_dimension_items(env, spec, prefix='enc', lay=None):
     return out
 
 
+def build_parts(env, spec, bodies, check_sources=True):
+    """Części obudowy: {'body'} albo (podział, etap 4) {'base', 'lid'}, z mocowaniami (etap 7) dołączonymi do części,
+    której ściankę trafiają. Zwraca (części cq, gwinty kosmetyczne na część, opis mocowań)."""
+    if split_of(spec)['enabled']:
+        split = split_enclosure(env, spec, bodies, check_sources=check_sources)
+        parts = {'base': split['base'], 'lid': split['lid']}
+    else:
+        parts = {'body': box_enclosure(env, spec, bodies)}
+    if spec.posts and spec.mounts:
+        from . import enclosure_posts
+        return enclosure_posts.apply(env, spec, parts, bodies, check=check_sources)
+    return parts, {}, []
+
+
 def run(bodies, recipe, check_sources=False):
     """Krok historii 'enclosure': definicja obudowy (obiekt 'encl' z krawędziami przestrzeni i przepisem w meta).
     Przy przeliczaniu przestrzeń liczy się od nowa z aktualnego położenia elementów źródłowych."""
@@ -365,16 +380,22 @@ def run(bodies, recipe, check_sources=False):
     name = recipe.get('name') or 'Obudowa'
     meta = dict(enclosure=spec.to_json())
     old = next((b for b in bodies if b.id == ident), None)
-    if spec.version >= 2 and split_of(spec)['enabled']:       # etap 4: podstawa i pokrywa - dwie osobne bryły w grupie obudowy
-        parts = split_enclosure(env, spec, bodies, check_sources=check_sources)
+    if spec.version >= 2 and (split_of(spec)['enabled'] or spec.posts):
+        parts, threads, _info = build_parts(env, spec, bodies, check_sources)
+        if 'body' in parts:                       # bez podziału, z mocowaniami (etap 7)
+            body = (replace(old, shape=parts['body'], meta=meta, mesh=None, threads=tuple(threads.get('body', ())))
+                    if old is not None else Body(name, parts['body'], 'solid', 'XY', id=ident, meta=meta,
+                                                 threads=tuple(threads.get('body', ())))).prepared()
+            return [body if b.id == ident else b for b in bodies] if old is not None else [*bodies, body]
         lid_id = recipe.get('out_lid') or ident + '-lid'
         folder = recipe.get('folder') or name
         out = list(bodies)
         for pid, part, title in ((ident, 'base', 'podstawa'), (lid_id, 'lid', 'pokrywa')):
             prev = next((b for b in out if b.id == pid), None)
             pmeta = dict(enclosure=spec.to_json(), enclosure_part=part)
-            made = (replace(prev, shape=parts[part], meta=pmeta, mesh=None) if prev is not None
-                    else Body(f'{name} - {title}', parts[part], 'solid', 'XY', id=pid, meta=pmeta, folder=folder)).prepared()
+            th = tuple(threads.get(part, ()))
+            made = (replace(prev, shape=parts[part], meta=pmeta, mesh=None, threads=th) if prev is not None
+                    else Body(f'{name} - {title}', parts[part], 'solid', 'XY', id=pid, meta=pmeta, folder=folder, threads=th)).prepared()
             out = [made if b.id == pid else b for b in out] if prev is not None else [*out, made]
         return out
     if spec.version >= 2:              # etap 2: prostokątna obudowa jako bryła (nowy element dokumentu)

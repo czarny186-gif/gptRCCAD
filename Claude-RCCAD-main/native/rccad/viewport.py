@@ -1384,9 +1384,15 @@ class CadView(gl.GLViewWidget):
         for item in getattr(self, 'selection_items', []):
             self.removeItem(item)
         self.selection_items = []
+        base = (color, line_color)
         for mesh in meshes or []:
             if mesh is None:
                 continue
+            color, line_color = base
+            if isinstance(mesh, tuple):          # (siatka, kolor, kolor linii) - kilka kolorów naraz (np. znaczniki otworów)
+                mesh, color, line_color = mesh
+                if mesh is None:
+                    continue
             if len(mesh.triangles):
                 item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
                 item.setGLOptions('translucent')

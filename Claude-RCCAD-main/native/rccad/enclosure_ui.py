@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout
 from . import dims
 from . import enclosure as enc
 from . import enclosure_shapes as shapes
+from . import enclosure_mounts as mounts
+from . import enclosure_posts as posts
 from . import kernel
 from . import shell_ui as ui
 
@@ -233,6 +235,7 @@ class EnclosureTools:
         box.addLayout(row)
         lay.addWidget(self.enc_split_box)
         self.enc_split_box.setVisible(False)
+        self._build_enc_mounts(lay)
         self.enc_status = _label('Klikaj bryły (także z importu STEP) - kliknięcie dodaje albo usuwa z listy.', 'status')
         lay.addWidget(self.enc_status)
         self.enc_apply, _ = self._buttons(self.enc_panel.footer, 'Zastosuj', 'Anuluj', self.apply_enclosure, lambda: self.set_mode(None))
@@ -322,6 +325,386 @@ class EnclosureTools:
             if abs(box.value() - float(value)) > 5e-3:
                 self._enc_set(box, round(float(value), 2))
 
+    # ------------------------------------------------------------------ etap 6: punkty montażowe
+    MOUNT_COLORS = {'approved': ((.1, .7, .3, .3), (.05, .6, .2, 1)), 'pending': ((1, .55, .1, .3), (.95, .45, .02, 1)),
+                    'rejected': ((.6, .6, .6, .2), (.55, .55, .55, 1)), 'current': ((.2, .5, 1, .3), (.1, .35, .95, 1))}
+
+    def _build_enc_mounts(self, lay):
+        self.enc_step5 = ui.StepRow(5, 'x_enclosure', 'Punkty montażowe', plain=True)
+        lay.addWidget(self.enc_step5)
+        self.enc_detect = QPushButton('Wykryj otwory montażowe')
+        self.enc_detect.setToolTip('Analiza powierzchni cylindrycznych elementów: otwory zwykłe, ślepe, pogłębione i stopniowane')
+        self.enc_detect.clicked.connect(lambda _=False: self.enc_detect_mounts())
+        lay.addWidget(self.enc_detect)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(5)
+        grid.addWidget(_label('Średnica od', 'label'), 0, 0)
+        self.enc_dmin = _spin(mounts.DEFAULT_FILTER['dmin'], 0, enc.MAX_VALUE, 2, .5, ' mm')
+        grid.addWidget(self.enc_dmin, 0, 1)
+        grid.addWidget(_label('do', 'label'), 0, 2)
+        self.enc_dmax = _spin(mounts.DEFAULT_FILTER['dmax'], 0, enc.MAX_VALUE, 2, .5, ' mm')
+        grid.addWidget(self.enc_dmax, 0, 3)
+        self.enc_maxis = QComboBox()
+        for key, text in (('all', 'Każdy kierunek osi'), ('x', 'Oś X obudowy'), ('y', 'Oś Y obudowy'), ('z', 'Oś Z obudowy')):
+            self.enc_maxis.addItem(text, key)
+        grid.addWidget(self.enc_maxis, 1, 0, 1, 4)
+        self.enc_mkinds = {}
+        for n, kind in enumerate(('plain', 'blind', 'counterbore', 'stepped')):
+            box = QCheckBox(mounts.KIND_LABELS[kind])
+            box.setChecked(True)
+            box.toggled.connect(lambda *_: self._enc_mounts_show())
+            grid.addWidget(box, 2 + n // 2, (n % 2) * 2, 1, 2)
+            self.enc_mkinds[kind] = box
+        for w_ in (self.enc_dmin, self.enc_dmax):
+            w_.valueChanged.connect(lambda *_: self._enc_mounts_show())
+        self.enc_maxis.currentIndexChanged.connect(lambda *_: self._enc_mounts_show())
+        lay.addLayout(grid)
+        self.enc_mount_list = QListWidget()
+        self.enc_mount_list.setObjectName('enclist')
+        self.enc_mount_list.setFixedHeight(120)
+        self.enc_mount_list.setStyleSheet(self.enc_list.styleSheet())
+        self.enc_mount_list.currentRowChanged.connect(lambda *_: (self._enc_mount_markers(), self._enc_post_load()))
+        self.enc_mount_list.itemChanged.connect(lambda item: self._enc_mount_checked(item))
+        lay.addWidget(self.enc_mount_list)
+        row = QGridLayout()
+        row.setHorizontalSpacing(6)
+        row.setVerticalSpacing(5)
+        buttons = (('Zatwierdź', lambda: self.enc_mount_set('approved')), ('Odrzuć', lambda: self.enc_mount_set('rejected')),
+                   ('Zmień kierunek', self.enc_mount_flip), ('Usuń', self.enc_mount_delete),
+                   ('Wskaż walec', lambda: self._enc_pick_mount('face')), ('Dodaj punkt', lambda: self._enc_pick_mount('point')))
+        tips = {'Wskaż walec': 'Kliknij powierzchnię cylindryczną elementu - otwór z jej współosiowych ścian',
+                'Dodaj punkt': 'Kliknij ścianę elementu - punkt montażowy z kierunkiem normalnej ściany',
+                'Usuń': 'Usuwa punkt dodany ręcznie (wykryte otwory można odrzucić)'}
+        self.enc_mount_buttons = {}
+        for n, (text, fn) in enumerate(buttons):
+            b = QPushButton(text)
+            b.setToolTip(tips.get(text, ''))
+            b.clicked.connect(lambda _=False, f=fn: f())
+            row.addWidget(b, n // 2, n % 2)
+            self.enc_mount_buttons[text] = b
+        lay.addLayout(row)
+        self.enc_mount_info = _label('Punkty montażowe: brak', 'small')
+        lay.addWidget(self.enc_mount_info)
+        self._build_enc_posts(lay)
+
+    # ------------------------------------------------------------------ etap 7: mocowania
+    POST_FIELDS = {'cylinder': ('diameter', 'height', 'hole_depth', 'gap'), 'rect': ('width', 'height', 'hole_depth', 'gap'),
+                   'cone': ('diameter', 'top_diameter', 'height', 'hole_depth', 'gap'), 'ribbed': ('diameter', 'height', 'hole_depth', 'rib', 'ribs', 'gap'),
+                   'snap': ('diameter', 'height', 'gap'), 'guide': ('length', 'groove', 'height', 'hole_depth', 'rib', 'gap'),
+                   'support': ('diameter', 'height')}
+
+    def _build_enc_posts(self, lay):
+        self.enc_step6 = ui.StepRow(6, 'x_enclosure', 'Mocowania', plain=True)
+        lay.addWidget(self.enc_step6)
+        self.enc_posts_on = QCheckBox('Generuj mocowania w zatwierdzonych punktach')
+        self.enc_posts_on.setChecked(True)
+        self.enc_posts_on.toggled.connect(lambda *_: self._enc_posts_changed())
+        lay.addWidget(self.enc_posts_on)
+        self.enc_post_single = QCheckBox('Zmieniaj tylko wybrany punkt')
+        self.enc_post_single.setToolTip('Wyłączone - zmiany dotyczą wszystkich mocowań (bez własnych ustawień); włączone - tylko punktu wybranego na liście')
+        self.enc_post_single.toggled.connect(lambda *_: self._enc_post_load())
+        lay.addWidget(self.enc_post_single)
+        self.enc_post_type = QComboBox()
+        for key in posts.POST_TYPES:
+            self.enc_post_type.addItem(posts.POST_LABELS[key], key)
+        self.enc_post_fasten = QComboBox()
+        for key in posts.FASTENINGS:
+            self.enc_post_fasten.addItem(posts.FASTEN_LABELS[key], key)
+        self.enc_post_screw = QComboBox()
+        for key in posts.SCREWS:
+            self.enc_post_screw.addItem(key, key)
+        for box in (self.enc_post_type, self.enc_post_fasten, self.enc_post_screw):
+            box.currentIndexChanged.connect(lambda *_: self._enc_post_edited())
+            lay.addWidget(box)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(5)
+        self.enc_post_rows = {}
+        rows = (('diameter', 'Średnica', 0.5), ('top_diameter', 'Średnica górna', 0.5), ('width', 'Szerokość', 0.5),
+                ('height', 'Wysokość (0 = auto)', 0.0), ('hole_depth', 'Głębokość otworu (0 = auto)', 0.0), ('rib', 'Grubość żeber', 0.2),
+                ('ribs', 'Liczba żeber', 2), ('gap', 'Luz montażowy', 0.0), ('groove', 'Rowek (grubość elementu)', 0.2), ('length', 'Długość prowadnicy', 1.0))
+        for n, (key, title, low) in enumerate(rows):
+            if key == 'ribs':
+                box = QSpinBox()
+                box.setRange(2, 8)
+                box.setButtonSymbols(QSpinBox.NoButtons)
+                box.setKeyboardTracking(False)
+            else:
+                box = _spin(0, low, enc.MAX_VALUE, 2, .5, ' mm')
+            box.setValue(posts.DEFAULTS[key])
+            box.valueChanged.connect(lambda *_: self._enc_post_edited())
+            label = _label(title, 'label')
+            grid.addWidget(label, n, 0)
+            grid.addWidget(box, n, 1)
+            self.enc_post_rows[key] = (label, box)
+        lay.addLayout(grid)
+        self.enc_post_thread = QCheckBox('Gwint kosmetyczny w otworze pod gwint')
+        self.enc_post_thread.setToolTip('Opis gwintu przy bryle (jak Edycja → Gwint) - bez geometrii zwojów')
+        self.enc_post_thread.toggled.connect(lambda *_: self._enc_post_edited())
+        lay.addWidget(self.enc_post_thread)
+        self.enc_post_reset = QPushButton('Przywróć wspólne ustawienia punktu')
+        self.enc_post_reset.clicked.connect(lambda _=False: self._enc_post_reset())
+        lay.addWidget(self.enc_post_reset)
+        self.enc_post_info = _label('', 'small')
+        lay.addWidget(self.enc_post_info)
+        self.enc_posts = dict(posts.DEFAULTS)
+        self._enc_post_load()
+
+    def _enc_post_widgets(self, p):
+        typ = p['type']
+        fields = self.POST_FIELDS.get(typ, ())
+        for key, (label, box) in self.enc_post_rows.items():
+            label.setVisible(key in fields)
+            box.setVisible(key in fields)
+        holes = typ in ('cylinder', 'rect', 'cone', 'ribbed')
+        self.enc_post_fasten.setVisible(holes)
+        self.enc_post_screw.setVisible(holes or typ == 'snap')
+        self.enc_post_thread.setVisible(holes and p['fastening'] == 'tapped')
+
+    def _enc_post_target(self):
+        """Edytowane ustawienia: wspólne albo nadpisania wybranego punktu."""
+        if self.enc_post_single.isChecked():
+            h = self._enc_mount(self._enc_current_mount_id())
+            if h is not None:
+                return h
+        return None
+
+    def _enc_post_load(self):
+        """Pola mocowania z ustawień wspólnych albo wybranego punktu (wspólne + jego nadpisania)."""
+        if not hasattr(self, 'enc_post_rows'):
+            return
+        h = self._enc_post_target()
+        p = posts.params(self.enc_posts, h)
+        widgets = [self.enc_post_type, self.enc_post_fasten, self.enc_post_screw, self.enc_post_thread, *[b for _l, b in self.enc_post_rows.values()]]
+        for w_ in widgets:
+            w_.blockSignals(True)
+        self.enc_post_type.setCurrentIndex(max(0, self.enc_post_type.findData(p['type'])))
+        self.enc_post_fasten.setCurrentIndex(max(0, self.enc_post_fasten.findData(p['fastening'])))
+        self.enc_post_screw.setCurrentIndex(max(0, self.enc_post_screw.findData(p['screw'])))
+        self.enc_post_thread.setChecked(bool(p.get('thread')))
+        for key, (_l, box) in self.enc_post_rows.items():
+            box.setValue(int(p[key]) if key == 'ribs' else float(p[key]))
+        for w_ in widgets:
+            w_.blockSignals(False)
+        self.enc_post_reset.setEnabled(h is not None and bool(h.get('post')))
+        self._enc_post_widgets(p)
+
+    def _enc_post_values(self):
+        out = dict(type=self.enc_post_type.currentData(), fastening=self.enc_post_fasten.currentData(), screw=self.enc_post_screw.currentData(),
+                   thread=self.enc_post_thread.isChecked())
+        for key, (_l, box) in self.enc_post_rows.items():
+            out[key] = int(box.value()) if key == 'ribs' else float(box.value())
+        return out
+
+    def _enc_post_edited(self):
+        values = self._enc_post_values()
+        h = self._enc_post_target()
+        if h is not None:                              # indywidualnie: tylko różnice względem wspólnych
+            base = dict(posts.DEFAULTS, **self.enc_posts)
+            h['post'] = {k: v for k, v in values.items() if base.get(k) != v}
+            self.enc_post_reset.setEnabled(bool(h['post']))
+        else:
+            self.enc_posts.update(values)
+        self._enc_post_widgets(posts.params(self.enc_posts, h))
+        self._enc_posts_changed()
+
+    def _enc_post_reset(self):
+        h = self._enc_post_target()
+        if h is not None:
+            h['post'] = {}
+        self._enc_post_load()
+        self._enc_posts_changed()
+
+    def _enc_posts_changed(self):
+        on = self.enc_posts_on.isChecked()
+        for w_ in (self.enc_post_single, self.enc_post_type, self.enc_post_fasten, self.enc_post_screw, self.enc_post_thread, self.enc_post_reset,
+                   *[b for _l, b in self.enc_post_rows.values()]):
+            w_.setEnabled(on if w_ is not self.enc_post_reset else (on and w_.isEnabled()))
+        n = sum(1 for h in self.enc.get('mounts') or [] if h['status'] == 'approved')
+        self.enc_step6.set_state('done' if (on and n) else 'pending', f'{n} mocowań' if (on and n) else ('wyłączone' if not on else 'brak punktów'))
+        self._enc_live()
+
+    def _enc_filter(self):
+        return dict(dmin=self.enc_dmin.value(), dmax=self.enc_dmax.value(), axis=self.enc_maxis.currentData(),
+                    kinds=tuple(k for k, b in self.enc_mkinds.items() if b.isChecked()))
+
+    def enc_detect_mounts(self):
+        """Wykrywanie w tle; zatwierdzone / odrzucone wcześniej otwory zachowują decyzję, ręczne punkty zostają."""
+        if self.enc.get('env') is None:
+            self.toast('Najpierw wybierz elementy obudowy.')
+            return
+        bodies, ids, env = list(self.document.bodies), list(self.enc['ids']), self.enc['env']
+        self.enc_mount_info.setText('Wykrywanie otworów…')
+
+        def compute():
+            return mounts.detect(bodies, ids, env)
+
+        def show(found, error):
+            if self.mode != 'enclosure':
+                return
+            if error or found is None:
+                self.enc_mount_info.setText(f'Wykrywanie nie powiodło się: {error}')
+                return
+            old = self.enc.get('mounts') or []
+            key = lambda h: (h.get('source'), tuple(round(c, 3) for c in h['center']), round(h['diameter'], 3))
+            decided = {key(h): h for h in old if not h.get('manual')}
+            for h in found:
+                prev = decided.get(key(h)) or decided.get((h.get('source'), tuple(round(c, 3) for c in self._other_end(h)), round(h['diameter'], 3)))
+                if prev is not None:
+                    h.update(status=prev['status'], axis=prev['axis'], center=prev['center'], side=prev.get('side'),
+                             accessible=prev.get('accessible', True), id=prev['id'])
+            self.enc['mounts'] = [h for h in old if h.get('manual')] + found
+            self._enc_mounts_show()
+        self.run_preview('encmounts', compute, show)
+
+    @staticmethod
+    def _other_end(h):
+        ends = h.get('ends') or [h['center'], h['center']]
+        c = np.asarray(h['center'], float)
+        a, b = (np.asarray(e, float) for e in ends)
+        return b if np.linalg.norm(c - a) < np.linalg.norm(c - b) else a
+
+    def _enc_visible_mounts(self):
+        flt = self._enc_filter()
+        return [h for h in (self.enc.get('mounts') or []) if mounts.passes(h, flt)]
+
+    def _enc_mounts_show(self, keep=None):
+        if not hasattr(self, 'enc_mount_list'):
+            return
+        shown = self._enc_visible_mounts()
+        current = keep or self._enc_current_mount_id()
+        self.enc_mount_list.blockSignals(True)
+        self.enc_mount_list.clear()
+        mark = {'approved': '✓', 'rejected': '✗', 'pending': '•'}
+        for h in shown:
+            item = QListWidgetItem(f'{mark.get(h["status"], "•")} {mounts.describe(h)}')
+            item.setData(Qt.UserRole, h['id'])
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if h['status'] == 'approved' else Qt.Unchecked)
+            item.setToolTip(f'Głębokość {h["depth"]:.2f} mm · oś {tuple(round(c, 3) for c in h["axis"])} · środek '
+                            f'{tuple(round(c, 2) for c in h["center"])}' + ('' if h.get('accessible', True) else ' · oś za wejściem trafia w inny element'))
+            self.enc_mount_list.addItem(item)
+            if h['id'] == current:
+                self.enc_mount_list.setCurrentItem(item)
+        self.enc_mount_list.blockSignals(False)
+        allm = self.enc.get('mounts') or []
+        ok = sum(1 for h in allm if h['status'] == 'approved')
+        self.enc_mount_info.setText(f'Zatwierdzone: {ok} · do decyzji: {sum(1 for h in allm if h["status"] == "pending")} · '
+                                    f'odrzucone: {sum(1 for h in allm if h["status"] == "rejected")} · ukryte filtrem: {len(allm) - len(shown)}')
+        self.enc_step5.set_state('done' if ok else ('active' if allm else 'pending'), f'{ok} zatwierdzone' if allm else 'opcjonalnie')
+        self._enc_mount_markers()
+        if hasattr(self, 'enc_step6'):
+            on = self.enc_posts_on.isChecked()
+            self.enc_step6.set_state('done' if (on and ok) else 'pending', f'{ok} mocowań' if (on and ok) else ('wyłączone' if not on else 'brak punktów'))
+            self._enc_post_load()
+        self._enc_live()                         # zatwierdzone punkty z mocowaniami zmieniają geometrię
+
+    def _enc_current_mount_id(self):
+        item = self.enc_mount_list.currentItem() if hasattr(self, 'enc_mount_list') else None
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _enc_mount(self, mid):
+        return next((h for h in self.enc.get('mounts') or [] if h['id'] == mid), None)
+
+    def _enc_mount_markers(self):
+        """Tymczasowe znaczniki 3D: zielony - zatwierdzony, pomarańczowy - do decyzji, szary - odrzucony, niebieski - bieżący."""
+        if self.mode != 'enclosure':
+            return
+        shown = self._enc_visible_mounts()
+        cur = self._enc_current_mount_id()
+        size = max(1.0, .03 * float(np.max(self.enc['env'].size))) if self.enc.get('env') is not None else 1.0
+        meshes = []
+        for status in ('rejected', 'pending', 'approved', 'current'):
+            group = [h for h in shown if (h['id'] == cur) == (status == 'current') and (status == 'current' or h['status'] == status)]
+            mesh = mounts.marker_mesh(group, size) if group else None
+            if mesh is not None:
+                meshes.append((mesh, *self.MOUNT_COLORS[status]))
+        self.view.set_selection_meshes(meshes)
+
+    def _enc_mount_checked(self, item):
+        h = self._enc_mount(item.data(Qt.UserRole))
+        if h is not None:
+            h['status'] = 'approved' if item.checkState() == Qt.Checked else ('rejected' if h['status'] == 'approved' else h['status'])
+            self._enc_mounts_show(keep=h['id'])
+
+    def enc_mount_set(self, status, mid=None):
+        h = self._enc_mount(mid or self._enc_current_mount_id())
+        if h is None:
+            self.toast('Wybierz otwór z listy albo kliknij jego znacznik.')
+            return
+        h['status'] = status
+        self._enc_mounts_show(keep=h['id'])
+
+    def enc_mount_flip(self, mid=None):
+        h = self._enc_mount(mid or self._enc_current_mount_id())
+        if h is None:
+            self.toast('Wybierz otwór z listy albo kliknij jego znacznik.')
+            return
+        h.update(mounts.flipped(h, self.enc.get('env'), self.document.bodies))
+        self._enc_mounts_show(keep=h['id'])
+
+    def enc_mount_delete(self, mid=None):
+        h = self._enc_mount(mid or self._enc_current_mount_id())
+        if h is None:
+            return
+        if not h.get('manual'):
+            self.toast('Wykrytego otworu nie usuwa się - odrzuć go.')
+            return
+        self.enc['mounts'] = [x for x in self.enc['mounts'] if x['id'] != h['id']]
+        self._enc_mounts_show()
+
+    def _enc_pick_mount(self, what):
+        if not self.enc['ids']:
+            self.toast('Najpierw wybierz elementy obudowy.')
+            return
+        self.enc['picking_mount'] = what
+        self.enc.update(picking_face=False, picking_split=False)
+        self.hint('Kliknij powierzchnię cylindryczną elementu.' if what == 'face' else
+                  'Kliknij ścianę elementu w miejscu punktu montażowego (kierunek - normalna ściany).')
+        self.enc_status.setText('Kliknij powierzchnię cylindryczną elementu.' if what == 'face' else 'Kliknij ścianę elementu - punkt montażowy.')
+
+    def _enc_mount_click(self, x, y):
+        """Klik w trybie wskazywania otworu / punktu; poza nim - klik w znacznik wybiera otwór na liście."""
+        what = self.enc.get('picking_mount')
+        if what:
+            hit = self.view.pick_face(x, y)
+            body = self.document.get(hit[0]) if hit else None
+            if body is None or body.id not in self.enc['ids'] or body.kind != 'solid':
+                self.toast('Kliknij element obudowy (bryłę z listy).')
+                return True
+            try:
+                face, normal = self.view.face_at(body, hit, curved=True)
+                if what == 'face':
+                    h = mounts.from_face(body, face, self.document.bodies, self.enc.get('env'))
+                else:
+                    h = mounts.manual_point(body, hit[2], normal, self.document.bodies, self.enc.get('env'))
+            except kernel.CadError as exc:
+                self.toast(str(exc))
+                return True
+            except Exception as exc:
+                self.toast(f'Nie udało się odczytać ściany: {exc}')
+                return True
+            self.enc['picking_mount'] = None
+            self.enc.setdefault('mounts', [])
+            self.enc['mounts'] = [*self.enc['mounts'], h]
+            self._enc_mounts_show(keep=h['id'])
+            self._enc_live(exact=False)
+            return True
+        shown = self._enc_visible_mounts()
+        best = None
+        for h in shown:
+            p = self.view.project_one(np.asarray(h['center'], float))
+            if p is None:
+                continue
+            d = float(np.hypot(p[0] - x, p[1] - y))
+            if d < 14 and (best is None or d < best[0]):
+                best = (d, h)
+        if best is not None:
+            self._enc_mounts_show(keep=best[1]['id'])
+            return True
+        return False
+
     def _enc_grid(self, lay, title, keys, low, value):
         """Sześć pól (X−, X+, Y−, Y+, …) z przełącznikiem „Jednakowe” - jedna wartość dla wszystkich."""
         head = QHBoxLayout()
@@ -363,7 +746,8 @@ class EnclosureTools:
     # ------------------------------------------------------------------ tryb
     def _enclosure_begin(self, previous=()):
         """set_mode('enclosure'): zaznaczone wcześniej bryły od razu na liście."""
-        self.enc = dict(ids=[], face=None, picking_face=False, picking_split=False, env=None, error=None, split_face=None)
+        self.enc = dict(ids=[], face=None, picking_face=False, picking_split=False, env=None, error=None, split_face=None,
+                        mounts=[], picking_mount=None)
         self._enc_exact_result = None
         self.enc_frame.blockSignals(True)
         self.enc_frame.setCurrentIndex(0)
@@ -374,6 +758,7 @@ class EnclosureTools:
             box.blockSignals(False)
         self.enc_panel.show()
         self.enc_set_ids([i for i in previous if self._enc_ok(self.document.get(i))])
+        self._enc_mounts_show()
         self.hint('Utwórz obudowę: klikaj bryły, które mają być w obudowie (ponowne kliknięcie usuwa z listy).')
         self.view.setCursor(Qt.PointingHandCursor)
 
@@ -397,6 +782,9 @@ class EnclosureTools:
             if i not in seen and self._enc_ok(self.document.get(i)):
                 seen.append(i)
         self.enc['ids'] = seen
+        if self.enc.get('mounts'):
+            self.enc['mounts'] = [h for h in self.enc['mounts'] if h.get('source') in seen]   # punkty usuniętych elementów znikają
+            self._enc_mounts_show()
         self._enc_update()
 
     def enc_toggle(self, ids):
@@ -452,7 +840,9 @@ class EnclosureTools:
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         mesh = None
-        if self.enc['picking_face'] or self.enc.get('picking_split'):
+        if self.enc.get('picking_mount'):
+            mesh = body.mesh if (body is not None and body.id in self.enc['ids']) else None
+        elif self.enc['picking_face'] or self.enc.get('picking_split'):
             if body is not None and body.kind == 'solid':
                 try:
                     face, _n = self.view.face_at(body, hit)
@@ -467,6 +857,8 @@ class EnclosureTools:
             self.view.set_hover_mesh(mesh)
 
     def enclosure_click(self, x, y, shift=False):
+        if (self.enc.get('mounts') or self.enc.get('picking_mount')) and self._enc_mount_click(x, y):
+            return                                   # punkty montażowe: wskazanie walca / punktu albo wybór znacznika
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         if self.enc['picking_face'] or self.enc.get('picking_split'):
@@ -521,6 +913,9 @@ class EnclosureTools:
                           plane=self.enc_split_plane.currentData(), face=dict(id=cut['id'], point=cut['point']) if cut else None,
                           unit=self.enc_split_unit.currentData(), position=float(self.enc_split_pos.value()),
                           joint=self.enc_joint.currentData(), **{k: float(s.value()) for k, s in self.enc_joint_spins.items()})
+        spec.mounts = [mounts.stored(h) for h in self.enc.get('mounts') or [] if h['status'] == 'approved']
+        if hasattr(self, 'enc_posts_on') and self.enc_posts_on.isChecked() and spec.mounts:
+            spec.posts = dict(self.enc_posts, enabled=True)
         if self.enc.get('env') is not None:
             spec.envelope = self.enc['env']
         return spec
@@ -659,7 +1054,10 @@ class EnclosureTools:
             spin.setEnabled(joint)
 
     def _enc_sig_of(self, spec):
-        return repr(spec.to_json())
+        data = spec.to_json()
+        if not data.get('posts'):
+            data.pop('mounts', None)             # punkty bez mocowań nie zmieniają geometrii obudowy
+        return repr(data)
 
     # ------------------------------------------------------------------ strzałki (manipulatory)
     def _enc_handles(self, env, spec, layout, plane):
@@ -867,10 +1265,11 @@ class EnclosureTools:
         split = enc.split_of(spec)['enabled']
 
         def compute():
+            parts, _threads, info = enc.build_parts(env, spec, bodies, check_sources=True)    # podział, mocowania, kolizje
             if split:
-                parts = enc.split_enclosure(env, spec, bodies, check_sources=True)
-                return dict(base=kernel.display_mesh(parts['base']), lid=kernel.display_mesh(parts['lid']), normal=parts['normal'])
-            return dict(mesh=kernel.display_mesh(enc.box_enclosure(env, spec, bodies)))     # kształty: zawieranie sprawdzone Boolean
+                plane = enc.split_plane(env, spec, enc.layout(env, spec, bodies=bodies), bodies)
+                return dict(base=kernel.display_mesh(parts['base']), lid=kernel.display_mesh(parts['lid']), normal=plane[1], posts=info)
+            return dict(mesh=kernel.display_mesh(parts['body']), posts=info)
 
         def show(value, error):
             if self.mode != 'enclosure' or getattr(self, '_enc_sig', None) != sig:
@@ -884,6 +1283,10 @@ class EnclosureTools:
                 return
             self.enc['exact_error_sig'] = None
             self._enc_exact_result = dict(value, sig=sig)
+            if hasattr(self, 'enc_post_info'):
+                info = value.get('posts') or []
+                self.enc_post_info.setText('' if not info else 'Wysokości: ' + ', '.join(
+                    f'{i["height"]:.2f}' + ('' if abs(i['height'] - i['auto_height']) < 1e-6 else f' (auto {i["auto_height"]:.2f})') for i in info) + ' mm')
             if self.enc.get('drag') is None:
                 self._enc_redisplay()
         self.run_preview('enclosure', compute, show)

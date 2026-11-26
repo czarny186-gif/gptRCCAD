@@ -1,14 +1,29 @@
-# RCCAD Desktop 0.5.54 — Generator obudów, etap 5: kształty obudowy
+# RCCAD Desktop 0.5.55 — Generator obudów, etapy 6 i 7: otwory montażowe i mocowania
+
+- **Etap 6 - punkty montażowe** (Obudowy → Utwórz obudowę → Punkty montażowe):
+  - „Wykryj otwory montażowe”: analiza topologii B-Rep (TopExp_Explorer, BRepAdaptor_Surface) - powierzchnie cylindryczne i stożkowe grupowane po wspólnej osi; otwór tylko przy wklęsłych ścianach o pełnym obwodzie z otwartym końcem (wałki, łuki i zaokrąglenia pomijane);
+  - rozpoznawane otwory zwykłe (przelotowe), ślepe, pogłębione (walcowo / stożkowo) i stopniowane: średnica, środek wejścia, kierunek osi, głębokość, przelotowość, strona obudowy, dostępność od strony obudowy;
+  - filtry: zakres średnic, kierunek osi, rodzaje; znaczniki 3D (do decyzji / zatwierdzony / odrzucony / wybrany), klik w znacznik wybiera otwór;
+  - Zatwierdź, Odrzuć, Zmień kierunek, Wskaż walec (ręcznie), Dodaj punkt (ręcznie); zatwierdzone punkty zapisane z parametrami w definicji obudowy.
+- **Etap 7 - mocowania** w zatwierdzonych punktach:
+  - słupki cylindryczne, prostokątne, stożkowe, z żebrami (kliny BRepPrimAPI_MakeWedge), kołki zatrzaskowe, prowadnice wsuwane, podpory bez otworu;
+  - otwór pod wkręt, przelotowy pod śrubę, gniazdo nakrętki (od zewnątrz ścianki), gniazdo insertu termicznego, otwór pod gwint z opcjonalnym gwintem kosmetycznym RCCAD (bez geometrii zwojów); rozmiary M2-M5;
+  - parametry: średnica, średnica górna, szerokość, wysokość, głębokość otworu, grubość i liczba żeber, luz, rowek i długość prowadnicy;
+  - wysokość automatyczna (od powierzchni montażowej elementu do wewnętrznej powierzchni dna / pokrywy / ściany w kierunku mocowania) z ręcznym nadpisaniem; mocowania od dna, pokrywy i ścian bocznych;
+  - wspólna edycja wszystkich mocowań i indywidualna edycja wybranego punktu;
+  - słupek wchodzi w ściankę i po BRepAlgoAPI_Fuse tworzy z częścią obudowy jedną poprawną bryłę; kolizje z elementami blokują Zastosuj.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.54 — Generator obudów, etap 5: kształty obudowy
 
 - **Obudowy → Utwórz obudowę → Kształt obudowy**: prostokątna, z zaokrąglonymi narożnikami, ze sfazowanymi narożnikami, cylindryczna, eliptyczna, wielokątna, trapezowa, pulpitowa (pochylona góra).
   - parametry: promień narożników, wielkość fazowania, średnica, średnice X / Y, liczba boków, kąt pochylenia, wysokość przedniej i tylnej ścianki, orientacja kształtu (oś Z / X / Y, kierunek pochylenia, strona przodu);
   - „Dopasuj automatycznie do elementów”: wymiary wyznaczane z rzeczywistej geometrii elementów (punkty siatek w okręgu / elipsie / wielokącie / narożnikach / pochyleniach) i sprawdzane operacją Boolean - nie z samej ramki; ręczne wymiary są sprawdzane (za małe - komunikat z najmniejszą wartością);
   - profile 2D tworzone przed wyciągnięciem (zaokrąglenia narożników na profilu - BRepFilletAPI_MakeFillet2d), walce - BRepPrimAPI_MakeCylinder, wyciągnięcia - BRepPrimAPI_MakePrism, wnętrze - Boolean Cut;
   - grubości ścianek zachowane, podział na podstawę i pokrywę (etap 4) działa dla każdego kształtu; walidacja geometrii po każdej zmianie kształtu.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.53 — Generator obudów, etapy 3 i 4: manipulatory, podgląd, podstawa i pokrywa
 
