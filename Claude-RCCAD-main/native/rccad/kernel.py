@@ -35,9 +35,21 @@ except Exception:       # starsza biblioteka: zostaje liczenie na jednym rdzeniu
     pass
 
 
+TRUSTED = []          # kształty już sprawdzone kawałkami (np. Wentylacja z tysiącami otworów) - BRepCheck całości trwałby minuty
+
+
+def trust(shape):
+    w = getattr(shape, 'wrapped', shape)
+    TRUSTED.append(w)
+    del TRUSTED[:-16]
+
+
 def is_valid(shape):
     """Sprawdzenie poprawności bryły na wielu rdzeniach (to samo co Shape.isValid, równolegle)."""
     from OCP.BRepCheck import BRepCheck_Analyzer
+    w = getattr(shape, 'wrapped', shape)
+    if any(t.IsPartner(w) for t in TRUSTED):          # ten sam kształt (także przesunięty) - sprawdzony wcześniej
+        return True
     try:
         return BRepCheck_Analyzer(shape.wrapped, True, True).IsValid()
     except TypeError:
@@ -446,6 +458,12 @@ def extrude(wire, plane, distance, symmetric=False):
         raise CadError("Odległość wyciągnięcia musi być różna od zera.")
     normal = cq.Vector(*frame_of(plane).normal).multiply(distance)
     base = wire.translate(normal.multiply(-.5)) if symmetric else wire
+    if isinstance(base, cq.Compound):          # szkic połączony z kilku zamkniętych kształtów: każdy obszar osobno
+        faces = profile_faces(base) if is_closed(base) else []
+        if not faces:
+            raise CadError("Profil musi być zamknięty.")
+        solids = [cq.Solid.extrudeLinear(f, normal) for f in faces]
+        return valid(solids[0] if len(solids) == 1 else compound(solids))
     if not base.IsClosed():
         raise CadError("Profil musi być zamknięty.")
     return valid(cq.Solid.extrudeLinear(base, [], normal))
@@ -3026,6 +3044,51 @@ def path_wire(shape):
         raise CadError("Ścieżka musi być ciągłą linią (bez przerw).") from exc
 
 
+def surface_path(shape, wire, normal, origin=None):
+    """Ścieżka ze szkicu na powierzchni (walec, narożnik ostry / zaokrąglony) przeniesiona na bryłę - tak, jak szkic jest
+    pokazany. Kształty nierozwijalne (stożek, kula...): rzut punktów ścieżki wzdłuż normalnej szkicu na najbliższą ścianę."""
+    from . import surfacewrap
+    if origin is not None:
+        try:
+            out = surfacewrap.wrap_path(shape, wire, normal, origin)
+        except surfacewrap.WrapError as exc:
+            raise CadError(str(exc)) from exc
+        if out is not None:
+            return out
+    from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
+    from OCP.gp import gp_Lin, gp_Pnt, gp_Dir
+    n = np.asarray(normal, float)
+    n /= np.linalg.norm(n)
+    box = bounds(shape)
+    span = max(box.xlen, box.ylen, box.zlen) * 2 + 10
+    hit = IntCurvesFace_ShapeIntersector()
+    hit.Load(shape.wrapped, 1e-6)
+    flat = []
+    for e in _ordered_edges(wire):
+        k = max(8, int(e.Length() / .5))
+        seq = [np.array(e.positionAt(i / k).toTuple(), float) for i in range(k + 1)]
+        if flat and float(np.linalg.norm(seq[-1] - flat[-1])) < float(np.linalg.norm(seq[0] - flat[-1])):
+            seq = seq[::-1]
+        if not flat and len(wire.Edges()) > 1:
+            nxt = _ordered_edges(wire)[1]
+            ends = [np.array(nxt.startPoint().toTuple(), float), np.array(nxt.endPoint().toTuple(), float)]
+            if min(float(np.linalg.norm(seq[0] - q)) for q in ends) < min(float(np.linalg.norm(seq[-1] - q)) for q in ends):
+                seq = seq[::-1]
+        flat += seq if not flat else seq[1:]
+    pts = []
+    for p in flat:
+        if True:
+            hit.Perform(gp_Lin(gp_Pnt(*(p + n * span)), gp_Dir(*(-n))), 0, 2 * span)
+            if not hit.IsDone() or hit.NbPnt() == 0:
+                raise CadError('Ścieżka wychodzi poza bryłę, na której ją narysowano.')
+            j = min(range(1, hit.NbPnt() + 1), key=lambda m: hit.WParameter(m))
+            pts.append(np.array(hit.Pnt(j).Coord(), float))
+    edge = surfacewrap._interp(pts)
+    if edge is None:
+        raise CadError('Ścieżka jest pusta.')
+    return cq.Wire.assembleEdges([edge])
+
+
 def sweep_face(face, path, frenet=False):
     """Przeciągnięcie ściany / obszaru (z otworami) wzdłuż ścieżki: rura, prowadnica, uchwyt - przekrój stały."""
     wire = path_wire(path) if not isinstance(path, cq.Wire) else path
@@ -3501,6 +3564,65 @@ def _fillet_offset_tool(info, d):
 
 
 # ---------- narzędzia szkicu: połącz szkice, punkty do wymiarowania ----------
+def closed_wires(shape):
+    """Zamknięte obrysy szkicu: łamana / okrąg - on sam, szkic połączony z kilku rozłącznych kształtów (Compound) - każdy
+    jego zamknięty obrys osobno."""
+    if shape is None:
+        return []
+    if isinstance(shape, cq.Wire):
+        return [shape] if shape.IsClosed() else []
+    if isinstance(shape, cq.Edge):
+        return [cq.Wire.assembleEdges([shape])] if shape.IsClosed() else []
+    if isinstance(shape, cq.Face):
+        return [shape.outerWire()]
+    try:
+        return [w for w in shape.Wires() if w.IsClosed()]
+    except Exception:
+        return []
+
+
+def is_closed(shape):
+    """Szkic zamknięty: pojedynczy zamknięty obrys albo szkic połączony, w którym wszystkie obrysy są zamknięte."""
+    if isinstance(shape, cq.Face):
+        return True
+    if hasattr(shape, 'IsClosed') and not isinstance(shape, cq.Compound):
+        try:
+            return bool(shape.IsClosed())
+        except Exception:
+            return False
+    try:
+        wires = shape.Wires()
+        loose = len(shape.Edges()) - sum(len(w.Edges()) for w in wires)
+        return bool(wires) and loose <= 0 and all(w.IsClosed() for w in wires)
+    except Exception:
+        return False
+
+
+def profile_faces(shape):
+    """Ściany profilu z (połączonego) szkicu: obrysy zagnieżdżone tworzą otwory (parzystość), rozłączne - osobne ściany."""
+    wires = closed_wires(shape)
+    items = []
+    for w in wires:
+        try:
+            f = cq.Face.makeFromWires(w)
+            items.append((f, w, float(f.Area())))
+        except Exception:
+            continue
+    out = []
+    for i, (f, w, a) in enumerate(items):
+        p = np.array(w.Vertices()[0].toTuple(), float) if w.Vertices() else np.array(w.Center().toTuple(), float)
+        parents = [j for j, (g, _w, b) in enumerate(items) if j != i and b > a and face_contains(g, p)]
+        if len(parents) % 2:
+            continue
+        holes = [items[j][1] for j, (g, w2, b) in enumerate(items) if j != i and b < a and face_contains(f, np.array(w2.Vertices()[0].toTuple() if w2.Vertices() else w2.Center().toTuple(), float))
+                 and sum(1 for k, (h, _x, c) in enumerate(items) if k != j and c > b and face_contains(h, np.array(w2.Vertices()[0].toTuple() if w2.Vertices() else w2.Center().toTuple(), float))) == len(parents) + 1]
+        try:
+            out.append(cq.Face.makeFromWires(w, holes) if holes else f)
+        except Exception:
+            out.append(f)
+    return out
+
+
 def sketch_join(shapes, tol=1e-3):
     """Połącz szkice: krawędzie kilku osobnych szkiców (np. czterech pojedynczych linii kwadratu) łączą się w ciągłe
     obrysy - końce bliżej niż tol stają się wspólnym wierzchołkiem. Wynik: jedna łamana albo zbiór łamanych (kilka

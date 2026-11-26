@@ -1,10 +1,33 @@
-# RCCAD Desktop 0.5.61 — Generator obudów, etap 19: panel sterowania
+# RCCAD Desktop 0.5.62 — Generator obudów etapy 20-22 i nowe narzędzie Wentylacja
 
-- **Panel sterowania** (Obudowy → Panel sterowania): ramki wyświetlaczy LCD / OLED i ekranów dotykowych (powierzchnia aktywna osobno od modułu, ramka z każdej strony, montaż na równi / poniżej / powyżej, podpory, miejsce na złącze), zagłębienia, otwory pod enkodery i potencjometry, pokrętła (5 kształtów, wałki okrągłe / D / sześciokątne / wielowypustowe / z profilu), przyciski mechaniczne (nasadka, trzpień, ogranicznik, prowadnica, kontrola spoczynku i naciśnięcia), przyciski membranowe, suwaki, przełączniki, prowadnice światła (proste, stopniowane, zakrzywione), maskownice głośników, otwory mikrofonowe, okna ochronne; rozmieszczanie (wyrównanie, środek, symetria, rozstaw, szyk). Elementy ruchome i okna to osobne bryły.
+- **Prowadzenie przewodów** (Obudowy → Prowadzenie przewodów, etap 20): przewody okrągłe, wielożyłowe, wiązki, płaskie, taśmowe, w osłonie i rurki. Początek i koniec są na złączach komponentów. Można dodać punkty pośrednie. Tryby: najkrótsza, przy ściankach, przy dnie, ortogonalna, przestrzenna, przez punkty, ręczna. Trasę liczy A* na siatce wnętrza; w trybie ortogonalnym załamania mają odstęp pod promień gięcia, a łuki i B-spline mają kontrolę promienia. Przewód płaski leży w jednej płaszczyźnie, bez skręcania. Bryła przewodu jest B-Rep i ma kontrolę kolizji. Uchwyty (klipsy, opaski, kanały, prowadnice narożne, odciążenia) są połączone z obudową. Po przesunięciu komponentu przewody przeliczają się.
+- **Optymalizacja obudowy** (etap 21). Tryb A zmienia tylko orientację obudowy. Tryb B zmienia też rozmieszczenie i obroty komponentów, ale tylko jako propozycję. Cele mają wagi: objętość, materiał, masa, wymiary, długość przewodów. Ograniczenia: blokady, dno, złącza przy ściance, strefy serwisowe i zabronione. Szybki etap na ramkach poprzedza dokładną kontrolę wariantów na B-Rep. Lista wariantów pokazuje porównanie i podgląd. Zastosuj to jeden krok historii. Program nie gwarantuje optimum globalnego.
+- **Dopasowanie przestrzenne 3D** (etap 22):
+  - analiza i strefa ochronna komponentów (odsunięcie B-Rep albo OBB / AABB), odległości i rozłączne obszary;
+  - otoczka wypukła 3D (QuickHull, płaszczyzny podparcia, dualność biegunowa, dokładna kontrola zawierania);
+  - obudowa z przekrojów (otoczki 2D w stacjach, powierzchnie prostokreślne, kontrola analityczna, osobne obudowy dla rozłącznych obszarów);
+  - kształt organiczny (powierzchnia B-spline z wygładzaniem);
+  - ścianki stałe albo z lokalną grubością dna i pokrywy;
+  - podział na korpus i pokrywę z zakładką lub wpustem;
+  - walidacja odstępów, minimalnej grubości i wyjmowania pokrywy.
+- **Nowe narzędzie Wzory → Wentylacja**: uniwersalny generator otworów i perforacji na dowolnych bryłach i powierzchniach (płaskie, walec, stożek, kula, torus, B-spline, obudowy, import STEP).
+  - Biblioteka 47 wzorów i 10 wzorów maskownic wentylatorów (25-200 mm, rozstaw otworów montażowych z tabeli) z miniaturami, wyszukiwaniem, ulubionymi i szablonami użytkownika (import / eksport).
+  - 17 układów i tryby wypełniania A-F. Tryb krawędzi do wyboru. Gradienty 10 parametrów (8 kierunków, 7 funkcji). Do tego wzory mieszane, Voronoi, Gyroid 2D i Gyroid 3D (wycięcie albo osobna bryła), własny wzór ze szkicu oraz import SVG / DXF z kontrolą konturów.
+  - Rodzaje otworów: przelotowy, ślepy, zagłębienie, stożkowy, stopniowany, ukośny, o zmiennym przekroju, fazowany, zaokrąglony, kanał, żaluzje. Kierunki cięcia: normalna, oś, wektor, kąt, promieniowo. Tryby głębokości do wyboru.
+  - Wiele ścian: niezależnie, wspólny rzut, kontynuacja przez krawędzie i zaokrąglenia, zawijanie. Odwzorowania na powierzchniach zakrzywionych do wyboru.
+  - Strefy zabronione (prostokąt, okrąg, wielokąt, komponent, szkic). Margines od istniejących otworów. Program wykrywa żebra i słupki za ścianką. Pojedyncze otwory można edytować: przesunąć, zmienić, usunąć, zablokować, dodać.
+  - Statystyki powierzchni otwartej i usuniętej masy. Trzy poziomy podglądu z uchwytami. Krok historii z regeneracją, Cofnij / Ponów, Esc / Enter.
+  - Tysiące otworów cięte są kawałkami. Wyniki pomiarów na płycie 400 × 300: 1000 otworów ok. 9 s, 5000 ok. 43 s, 10 000 ok. 89 s.
+- **Połącz szkice**: szkic połączony z kilku zamkniętych kształtów działa teraz w Wyciągnięciu i Wycięciu, także w innej bryle. Wcześniej wskazanie go powodowało błąd. Każdy kształt jest osobnym profilem, a kształt leżący wewnątrz innego jest otworem.
+- **Przeciągnięcie wzdłuż ścieżki**: ścieżką może być linia narysowana narzędziem Szkic na walcu albo Szkic na narożniku. Ścieżka biegnie po powierzchni bryły tak, jak ją widać: na walcu i zaokrągleniu jako krzywa na powierzchni, na ostrym narożniku łamie się na krawędzi.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.61 — Generator obudów, etap 19: panel sterowania
+
+- **Panel sterowania** (Obudowy → Panel sterowania): ramki wyświetlaczy LCD / OLED i ekranów dotykowych (powierzchnia aktywna osobno od modułu, ramka z każdej strony, montaż na równi / poniżej / powyżej, podpory, miejsce na złącze), zagłębienia, otwory pod enkodery i potencjometry, pokrętła (5 kształtów, wałki okrągłe / D / sześciokątne / wielowypustowe / z profilu), przyciski mechaniczne (nasadka, trzpień, ogranicznik, prowadnica, kontrola spoczynku i naciśnięcia), przyciski membranowe, suwaki, przełączniki, prowadnice światła (proste, stopniowane, zakrzywione), maskownice głośników, otwory mikrofonowe, okna ochronne; rozmieszczanie (wyrównanie, środek, symetria, rozstaw, szyk). Elementy ruchome i okna to osobne bryły.
 
 ### 0.5.60 — Generator obudów, etapy 17-18: mocowania zewnętrzne i przegrody wewnętrzne
 

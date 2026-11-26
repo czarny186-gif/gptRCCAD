@@ -22,7 +22,7 @@ import weakref
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'split': 'split', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text', 'revolve': 'revolve', 'shell': 'shell', 'sweep': 'sweep', 'loft': 'loft', 'sheet': 'sheet', 'flange': 'flange', 'sheetbuild': 'flange', 'sheetmode':'unfold_sheet', 'unfold_sheet':'unfold_sheet', 'fold_sheet':'fold_sheet', 'sheet_sync':'sheet_sync', 'thread': 'thread',
-         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'gear': 'gear', 'gear_pair': 'gearpair', 'sketch_fillet': 's_sfillet', 'sketch_join': 's_sjoin', 'sketch_mirror': 's_smirror', 'reblend': 'mod', 'enclosure': 'enclosure', 'enc_hole': 'enchole', 'enc_vent': 'encvent', 'enc_rib': 'encrib', 'enc_ext': 'encext', 'enc_part': 'encpart', 'enc_panel': 'encpanel', 'enc_regen': 'enclosure', 'enc_mode': 'enclosure', 'enc_convert': 'enclosure', 'twist': 'twist', 'link': 'link'}
+         'ply': 'ply', 'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'ply_joints': 'ply_joints', 'ply_unfold': 'ply_unfold', 'ply_fold': 'ply_fold', 'tabwall': 'tabwall', 'scale': 'scale', 'color': 'color', 'matchsize': 'matchsize', 'tilt': 'tilt', 'gear': 'gear', 'gear_pair': 'gearpair', 'sketch_fillet': 's_sfillet', 'sketch_join': 's_sjoin', 'sketch_mirror': 's_smirror', 'reblend': 'mod', 'enclosure': 'enclosure', 'enc_hole': 'enchole', 'enc_vent': 'encvent', 'enc_rib': 'encrib', 'enc_ext': 'encext', 'enc_part': 'encpart', 'enc_panel': 'encpanel', 'enc_cable': 'enccable', 'enc_opt': 'encopt', 'enc_fit': 'encfit', 'vent': 'vent', 'enc_regen': 'enclosure', 'enc_mode': 'enclosure', 'enc_convert': 'enclosure', 'twist': 'twist', 'link': 'link'}
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Obrót': 'revolve', 'Przeciągnięcie': 'sweep', 'Przeciągnięcie (dodaj)': 'sweep', 'Przeciągnięcie (wytnij)': 'cut', 'Przeciągnięcie (część wspólna)': 'intersect', 'Wyciągnięcie złożone': 'loft', 'Wyciągnięcie złożone (dodaj)': 'loft', 'Wyciągnięcie złożone (wytnij)': 'cut', 'Wyciągnięcie złożone (część wspólna)': 'intersect', 'Obrót (dodaj)': 'revolve', 'Obrót (wytnij)': 'cut', 'Obrót (część wspólna)': 'intersect', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',
@@ -30,7 +30,7 @@ LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymi
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file', 'Koło zębate': 'gear', 'Para kół zębatych': 'gearpair',
                'Zaokrąglenie szkicu': 's_sfillet', 'Fazowanie szkicu': 's_sfillet', 'Skręcenie (TWIST)': 'twist',
                'Połączenie szkiców': 's_sjoin', 'Lustro szkicu': 's_smirror', 'Wymiar szkicu': 's_sdim',
-               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod', 'Definicja obudowy': 'enclosure', 'Obudowa prostokątna': 'enclosure', 'Obudowa z pokrywą': 'enclosure', 'Obudowa (kształt)': 'enclosure', 'Otwór na element': 'enchole', 'Wentylacja': 'encvent', 'Żebra wzmacniające': 'encrib', 'Mocowania zewnętrzne': 'encext', 'Przegrody wewnętrzne': 'encpart', 'Panel sterowania': 'encpanel', 'Aktualizacja obudowy': 'enclosure', 'Tryb obudowy': 'enclosure', 'Konwersja obudowy do brył': 'enclosure'}
+               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod', 'Definicja obudowy': 'enclosure', 'Obudowa prostokątna': 'enclosure', 'Obudowa z pokrywą': 'enclosure', 'Obudowa (kształt)': 'enclosure', 'Otwór na element': 'enchole', 'Wentylacja': 'encvent', 'Żebra wzmacniające': 'encrib', 'Mocowania zewnętrzne': 'encext', 'Przegrody wewnętrzne': 'encpart', 'Panel sterowania': 'encpanel', 'Prowadzenie przewodów': 'enccable', 'Optymalizacja obudowy': 'encopt', 'Dopasowanie przestrzenne 3D': 'encfit', 'Wentylacja': 'vent', 'Aktualizacja obudowy': 'enclosure', 'Tryb obudowy': 'enclosure', 'Konwersja obudowy do brył': 'enclosure'}
 
 
 def _num(value, unit=''):
@@ -280,14 +280,13 @@ def _group_regions(plane, members, bodies=None):
     (tak samo jak przy wskazywaniu obszaru w oknie), inaczej przeliczenie historii gubiłoby takie kroki.
     bodies: gdy podane, obszary dzieli też obrys ścian brył leżących w tej płaszczyźnie (szkic wychodzący poza ścianę)."""
     try:
-        faces = kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
+        faces = kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [w for b in members for w in kernel.closed_wires(b.shape)])
     except Exception:
         faces = []
     if not faces:
         for b in members:
             try:
-                if b.shape.IsClosed():
-                    faces.append(cq.Face.makeFromWires(b.shape))
+                faces += kernel.profile_faces(b.shape)
             except Exception:
                 continue
     if bodies is not None and faces:
@@ -340,12 +339,12 @@ def _material_faces(sketches):
     a kontury nakładające się bez zagnieżdżenia (częste w glifach, np. k, s, t) łączą się w jedną sumę - nic nie wypada z wyciągnięcia."""
     items = []
     for b in sketches:
-        try:
-            if b.shape.IsClosed():
-                face = cq.Face.makeFromWires(b.shape)
-                items.append((face, [np.array(v.toTuple(), float) for v in b.shape.Vertices()], float(face.Area())))
-        except Exception:
-            continue
+        for w in kernel.closed_wires(b.shape):          # szkic połączony: każdy zamknięty obrys osobno
+            try:
+                face = cq.Face.makeFromWires(w)
+                items.append((face, [np.array(v.toTuple(), float) for v in w.Vertices()], float(face.Area())))
+            except Exception:
+                continue
     if not items:
         return []
     depth = []
@@ -399,7 +398,7 @@ def _outline_point(shape):
     hit = _OUTLINES.get(id(shape))
     if hit is not None and hit[0] is shape:
         return hit[1]
-    point = _inner_point(cq.Face.makeFromWires(shape))
+    point = _inner_point(cq.Face.makeFromWires(shape) if not isinstance(shape, cq.Compound) else kernel.profile_faces(shape)[0])
     if len(_OUTLINES) > 2048:
         _OUTLINES.clear()
     _OUTLINES[id(shape)] = (shape, point)
@@ -415,7 +414,7 @@ def coplanar_sketches(face, normal, bodies):
         if b.kind != 'sketch' or not b.visible:
             continue
         try:
-            if not b.shape.IsClosed():
+            if not kernel.is_closed(b.shape):
                 continue
             if bool((np.abs((_vertex_array(b.shape) - origin) @ n) > 1e-4).any()):
                 continue
@@ -477,6 +476,13 @@ def _describe(profiles, bodies=(), merge=True):
             out.append({'k': 'sketch', 'id': src['id']})
         elif src['kind'] == 'region':
             center = np.array(src['center'], float)
+            face = src.get('face')
+            if face is not None:          # pierścień / kształt wklęsły: środek ciężkości leży poza obszarem (np. w otworze) - punkt wewnątrz
+                try:
+                    if not kernel.face_contains(face, center):
+                        center = np.asarray(_inner_point(face), float)
+                except Exception:
+                    pass
             spec = {'k': 'region', 'plane': plane_to_json(src['plane']), 'center': [float(c) for c in center], 'split': 1}
             owner=owners.get(src.get('source_id'))
             if owner is not None and owner.kind=='sketch':
@@ -662,7 +668,13 @@ def resolve_profiles(bodies, spec):
                 n = tuple(float(c) for c in normal)
                 return [dict(wire=r.outerWire(), normal=n, plane=None, face=r, spent=[b.id for b in sketches]) for r in regions]
     if spec['k'] != 'textgroup':
-        return [resolve_profile(bodies, spec)]
+        src = resolve_profile(bodies, spec)
+        if spec['k'] == 'sketch' and isinstance(src.get('wire'), cq.Compound):     # szkic połączony z kilku kształtów: każdy obszar osobno
+            faces = kernel.profile_faces(src['wire']) if kernel.is_closed(src['wire']) else []
+            if not faces:
+                raise kernel.CadError('Połączony szkic nie tworzy zamkniętych obszarów - zamknij wszystkie kształty.')
+            return [dict(src, face=f, wire=f.outerWire()) for f in faces]
+        return [src]
     plane = plane_from_json(spec['plane'])
     groups = sketch_groups(bodies)
     found = groups.get(plane_key(plane))
@@ -1360,7 +1372,11 @@ def profile_face(wire):
     if hit is not None and hit[0] is wire:
         return hit[1]
     try:
-        face = cq.Face.makeFromWires(wire)
+        if isinstance(wire, cq.Compound):        # szkic połączony: jedna ściana tylko, gdy obrysy tworzą jeden obszar (np. z otworami)
+            faces = kernel.profile_faces(wire) if kernel.is_closed(wire) else []
+            face = faces[0] if len(faces) == 1 else None
+        else:
+            face = cq.Face.makeFromWires(wire)
     except Exception:
         face = None
     if len(_PROFILE_FACES) > 1024:
@@ -1429,6 +1445,12 @@ def resolve_path(bodies, spec):
     """Ścieżka przeciągnięcia: cały szkic (łamana, łuk) albo krawędź bryły odnaleziona po odwołaniu."""
     body = _body(bodies, spec['id'])
     if spec['k'] == 'sketch':
+        surface = (body.meta or {}).get('surface')
+        if surface:            # linia narysowana szkicem na walcu / narożniku: ścieżka biegnie po powierzchni bryły
+            target = next((b for b in bodies if b.id == surface.get('target') and b.kind == 'solid'), None)
+            if target is None:
+                raise kernel.CadError('Bryła pod ścieżką (szkic na powierzchni) już nie istnieje.')
+            return kernel.surface_path(target.shape, kernel.path_wire(body.shape), surface['normal'], kernel.plane_origin(body.plane))
         return kernel.path_wire(body.shape)
     index = edge_indices(body.shape, [spec['ref']])[0]
     return kernel.path_wire(body.shape.Edges()[index])
@@ -1814,6 +1836,45 @@ def run_enc_part(bodies, recipe):
 def run_enc_panel(bodies, recipe):
     """Generator obudów: panel sterowania - rccad.enclosure_panel_ui.run."""
     from .enclosure_panel_ui import run
+    return run(bodies, recipe)
+
+
+def run_enc_cable(bodies, recipe):
+    """Generator obudów: prowadzenie przewodów - rccad.enclosure_cable_ui.run."""
+    from .enclosure_cable_ui import run
+    return run(bodies, recipe)
+
+
+def run_enc_opt(bodies, recipe):
+    """Generator obudów: zatwierdzony wariant optymalizacji - rccad.enclosure_optimize_ui.run."""
+    from .enclosure_optimize_ui import run
+    return run(bodies, recipe)
+
+
+def run_enc_fit(bodies, recipe):
+    """Generator obudów: dopasowanie przestrzenne 3D - rccad.enclosure_fit_ui.run."""
+    from .enclosure_fit_ui import run
+    return run(bodies, recipe)
+
+
+def run_vent(bodies, recipe):
+    """Wzory: Wentylacja - otwory i perforacje na powierzchniach bryły (rccad.vent_feature); Gyroid 3D - rccad.vent_gyroid."""
+    if recipe.get('gyroid'):
+        from dataclasses import replace
+        from . import vent_gyroid as gy
+        import cadquery as cq
+        tb = _body(bodies, recipe['target'])
+        a = (recipe.get('areas') or [{}])[0]
+        gp = dict(gy.DEFAULTS, **{k: a[k] for k in gy.DEFAULTS if k in a})
+        res, _rep = gy.build(tb.shape.wrapped, gp)
+        out = list(bodies)
+        if gp['mode'] == 'separate':
+            from .document import Body
+            ids = list(recipe.get('out_ids') or []) or [stable_id(f'{recipe.get("id")}:gyroid', 0)]
+            recipe['out_ids'] = ids
+            return [b for b in out if b.id != ids[0]] + [Body(f'{tb.name} - Gyroid', cq.Shape.cast(res), id=ids[0], folder=tb.folder).prepared()]
+        return _replace(out, replace(tb, shape=cq.Shape.cast(res), mesh=None).prepared())
+    from .vent_feature import run
     return run(bodies, recipe)
 
 
@@ -4230,7 +4291,7 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
     return tuple(out)
 
 
-RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link, 'gear': run_gear, 'gear_pair': run_gear_pair, 'sketch_fillet': run_sketch_fillet, 'sketch_join': run_sketch_join, 'sketch_mirror': run_sketch_mirror, 'reblend': run_reblend, 'enclosure': run_enclosure, 'enc_hole': run_enc_hole, 'enc_vent': run_enc_vent, 'enc_rib': run_enc_rib, 'enc_ext': run_enc_ext, 'enc_part': run_enc_part, 'enc_panel': run_enc_panel, 'enc_regen': run_enc_regen, 'enc_mode': run_enc_mode, 'enc_convert': run_enc_convert, 'twist': run_twist}
+RUNNERS = {'multi': run_multi, 'ply_panel': run_ply_panel, 'ply_wall': run_ply_wall, 'ply_between': run_ply_between, 'ply_joints': run_ply_joints, 'ply_fold': run_ply_fold, 'sheet_tabwall': run_sheet_tabwall, 'scale': run_scale, 'delete': run_delete, 'rename': run_rename, 'color': run_color, 'folder': run_folder, 'thread': run_thread, 'thread_real': run_thread_real, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'revolve': run_revolve, 'sweep': run_sweep, 'loft': run_loft, 'pattern': run_pattern, 'mod': run_mod, 'shell': run_shell, 'transform': run_transform, 'mirror': run_mirror, 'split': run_split, 'bool': run_bool, 'sheet': run_sheet, 'flange': run_flange, 'sheetbuild': run_sheetbuild, 'sheetmode':run_sheetmode, 'mate': run_mate, 'featmove': run_featmove, 'tilt': run_tilt, 'link': run_link, 'gear': run_gear, 'gear_pair': run_gear_pair, 'sketch_fillet': run_sketch_fillet, 'sketch_join': run_sketch_join, 'sketch_mirror': run_sketch_mirror, 'reblend': run_reblend, 'enclosure': run_enclosure, 'enc_hole': run_enc_hole, 'enc_vent': run_enc_vent, 'enc_rib': run_enc_rib, 'enc_ext': run_enc_ext, 'enc_part': run_enc_part, 'enc_panel': run_enc_panel, 'enc_cable': run_enc_cable, 'enc_opt': run_enc_opt, 'enc_fit': run_enc_fit, 'vent': run_vent, 'enc_regen': run_enc_regen, 'enc_mode': run_enc_mode, 'enc_convert': run_enc_convert, 'twist': run_twist}
 
 
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -4388,6 +4449,17 @@ def reads(recipe, current):
         return {s['id'] for s in spec.get('sources', [])} | {f['id'] for f in (face, cut) if f.get('id')}
     if kind == 'enc_vent':
         return {recipe['target']}
+    if kind == 'vent':
+        ex = {z.get('id') for z in recipe.get('exclusions') or [] if z.get('id')}
+        sk = {(a.get('region') or {}).get('sketch') for a in recipe.get('areas') or [] if (a.get('region') or {}).get('sketch')}
+        return {recipe['target'], *ex, *sk, *(recipe.get('out_ids') or [])}
+    if kind == 'enc_fit':
+        return {*(recipe.get('sources') or []), *(recipe.get('out_ids') or [])}
+    if kind == 'enc_opt':
+        return set(recipe.get('reads') or []) or None
+    if kind == 'enc_cable':
+        return {recipe['target'], *(recipe.get('out_ids') or []), *(recipe.get('reads') or []),
+                *(ep['comp'] for ep in (recipe.get('start') or {}, recipe.get('end') or {}) if ep.get('comp'))}
     if kind == 'enc_panel':
         return {recipe['target'], *(recipe.get('out_ids') or []), *(it['bore_sketch'] for it in recipe.get('items') or [] if it.get('bore_sketch'))}
     if kind == 'enc_part':

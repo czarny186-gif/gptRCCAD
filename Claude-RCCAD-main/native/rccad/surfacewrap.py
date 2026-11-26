@@ -1029,3 +1029,113 @@ def _split_line(verts, tris, strip, s_line):
         p, q = cut(a, b), cut(c, a)
         out += [(a, p, q), (p, b, c), (p, c, q)]
     return out
+
+
+# ------------------------------------------------------------------ ścieżka przeciągnięcia na bryle
+def _interp(points):
+    """Krzywa B-spline przez punkty (dokładne przejście przez każdy punkt)."""
+    from OCP.GeomAPI import GeomAPI_Interpolate
+    from OCP.TColgp import TColgp_HArray1OfPnt
+    from OCP.gp import gp_Pnt
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    pts = [points[0]]
+    for p in points[1:]:
+        if float(np.linalg.norm(p - pts[-1])) > 1e-6:
+            pts.append(p)
+    if len(pts) < 2:
+        return None
+    if len(pts) == 2:
+        return cq.Edge.makeLine(cq.Vector(*pts[0]), cq.Vector(*pts[1]))
+    arr = TColgp_HArray1OfPnt(1, len(pts))
+    for i, p in enumerate(pts):
+        arr.SetValue(i + 1, gp_Pnt(*map(float, p)))
+    it = GeomAPI_Interpolate(arr, False, 1e-7)
+    it.Perform()
+    if not it.IsDone():
+        raise WrapError('Nie udało się odwzorować ścieżki na powierzchni bryły.')
+    return cq.Edge(BRepBuilderAPI_MakeEdge(it.Curve()).Edge())
+
+
+def _edge_samples(edge, n):
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    c = BRepAdaptor_Curve(edge.wrapped)
+    a, b = c.FirstParameter(), c.LastParameter()
+    ts = np.linspace(a, b, n + 1)
+    return c, ts
+
+
+def wrap_path(shape, path, normal, origin):
+    """Ścieżka narysowana jako szkic na walcu / narożniku przeniesiona na bryłę (tak samo jak szkic na ekranie):
+    odcinki na płaskich ścianach pasa zostają odcinkami, na walcu lub zaokrągleniu - krzywa na powierzchni (B-spline
+    przez gęste punkty dokładnego odwzorowania), a na krawędzi narożnika łamie się dokładnie na krawędzi.
+    None - kształt pod szkicem nieobsługiwany (rzut przybliżony robi wywołujący)."""
+    strip = build_strip(shape, origin, normal, sketch_extent(origin, normal, path))
+    if strip is None:
+        return None
+    breaks = sorted({g.s0 for g in strip.segs[1:]})
+    rmin = min([g.r for g in strip.segs if g.kind == 'arc'] or [math.inf])
+    step = min(1.0, rmin * .04)
+    from OCP.BRepTools import BRepTools_WireExplorer
+    from OCP.TopAbs import TopAbs_REVERSED
+    wire = path if isinstance(path, cq.Wire) else cq.Wire.assembleEdges(path.Edges())
+    if strip.full is not None:
+        ss = [strip.st(v.toTuple())[0] for v in wire.Vertices()] + [strip.st(e.positionAt(k / 8).toTuple())[0] for e in wire.Edges() for k in range(9)]
+        if min(ss) < strip.full[0] + 1e-6 or max(ss) > strip.full[1] - 1e-6:
+            raise WrapError('Ścieżka jest zbyt długa dla tego walca (obiegłaby go całego). Podziel ją na kilka szkiców.')
+    out = []
+    ex = BRepTools_WireExplorer(wire.wrapped)
+    while ex.More():
+        e = cq.Edge(ex.Current())
+        rev = ex.Current().Orientation() == TopAbs_REVERSED
+        ex.Next()
+        n = max(2, int(math.ceil(e.Length() / step))) if math.isfinite(step) else 2
+        c, ts = _edge_samples(e, n)
+        if rev:
+            ts = ts[::-1]
+        pf = lambda t: np.array(c.Value(float(t)).Coord(), float)
+        sf = lambda t: strip.st(pf(t))[0]
+        # parametry przecięcia z krawędziami pasa (bisekcja na każdym odcinku próbkowania)
+        cuts = []
+        for t0, t1 in zip(ts[:-1], ts[1:]):
+            s0, s1 = sf(t0), sf(t1)
+            for b in breaks:
+                if (s0 - b) * (s1 - b) < 0:
+                    lo, hi = t0, t1
+                    for _ in range(60):
+                        mid = (lo + hi) / 2
+                        if (sf(lo) - b) * (sf(mid) - b) <= 0:
+                            hi = mid
+                        else:
+                            lo = mid
+                    cuts.append(((lo + hi) / 2, b))
+        allt = sorted(set(list(ts) + [t for t, _ in cuts]), reverse=rev)
+        cut_t = {t for t, _ in cuts}
+        runs, cur = [], []
+        for t in allt:
+            cur.append(t)
+            if t in cut_t:
+                runs.append(cur)
+                cur = [t]
+        if len(cur) > 1:
+            runs.append(cur)
+        straight = e.geomType() == 'LINE'
+        for run in runs:
+            if len(run) < 2:
+                continue
+            mid = sf((run[0] + run[-1]) / 2)
+            g = strip.seg_at(mid)
+            ends = [g.point(*strip.st(pf(t))) for t in (run[0], run[-1])]
+            if g.kind == 'plane' and straight:
+                if float(np.linalg.norm(ends[1] - ends[0])) > 1e-7:
+                    out.append(cq.Edge.makeLine(cq.Vector(*ends[0]), cq.Vector(*ends[1])))
+                continue
+            pts = [g.point(*strip.st(pf(t))) for t in run]
+            ed = _interp(pts)
+            if ed is not None:
+                out.append(ed)
+    if not out:
+        raise WrapError('Ścieżka nie leży na powierzchni bryły.')
+    try:
+        return cq.Wire.assembleEdges(out)
+    except Exception as exc:
+        raise WrapError('Ścieżka na powierzchni nie tworzy ciągłej linii.') from exc

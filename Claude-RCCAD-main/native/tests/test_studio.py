@@ -55,7 +55,7 @@ class StudioTests(unittest.TestCase):
 
     def preview(self):
         end=time.monotonic()+20
-        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None),getattr(self.w,'_ex_timer',None),getattr(self.w,'_ep_timer',None),getattr(self.w,'_pn_timer',None)) if t is not None]
+        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None),getattr(self.w,'_ex_timer',None),getattr(self.w,'_ep_timer',None),getattr(self.w,'_pn_timer',None),getattr(self.w,'_cb_timer',None),getattr(self.w,'_ft_timer',None)) if t is not None]
         while any(t.isActive() for t in timers) and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
             self.app.processEvents();time.sleep(.005)
         while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
@@ -4182,6 +4182,79 @@ class StudioTests(unittest.TestCase):
         other=Body('Inna',k.polyline('XZ',[(0,0),(5,0)]),'sketch','XZ').prepared()
         with self.assertRaises(k.CadError):hist.run_sketch_join([sides[0],other],dict(type='sketch_join',ids=[sides[0].id,other.id]))
 
+    # 0.5.62: połączony szkic z kilku zamkniętych kształtów (prostokąt + okrąg + prostokąt z otworem) - wyciągnięcie i wycięcie
+    def test_joined_closed_sketches_extrude_and_cut(self):
+        w=self.w;box=Body('Kostka',k.transform(k.box(80,40,10),(-10,-15,0)),id='K').prepared()
+        a=Body('A',k.transform(k.polyline('XY',[(0,0),(10,0),(10,10),(0,10),(0,0)]),(0,0,10)),'sketch','XY',id='A').prepared()
+        b=Body('B',k.transform(k.sketch('circle','XY',6,x=25,y=5),(0,0,10)),'sketch','XY',id='B').prepared()
+        c=Body('C',k.transform(k.polyline('XY',[(35,-8),(55,-8),(55,12),(35,12),(35,-8)]),(0,0,10)),'sketch','XY',id='C').prepared()
+        d=Body('D',k.transform(k.sketch('circle','XY',4,x=45,y=2),(0,0,10)),'sketch','XY',id='D').prepared()
+        w.document.commit([box,a,b,c,d]);w.refresh();w.set_mode('plane');w.plane_picked('XY')
+        w.selected=['A','B','C','D'];w.choose_tool('sjoin');w.apply_sketch_join();self.wait()
+        sk=[x for x in w.document.bodies if x.kind=='sketch'];self.assertEqual(len(sk),1);self.assertTrue(k.is_closed(sk[0].shape))
+        faces=k.profile_faces(sk[0].shape);self.assertEqual(len(faces),3)                     # okrąg D to otwór w prostokącie C
+        area=100+math.pi*9+(400-math.pi*4)
+        self.assertAlmostEqual(sum(f.Area() for f in faces),area,3)
+        key,(plane,members)=next(iter(w._drawn_sketches().items()))
+        self.assertGreaterEqual(len(w._regions_for(key,plane,members)),3)                     # obszary do wskazania w oknie
+        w.selected=[sk[0].id];w.set_mode('extrude')
+        w.ex_op.setCurrentIndex(w.ex_op.findData('cut'));w.ex_value.setValue(-4);self.wait()
+        w.apply_extrude();self.wait()
+        solid=next(x for x in w.document.bodies if x.kind=='solid')
+        self.assertAlmostEqual(solid.shape.Volume(),80*40*10-4*area,1)
+        infos,cur=w.document.infos();op=infos[-1]['op'];base=w.document.states()[cur-1][0]
+        again=hist.run_recipe(base,op)                                                     # przeliczenie z historii: pierścień C-D, nie okrąg D
+        self.assertAlmostEqual(next(x for x in again if x.kind=='solid').shape.Volume(),solid.shape.Volume(),2)
+        w.undo();self.wait()
+        steps=hist.run_extrude(w.document.bodies,dict(profiles=[dict(k='sketch',id=sk[0].id)],d1=5,mode='new',dir='one'))
+        self.assertAlmostEqual(sum(x.shape.Volume() for x in steps if x.kind=='solid' and x.id!='K'),5*area,2)
+
+    # 0.5.62: Przeciągnięcie wzdłuż linii narysowanej szkicem na walcu / na narożniku - ścieżka biegnie po bryle
+    def test_sweep_along_line_sketched_on_cylinder_and_corner(self):
+        w=self.w
+        def tube_at(path,r=.8):
+            p0=path.startPoint();t=path.tangentAt(0)
+            return cq.Wire.makeCircle(r,p0,t)
+        def run(target,frame_args,pts,check):
+            frame=k.face_frame(*frame_args);f=k.frame_of(frame)
+            pl=cq.Plane(origin=f.origin,xDir=f.xdir,normal=f.normal)
+            line=cq.Workplane(pl).polyline(pts).val()
+            sk=Body('Ścieżka',line,'sketch',frame,meta={'surface':{'target':target.id,'normal':list(map(float,f.normal))}}).prepared()
+            w.document.commit([target,sk]);w.refresh()
+            path=hist.resolve_path(w.document.bodies,dict(k='sketch',id=sk.id))
+            self.assertTrue(path.IsClosed() is False)
+            for e in path.Edges():
+                for q in (0,.25,.5,.75,1):
+                    check(np.array(e.positionAt(q).toTuple()))
+            prof=Body('Profil',tube_at(path),'sketch','XY').prepared()
+            w.document.commit([target,sk,prof]);w.refresh();w.set_mode('sweep')
+            src=dict(kind='sketch',id=prof.id,face=None,wire=prof.shape,plane=None,normal=tuple(path.tangentAt(0).toTuple()),center=prof.shape.Center().toTuple())
+            w.sw_profiles=[src];w.sw_path=None
+            with patch.object(w.view,'nearest_edge',return_value=(sk.id,0)):w._sw_pick_path(5,5)
+            self.assertIsNotNone(w.sw_path)
+            w.sw_op.setCurrentIndex(w.sw_op.findData('new'));self.wait()
+            w.apply_sweep();self.wait()
+            new=[b for b in w.document.bodies if b.kind=='solid' and b.id!=target.id]
+            self.assertEqual(len(new),1);self.assertTrue(new[0].shape.isValid())
+            self.assertAlmostEqual(new[0].shape.Volume(),math.pi*.8**2*path.Length(),delta=.03*math.pi*.8**2*path.Length())
+            return path
+        cyl=Body('Walec',cq.Workplane().cylinder(40,10).val(),'solid',id='CYL').prepared()
+        p=run(cyl,((10,0,0),(1,0,0)),[(-6,-10),(6,8)],lambda q:self.assertAlmostEqual(math.hypot(q[0],q[1]),10,3))
+        self.assertGreater(p.Length(),math.hypot(12,18)-1e-3)
+        w.set_mode(None)
+        box=Body('Narożnik',cq.Workplane().box(30,30,20).translate((15,15,10)).edges('|Z').fillet(4).val(),'solid',id='BOX').prepared()
+        d=1/math.sqrt(2);c=(30-4+4*d,30-4+4*d,10)
+        p=run(box,(c,(d,d,0)),[(-14,-3),(14,3)],lambda q:self.assertLess(box.shape.distance(cq.Vertex.makeVertex(*map(float,q))),2e-3))
+        self.assertGreater(len(p.Edges()),2)                                            # odcinek - łuk zaokrąglenia - odcinek
+        w.set_mode(None)
+        sharp=Body('Ostry',cq.Workplane().box(30,30,20).translate((15,15,10)).val(),'solid',id='SH').prepared()
+        p=run(sharp,((30,30,10),(d,d,0)),[(-14,-3),(14,3)],lambda q:self.assertLess(sharp.shape.distance(cq.Vertex.makeVertex(*map(float,q))),1e-4))
+        self.assertEqual(len(p.Edges()),2)                                              # łamie się dokładnie na krawędzi
+        infos,cur=w.document.infos();self.assertEqual(infos[-1]['op']['type'],'sweep')
+        again=hist.run_recipe(w.document.states()[cur-1][0],infos[-1]['op'])               # przeliczenie kroku z historii
+        self.assertEqual(len([b for b in again if b.kind=='solid']),2)
+        w.undo();self.wait();self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),1)
+
     # 0.5.44: Lustro szkicu - połowa profilu z odbiciem daje jeden zamknięty szkic; okrąg - kopia po drugiej stronie linii
     def test_sketch_mirror_tool(self):
         w=self.w
@@ -4270,7 +4343,7 @@ class StudioTests(unittest.TestCase):
         import rccad.studio as st
         from rccad import enclosure as encm
         w=self.w
-        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','encrib','encext','encpart','encpanel','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
+        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','encrib','encext','encpart','encpanel','enccable','encopt','encfit','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
         a=Body('Płytka',k.box(40,20,10)).prepared()
         rot=np.array([[np.cos(.5),-np.sin(.5),0],[np.sin(.5),np.cos(.5),0],[0,0,1]])
         r=Body('Obrócona',k.transformed(k.box(30,10,6),rot,np.array([80,0,0]))).prepared()
@@ -5469,6 +5542,320 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait();self.assertEqual(len(w.document.bodies),n0);w.redo();self.wait()
         regen=epm.regenerate(list(w.document.bodies),dict(type='enc_regen',id='L'))
         self.assertEqual(sorted(x.id for x in regen if (x.meta or {}).get('enclosure_mount_of')=='L'),sorted(ids))
+
+    # Generator obudów, etap 20: prowadzenie przewodów - A* na siatce wokseli, łuki o min. promieniu, bryła B-Rep, uchwyty
+    def test_enclosure_stage20_cables(self):
+        from rccad import enclosure as encm, enclosure_cables as CB, enclosure_cable_ui as CU, enclosure_param as epm
+        from rccad.enclosure_library import _cavity
+        a=Body('A',k.box(20,20,10)).prepared();b=Body('B',k.box(20,20,10).translate((60,0,0))).prepared();wall=Body('W',k.box(4,40,14).translate((38,-10,0))).prepared()
+        bodies=[a,b,wall];src=[encm.SourceRef(id=x.id) for x in bodies];env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        sp=encm.EnclosureSpec(sources=src,envelope=env,clearance={k_:14.0 for k_ in ('x-','x+','y-','y+','z-','z+')},walls={k_:2.5 for k_ in ('x-','x+','y-','y+','bottom','top')})
+        out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='E',name='Ob'));E=next(x for x in out if x.id=='E')
+        lay=encm.layout(env,sp,bodies=bodies);cav=_cavity(env,sp,lay)
+        obs=[('A',a.shape.wrapped),('B',b.shape.wrapped),('W',wall.shape.wrapped),('Ob',E.shape.wrapped)]
+        s0,e0=np.array([20.0,10,5]),np.array([60.0,10,5])
+        def check(r,p):
+            self.assertTrue(encm.is_valid(r['solid']));R=max(p.get('min_bend',6.0),CB.cable_radius(dict(CB.DEFAULTS,**p))*1.01)
+            for nm,sh in obs:self.assertLess(encm._volume(encm._boolean('common',r['solid'],sh,'t'))[0],1e-4,nm)
+            self.assertLess(encm._volume(encm._boolean('cut',r['solid'],cav,'t'))[0],1e-3)
+            for sg in r['segments']:
+                if sg[0]=='A':
+                    from OCP.GC import GC_MakeArcOfCircle;from OCP.gp import gp_Pnt
+                    c=GC_MakeArcOfCircle(*[gp_Pnt(*map(float,q)) for q in sg[1:]]).Value().BasisCurve().Radius();self.assertGreater(c,R-1e-6)
+            self.assertAlmostEqual(r['total'],r['length']*(1+dict(CB.DEFAULTS,**p)['spare']/100),6)
+            return r
+        base=dict(diameter=3.0,min_bend=5.0,width=6.0,thickness=1.0,straight=3.0)
+        lens={}
+        for mode in ('shortest','walls','floor','orthogonal','spatial'):
+            for kind in ('round','flat','tube'):
+                p=dict(base,mode=mode,kind=kind);r=check(CB.route(cav,obs,s0,e0,p,[],[1,0,0],[-1,0,0],('A','B')),p);lens[mode,kind]=r['length']
+                if kind=='flat':                                   # taśma: wszystkie odcinki prostopadłe do stałej binormalnej
+                    pts=np.array([q for sg in r['segments'] for q in sg[1:]]);n_=np.linalg.svd(pts-pts.mean(0))[2][-1]
+                    self.assertLess(np.abs((pts-pts.mean(0))@n_).max(),1e-6)
+                if mode=='orthogonal' and kind=='round':
+                    for sg in r['segments']:
+                        if sg[0]=='L':d=CB._unit(sg[2]-sg[1]);self.assertGreater(np.abs(d).max(),1-1e-6)
+        self.assertGreater(lens['orthogonal','round'],lens['shortest','round']-1e-6);self.assertGreater(lens['shortest','round'],40.0)
+        for kind in ('multi','bundle','sleeved','ribbon'):
+            p=dict(base,kind=kind,diameter=2.0,count=3);check(CB.route(cav,obs,s0,e0,p,[],[1,0,0],[-1,0,0],('A','B')),p)
+        wp=[np.array([40.0,38,7])]
+        for mode in ('waypoints','passes'):
+            p=dict(base,mode=mode);r=check(CB.route(cav,obs,s0,e0,p,wp,[1,0,0],[-1,0,0],('A','B')),p)
+            samp=np.array(CB.sample(r['segments'],.5));self.assertLess(np.min(np.linalg.norm(samp-wp[0],axis=1)),8.0)
+        with self.assertRaises(k.CadError):CB.route(cav,obs,s0,e0,dict(base,mode='waypoints'),[],[1,0,0],[-1,0,0])
+        man=[np.array([30.0,38,5]),np.array([50.0,38,5])]
+        p=dict(base,mode='manual');r=check(CB.route(cav,obs,s0,e0,p,man,[1,0,0],[-1,0,0],('A','B')),p)
+        with self.assertRaises(k.CadError):CB.route(cav,obs,s0,e0,p,[],[1,0,0],[-1,0,0])          # prosto przez ściankę W
+        p=dict(base,spline=True);r=check(CB.route(cav,obs,s0,e0,p,[],[1,0,0],[-1,0,0],('A','B')),p)
+        self.assertTrue(any('B-spline' in t for _l,t in r['report']))
+        with self.assertRaises(k.CadError) as cm:CB.route(cav,obs,s0,e0,dict(base,max_len=30.0),[],[1,0,0],[-1,0,0])
+        self.assertIn('dopuszczalne',str(cm.exception))
+        full=k.box(4,80,60).translate((38,-30,-20)).wrapped                                   # przegroda przez całe wnętrze
+        with self.assertRaises(k.CadError) as cm:CB.route(cav,obs+[('Przegroda',full)],s0,e0,base,[],[1,0,0],[-1,0,0])
+        self.assertIn('Przegroda',str(cm.exception))
+        with self.assertRaises(k.CadError) as cm:CB.route(cav,obs,s0,e0,base,[],[1,0,0],[-1,0,0],cancel=lambda:True)
+        self.assertIn('przerwane',str(cm.exception))
+        # uchwyty przy ściance: klipsy otwarte / zamknięte / opaski / kanał / narożne
+        r=CB.route(cav,obs,s0,e0,dict(base,mode='manual'),man,[1,0,0],[-1,0,0],('A','B'))
+        for ck in ('open','closed','tie','channel','corner'):
+            cl=CB.clips(E.shape.wrapped,r,dict(clip=ck,clip_pitch=15.0),[a.shape.wrapped,b.shape.wrapped,wall.shape.wrapped])
+            self.assertGreater(len(cl),0,ck);self.assertTrue(all(encm.is_valid(c) for c in cl))
+        # okno: część, końce na złączach komponentów, punkt pośredni, Zastosuj, Cofnij, przesunięcie komponentu, regeneracja
+        w=self.w;w.document.commit(out);w.refresh();w.set_mode('enccable');self.assertTrue(w.cb_panel.isVisible())
+        w.cbs.update(target='E',start=dict(point=[20.0,10,5],dir=[1.0,0,0],comp=a.id,offset=[20.0,10,5]),end=dict(point=[60.0,10,5],dir=[-1.0,0,0],comp=b.id,offset=[0.0,10,5]),
+                     waypoints=[[30.0,38,5],[50.0,38,5]])
+        w.cb_c['mode'].setCurrentIndex(w.cb_c['mode'].findData('manual'));w.cb_c['clip'].setCurrentIndex(w.cb_c['clip'].findData('closed'))
+        w.cb_f['min_bend'][1].setValue(5.0);w.cb_f['clip_pitch'][1].setValue(15.0);w.cb_name.setText('USB');w.cb_color.setText('#2060c0');w._cb_update()
+        self.preview();self.assertTrue(w.cb_apply.isEnabled(),w.cb_status.text());self.assertIn('Uchwyty',w.cb_info.text())
+        n0=len(w.document.bodies);v0=w.document.get('E').shape.Volume();w.apply_enccable();self.wait();w.set_mode(None)
+        self.assertEqual(len(w.document.bodies),n0+1);self.assertEqual(w.document.infos()[0][-1]['label'],'Prowadzenie przewodów')
+        rec=w.document.get('E').meta['enclosure_cables'][0];cid=rec['out_ids'][0];cab=w.document.get(cid)
+        self.assertEqual(cab.name,'USB');self.assertAlmostEqual(cab.color[2],0xc0/255,6);self.assertGreater(w.document.get('E').shape.Volume(),v0)
+        self.assertEqual(len(w.document.get('E').shape.Solids()),1);self.assertEqual(w.document.get(a.id).shape.Volume(),a.shape.Volume())
+        w.undo();self.wait();self.assertEqual(len(w.document.bodies),n0);w.redo();self.wait();self.assertIsNotNone(w.document.get(cid))
+        bodies2=[x if x.id!=b.id else Body('B',b.shape.translate((0,4,0)),id=b.id).prepared() for x in w.document.bodies]
+        self.assertFalse(CU.stale(list(w.document.bodies),rec));self.assertTrue(CU.stale(bodies2,rec))
+        pre=[x if x.id!=b.id else Body('B',b.shape.translate((0,4,0)),id=b.id).prepared() for x in out]          # wejście kroku (jak przy przeliczaniu historii)
+        moved=CU.run(pre,dict(rec,type='enc_cable'));cab2=next(x for x in moved if x.id==cid)
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape;from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex;from OCP.gp import gp_Pnt
+        def dist(sh):
+            d=BRepExtrema_DistShapeShape(sh.wrapped,BRepBuilderAPI_MakeVertex(gp_Pnt(60.0,14.0,5.0)).Vertex());d.Perform();return d.Value()
+        self.assertLess(dist(cab2.shape),1e-6);self.assertGreater(dist(cab.shape),2.0)                             # koniec poszedł za komponentem
+        self.assertAlmostEqual(next(x for x in moved if x.id==b.id).shape.BoundingBox().ymin,4.0,5)                # komponent nie zmieniony przez przewód
+        self.assertEqual(rec['waypoints'],[[30.0,38,5],[50.0,38,5]])
+        regen=epm.regenerate(list(w.document.bodies),dict(type='enc_regen',id='E'))
+        self.assertEqual([x.id for x in regen if (x.meta or {}).get('enclosure_cable_of')=='E'],[cid])
+
+    # Generator obudów, etap 21: optymalizacja - tryb A (orientacja obudowy), tryb B (propozycja rozmieszczenia), kontrola B-Rep
+    def test_enclosure_stage21_optimize(self):
+        from rccad import enclosure as encm, enclosure_optimize as O, enclosure_optimize_ui as OU
+        self.assertEqual([len(O.rotation_set(r)) for r in O.ROTATIONS],[1,4,24])
+        for R in O.rotation_set('all90'):self.assertAlmostEqual(np.linalg.det(R),1.0,9)
+        clear={s_:2.0 for s_ in O.SIDES};walls={w_:2.0 for w_ in ('x-','x+','y-','y+','bottom','top')}
+        # tryb A: długi element obrócony o 30° - obudowa obrócona razem z nim
+        b=k.transformed(k.box(60,10,8),O._rot((0,0,1),30),np.zeros(3))
+        r=O.run_search([dict(id='a',name='A',points=O._points(b))],{'a':b},np.eye(3),clear,walls,dict(mode='A',weights={'volume':1}))
+        v=r['variants'][0];self.assertTrue(v['exact']['valid']);self.assertAlmostEqual(v['angle']%90,30.0,1)
+        np.testing.assert_allclose(sorted(v['metrics']['dims']),[16.0,18.0,68.0],atol=.05);self.assertLess(v['change']['volume'],-50)
+        self.assertEqual(r['variants'][-1]['angle'] is None or len(r['variants'])<5,True)
+        # tryb B: komponenty rozrzucone; płyta zablokowana, Q na dnie, R ze złączem przy ściance Y+
+        sh={'p':k.box(40,30,2),'q':k.box(10,10,10).translate((80,50,0)),'r':k.box(20,8,15).translate((-40,60,0))}
+        items=[dict(id=i_,name=i_,points=O._points(x)) for i_,x in sh.items()];items[0]['lock']=True
+        r=O.run_search(items,sh,np.eye(3),clear,walls,dict(mode='B',weights={'volume':1},time_limit=8,accuracy='fast'))
+        v=r['variants'][0];self.assertTrue(v['exact']['valid']);self.assertLess(v['change']['volume'],-70);self.assertNotIn('p',v['transforms'])
+        moved={i_:k.transformed(x,np.asarray(v['transforms'][i_]['R']),np.asarray(v['transforms'][i_]['t'])) if i_ in v['transforms'] else x for i_,x in sh.items()}
+        ids=list(moved)
+        for a_ in range(3):
+            for b_ in range(a_+1,3):self.assertLess(encm._volume(encm._boolean('common',moved[ids[a_]].wrapped,moved[ids[b_]].wrapped,'t'))[0],1e-6)
+        items[1]['floor']=True;items[2]['access']=[[0,1.0,0]]
+        r=O.run_search(items,sh,np.eye(3),clear,walls,dict(mode='B',weights={'volume':1,'height':1},time_limit=8,accuracy='fast'))
+        v=r['variants'][0];self.assertTrue(v['exact']['valid'],v['exact']['issues'])
+        q=k.transformed(sh['q'],np.asarray(v['transforms']['q']['R']),np.asarray(v['transforms']['q']['t'])).BoundingBox();self.assertAlmostEqual(q.zmin,0.0,4)
+        rr=k.transformed(sh['r'],np.asarray(v['transforms']['r']['R']),np.asarray(v['transforms']['r']['t'])).BoundingBox()
+        allmax=max(x.BoundingBox().ymax for x in [sh['p'],k.transformed(sh['q'],np.asarray(v['transforms']['q']['R']),np.asarray(v['transforms']['q']['t'])),
+                    k.transformed(sh['r'],np.asarray(v['transforms']['r']['R']),np.asarray(v['transforms']['r']['t']))]);self.assertAlmostEqual(rr.ymax,allmax,4)
+        # strefa zabroniona nad płytą i za małe maksymalne wymiary - warianty niepoprawne nie są pokazane jako poprawne
+        r=O.run_search(items[:2],{'p':sh['p'],'q':sh['q']},np.eye(3),clear,walls,dict(mode='B',weights={'volume':1},forbidden=[[[-1,-1,2],[41,31,40]]],time_limit=5,accuracy='fast'))
+        v=r['variants'][0];self.assertTrue(v['exact']['valid']);qb=k.transformed(sh['q'],np.asarray(v['transforms']['q']['R']),np.asarray(v['transforms']['q']['t'])).BoundingBox()
+        self.assertTrue(qb.xmin>=41-1e-6 or qb.xmax<=-1+1e-6 or qb.ymin>=31-1e-6 or qb.ymax<=-1+1e-6)
+        r=O.run_search(items,sh,np.eye(3),clear,walls,dict(mode='B',weights={'volume':1},max_dims=[20,20,20],time_limit=3,accuracy='fast'))
+        self.assertFalse(any(v_['exact']['valid'] for v_ in r['variants']))
+        with self.assertRaises(k.CadError):O.run_search(items,sh,np.eye(3),clear,walls,dict(mode='B'),cancel=lambda:True)
+        with self.assertRaises(k.CadError):O.run_search(items,sh,np.eye(3),clear,walls,dict(mode='B',weights={}))
+        # okno: tryb B na prawdziwej obudowie, porównanie, Zastosuj jako jeden krok, Cofnij
+        A=Body('A',k.box(30,20,3)).prepared();B=Body('B',k.box(10,10,8).translate((70,40,0))).prepared();C=Body('C',k.transformed(k.box(50,8,6),O._rot((0,0,1),30),np.zeros(3)).translate((0,60,0))).prepared()
+        bodies=[A,B,C];src=[encm.SourceRef(id=x.id) for x in bodies];env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        sp=encm.EnclosureSpec(sources=src,envelope=env,clearance={k_:2.0 for k_ in O.SIDES},walls={k_:2.0 for k_ in ('x-','x+','y-','y+','bottom','top')})
+        out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='E',name='Ob'))
+        w=self.w;w.document.commit(out);w.refresh();w.set_mode('encopt');self.assertTrue(w.op_panel.isVisible());w.encopt_target('E')
+        self.assertEqual(w.op_table.rowCount(),3);w.op_mode.setCurrentIndex(1);w.op_f['time'].setValue(5.0);w.op_c['accuracy'].setCurrentIndex(0)
+        w.op_table.item(0,1).setCheckState(Qt.Checked)
+        v0=w.document.get('E').shape.Volume();pos0={x.id:x.shape.BoundingBox().xmin for x in bodies}
+        w.encopt_search();end=time.monotonic()+120
+        while w.op.get('result') is None and time.monotonic()<end:self.app.processEvents();time.sleep(.01)
+        self.assertGreater(w.op_list.count(),0);self.assertTrue(w.op_apply.isEnabled(),w.op_info.text());self.assertIn('Kontrola B-Rep',w.op_info.text())
+        self.assertEqual({x.id:x.shape.BoundingBox().xmin for x in w.document.bodies if x.id in pos0},pos0)          # podgląd nie zmienia dokumentu
+        n0=len(w.document.states());w.apply_encopt();self.wait();w.set_mode(None)
+        self.assertEqual(w.document.infos()[0][-1]['label'],'Optymalizacja obudowy');self.assertLess(w.document.get('E').shape.Volume(),v0*.6)
+        self.assertEqual(w.document.get(A.id).shape.BoundingBox().xmin,pos0[A.id])
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get('E').shape.Volume(),v0,3);self.assertEqual({x.id:x.shape.BoundingBox().xmin for x in w.document.bodies if x.id in pos0},pos0)
+        # tryb A przez krok: obrócony układ obudowy zapisany w definicji
+        rec=dict(type='enc_opt',target='E',mode='A',transforms={},axes=O.optimize_frame(np.vstack([O._points(x.shape) for x in bodies]),np.eye(3),clear,walls,dict(weights={'volume':1}))[0][0]['axes'])
+        out2=OU.run(list(w.document.bodies),rec);E2=next(x for x in out2 if x.id=='E')
+        self.assertEqual(E2.meta['enclosure']['frame']['mode'],'axes');self.assertTrue(encm.is_valid(E2.shape.wrapped))
+
+    # Generator obudów, etap 22A: analiza przestrzenna i strefa ochronna (odsunięcie B-Rep, rozłączne obszary)
+    def test_enclosure_stage22a_zone(self):
+        from rccad import enclosure as encm, enclosure_fit as F
+        a=Body('A',k.box(30,20,5)).prepared();b=Body('B',cq.Solid.makeCylinder(6,20,cq.Vector(10,10,5))).prepared();c=Body('C',k.box(10,10,10).translate((60,0,0))).prepared()
+        comps=[(x.id,x.name,x.shape) for x in (a,b,c)]
+        r=F.analyse(comps,dict(clearance=2.0))
+        self.assertEqual([x['zone'] for x in r['rows']],['offset']*3);self.assertEqual(r['stats']['regions'],2);self.assertEqual(r['groups'],[['A','B'],['C']])
+        for x in (a,b,c):                                                    # strefa zawiera komponent z odstępem
+            self.assertLess(encm._volume(encm._boolean('cut',x.shape.wrapped,r['zone'],'t'))[0],1e-6)
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        z=[q for q in r['regions'] if encm._volume(encm._boolean('common',q,c.shape.wrapped,'t'))[0]>0][0]
+        self.assertAlmostEqual(encm._volume(z)[0],1000+2*2*300+np.pi*4*30+4/3*np.pi*8,1)          # sześcian 10 odsunięty o 2 (wzór Steinera)
+        r2=F.analyse(comps,dict(clearance=2.0,zone_mode='aabb'));self.assertEqual([x['zone'] for x in r2['rows']],['aabb']*3)
+        self.assertGreater(r2['stats']['zone'],r['stats']['zone'])
+        r3=F.analyse(comps,dict(clearance=2.0,overrides={c.id:5.0}));self.assertGreater(r3['stats']['zone'],r['stats']['zone'])
+        self.assertTrue(any('bliżej' in t for _l,t in r['report']));self.assertTrue(any('rozłączne' in t for _l,t in r['report']))
+        with self.assertRaises(k.CadError):F.analyse(comps,dict(clearance=2.0),cancel=lambda:True)
+        # okno: wybór komponentów, podgląd, Zastosuj, Cofnij, przeliczenie po przesunięciu komponentu
+        w=self.w;w.document.commit([a,b,c]);w.refresh();w.set_mode('encfit');self.assertTrue(w.ft_panel.isVisible())
+        w.ft['ids']=[a.id,c.id];w._ft_update();self.preview();self.assertTrue(w.ft_apply.isEnabled(),w.ft_status.text());self.assertIn('Strefa ochronna',w.ft_info.text())
+        w.apply_encfit();self.wait();w.set_mode(None);self.assertEqual(len(w.document.bodies),4)
+        self.assertEqual(w.document.infos()[0][-1]['label'],'Dopasowanie przestrzenne 3D')
+        zone=[x for x in w.document.bodies if (x.meta or {}).get('enclosure_fit')][0];v0=zone.shape.Volume()
+        w.undo();self.wait();self.assertEqual(len(w.document.bodies),3);w.redo();self.wait();self.assertEqual(len(w.document.bodies),4)
+        from rccad.enclosure_fit_ui import run
+        rec=dict(zone.meta['enclosure_fit'],type='enc_fit')
+        moved=[x if x.id!=c.id else Body('C',k.box(10,10,10).translate((60,0,0)),id=c.id).prepared() for x in (a,b,c)]
+        out=run(moved,dict(rec,params=dict(rec['params'],clearance=3.0)));z2=next(x for x in out if x.id==zone.id)
+        self.assertGreater(z2.shape.Volume(),v0);self.assertEqual(next(x for x in out if x.id==c.id).shape.Volume(),c.shape.Volume())
+
+    # Generator obudów, etap 22B: otoczka wypukła 3D (QuickHull) → bryły B-Rep wnętrza i zewnętrza
+    def test_enclosure_stage22b_hull(self):
+        from rccad import enclosure as encm, enclosure_fit as F
+        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        rng=np.random.default_rng(3);pts=rng.normal(size=(3000,3))*[10,5,3]
+        P,T=F.quickhull(pts);nrm=np.cross(P[T[:,1]]-P[T[:,0]],P[T[:,2]]-P[T[:,0]]);nrm/=np.linalg.norm(nrm,axis=1)[:,None]
+        self.assertLess((pts@nrm.T-np.einsum('ij,ij->i',nrm,P[T[:,0]])).max(),1e-7)                     # wszystkie punkty wewnątrz
+        self.assertEqual(len(T),2*len(np.unique(T))-4)                                                    # Euler: wielościan zamknięty z trójkątów
+        cube=np.array([[x,y,z] for x in (0,1) for y in (0,1) for z in (0,1)],float)*10
+        P,T=F.quickhull(np.vstack([cube,rng.random((80,3))*10]));pol=F.hull_polygons(P,T);self.assertEqual(len(pol),6)
+        self.assertAlmostEqual(encm._volume(F.polyhedron(P,pol))[0],1000.0,6)
+        N,D,c=F.convex_planes(P,pol);self.assertAlmostEqual(encm._volume(F.planes_solid(N,D,c,1.0))[0],12**3,3)   # odsunięcie płaszczyzn
+        with self.assertRaises(k.CadError):F.quickhull(np.c_[rng.random((20,2)),np.zeros(20)])
+        a=Body('A',k.box(30,20,5)).prepared();b=Body('B',cq.Solid.makeCylinder(6,20,cq.Vector(10,10,5))).prepared();c_=Body('C',k.box(10,10,10).translate((60,0,0))).prepared()
+        comps=[(x.id,x.name,x.shape) for x in (a,b,c_)]
+        r=F.analyse(comps,dict(clearance=2.0))
+        from rccad.enclosure_optimize import _points
+        h=F.hull_enclosure(r['zone'],np.vstack([_points(q) for q in r['regions']]),2.0)
+        self.assertTrue(encm.is_valid(h['shell']));self.assertEqual(len(encm._solids(h['shell'])),1)
+        self.assertLess(encm._volume(encm._boolean('cut',r['zone'],h['inner'],'t'))[0],1e-6)              # strefa w środku
+        for x in (a,b,c_):
+            self.assertLess(encm._volume(encm._boolean('common',x.shape.wrapped,h['shell'],'t'))[0],1e-6)
+            d=BRepExtrema_DistShapeShape(x.shape.wrapped,h['shell']);d.Perform();self.assertGreater(d.Value(),2.0-1e-3)
+        np.testing.assert_allclose(encm._volume(h['outer'])[0]-encm._volume(h['inner'])[0],encm._volume(h['shell'])[0],rtol=1e-6)
+        hull_v=encm._volume(h['inner'])[0];box=r['stats']['aabb_volume'];self.assertLess(hull_v,box)        # ciaśniej niż prostopadłościan
+        # okno: tryb otoczki, Zastosuj, Cofnij
+        w=self.w;w.document.commit([a,b,c_]);w.refresh();w.set_mode('encfit');w.ft_mode.setCurrentIndex(w.ft_mode.findData('hull'))
+        w.ft['ids']=[a.id,b.id,c_.id];w._ft_update();self.preview();self.assertTrue(w.ft_apply.isEnabled(),w.ft_status.text());self.assertIn('Otoczka wypukła',w.ft_info.text())
+        w.apply_encfit();self.wait();w.set_mode(None);self.assertEqual(len(w.document.bodies),4)
+        out=[x for x in w.document.bodies if (x.meta or {}).get('enclosure_fit')][0];self.assertTrue(encm.is_valid(out.shape.wrapped))
+        w.undo();self.wait();self.assertEqual(len(w.document.bodies),3)
+
+    # Generator obudów, etapy 22C-22F: zmienny przekrój (loft), powierzchnie organiczne B-spline, ścianki, podział, walidacja
+    def test_enclosure_stage22cf_fit(self):
+        from rccad import enclosure as encm, enclosure_fit as F
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_BSplineSurface
+        a=Body('A',k.box(30,20,5)).prepared();b=Body('B',cq.Solid.makeCylinder(6,20,cq.Vector(10,10,5))).prepared();c_=Body('C',k.box(10,10,10).translate((10,0,25))).prepared()
+        comps=[(x.id,x.name,x.shape) for x in (a,b,c_)]
+        r=F.analyse(comps,dict(clearance=2.0))
+        def inside(h):
+            self.assertLess(encm._volume(encm._boolean('cut',r['zone'],h['inner'],'t'))[0],1e-6)
+            self.assertTrue(encm.is_valid(h['shell']));self.assertEqual(len(encm._solids(h['shell'])),1)
+            self.assertGreater(F.min_wall(h['inner'],h['outer']),2.0-1e-3)
+        # 22C: przekroje (BRepAlgoAPI_Section) + loft; przekrój prostokątny; edycja przekrojów; inna oś
+        h=F.section_enclosure(r['zone'],dict(sections=6));inside(h);self.assertEqual(len(h['stations']),6)
+        h2=F.section_enclosure(r['zone'],dict(sections=6,section='rect'));inside(h2);self.assertGreater(encm._volume(h2['inner'])[0],encm._volume(h['inner'])[0])
+        h3=F.section_enclosure(r['zone'],dict(stations=[dict(t=0),dict(t=.5,offset=3.0),dict(t=1)]));inside(h3);self.assertEqual(len(h3['stations']),3)
+        h4=F.section_enclosure(r['zone'],dict(sections=5,axis=[1,0,0]));inside(h4)
+        # rozłączne obszary: wspólna otoczka / osobne bryły
+        two=[('p','P',k.box(10,10,30).wrapped),('q','Q',k.box(10,10,30).translate((40,0,0)).wrapped)]
+        r2=F.analyse(two,dict(clearance=2.0))
+        sep=F.section_enclosure(r2['zone'],dict(sections=4,disjoint='separate'));self.assertEqual(len(sep['parts']),2)
+        mer=F.section_enclosure(r2['zone'],dict(sections=4,disjoint='merge'));self.assertEqual(len(mer['parts']),1)
+        # 22D: jedna powierzchnia B-spline (nie tysiące trójkątów) + płaskie dno i pokrywa
+        o=F.organic_enclosure(r['zone'],dict(nu=24,nv=8));inside(o)
+        from OCP.TopAbs import TopAbs_FACE;from OCP.TopExp import TopExp_Explorer;from OCP.TopoDS import TopoDS
+        ex=TopExp_Explorer(o['inner'],TopAbs_FACE);kinds=[]
+        while ex.More():kinds.append(BRepAdaptor_Surface(TopoDS.Face_s(ex.Current())).GetType());ex.Next()
+        self.assertEqual(len(kinds),3);self.assertEqual(kinds.count(GeomAbs_BSplineSurface),1)
+        o2=F.organic_enclosure(r['zone'],dict(nu=24,nv=8,smooth=10.0));inside(o2)
+        # 22E: lokalna grubość dna, podział z zakładką, ścianka z odsunięcia; 22F: walidacja
+        res=F.fit(comps,dict(clearance=2.0,mode='hull',wall_bottom=2.0))
+        self.assertGreater(res['material'],F.fit(comps,dict(clearance=2.0,mode='hull'))['material'])
+        res=F.fit(comps,dict(clearance=2.0,mode='hull',split=True,joint='lap',lip=3.0,lip_gap=.2))
+        self.assertEqual([n for n,_s in res['parts']],['Podstawa','Pokrywa']);self.assertFalse([t for l,t in res['report'] if l=='error'])
+        base,lid=(s_ for _n,s_ in res['parts'])
+        self.assertLess(encm._volume(encm._boolean('common',base,lid,'t'))[0],1e-6)
+        self.assertTrue(any('zdejmuje się' in t for _l,t in res['report']))
+        flat=F.fit(comps,dict(clearance=2.0,mode='hull',split=True))
+        self.assertGreater(encm._volume(dict(res['parts'])['Podstawa'])[0],encm._volume(dict(flat['parts'])['Podstawa'])[0])   # wypust
+        res=F.fit(comps,dict(clearance=2.0,mode='hull',wall_method='offset'));self.assertTrue(any('MakeOffsetShape' in t for _l,t in res['report']))
+        bad=F.validate([('X',k.box(10,10,10).wrapped)],comps,dict(clearance=2.0),None,r['zone']);self.assertTrue(any(l=='error' for l,_t in bad))
+        with self.assertRaises(k.CadError):F.fit(comps,dict(mode='nic'))
+        # okno: tryb organiczny, tylko parametry trybu, podział, Zastosuj (dwie bryły w folderze), Cofnij, przeliczenie
+        w=self.w;w.document.commit([a,b,c_]);w.refresh();w.set_mode('encfit');w.ft_mode.setCurrentIndex(w.ft_mode.findData('organic'))
+        w.ft['ids']=[a.id,b.id,c_.id];w._ft_update()
+        self.assertFalse(w.ft_f['sections'].isVisibleTo(w.ft_panel));self.assertTrue(w.ft_f['smooth'].isVisibleTo(w.ft_panel))
+        w.ft_f['nu'].setValue(24);w.ft_f['nv'].setValue(8);w.ft_split.setChecked(True)
+        self.preview();end=time.monotonic()+120
+        while time.monotonic()<end and not w.ft_apply.isEnabled() and 'nie' not in w.ft_status.text():self.app.processEvents();time.sleep(.02)
+        self.assertTrue(w.ft_apply.isEnabled(),w.ft_status.text())
+        w.apply_encfit();end=time.monotonic()+120
+        while w.busy and time.monotonic()<end:self.app.processEvents();time.sleep(.02)
+        w.set_mode(None);parts=[x for x in w.document.bodies if (x.meta or {}).get('enclosure_fit')]
+        self.assertEqual(sorted(x.name for x in parts),['Podstawa','Pokrywa']);self.assertEqual({x.folder for x in parts},{'Obudowa 3D'})
+        rec=dict(parts[0].meta['enclosure_fit'],type='enc_fit')
+        self.assertEqual(rec['params']['mode'],'organic');self.assertTrue(rec['params']['split'])
+        w.undo();self.wait();self.assertEqual(len(w.document.bodies),3)
+
+    # Wentylacja (Wzory): okno, biblioteka, podgląd trzech poziomów, Zastosuj jako krok, Cofnij, regeneracja, szablony
+    def test_vent_tool_window(self):
+        from rccad import vent_feature as VF, vent_library as VL
+        import rccad.studio as st
+        plate=Body('Płyta',cq.Workplane().box(100,60,2).val()).prepared()
+        w=self.w;w.document.commit([plate]);w.refresh()
+        self.assertIn('vent',st.TABS['Wzory']);self.assertIn('vent',w.tools);self.assertIn('vent',st.FAVORITE_TOOLS)
+        w.set_mode('vent');self.assertTrue(w.vn_panel.isVisible())
+        self.assertGreater(w.vn_lib.count(),45)
+        top=[f_ for f_ in plate.shape.Faces() if f_.normalAt().z>.9][0]
+        w.vn.update(target=plate.id,faces=VF.face_refs(plate.shape,[top.wrapped]));w._vn_update()
+        hexes=[w.vn_lib.item(i) for i in range(w.vn_lib.count()) if w.vn_lib.item(i).data(Qt.UserRole)=='hex'][0]
+        w._vn_library_apply(hexes);self.assertEqual(w._vn_area()['kind'],'hex')
+        self.assertTrue(w.vn_w[('area','corner')][1].isVisibleTo(w.vn_panel));self.assertFalse(w.vn_w[('area','turns')][1].isVisibleTo(w.vn_panel))
+        def wait_preview():
+            end=time.monotonic()+120
+            while time.monotonic()<end and (w._vn_timer.isActive() or any(s_['running'] or s_['pending'] for s_ in w._pv.values())):
+                self.app.processEvents();time.sleep(.01)
+            self.app.processEvents()
+        wait_preview();self.assertTrue(w.vn_apply.isEnabled(),w.vn_status.text());self.assertIn('Otwory:',w.vn_stats.text())
+        n_fast=w.vn['result']['stats']['count'];self.assertGreater(n_fast,50)
+        w.vn_level.setCurrentIndex(w.vn_level.findData('spatial'));wait_preview();self.assertIsNotNone(w.vn['result'].get('tool_mesh'))
+        w.vn_level.setCurrentIndex(w.vn_level.findData('exact'));wait_preview();self.assertIn('Po wycięciu',w.vn_stats.text())
+        self.assertEqual(w.document.get(plate.id).shape.Volume(),plate.shape.Volume())                     # podgląd nie zmienia dokumentu
+        # manipulator: przesunięcie wzoru aktualizuje pole w panelu
+        w.vent_handle_dragged('vent:x',5.0);self.assertAlmostEqual(w.vn_w[('area','ox')][1].value(),5.0,6);w.vent_handle_released('vent:x')
+        wait_preview();n_fast=w.vn['result']['stats']['count']
+        # edycja pojedynczego otworu: usunięcie
+        pl=w.vn['result']['plan'];h=[x for x in pl['plans'][0]['holes'] if x['status']=='ok'][0]
+        P=pl['plans'][0]['mappers'][0].to3d(h['c'])[0];w._vn_pick('edit');w._vn_edit_click(P,False);self.assertEqual(len(w.vn['sel']),1)
+        w._vn_edit_flag('deleted',True);wait_preview();self.assertEqual(w.vn['result']['stats']['count'],n_fast-1)
+        v0=plate.shape.Volume();w.apply_vent();end=time.monotonic()+120
+        while w.busy and time.monotonic()<end:self.app.processEvents();time.sleep(.02)
+        w.set_mode(None);self.assertEqual(w.document.infos()[0][-1]['label'],'Wentylacja');v1=w.document.get(plate.id).shape.Volume()
+        self.assertAlmostEqual(v0-v1,(n_fast-1)*VF.vs.profile_area(VF.vs.profile('hex',5.0))*2,0)
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(plate.id).shape.Volume(),v0,6);w.redo();self.wait()
+        # regeneracja po zmianie bryły: grubsza płyta - otwory dalej przez całą ściankę
+        from rccad.history import run_vent
+        rec=w.document.infos()[0][-1]['op'];self.assertEqual(rec['type'],'vent')
+        thick=Body('Płyta',cq.Workplane().box(100,60,4).val(),id=plate.id).prepared()
+        out=run_vent([thick],dict(rec))
+        self.assertAlmostEqual(thick.shape.Volume()-out[0].shape.Volume(),(n_fast-1)*VF.vs.profile_area(VF.vs.profile('hex',5.0))*4,0)
+        # szablony: zapis, lista, zmiana nazwy, duplikat, eksport / import, usunięcie
+        import tempfile,os
+        cfg=dict(area=dict(VL.preset('voronoi')),cut=dict(VF.CUT_DEFAULTS))
+        VL.save_template('Test Voronoi',cfg,'Testy');names=[t['name'] for t in VL.templates()];self.assertIn('Test Voronoi',names)
+        VL.rename_template('Test Voronoi','Test V2');dup=VL.duplicate_template('Test V2');self.assertIn(dup,[t['name'] for t in VL.templates()])
+        path=os.path.join(tempfile.mkdtemp(),'t.json');self.assertGreaterEqual(VL.export_templates(path),2)
+        for n_ in ('Test V2',dup):VL.delete_template(n_)
+        self.assertEqual(VL.import_templates(path),2)
+        for t in VL.templates():
+            if t['name'].startswith('Test V2'):VL.delete_template(t['name'])
 
     # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
     def test_enclosure_stage14a_print(self):

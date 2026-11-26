@@ -1298,7 +1298,10 @@ class EnclosureTools:
                 spec.sources.append(enc.SourceRef(id=b.id, name=b.name, kind=b.kind, source=getattr(b, 'source', '')))
         mode = self.enc_frame.currentData()
         face = self.enc['face']
-        spec.frame = enc.FrameSpec(mode=mode, face=dict(id=face['id'], point=face['point']) if (mode == 'face' and face) else None)
+        if mode == 'axes':                                   # układ z optymalizacji: osie zachowane przy edycji
+            spec.frame = enc.FrameSpec(mode=mode, face=dict(axes=(face or {}).get('axes') or [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]]))
+        else:
+            spec.frame = enc.FrameSpec(mode=mode, face=dict(id=face['id'], point=face['point']) if (mode == 'face' and face) else None)
         spec.mode = self.enc_mode.currentData()
         spec.shape = self.enc_shape.currentData()
         if spec.shape != 'box':
@@ -1349,7 +1352,7 @@ class EnclosureTools:
         self.enc_face_button.setText('Kliknij płaską ścianę…' if self.enc['picking_face'] else
                                      ('Wskaż inną ścianę' if face else 'Wskaż ścianę orientacji'))
         self.enc_step2.set_state('done' if (mode != 'face' or face) else 'active',
-                                 {'global': 'globalny', 'local': 'lokalny (OBB)'}.get(mode) or (f'ściana · {face["name"]}' if face else 'wskaż ścianę'))
+                                 {'global': 'globalny', 'local': 'lokalny (OBB)', 'axes': 'obrócony (optymalizacja)'}.get(mode) or (f'ściana · {face["name"]}' if face else 'wskaż ścianę'))
         self.view.tints = {i: SOURCE_TINT for i in ids}          # elementy źródłowe podświetlone
         env, error = None, None
         self.enc['env'] = None

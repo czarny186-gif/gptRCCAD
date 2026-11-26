@@ -181,23 +181,10 @@ def area_region(p, frame):
 
 
 def _cut_many(shape, tools):
-    """Cięcie zbiorcze: jedna operacja Boolean ze wszystkimi narzędziami (równolegle, z prefiltrem OBB) - nowa ściana z
-    otworami powstaje raz, a nie po każdej partii."""
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-    from OCP.TopTools import TopTools_ListOfShape
-    args, tl = TopTools_ListOfShape(), TopTools_ListOfShape()
-    args.Append(shape)
-    for t in tools:
-        tl.Append(t)
-    op = BRepAlgoAPI_Cut()
-    op.SetArguments(args)
-    op.SetTools(tl)
-    op.SetRunParallel(True)
-    op.SetUseOBB(True)
-    op.Build()
-    if not op.IsDone():
-        raise kernel.CadError('Wycięcie otworów wentylacyjnych nie powiodło się.')
-    return op.Shape()
+    """Cięcie zbiorcze - wspólny silnik narzędzia Wentylacja (rccad.vent_cut.cut_many: jedna operacja Boolean ze
+    wszystkimi narzędziami, równolegle, prefiltr OBB)."""
+    from .vent_cut import cut_many
+    return cut_many(shape, tools)
 
 
 def tools(target_shape, frame, p):

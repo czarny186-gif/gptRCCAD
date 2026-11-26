@@ -12,7 +12,11 @@ _PROFILES=LRU(96*1024*1024,max_entries=2048)
 def _profile(shape,tol):
     key=(id(shape),tol);cached=_PROFILES.get(key)
     if cached is not None and cached[0] is shape:return cached[1:]
-    if not isinstance(shape,cq.Face) and not shape.IsClosed():return None
+    if not isinstance(shape,cq.Face) and not k.is_closed(shape):return None
+    if isinstance(shape,cq.Compound):
+        fs=k.profile_faces(shape)
+        if len(fs)!=1:return None
+        shape=fs[0]
     face=shape if isinstance(shape,cq.Face) else cq.Face.makeFromWires(shape)
     if not k.is_planar_face(face) or not face.isValid():return None
     mesh=k.display_mesh(face,tol)

@@ -1327,6 +1327,28 @@ class CadView(gl.GLViewWidget):
         self.set_preview_mesh(mesh,color=(.3,.8,.5,.55),line_color=(.05,.4,.2,1),width=2)
         self._pattern_preview_items=(tuple(self.preview_items),(has_fill,has_line))
 
+    def set_layers_preview(self, layers):
+        """Podgląd z kilku warstw w różnych kolorach (np. Wentylacja: zielone / żółte / czerwone / szare otwory, strefy
+        zabronione): [(siatka, kolor wypełnienia, kolor linii, grubość)]. Czyści się razem z set_preview_mesh(None)."""
+        for item in self.preview_items:
+            self.removeItem(item)
+        self.preview_items = []
+        for mesh, fill, line, width in layers:
+            if mesh is None:
+                continue
+            if len(mesh.triangles):
+                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=fill, drawEdges=False)
+                item.setGLOptions('translucent')
+                self.addItem(item)
+                self.preview_items.append(item)
+            seg = _segments(mesh.edges.values())
+            if seg is not None:
+                item = SectionLine(pos=seg, color=line, width=width, antialias=True, mode='lines')
+                item.setDepthValue(5)
+                self.addItem(item)
+                self.preview_items.append(item)
+        self.update()
+
     SPLIT_COLORS = {1: ((.30, .80, .50, .62), (.08, .50, .25, 1)), 2: ((.96, .58, .18, .62), (.65, .33, .03, 1))}
 
     def set_split_preview(self, parts, cut=None):
@@ -1823,7 +1845,7 @@ class CadView(gl.GLViewWidget):
                     return body.id
                 continue
             try:
-                if not body.shape.IsClosed():
+                if not kernel.is_closed(body.shape):
                     continue
             except Exception:
                 pass

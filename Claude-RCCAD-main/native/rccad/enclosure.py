@@ -22,8 +22,9 @@ import numpy as np
 from . import kernel
 
 SPEC_VERSION = 4               # 1 - definicja (etap 1); 2 - prostokątna obudowa (etap 2); 3 - podział (etap 4); 4 - kształty (etap 5)
-FRAME_MODES = ('global', 'local', 'face')
-FRAME_LABELS = {'global': 'Globalny (osie X, Y, Z)', 'local': 'Lokalny (dopasowany do elementów)', 'face': 'Ze ściany (wskazana ściana)'}
+FRAME_MODES = ('global', 'local', 'face', 'axes')
+FRAME_LABELS = {'global': 'Globalny (osie X, Y, Z)', 'local': 'Lokalny (dopasowany do elementów)', 'face': 'Ze ściany (wskazana ściana)',
+                'axes': 'Obrócony (z optymalizacji obudowy)'}
 SOURCE_KINDS = ('solid', 'mesh')
 MODES = ('open', 'closed', 'solid')
 MODE_LABELS = {'open': 'Otwarta (bez górnej ścianki)', 'closed': 'Całkowicie zamknięta', 'solid': 'Pełna bryła zewnętrzna'}
@@ -229,6 +230,12 @@ def envelope(bodies, spec):
     mode = spec.frame.mode
     if mode == 'local':
         return obb(shapes)
+    if mode == 'axes':                                    # układ obrócony (etap 21: optymalizacja) - osie zapisane w definicji
+        ax = np.asarray((spec.frame.face or {}).get('axes') or np.eye(3), float)
+        x = ax[0] / np.linalg.norm(ax[0])
+        y = ax[1] - x * float(ax[1] @ x)
+        y = y / np.linalg.norm(y)
+        return framed_box(shapes, np.zeros(3), x, y, np.cross(x, y))
     if mode == 'face':
         face = spec.frame.face or {}
         owner = by_id.get(face.get('id'))
@@ -325,6 +332,9 @@ def is_valid(shape):
     for s in _CHECKED:
         if s.IsSame(shape):
             return True
+    from .kernel import TRUSTED
+    if any(t.IsPartner(shape) for t in TRUSTED):
+        return True
     ok = BRepCheck_Analyzer(shape, True, True).IsValid()
     if ok:
         _CHECKED.append(shape)

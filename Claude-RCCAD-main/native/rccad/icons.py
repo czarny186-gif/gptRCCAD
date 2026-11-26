@@ -973,6 +973,27 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(4, 8, 40, 32))
         p.setBrush(QColor(255, 255, 255)); p.setPen(pen(INK, 2.0)); p.drawRect(QRectF(9, 13, 18, 12))
         p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.2)); p.drawEllipse(QPointF(35, 19), 4.5, 4.5); p.drawEllipse(QPointF(13, 33), 2.6, 2.6); p.drawEllipse(QPointF(23, 33), 2.6, 2.6)
+    elif kind == 'x_enccable':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(4, 8, 12, 12)); p.drawRect(QRectF(32, 28, 12, 12))
+        path = QPainterPath(QPointF(16, 14)); path.cubicTo(QPointF(30, 14), QPointF(18, 34), QPointF(32, 34))
+        p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 3.2)); p.drawPath(path)
+        p.setPen(pen(INK, 2.0)); p.drawRect(QRectF(20, 20, 6, 6))
+    elif kind == 'x_encopt':
+        p.setBrush(Qt.NoBrush); pn = pen(BLUE, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawRect(QRectF(4, 6, 40, 36))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(10, 14, 22, 22))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen)
+        p.drawPolygon(QPolygonF([QPointF(44, 42), QPointF(34, 40), QPointF(42, 32)])); p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(32, 36), QPointF(40, 40))
+    elif kind == 'x_encfit':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4))
+        path = QPainterPath(QPointF(8, 30)); path.cubicTo(QPointF(4, 8), QPointF(40, 2), QPointF(42, 22)); path.cubicTo(QPointF(44, 40), QPointF(14, 46), QPointF(8, 30)); p.drawPath(path)
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.2)); p.drawRect(QRectF(14, 18, 10, 10)); p.drawRect(QRectF(26, 22, 8, 10))
+    elif kind == 'x_vent':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRoundedRect(QRectF(5, 7, 38, 34), 4, 4)
+        p.setBrush(QColor(255, 255, 255)); p.setPen(pen(INK, 1.8))
+        for r_ in range(3):
+            for c_ in range(4 - (r_ % 2)):
+                p.drawEllipse(QPointF(12 + c_ * 8 + (4 if r_ % 2 else 0), 15 + r_ * 9), 2.6, 2.6)
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(36, 33), 3.2, 3.2)
     elif kind == 'x_enccheck':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
         p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
@@ -1226,6 +1247,22 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(4, 9, 40, 30))
             p.setBrush(QColor(255, 255, 255)); p.setPen(pen(ink, 1.8)); p.drawRect(QRectF(9, 14, 18, 11))
             p.setPen(pen(acc, 2.4)); p.drawEllipse(QPointF(35, 19.5), 4.6, 4.6); p.drawEllipse(QPointF(13, 32), 2.6, 2.6); p.drawEllipse(QPointF(23, 32), 2.6, 2.6)
+        elif name == 'enccable':
+            # prowadzenie przewodów: dwa złącza połączone pomarańczowym przewodem z uchwytem
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(4, 8, 12, 12)); p.drawRect(QRectF(32, 28, 12, 12))
+            path = QPainterPath(QPointF(16, 14)); path.cubicTo(QPointF(30, 14), QPointF(18, 34), QPointF(32, 34))
+            p.setBrush(Qt.NoBrush); p.setPen(pen(acc, 3.0)); p.drawPath(path)
+            p.setPen(pen(ink, 1.8)); p.drawRect(QRectF(20, 20, 6, 6))
+        elif name == 'encopt':
+            # optymalizacja: obudowa przerywana dopasowana do mniejszej, pomarańczowa strzałka zmniejszania
+            pn = pen(ink, 1.8); pn.setStyle(Qt.DashLine); p.setBrush(Qt.NoBrush); p.setPen(pn); p.drawRect(QRectF(4, 6, 40, 36))
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(10, 14, 22, 22))
+            p.setPen(pen(acc, 2.6)); p.drawLine(QPointF(43, 41), QPointF(34, 37)); p.drawLine(QPointF(43, 41), QPointF(40, 33)); p.drawLine(QPointF(43, 41), QPointF(35, 43))
+        elif name == 'encfit':
+            # dopasowanie 3D: obły kształt obudowy otulający dwa komponenty (pomarańczowe)
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2))
+            path = QPainterPath(QPointF(8, 30)); path.cubicTo(QPointF(4, 8), QPointF(40, 2), QPointF(42, 22)); path.cubicTo(QPointF(44, 40), QPointF(14, 46), QPointF(8, 30)); p.drawPath(path)
+            p.setBrush(Qt.NoBrush); p.setPen(pen(acc, 2.4)); p.drawRect(QRectF(14, 18, 10, 10)); p.drawRect(QRectF(26, 22, 8, 10))
         elif name == 'encpart':
             # przegrody: wnętrze obudowy podzielone pomarańczową przegrodą na dwie komory
             p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(5, 9, 38, 30))
@@ -1436,6 +1473,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             for k in (9, 19, 29, 39):
                 p.drawLine(QPointF(k, 8), QPointF(k, 40)); p.drawLine(QPointF(8, k), QPointF(40, k))
             st(acc, 3.0); p.drawLine(QPointF(24, 6), QPointF(24, 42)); p.drawLine(QPointF(6, 24), QPointF(42, 24))
+        elif name == 'vent':
+            # wentylacja: perforowana płyta (kratka) z otworami w układzie sześciokątnym, jeden otwór pomarańczowy
+            fl(_rounded(5, 7, 38, 34, 4), soft)
+            for r_ in range(3):
+                for c_ in range(4 - (r_ % 2)):
+                    q = QPointF(12 + c_ * 8 + (4 if r_ % 2 else 0), 15 + r_ * 9)
+                    p.setPen(pen(ink, 1.8)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (2, 3) else QColor(acc)); p.drawEllipse(q, 2.7, 2.7)
         elif name == 'pattern':
             for r in range(2):
                 for c in range(2):
