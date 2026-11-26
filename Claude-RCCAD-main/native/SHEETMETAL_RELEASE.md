@@ -1,11 +1,15 @@
-# RCCAD Desktop 0.5.60 — Generator obudów, etapy 17-18: mocowania zewnętrzne i przegrody wewnętrzne
+# RCCAD Desktop 0.5.61 — Generator obudów, etap 19: panel sterowania
 
-- **Mocowania zewnętrzne** (Obudowy → Mocowania zewnętrzne): uchwyt ścienny, kołnierz, ucho, otwory kluczowe i podłużne, uchwyt narożny, zaczep DIN TH35-7,5 / TH35-15 (IEC/EN 60715: 35 / 27 / 1 mm), VESA MIS-D 75 / 100 (M4), nóżki, gniazda gumowych nóżek, klips do paska, uchwyt opaski, obejma rury, według szkicu; rozmieszczenie pojedyncze / symetryczne / narożne / szyki / ręczne / wskazane punkty, przesuwanie i obrót strzałkami; integralne, osobne albo odłączane z otworami; kontrole kolizji, dostępu narzędzia, otworów ślepych.
-- **Przegrody wewnętrzne** (Obudowy → Przegrody wewnętrzne): pełne, częściowe, perforowane, wyjmowane / wsuwane (prowadnice, kontrola wyjmowania na całej drodze), poziome, pionowe, ukośne, zakrzywione, półki, kanały kablowe i powietrza, według szkicu; przepusty; komory (liczba, wymiary, udziały, propozycja według komponentów) i przypisanie komponentów do komór. Przegroda nie jest certyfikowaną izolacją.
+- **Panel sterowania** (Obudowy → Panel sterowania): ramki wyświetlaczy LCD / OLED i ekranów dotykowych (powierzchnia aktywna osobno od modułu, ramka z każdej strony, montaż na równi / poniżej / powyżej, podpory, miejsce na złącze), zagłębienia, otwory pod enkodery i potencjometry, pokrętła (5 kształtów, wałki okrągłe / D / sześciokątne / wielowypustowe / z profilu), przyciski mechaniczne (nasadka, trzpień, ogranicznik, prowadnica, kontrola spoczynku i naciśnięcia), przyciski membranowe, suwaki, przełączniki, prowadnice światła (proste, stopniowane, zakrzywione), maskownice głośników, otwory mikrofonowe, okna ochronne; rozmieszczanie (wyrównanie, środek, symetria, rozstaw, szyk). Elementy ruchome i okna to osobne bryły.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 
 ## Wcześniejsze poprawki
+
+### 0.5.60 — Generator obudów, etapy 17-18: mocowania zewnętrzne i przegrody wewnętrzne
+
+- **Mocowania zewnętrzne** (Obudowy → Mocowania zewnętrzne): uchwyt ścienny, kołnierz, ucho, otwory kluczowe i podłużne, uchwyt narożny, zaczep DIN TH35-7,5 / TH35-15 (IEC/EN 60715: 35 / 27 / 1 mm), VESA MIS-D 75 / 100 (M4), nóżki, gniazda gumowych nóżek, klips do paska, uchwyt opaski, obejma rury, według szkicu; rozmieszczenie pojedyncze / symetryczne / narożne / szyki / ręczne / wskazane punkty, przesuwanie i obrót strzałkami; integralne, osobne albo odłączane z otworami; kontrole kolizji, dostępu narzędzia, otworów ślepych.
+- **Przegrody wewnętrzne** (Obudowy → Przegrody wewnętrzne): pełne, częściowe, perforowane, wyjmowane / wsuwane (prowadnice, kontrola wyjmowania na całej drodze), poziome, pionowe, ukośne, zakrzywione, półki, kanały kablowe i powietrza, według szkicu; przepusty; komory (liczba, wymiary, udziały, propozycja według komponentów) i przypisanie komponentów do komór. Przegroda nie jest certyfikowaną izolacją.
 
 ### 0.5.59 — Generator obudów, etap 16: żebra wzmacniające
 

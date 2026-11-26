@@ -969,6 +969,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     elif kind == 'x_encpart':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 8, 38, 32))
         p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.6)); p.drawRect(QRectF(21, 10, 4, 28))
+    elif kind == 'x_encpanel':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(4, 8, 40, 32))
+        p.setBrush(QColor(255, 255, 255)); p.setPen(pen(INK, 2.0)); p.drawRect(QRectF(9, 13, 18, 12))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.2)); p.drawEllipse(QPointF(35, 19), 4.5, 4.5); p.drawEllipse(QPointF(13, 33), 2.6, 2.6); p.drawEllipse(QPointF(23, 33), 2.6, 2.6)
     elif kind == 'x_enccheck':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
         p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
@@ -1217,6 +1221,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setPen(pen(ink, 3.0)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(29, 17)]))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(38, 36), 7, 7)
             p.setPen(pen(QColor(255, 255, 255), 2.2)); p.drawLine(QPointF(38, 32), QPointF(38, 37)); p.drawPoint(QPointF(38, 40))
+        elif name == 'encpanel':
+            # panel sterowania: ekran, pokrętło i przyciski (pomarańczowe)
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(4, 9, 40, 30))
+            p.setBrush(QColor(255, 255, 255)); p.setPen(pen(ink, 1.8)); p.drawRect(QRectF(9, 14, 18, 11))
+            p.setPen(pen(acc, 2.4)); p.drawEllipse(QPointF(35, 19.5), 4.6, 4.6); p.drawEllipse(QPointF(13, 32), 2.6, 2.6); p.drawEllipse(QPointF(23, 32), 2.6, 2.6)
         elif name == 'encpart':
             # przegrody: wnętrze obudowy podzielone pomarańczową przegrodą na dwie komory
             p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(5, 9, 38, 30))

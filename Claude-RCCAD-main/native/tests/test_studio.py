@@ -55,7 +55,7 @@ class StudioTests(unittest.TestCase):
 
     def preview(self):
         end=time.monotonic()+20
-        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None),getattr(self.w,'_ex_timer',None),getattr(self.w,'_ep_timer',None)) if t is not None]
+        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None),getattr(self.w,'_ex_timer',None),getattr(self.w,'_ep_timer',None),getattr(self.w,'_pn_timer',None)) if t is not None]
         while any(t.isActive() for t in timers) and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
             self.app.processEvents();time.sleep(.005)
         while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
@@ -4270,7 +4270,7 @@ class StudioTests(unittest.TestCase):
         import rccad.studio as st
         from rccad import enclosure as encm
         w=self.w
-        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','encrib','encext','encpart','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
+        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','encrib','encext','encpart','encpanel','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
         a=Body('Płytka',k.box(40,20,10)).prepared()
         rot=np.array([[np.cos(.5),-np.sin(.5),0],[np.sin(.5),np.cos(.5),0],[0,0,1]])
         r=Body('Obrócona',k.transformed(k.box(30,10,6),rot,np.array([80,0,0]))).prepared()
@@ -5401,6 +5401,74 @@ class StudioTests(unittest.TestCase):
         w.undo();self.wait();self.assertEqual(len(w.document.bodies),n0);w.redo();self.wait()
         regen=epm.regenerate(list(w.document.bodies),dict(type='enc_regen',id='E'))
         self.assertEqual([x.id for x in regen if (x.meta or {}).get('enclosure_mount_of')=='E'],ids)
+
+    # Generator obudów, etap 19: panel sterowania - ramki wyświetlaczy (powierzchnia aktywna ≠ moduł, montaż), przyciski
+    # (spoczynek / naciśnięcie), pokrętła z otworami na wałki, prowadnice światła, rozmieszczanie, okno i historia
+    def test_enclosure_stage19_control_panel(self):
+        from rccad import enclosure as encm, enclosure_panel as PN, enclosure_panel_ui as PU, enclosure_param as epm
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        pcb=Body('PCB',k.box(100,70,1.6)).prepared();sw=Body('SW',k.box(6,6,3).translate((20,20,1.6))).prepared();bodies=[pcb,sw]
+        src=[encm.SourceRef(id=x.id) for x in bodies];env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        sp=encm.EnclosureSpec(sources=src,envelope=env,clearance={'x-':4.0,'x+':4.0,'y-':4.0,'y+':4.0,'z-':4.0,'z+':3.0},
+                              walls={k_:2.5 for k_ in ('x-','x+','y-','y+','bottom','top')},split=dict(enabled=True,mode='z',unit='%',position=40,joint='flat'))
+        out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='B',out_lid='L',name='Ob',folder='Ob'))
+        lid=next(x for x in out if x.id=='L');base=next(x for x in out if x.id=='B')
+        top=max((f for f in lid.shape.Faces() if f.geomType()=='PLANE' and f.normalAt().z>.99),key=lambda f:f.Center().z)
+        face=dict(point=list(top.Center().toTuple()),normal=[0,0,1.0]);fr=PN.frame_of(face)
+        uv,depth,_a,_b=PN.from_component(fr,sw.shape.wrapped);self.assertAlmostEqual(depth,5.5,4)
+        comps=[x.shape.wrapped for x in bodies]
+        def ok(res):
+            self.assertTrue(BRepCheck_Analyzer(res['part'].wrapped).IsValid());self.assertEqual(len(res['part'].Solids()),1)
+            for c in comps:
+                for sh in [res['part'],*[q for _n,q in res['parts']]]:self.assertLess(encm._volume(encm._boolean('common',sh.wrapped,c,'t'))[0],1e-4)
+            return res
+        v0=lid.shape.Volume()
+        # wyświetlacz: otwór = powierzchnia aktywna (+ ramka), nie moduł; montaż poniżej / na równi / powyżej
+        vols={}
+        for mount in ('below','flush','above'):
+            r=ok(PN.build(lid.shape,face,[dict(element='display',u=-20,v=5,active_w=30,active_h=20,module_w=40,module_h=30,module_t=1.5,mount=mount)],comps,[base.shape.wrapped]))
+            vols[mount]=r['part'].Volume()
+        self.assertGreater(vols['above'],vols['below']);self.assertLess(vols['flush'],v0)
+        r1=PN.build(lid.shape,face,[dict(element='display',u=-20,v=5,active_w=30,active_h=20,module_w=40,module_h=30,mount='below',supports=False,conn_w=0)],comps)
+        r2=PN.build(lid.shape,face,[dict(element='display',u=-20,v=5,active_w=30,active_h=20,module_w=40,module_h=30,mount='below',supports=False,conn_w=0,frame_l=2.0)],comps)
+        self.assertAlmostEqual(r1['part'].Volume()-r2['part'].Volume(),2.0*20*1.5,3)        # okno 2 mm szersze z lewej: pas nad wnęką modułu (ścianka 2,5 - wnęka 1,0)
+        with self.assertRaises(k.CadError):PN.build(lid.shape,face,[dict(element='display',active_w=50,module_w=40)],comps)
+        # przycisk nad przyciskiem wewnątrz: osobna bryła, prowadnica, spoczynek i naciśnięcie
+        r=ok(PN.build(lid.shape,face,[dict(element='button',u=float(uv[0]),v=float(uv[1]),diameter=5.0,height=3,component_depth=depth,travel=.5)],comps,[base.shape.wrapped]))
+        self.assertEqual([n for n,_s in r['parts']],['Przycisk']);self.assertTrue(any('dosięga przycisku' in t for l,t in r['report']))
+        btn=r['parts'][0][1];self.assertLess(encm._volume(encm._boolean('common',btn.wrapped,r['part'].wrapped,'t'))[0],1e-3)
+        r=PN.build(lid.shape,face,[dict(element='button',u=float(uv[0]),v=float(uv[1]),diameter=5.0,height=3,stem=1.0,travel=.5)],comps)
+        self.assertTrue(any('nie dosięga' in t for l,t in r['report']))
+        # pokrętła: otwory na wałek (D krótszy od okrągłego), kształty
+        knob=lambda **kw:PN.build(lid.shape,face,[dict(dict(element='knob',u=30,v=10,diameter=14,height=12,insert=8,shaft=6),**kw)],comps)['parts'][0][1].Volume()
+        self.assertGreater(knob(bore='d',flat=4.5),knob(bore='round'))
+        for kn in PN.KNOBS:
+            for bo in ('round','d','hex','spline'):
+                self.assertGreater(knob(knob=kn,bore=bo),100.0)
+        # pozostałe elementy
+        for it in (dict(element='encoder',u=30,v=25,diameter=7),dict(element='pot',u=30,v=25,diameter=7),dict(element='membrane',u=0,v=-25,width=20,height=12,depth=.8,conn_w=8),
+                   dict(element='slider',u=-40,v=-25,width=3,length=15),dict(element='switch',u=-45,v=25,width=8,height=4),dict(element='speaker',u=-5,v=-10,diameter=14,hole=1.6),
+                   dict(element='mic',u=10,v=-25,hole=1.0,diameter=4,gasket=.8),dict(element='window',u=45,v=-10,width=10,height=8,window_t=1.0,bezel=1.0),
+                   dict(element='recess',u=30,v=-25,module_w=20,module_h=10,depth=1.0)):
+            r=ok(PN.build(lid.shape,face,[it],comps));self.assertLess(r['part'].Volume(),v0,it['element'])
+        for pipe in PN.PIPES:
+            r=ok(PN.build(lid.shape,face,[dict(element='lightpipe',u=5,v=25,pipe=pipe,stem=4.0,bend=3.0)],comps));self.assertEqual(len(r['parts']),1)
+            self.assertTrue(any('optyczna' in t for l,t in r['report']))
+        # rozmieszczanie
+        A=[dict(u=0,v=0),dict(u=10,v=3),dict(u=30,v=-2)]
+        self.assertEqual([x['u'] for x in PN.arrange(A,'hspace')],[0.0,15.0,30.0]);self.assertEqual({x['v'] for x in PN.arrange(A,'top')},{3.0})
+        self.assertEqual(len(PN.arrange(A,'mirror',0.0)),6);self.assertAlmostEqual(np.mean([x['u'] for x in PN.arrange(A,'center',0.0)]),0.0,9)
+        # okno: powierzchnia, element z komponentu, dodanie, Zastosuj, Cofnij, regeneracja (osobne bryły te same)
+        w=self.w;w.document.commit(out);w.refresh();w.set_mode('encpanel');w.pn.update(target='L',face=face)
+        w.pn_kind.setCurrentIndex(w.pn_kind.findData('button'));w._pn_pick();w.pn['comp_depth']=depth
+        w.pn_f['u'][1].setValue(float(uv[0]));w.pn_f['v'][1].setValue(float(uv[1]));w.pn_add()
+        w.pn_kind.setCurrentIndex(w.pn_kind.findData('knob'));w.pn_f['u'][1].setValue(30.0);w.pn_f['v'][1].setValue(10.0);w.pn_add()
+        self.assertEqual(w.pn_list.count(),2);self.preview();self.assertTrue(w.pn_apply.isEnabled(),w.pn_status.text())
+        n0=len(w.document.bodies);w.apply_encpanel();self.wait();w.set_mode(None);self.assertEqual(len(w.document.bodies),n0+2)
+        self.assertEqual(w.document.infos()[0][-1]['label'],'Panel sterowania');ids=w.document.get('L').meta['enclosure_panels'][0]['out_ids']
+        w.undo();self.wait();self.assertEqual(len(w.document.bodies),n0);w.redo();self.wait()
+        regen=epm.regenerate(list(w.document.bodies),dict(type='enc_regen',id='L'))
+        self.assertEqual(sorted(x.id for x in regen if (x.meta or {}).get('enclosure_mount_of')=='L'),sorted(ids))
 
     # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
     def test_enclosure_stage14a_print(self):
