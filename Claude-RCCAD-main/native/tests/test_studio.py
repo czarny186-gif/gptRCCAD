@@ -6,6 +6,7 @@ DIAG=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w")
 # strażnik zawieszenia: włączany w setUp każdego testu okna i wyłączany w tearDown (nie liczy czasu innych modułów)
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time, math
+import json
 import tempfile
 os.environ['RCCAD_CONFIG_DIR']=tempfile.mkdtemp(prefix='rccad-cfg-')
 os.environ.setdefault('RCCAD_WORKERS','0')        # testy okna liczą w jednym procesie (procesy liczące mają własne testy: test_workers)     # zapamiętane ustawienia (Kołnierz → Zatwierdź) nie trafiają do prawdziwego profilu
@@ -5058,6 +5059,82 @@ class StudioTests(unittest.TestCase):
         for i in range(len(shapes)):
             for j in range(i+1,len(shapes)):
                 self.assertLess(encm._volume(encm._boolean('common',shapes[i].wrapped,shapes[j].wrapped,'t'))[0],1e-4)
+
+    # Generator obudów, etap 15: biblioteka szablonów, szablony użytkownika, montaż DIN / ścienny, zestawienie, masa, eksport
+    def test_enclosure_stage15_templates_export(self):
+        import zipfile, ezdxf
+        from rccad import enclosure as encm, enclosure_library as L
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        bodies,env,mk=self._tech_scene();src=[encm.SourceRef(id=b.id) for b in bodies]
+        self.assertEqual(len(L.TEMPLATES),12)
+        # właściwości: sześcian 10 mm z PLA (1,24 g/cm³) = 1,24 g
+        pr=L.properties(k.box(10,10,10),1.24);self.assertAlmostEqual(pr['volume'],1000,6);self.assertAlmostEqual(pr['area'],600,6)
+        self.assertAlmostEqual(pr['mass'],1.24,9);self.assertEqual(tuple(round(x,6) for x in pr['dims']),(10,10,10))
+        # każda gotowa konfiguracja daje poprawne bryły (reguły dopasowane do elementów, wentylacja jako osobne kroki)
+        vols={}
+        for key,(name,_d,params,rules) in L.TEMPLATES.items():
+            sp=L.template_spec(params,src);sp.envelope=env;L.fit_template(sp,env,bodies)
+            out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='E',name=name,out_lid='L',folder=name))
+            ids=[b.id for b in out if (b.meta or {}).get('enclosure_part') or (b.meta or {}).get('enclosure')]
+            self.assertTrue(ids,key)
+            out,steps,_w=L.apply_rules(out,ids,rules)
+            if key in ('vented','controller','psu'):self.assertTrue(steps,key)
+            for b in out:
+                if b.id in ids:self.assertTrue(BRepCheck_Analyzer(b.shape.wrapped).IsValid(),key)
+            for b in bodies:self.assertIs(next(x for x in out if x.id==b.id).shape,b.shape)       # elementy źródłowe bez zmian
+            vols[key]=L.summary(out,ids[0])[1]['volume']
+        # DIN: rowek 35,4 mm w dnie (mniej materiału); ścienny: uszy po bokach (szerszy obrys)
+        base=dict(L.TEMPLATES['universal'][2],closure={});sp=L.template_spec(base,src);sp.envelope=env
+        ref=encm.build_parts(env,sp,bodies)[0];sp.process=dict(mounting='din');din=encm.build_parts(env,sp,bodies)[0]
+        self.assertLess(din['base'].Volume(),ref['base'].Volume()-30);self.assertAlmostEqual(din['lid'].Volume(),ref['lid'].Volume(),4)
+        sp.process=dict(mounting='wall');wall=encm.build_parts(env,sp,bodies)[0]
+        self.assertAlmostEqual(wall['base'].BoundingBox().xlen,ref['base'].BoundingBox().xlen+24,4)
+        sp.shape='cylinder'
+        with self.assertRaises(k.CadError):L.mounting(env,sp,ref,bodies)
+        # okno: szablon wczytany do pól, Zastosuj = obudowa + kroki wentylacji (Cofnij usuwa kolejno)
+        w=self.w;w.document.commit(bodies);w.refresh();w.selected=[b.id for b in bodies];w.set_mode('enclosure');self.preview()
+        self.assertEqual(w.enc_tpl.count(),12+len(L.user_templates()))
+        w.enc_template_load('vented');self.preview()
+        self.assertEqual(w.enc_wall['bottom'].value(),2.0);self.assertTrue(w.enc_split_on.isChecked());self.assertEqual(len(w.enc['rules']),3)
+        self.assertEqual(len(w.enc['ids']),2);self.assertIn('wentylacji',w.enc_tpl_info.text())
+        n0=len(w.document.states());w.apply_enclosure();self.wait()
+        for _ in range(300):
+            self.app.processEvents();time.sleep(.01)
+            if not w.busy and len(w.document.states())>=n0+4:break
+        self.wait();self.assertEqual(len(w.document.states()),n0+4)
+        self.assertEqual([i['label'] for i in w.document.infos()[0][-3:]],['Wentylacja (szablon)']*3)
+        bid=next(b.id for b in w.document.bodies if (b.meta or {}).get('enclosure_part')=='base')
+        vented=sum(len((b.meta or {}).get('enclosure_vents',[])) for b in w.document.bodies);self.assertEqual(vented,3)
+        w.undo();self.wait();self.assertEqual(sum(len((b.meta or {}).get('enclosure_vents',[])) for b in w.document.bodies),2)
+        # szablon użytkownika: zapis i odczyt parametrów (bez elementów)
+        folder=Path(tempfile.mkdtemp())
+        with patch.object(L,'user_folder',lambda:folder):
+            w.set_mode('enclosure');self.preview();w.enc_template_load('din');w.enc_wall_link.setChecked(False);w.enc_wall['top'].setValue(3.3)
+            path=w.enc_template_save('Mój szablon');self.assertTrue(path.exists())
+            data=json.loads(path.read_text(encoding='utf-8'));self.assertNotIn('sources',data['params']);self.assertEqual(data['params']['process']['mounting'],'din')
+            self.assertIn('user:Mój szablon',L.all_templates());w.enc_template_load('universal');self.assertEqual(w.enc_mounting.currentData(),'')
+            w.enc_template_load('user:Mój szablon');self.assertEqual(w.enc_wall['top'].value(),3.3);self.assertEqual(w.enc_mounting.currentData(),'din')
+            w.set_mode(None)
+        # zestawienie i eksport: STEP (części + całość) wczytywany z powrotem, STL, 3MF, CSV / TXT
+        w.set_mode('enccheck');w.chk_target=bid;w._chk_state_update();self.assertIn('Razem',w.chk_props.text())
+        rows,total=w.chk_summary;self.assertAlmostEqual(total['mass'],total['volume']*1.24/1000,9);self.assertEqual(len(rows),2)
+        out_dir=Path(tempfile.mkdtemp());w.enc_export(str(out_dir));self.preview()
+        names={p.name for p in w._enc_exported};self.assertTrue(any(n.endswith('całość.step') for n in names))
+        for r in rows:
+            p=out_dir/f'{r["name"]}.step';self.assertTrue(p.exists());back=cq.importers.importStep(str(p)).val()
+            self.assertAlmostEqual(back.Volume(),r['volume'],delta=r['volume']*1e-4)
+            self.assertGreater((out_dir/f'{r["name"]}.stl').stat().st_size,1000)
+        mf=next(p for p in w._enc_exported if p.suffix=='.3mf');self.assertTrue(zipfile.is_zipfile(mf))
+        csv=next(p for p in w._enc_exported if p.suffix=='.csv').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(len(csv),4);self.assertTrue(csv[-1].startswith('RAZEM'));self.assertAlmostEqual(float(csv[-1].split(';')[-1]),total['mass'],2)
+        w.chk_material.setCurrentIndex(w.chk_material.findText('ABS'));self.assertAlmostEqual(w.chk_summary[1]['mass'],total['volume']*1.04/1000,9);w.set_mode(None)
+        # płaskie części: laser - obrysy DXF / SVG; blacha - rozwinięcia DXF z modułu blach
+        for tech in ('laser','sheet'):
+            sp=mk(tech);out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='E'+tech,name=tech,out_lid='L'+tech,folder=tech))
+            d=Path(tempfile.mkdtemp());files=L.export(out,'Elaser-panel_bottom' if tech=='laser' else 'Esheet',d,formats=('dxf','svg'))
+            dx=[p for p in files if p.suffix=='.dxf'];self.assertTrue(dx,tech)
+            for p in dx:self.assertGreater(len(list(ezdxf.readfile(str(p)).modelspace())),0)
+            if tech=='laser':self.assertTrue(any(p.suffix=='.svg' and '<path' in p.read_text(encoding='utf-8') for p in files))
 
     # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
     def test_enclosure_stage14a_print(self):

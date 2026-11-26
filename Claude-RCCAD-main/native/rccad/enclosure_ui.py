@@ -95,6 +95,7 @@ class EnclosureTools:
         row.addWidget(self.enc_remove)
         row.addWidget(clear)
         lay.addLayout(row)
+        self._build_enc_templates(lay)                # etap 15: biblioteka szablonów i sposób montażu
         self.enc_step2 = ui.StepRow(2, 'x_axes', 'Układ współrzędnych', plain=True)
         lay.addWidget(self.enc_step2)
         self.enc_frame = QComboBox()
@@ -1133,8 +1134,11 @@ class EnclosureTools:
     def _enclosure_begin(self, previous=()):
         """set_mode('enclosure'): zaznaczone wcześniej bryły od razu na liście."""
         self.enc = dict(ids=[], face=None, picking_face=False, picking_split=False, env=None, error=None, split_face=None,
-                        mounts=[], picking_mount=None)
+                        mounts=[], picking_mount=None, rules=[])
         self._enc_exact_result = None
+        if hasattr(self, 'enc_tpl_info'):
+            self.enc_tpl_info.setText('')
+            self._enc_tpl_fill()
         self.enc_frame.blockSignals(True)
         self.enc_frame.setCurrentIndex(0)
         self.enc_frame.blockSignals(False)
@@ -1311,6 +1315,8 @@ class EnclosureTools:
         if hasattr(self, 'enc_tech') and self._enc_tech_on():
             kind = self.enc_tech.currentData()
             spec.process = dict(tech=kind, **{kind: dict(self.enc_tech_params[kind])})
+        if hasattr(self, 'enc_mounting') and self.enc_mounting.currentData():
+            spec.process = dict(spec.process or {}, mounting=self.enc_mounting.currentData())
         if hasattr(self, 'enc_closure') and spec.split.get('enabled'):
             systems = [dict(type=k, enabled=True, params=dict(sy['params']), items=list(sy['items'].values()))
                        for k, sy in self.enc_closure.items() if sy['enabled']]
@@ -1830,6 +1836,8 @@ class EnclosureTools:
             self.enc_tech_params[kind].update(tech.params(spec))
         set_combo(self.enc_tech, kind)
         self._enc_tech_form(update=False)
+        if hasattr(self, 'enc_mounting'):
+            set_combo(self.enc_mounting, (spec.process or {}).get('mounting') or '')
         self.enc_set_ids([s.id for s in spec.sources])
         self._enc_mounts_show()
 
@@ -1906,12 +1914,16 @@ class EnclosureTools:
             self.document.pending_icon = 'enclosure'
             self.document.commit(bodies)
 
+        rules = [] if editing else list(self.enc.get('rules') or [])
+
         def after():
             self.set_mode(None)
             made = [i for i in (recipe['out'], recipe.get('out_lid')) if i and self.document.get(i) is not None]
             if made:
                 self.selected = made
                 self.refresh()
+                if rules:                             # etap 15: reguły szablonu (wentylacja) - osobne kroki po obudowie
+                    self._enc_apply_rules(made, rules)
 
         self._enc_timer.stop()
         self.view.set_preview_mesh(None)

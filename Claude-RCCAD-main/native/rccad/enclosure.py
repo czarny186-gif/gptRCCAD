@@ -401,6 +401,9 @@ def build_parts(env, spec, bodies, check_sources=True, report=None, extra=None):
     if spec.posts and spec.mounts:
         from . import enclosure_posts
         parts, threads, info = enclosure_posts.apply(env, spec, parts, bodies, check=check_sources)
+    if (spec.process or {}).get('mounting') in ('din', 'wall'):                                   # etap 15: sposób montażu z szablonu
+        from . import enclosure_library
+        parts = enclosure_library.mounting(env, spec, parts, bodies)
     if kind == 'print':
         if report is not None:
             report.extend(tech.print_analysis(env, {k: v.wrapped for k, v in parts.items()}, tp))

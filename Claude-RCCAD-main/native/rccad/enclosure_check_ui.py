@@ -189,6 +189,7 @@ class EnclosureCheckTools:
         self.chk_convert.setToolTip('Usuwa parametry generatora - zostają zwykłe bryły B-Rep (Cofnij przywraca)')
         self.chk_convert.clicked.connect(lambda _=False: self.enc_convert(self.chk_target))
         lay.addWidget(self.chk_convert)
+        self._build_enc_export(lay)                   # etap 15: zestawienie, masa i eksport
         self._buttons(self.chk_panel.footer, 'Zamknij', 'Anuluj', lambda: self.set_mode(None), lambda: self.set_mode(None))
         return self.chk_panel
 
@@ -214,6 +215,8 @@ class EnclosureCheckTools:
         for w_ in (self.chk_mode, self.chk_regen, self.chk_edit, self.chk_convert, self.chk_ops):
             w_.setEnabled(on)
         self.chk_ops.clear()
+        if hasattr(self, 'chk_export'):
+            self._chk_summary_update()
         if not on:
             self.chk_state.setText('')
             return

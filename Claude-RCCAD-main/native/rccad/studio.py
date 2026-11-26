@@ -45,6 +45,7 @@ from .enclosure_ui import EnclosureTools
 from .enclosure_hole_ui import EnclosureHoleTools
 from .enclosure_vent_ui import EnclosureVentTools
 from .enclosure_check_ui import EnclosureCheckTools
+from .enclosure_library_ui import EnclosureLibraryTools
 from . import dims
 from .gear_ui import GearTools
 from .gearpair_ui import GearPairTools
@@ -232,7 +233,7 @@ MEASURE_MODES = ('mdist', 'mangle', 'mrad', 'mprops')
 DRAWING_MODES = ('drawing', 'autodrawing', 'sheetdrawing', 'plydrawing')
 
 
-class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlace, EnclosureTools, EnclosureHoleTools, EnclosureVentTools, EnclosureCheckTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
+class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlace, EnclosureTools, EnclosureHoleTools, EnclosureVentTools, EnclosureCheckTools, EnclosureLibraryTools, GearTools, GearPairTools, GearSimTools, LinkTools, SectionTools, ScaleTools, ColorTools, MatchSizeTools, PlywoodTools, QMainWindow):
     def __init__(self):
         super().__init__()
         self.document = Document()

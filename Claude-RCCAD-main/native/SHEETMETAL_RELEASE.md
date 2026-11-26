@@ -1,4 +1,16 @@
-# RCCAD Desktop 0.5.56 — Generator obudów, etapy 8-14
+# RCCAD Desktop 0.5.57 — Generator obudów, etap 15: szablony, eksport, zestawienie
+
+- **Biblioteka 12 konfiguracji** (Utwórz obudowę → Szablon): uniwersalna, PCB, wyświetlacza, sterownika, zasilacza, czujnika, pilota, pulpitowa, na szynę DIN, wentylowana, z uszczelką, ścienna - parametry i reguły, dopasowywane do elementów; wentylacja z szablonu jako osobne kroki historii.
+- **Szablony użytkownika**: „Zapisz jako szablon…” (folder Ustawienia/Szablony obudów), bez elementów i geometrii.
+- **Sposób montażu**: rowek pod szynę DIN TS35 w dnie, uszy z otworami do montażu na ścianie.
+- **Zestawienie** (Kontrola obudowy → krok 3): objętość, powierzchnia, wymiary zewnętrzne i szacunkowa masa z gęstości materiału.
+- **Eksport do folderu**: STEP (części i całość), STL, 3MF, DXF (rozwinięcia blach z liniami gięcia, płyty laserowe), SVG (kontury), zestawienie CSV i TXT; bryły sprawdzane BRepCheck przed zapisem.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.56 — Generator obudów, etapy 8-14
 
 - **Etap 8 - Otwór na element** (Obudowy → Otwór na element): element (bryła / ściany), proponowana najbliższa ścianka obudowy (do zmiany), kierunek wycięcia; tryby: dokładny rzut konturu, obrys prostokątny, okrągły, prostokąt zaokrąglony, biblioteka (USB-A, USB-C, Micro USB, HDMI, RJ45, DC, SD, microSD, przyciski, przełączniki, wyświetlacze - wymiary do zmiany), własny szkic; luzy w czterech kierunkach, przesunięcie, obrót; otwór przelotowy, zagłębienie, podfrezowanie, wycięcie stopniowane; miejsce na wtyczkę, przewód i dostęp palca; wycinane tylko narzędzie, kontrola uszkodzeń mocowań / zamknięć / sąsiednich ścianek; każdy otwór - osobny krok.
 - **Etap 9 - systemy zamykania**: śruby (słupki, otwory, pogłębienia, nakrętki / inserty), zatrzaski elastyczne (ramiona, haki, najazdy, gniazda), pokrywa wsuwana i jaskółczy ogon (prowadnice, ogranicznik, luzy), zawiasy (współosiowe kostki, otwór na sworzeń), magnesy, połączenia wciskane, rowek uszczelki; rozmieszczenie automatyczne z ręczną korektą, kilka systemów naraz, kontrola kolizji i otwierania (próbkowana).
@@ -7,10 +19,6 @@
 - **Etap 12 - Kontrola obudowy**: kolizje (objętościowe vs styk), odstępy, grubości, poprawność B-Rep, fragmenty, powłoki, samoprzecięcia, montaż i otwieranie (próbkowane); wyniki Poprawne / Ostrzeżenie / Błąd z podświetleniem; w oknie tworzenia i jako osobne narzędzie.
 - **Etap 13 - obudowa parametryczna**: dwuklik = edycja z zachowanymi parametrami, tryby: automatyczna / ręczna aktualizacja, zamrożenie, konwersja do brył; przeniesienie referencji po zmianie elementów, ostatnia poprawna geometria przy błędzie, operacje składowe do edycji.
 - **Etap 14 - technologia produkcji**: 14A druk 3D (nawisy, cienkie ścianki, przestrzeń robocza, podział z kołkami), 14B blacha (moduł blach RCCAD, rozwinięcia, linie gięcia, BA, K), 14C frezowanie CNC (promienie, dogbone, dostępność), 14D cięcie laserowe (płyty z noskami i wpustami, kerf, luz, otwory, rozkrój).
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.55 — Generator obudów, etapy 6 i 7: otwory montażowe i mocowania
 
