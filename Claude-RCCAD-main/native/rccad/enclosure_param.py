@@ -247,15 +247,15 @@ def regenerate(bodies, recipe):
         rec.update(out_lid=lid.id, folder=base.folder or name)
     ops = []
     for b in parts:
-        for kind, key in (('hole', 'enclosure_holes'), ('vent', 'enclosure_vents')):
+        for kind, key in (('hole', 'enclosure_holes'), ('vent', 'enclosure_vents'), ('rib', 'enclosure_ribs')):
             for r in (b.meta or {}).get(key, []):
-                ops.append((r.get('seq', 0), kind, dict(r, type='enc_hole' if kind == 'hole' else 'enc_vent')))
+                ops.append((r.get('seq', 0), kind, dict(r, type={'hole': 'enc_hole', 'vent': 'enc_vent', 'rib': 'enc_rib'}[kind])))
     ops.sort(key=lambda x: x[0])
     # części bez otworów: przebudowa definicji (meta otworów wyczyszczona, operacje dołożone ponownie niżej)
     cleaned = []
     for b in bodies:
         if b in parts:
-            meta = {k: v for k, v in (b.meta or {}).items() if k not in ('enclosure_holes', 'enclosure_vents')}
+            meta = {k: v for k, v in (b.meta or {}).items() if k not in ('enclosure_holes', 'enclosure_vents', 'enclosure_ribs')}
             from dataclasses import replace
             b = replace(b, meta=meta)
         cleaned.append(b)
@@ -263,6 +263,14 @@ def regenerate(bodies, recipe):
     new_env = enc.EnclosureSpec.from_json(next(b for b in out if b.id == base.id).meta['enclosure']).envelope
     for _seq, kind, r in ops:
         target = next(b for b in out if b.id == r['target'])
+        if kind == 'rib':                                  # żebra: każda powierzchnia przeniesiona osobno
+            faces = []
+            for f in r['faces']:
+                pt, nm = rematch_wall(target.shape, f['point'], f['normal'], old_env, new_env)
+                faces.append(dict(point=pt, normal=nm))
+            from .enclosure_rib_ui import run as run_rib
+            out = run_rib(out, dict(r, faces=faces))
+            continue
         point, normal = rematch_wall(target.shape, r['point'], r['normal'], old_env, new_env)
         r = dict(r, point=point, normal=normal)
         if kind == 'hole':
@@ -297,5 +305,5 @@ def convert(bodies, recipe):
     if first is None:
         raise kernel.CadError('Obudowy już nie ma.')
     ids = {b.id for b in group(bodies, first)}
-    drop = ('enclosure', 'enclosure_part', 'enclosure_holes', 'enclosure_vents', 'enclosure_sig', 'enclosure_mode')
+    drop = ('enclosure', 'enclosure_part', 'enclosure_holes', 'enclosure_vents', 'enclosure_ribs', 'enclosure_sig', 'enclosure_mode')
     return [replace(b, meta={k: v for k, v in (b.meta or {}).items() if k not in drop} or None) if b.id in ids else b for b in bodies]

@@ -954,6 +954,12 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             for x in (12, 20, 28, 36):
                 p.drawEllipse(QPointF(x, y + (4 if x in (20, 36) else 0) - 2), 2.6, 2.6)
         p.setPen(pen(ORANGE, 2.6)); p.drawLine(QPointF(10, 44), QPointF(38, 44))
+    elif kind == 'x_encrib':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPolygon(QPolygonF([QPointF(4, 34), QPointF(30, 42), QPointF(44, 30), QPointF(18, 22)]))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.2))
+        for k in range(3):
+            x0, y0 = 11 + k * 9, 27 + k * 3
+            p.drawPolygon(QPolygonF([QPointF(x0, y0), QPointF(x0 + 12, y0 - 9), QPointF(x0 + 12, y0 - 17), QPointF(x0, y0 - 8)]))
     elif kind == 'x_enccheck':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
         p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
@@ -1202,6 +1208,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setPen(pen(ink, 3.0)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(29, 17)]))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(38, 36), 7, 7)
             p.setPen(pen(QColor(255, 255, 255), 2.2)); p.drawLine(QPointF(38, 32), QPointF(38, 37)); p.drawPoint(QPointF(38, 40))
+        elif name == 'encrib':
+            # żebra wzmacniające: płyta w rzucie z trzema pomarańczowymi żebrami
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawPolygon(QPolygonF([QPointF(4, 34), QPointF(30, 42), QPointF(44, 30), QPointF(18, 22)]))
+            p.setBrush(QColor(255, 255, 255)); p.setPen(pen(acc, 2.4))
+            for k in range(3):
+                x0, y0 = 11 + k * 9, 27 + k * 3
+                p.drawPolygon(QPolygonF([QPointF(x0, y0), QPointF(x0 + 12, y0 - 9), QPointF(x0 + 12, y0 - 17), QPointF(x0, y0 - 8)]))
         elif name == 'encvent':
             # wentylacja: ścianka z rzędami otworów i pomarańczowe strzałki przepływu powietrza
             p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(7, 8, 26, 32))

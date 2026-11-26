@@ -55,7 +55,7 @@ class StudioTests(unittest.TestCase):
 
     def preview(self):
         end=time.monotonic()+20
-        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None)) if t is not None]
+        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None)) if t is not None]
         while any(t.isActive() for t in timers) and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
             self.app.processEvents();time.sleep(.005)
         while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
@@ -4270,7 +4270,7 @@ class StudioTests(unittest.TestCase):
         import rccad.studio as st
         from rccad import enclosure as encm
         w=self.w
-        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
+        self.assertEqual(st.TABS['Obudowy'],['enclosure','enchole','encvent','encrib','enccheck']);self.assertIn('enclosure',w.tools);self.assertIn('enclosure',st.FAVORITE_TOOLS)
         a=Body('Płytka',k.box(40,20,10)).prepared()
         rot=np.array([[np.cos(.5),-np.sin(.5),0],[np.sin(.5),np.cos(.5),0],[0,0,1]])
         r=Body('Obrócona',k.transformed(k.box(30,10,6),rot,np.array([80,0,0]))).prepared()
@@ -5204,6 +5204,80 @@ class StudioTests(unittest.TestCase):
         fr3=H.wall_frame((100,100,0.0),np.array([0,0,-1.0]),(0,1.0,0));t0=_t.time()
         shape,info=V.build(cq.Shape.cast(box),fr3,dict(pattern='circle',size=3.0,web=1.5,cu=0,cv=0,width=180,height=180,margin=2))
         self.assertGreater(info['count'],1000);self.assertLess(_t.time()-t0,40);self.assertTrue(BRepCheck_Analyzer(shape.wrapped).IsValid())
+
+    # Generator obudów, etap 16: żebra wzmacniające - rodzaje, dopasowanie do powierzchni (płaskie, nieregularne,
+    # zakrzywione) i przeszkód, połączenie objętościowe, usuwanie wybranych, krok historii, edycja i regeneracja
+    def test_enclosure_stage16_ribs(self):
+        from rccad import enclosure as encm, enclosure_ribs as R, enclosure_rib_ui as RU, enclosure_mounts as mnt, enclosure_param as epm
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        bodies,env,mk=self._tech_scene();pcb=bodies[0]
+        sp=encm.EnclosureSpec(sources=[encm.SourceRef(id=b.id) for b in bodies],envelope=env,mounts=mk('print').mounts,posts=dict(enabled=True),
+                              clearance={k_:4.0 for k_ in ('x-','x+','y-','y+','z-','z+')},walls={k_:2.5 for k_ in ('x-','x+','y-','y+','bottom','top')},
+                              split=dict(enabled=True,mode='z',unit='%',position=60,joint='flat'))
+        out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='B',out_lid='L',name='Ob',folder='Ob'))
+        base=next(b for b in out if b.id=='B');lid=next(b for b in out if b.id=='L')
+        floor=max((f for f in base.shape.Faces() if f.geomType()=='PLANE' and f.normalAt().z>.99),key=lambda f:f.Area())   # dno wnętrza
+        F=[dict(point=list(floor.Center().toTuple()),normal=[0,0,1.0])]
+        def ok(o,rid='B'):
+            part=next(b for b in o if b.id==rid);self.assertTrue(BRepCheck_Analyzer(part.shape.wrapped).IsValid());self.assertEqual(len(part.shape.Solids()),1)
+            for c in bodies:self.assertLess(encm._volume(encm._boolean('common',part.shape.wrapped,c.shape.wrapped,'t'))[0],1e-4)   # bez kolizji z komponentami
+            other=next(b for b in o if b.id==('L' if rid=='B' else 'B'))
+            self.assertLess(encm._volume(encm._boolean('common',part.shape.wrapped,other.shape.wrapped,'t'))[0],1e-3)               # ani z pokrywą
+            return part
+        v0=base.shape.Volume();counts={}
+        for pat in ('single','parallel','cross','grid','tri','hex','radial','corner','post'):
+            rec=dict(type='enc_rib',target='B',faces=F,params=dict(pattern=pat,pitch=12.0,height=5.0,count=4 if pat=='post' else 0),id=pat,seq=9)
+            o=RU.run(out,rec);part=ok(o);self.assertGreater(part.shape.Volume(),v0+1.0,pat);counts[pat]=part.meta['enclosure_ribs'][0]['params']['pattern']
+        # komponent nad dnem: żebra obniżone pod płytką (żadna część żeber nie wchodzi w przestrzeń ochronną z odstępem)
+        rec=dict(type='enc_rib',target='B',faces=F,params=dict(pattern='parallel',pitch=8.0,height=12.0,gap=1.0),id='r1',seq=9)
+        shape,info,ribs=RU.build(out,rec)
+        bb=pcb.shape.BoundingBox()
+        zone=encm._make_box((bb.xmin-.999,bb.ymin-.999,bb.zmin-.999),(bb.xmax+.999,bb.ymax+.999,bb.zmax+.999))
+        for r in ribs:self.assertLess(encm._volume(encm._boolean('common',r,zone,'t'))[0],1e-6)
+        column=encm._make_box((bb.xmin+1,bb.ymin+1,-50),(bb.xmax-1,bb.ymax-1,bb.zmin-1.0))
+        self.assertGreater(sum(encm._volume(encm._boolean('common',r,column,'t'))[0] for r in ribs),1.0)   # pod płytką żebra obniżone, nie usunięte
+        with self.assertRaises(k.CadError):RU.build(out,dict(rec,params=dict(rec['params'],obstacles='cut')))   # płytka zakrywa dno - pod nią nic
+        # zmienna wysokość, pochylenie, zaokrąglenie; usunięcie wybranych żeber
+        _s,i_const,_r=RU.build(out,dict(rec,params=dict(rec['params'],height=4.0)))
+        _s,i_ramp,_r=RU.build(out,dict(rec,params=dict(rec['params'],height=4.0,hmode='ramp',height2=1.0)))
+        self.assertLess(i_ramp['volume'],i_const['volume'])
+        _s,i_fil,_r=RU.build(out,dict(rec,params=dict(rec['params'],height=4.0,fillet=1.0,draft=3.0)));self.assertGreater(i_fil['volume'],i_const['volume'])
+        _s,i_rm,_r=RU.build(out,dict(rec,params=dict(rec['params'],height=4.0,removed=[0,1])));self.assertLess(i_rm['volume'],i_const['volume'])
+        # powierzchnia zewnętrzna (dno od spodu) i wiele powierzchni naraz
+        bottom=max((f for f in base.shape.Faces() if f.geomType()=='PLANE' and f.normalAt().z<-.99),key=lambda f:f.Area())
+        Fo=[dict(point=list(bottom.Center().toTuple()),normal=[0,0,-1.0])]
+        o=RU.run(out,dict(rec,faces=Fo,params=dict(pattern='grid',pitch=10.0,height=3.0)));part=ok(o)
+        self.assertLess(part.shape.BoundingBox().zmin,base.shape.BoundingBox().zmin-2.9)
+        side=min((f for f in base.shape.Faces() if f.geomType()=='PLANE' and f.normalAt().x>.99 and f.Area()>20),key=lambda f:f.Center().x)
+        o=RU.run(out,dict(rec,faces=F+[dict(point=list(side.Center().toTuple()),normal=[1.0,0,0])],params=dict(pattern='parallel',pitch=8.0,height=2.0)));ok(o)
+        # powierzchnia zakrzywiona: wewnętrzna ścianka obudowy cylindrycznej; nieregularna - dno obudowy konturowej
+        for shape,prm in (('cylinder',{}),('contour',dict(cmode='concave'))):
+            s2=encm.EnclosureSpec.from_json(dict(sp.to_json(),shape=shape,shape_params=prm,posts={},mounts=[]))
+            o2=encm.run(bodies,dict(type='enclosure',spec=s2.to_json(),out='B',out_lid='L',name='Ob',folder='Ob'));b2=next(b for b in o2 if b.id=='B')
+            if shape=='cylinder':
+                c=np.asarray(env.center)
+                lay=encm.layout(env,s2,bodies=bodies);r_in=lay['g_in']['a']
+                pt=np.array([c[0]+r_in,c[1],c[2]-2.0]);Fc=[dict(point=list(pt),normal=[-1.0,0,0])]
+                o3=RU.run(o2,dict(rec,faces=Fc,params=dict(pattern='parallel',angle=90.0,pitch=4.0,height=2.0,margin=1.0,gap=.5)));p3=ok(o3)
+                self.assertGreater(p3.shape.Volume(),b2.shape.Volume()+1.0)
+            else:
+                fl=max((f for f in b2.shape.Faces() if f.geomType()=='PLANE' and f.normalAt().z>.99),key=lambda f:f.Area())
+                o3=RU.run(o2,dict(rec,faces=[dict(point=list(fl.Center().toTuple()),normal=[0,0,1.0])],params=dict(pattern='hex',pitch=10.0,height=3.0)));ok(o3)
+        # okno: wskazanie, podgląd, strzałki, lista, Zastosuj, Cofnij, edycja kroku, regeneracja po przesunięciu elementów
+        w=self.w;w.document.commit(out);w.refresh();w.set_mode('encrib')
+        w.er.update(target='B',faces=F);w._er_update(reset=True);self.assertGreater(w.er_list.count(),0)
+        n0=w.er_list.count();w.er_f['pitch'][1].setValue(40.0);self.assertLess(w.er_list.count(),n0);w.er_f['pitch'][1].setValue(15.0)
+        h0=w.er_f['height'][1].value();w.encrib_handle_dragged('rib:height',2.0);self.assertAlmostEqual(w.er_f['height'][1].value(),h0+2.0,3)
+        w.encrib_handle_released('rib:height');self.preview()
+        self.assertTrue(w.er_apply.isEnabled(),w.er_status.text())
+        w.er_list.item(0).setCheckState(Qt.Unchecked);self.assertEqual(w.er['removed'],{0});self.preview()
+        before=w.document.get('B').shape.Volume();w.apply_encrib();self.wait();w.set_mode(None)
+        nb=w.document.get('B');self.assertGreater(nb.shape.Volume(),before);self.assertEqual(nb.meta['enclosure_ribs'][0]['params']['removed'],[0])
+        self.assertEqual(w.document.infos()[0][-1]['label'],'Żebra wzmacniające')
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get('B').shape.Volume(),before,4);w.redo();self.wait()
+        moved=[replace(b,shape=b.shape.translate((5,0,0))).prepared() for b in (w.document.get(bodies[0].id),w.document.get(bodies[1].id))]
+        regen=epm.regenerate([*moved,*[b for b in w.document.bodies if b.id not in (bodies[0].id,bodies[1].id)]],dict(type='enc_regen',id='B'))
+        rb=next(b for b in regen if b.id=='B');self.assertEqual(len(rb.meta['enclosure_ribs']),1);self.assertTrue(BRepCheck_Analyzer(rb.shape.wrapped).IsValid())
 
     # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
     def test_enclosure_stage14a_print(self):
