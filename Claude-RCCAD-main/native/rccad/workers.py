@@ -214,6 +214,41 @@ def _failed(exc, gen):
     return Unavailable()
 
 
+class Hung(Exception):
+    """Zadanie przekroczyło swój limit czasu (np. OpenCascade zapętlił się w algorytmie zaokrąglenia): procesy zostały
+    zamknięte i startują od nowa - tego zadania NIE liczy się ponownie w oknie (zawiesiłoby wątek bez końca)."""
+
+
+class Crashed(Hung):
+    """Proces liczący zakończył się awarią na tym zadaniu - liczenie go w oknie mogłoby zamknąć cały program."""
+
+
+def call_guarded(key, function, *args, timeout=60.0):
+    """Jak call_affine (key=None - dowolny proces), z własnym limitem czasu. Po przekroczeniu - zamknięcie procesów
+    (także zawieszonego) i wyjątek Hung."""
+    if not ready():
+        raise Unavailable()
+    from . import kernel
+    from concurrent.futures import TimeoutError as Timeout
+    gen = _abort_gen
+    pool = _pool_for(key) if key is not None else _next_pool()
+    try:
+        return pool.submit(function, *args).result(timeout=float(timeout))
+    except kernel.CadError:
+        raise
+    except Timeout as exc:
+        if gen != _abort_gen:
+            raise Aborted() from exc
+        abort()                                    # zabija zawieszony proces (i pozostałe), nowe startują w tle
+        raise Hung() from exc
+    except Exception as exc:
+        from concurrent.futures.process import BrokenProcessPool
+        if isinstance(exc, BrokenProcessPool) and gen == _abort_gen:
+            abort()                                # proces padł na tym zadaniu (błąd OpenCascade) - nie liczyć go w oknie
+            raise Crashed() from exc
+        raise _failed(exc, gen) from exc
+
+
 def call_affine(key, function, *args):
     """Jedno zadanie w procesie przypisanym do klucza (np. ta sama blacha zawsze w tym samym procesie, który pamięta
     jej wcześniejsze wyniki). Wątek okna czeka bez blokady Pythona, więc okno się nie zacina.

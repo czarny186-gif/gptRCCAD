@@ -141,8 +141,9 @@ class WorkerTests(unittest.TestCase):
         shape = cq.Workplane().box(60, 40, 20).faces('>Z').workplane().rarray(15, 15, 3, 2).rect(5, 5).cutBlind(-8).val()
         ids = [i for i, e in enumerate(shape.Edges()) if e.geomType() == 'LINE' and abs(e.tangentAt(0).z) > .99][:6]
         token = ('b', 1)
-        first = workers.call_affine(('mod',), hist.mod_preview_job, token, shape, ids, None, 1.0, 'fillet', 4.0)
-        again = workers.call_affine(('mod',), hist.mod_preview_job, token, None, ids, None, 1.5, 'fillet', 6.0)   # bez bryły
+        first, scope = workers.call_affine(('mod',), hist.mod_preview_job, token, shape, ids, None, 1.0, 'fillet', 4.0)
+        self.assertEqual(sorted(scope), sorted(ids))                                           # bez krawędzi stycznych
+        again, _scope = workers.call_affine(('mod',), hist.mod_preview_job, token, None, ids, None, 1.5, 'fillet', 6.0)   # bez bryły
         local = hist.mod_preview(shape, set(ids), None, 1.5, 'fillet', 6.0)
         self.assertGreater(len(first.triangles), 0)
         self.assertAlmostEqual(float(again.vertices.min()), float(local.vertices.min()), 3)

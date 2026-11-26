@@ -1,4 +1,23 @@
-# RCCAD Desktop 0.5.62 — Generator obudów etapy 20-22 i nowe narzędzie Wentylacja
+# RCCAD Desktop 0.5.63 — zaokrąglanie i fazowanie: diagnostyka, poprawki, wydajność; szyk kołowy „jak zegar”, TWIST
+
+- **Zaokrąglenie / faza: zakres widoczny przed zatwierdzeniem.** OpenCascade przedłuża zaokrąglenie na krawędzie połączone stycznie. Przykład: jedna górna krawędź bryły z zaokrąglonymi narożnikami zaokrągla cały obwód. Te krawędzie są teraz pomarańczowe, a ich liczba jest w oknie. Zaznaczone krawędzie zostają niebieskie. Podgląd dużej bryły liczył się na wycinku, który obcinał taki łańcuch, więc podgląd różnił się od wyniku. Teraz wycinek obejmuje cały zakres.
+- **Wynik liczy się raz.** Wcześniej operacja liczyła się podczas podglądu i drugi raz po Zastosuj. Teraz zaraz po podglądzie wynik całej bryły liczy się w tle, a Zastosuj / Enter go bierze. Szybkie zmiany wartości są łączone: dokładny podgląd rusza 180 ms po ostatniej zmianie.
+- **Nieudana operacja:** model i historia zostają bez zmian, a narzędzie zostaje otwarte z tym samym zaznaczeniem. Krawędzie, na których OpenCascade się zatrzymał, są czerwone. Promień nie jest zmniejszany samoczynnie.
+- **Kontrola wyniku:** BRepCheck, liczba brył, brak szczelin, zmiana objętości, promień powierzchni zaokrąglenia równy zadanemu.
+- **Ochrona przed zawieszeniem:** OpenCascade potrafi się zapętlić przy fazowaniu niektórych zestawów krawędzi. Obliczenia w procesie liczącym mają limit czasu. Po jego przekroczeniu albo po awarii procesu jest komunikat, program działa dalej, a operacja nie liczy się ponownie w oknie.
+- **Identyfikacja krawędzi** odbywa się po tożsamości topologicznej (także stożki i kule z krawędziami zdegenerowanymi). Gdy bryła zmieni się przy otwartym narzędziu, jej zaznaczenie jest usuwane, zamiast trafić w inne krawędzie.
+- **Bryły z setkami / tysiącami otworów** (płyty, perforacje, Wentylacja):
+  - siatka ściany z wieloma otworami liczy się algorytmem Delabella i kawałkami. Wcześniej przy ok. 1500 otworach w ścianie program kończył się brakiem pamięci;
+  - kontrola poprawności takich ścian nie sprawdza przecięć każdego otworu z każdym (kwadratowy czas).
+  - Pomiary dla płyty z 10 042 krawędziami: zaokrąglenie krawędzi 87,4 s → 5,9 s, siatka: awaria → 11,2 s. Dla 5024 krawędzi: 22,6 s → 2,7 s, siatka: awaria → 5,0 s.
+- **Szyk kołowy → „Odwróć kopie do pionu (jak cyfry zegara)”**: kopie przesuwają się po okręgu bez obracania i zachowują orientację oryginału. Działa dla szkiców i brył, zapisuje się w historii.
+- **TWIST:** skręcona kopia jest widoczna od razu po wskazaniu bryły. Wcześniej ruch myszy nad modelem zastępował podgląd podświetleniem, więc bryła znikała do pierwszego ruchu pierścienia.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.62 — Generator obudów etapy 20-22 i nowe narzędzie Wentylacja
 
 - **Prowadzenie przewodów** (Obudowy → Prowadzenie przewodów, etap 20): przewody okrągłe, wielożyłowe, wiązki, płaskie, taśmowe, w osłonie i rurki. Początek i koniec są na złączach komponentów. Można dodać punkty pośrednie. Tryby: najkrótsza, przy ściankach, przy dnie, ortogonalna, przestrzenna, przez punkty, ręczna. Trasę liczy A* na siatce wnętrza; w trybie ortogonalnym załamania mają odstęp pod promień gięcia, a łuki i B-spline mają kontrolę promienia. Przewód płaski leży w jednej płaszczyźnie, bez skręcania. Bryła przewodu jest B-Rep i ma kontrolę kolizji. Uchwyty (klipsy, opaski, kanały, prowadnice narożne, odciążenia) są połączone z obudową. Po przesunięciu komponentu przewody przeliczają się.
 - **Optymalizacja obudowy** (etap 21). Tryb A zmienia tylko orientację obudowy. Tryb B zmienia też rozmieszczenie i obroty komponentów, ale tylko jako propozycję. Cele mają wagi: objętość, materiał, masa, wymiary, długość przewodów. Ograniczenia: blokady, dno, złącza przy ściance, strefy serwisowe i zabronione. Szybki etap na ramkach poprzedza dokładną kontrolę wariantów na B-Rep. Lista wariantów pokazuje porównanie i podgląd. Zastosuj to jeden krok historii. Program nie gwarantuje optimum globalnego.
@@ -20,10 +39,6 @@
   - Tysiące otworów cięte są kawałkami. Wyniki pomiarów na płycie 400 × 300: 1000 otworów ok. 9 s, 5000 ok. 43 s, 10 000 ok. 89 s.
 - **Połącz szkice**: szkic połączony z kilku zamkniętych kształtów działa teraz w Wyciągnięciu i Wycięciu, także w innej bryle. Wcześniej wskazanie go powodowało błąd. Każdy kształt jest osobnym profilem, a kształt leżący wewnątrz innego jest otworem.
 - **Przeciągnięcie wzdłuż ścieżki**: ścieżką może być linia narysowana narzędziem Szkic na walcu albo Szkic na narożniku. Ścieżka biegnie po powierzchni bryły tak, jak ją widać: na walcu i zaokrągleniu jako krzywa na powierzchni, na ostrym narożniku łamie się na krawędzi.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.61 — Generator obudów, etap 19: panel sterowania
 

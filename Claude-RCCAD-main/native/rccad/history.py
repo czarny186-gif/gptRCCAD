@@ -1119,6 +1119,44 @@ def shape_job(module, name, args, solid=True):
     return shape, kernel.display_mesh(shape, coarse=kernel.heavy(shape))
 
 
+def blend_timeout(shape):
+    """Limit czasu jednego zaokrąglenia / fazy w procesie liczącym (OpenCascade potrafi się zapętlić w algorytmie
+    fazy przy niektórych zestawach krawędzi): 45 s + 30 ms na krawędź bryły."""
+    try:
+        return 45.0 + .03 * len(shape.Edges())
+    except Exception:
+        return 120.0
+
+
+HUNG_MESSAGE = ('OpenCascade nie zakończył obliczeń w {t:.0f} s (algorytm zaokrąglenia / fazy zapętlił się dla tego zestawu '
+                'krawędzi) - obliczenia przerwano, model bez zmian. Zmień wartość albo zaznacz mniej krawędzi naraz.')
+
+
+CRASH_MESSAGE = ('OpenCascade przerwał obliczenia awarią procesu liczącego dla tego zestawu krawędzi - model bez zmian, '
+                 'program działa dalej. Zmień wartość albo zaznacz mniej krawędzi naraz.')
+
+
+def offloaded_guarded(shape, function, *args):
+    """(kształt, siatka) funkcji zaokrąglenia / fazy w procesie liczącym z limitem czasu zależnym od bryły; po
+    zawieszeniu - CadError (bez liczenia w oknie). Bez procesów - tutaj."""
+    from . import workers
+    if workers.ready():
+        t = blend_timeout(shape)
+        try:
+            return workers.call_guarded(None, shape_job, function.__module__, function.__name__, args, timeout=t)
+        except workers.Crashed as exc:
+            raise kernel.CadError(CRASH_MESSAGE) from exc
+        except workers.Hung as exc:
+            raise kernel.CadError(HUNG_MESSAGE.format(t=t)) from exc
+        except workers.Unavailable:
+            pass
+    return function(*args), None
+
+
+def offloaded_blend(shape, ids, size, kind):
+    return offloaded_guarded(shape, kernel.blend, shape, set(ids), size, kind)
+
+
 def offloaded_shape(function, *args):
     """(kształt, siatka albo None) - kształt z funkcji kernela liczony w procesie liczącym; bez procesów tutaj (siatka None)."""
     from . import workers
@@ -1507,7 +1545,7 @@ def pattern_ops_for(body, recipe):
         center = np.array(kernel.bounds(body.shape).center.toTuple(), float)
         d0, direction = radial(center, p['pivot'], p['axis'])
         offset = tuple(float(c) for c in direction * (float(p['radius']) - d0))
-        ops = kernel.pattern_ops('circ', dict(p, offset=offset))
+        ops = kernel.pattern_ops('circ', dict(p, offset=offset, center=tuple(float(c) for c in center)))
         return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
     if kind == 'path' and float(p.get('start', 0.0)) > 1e-9:
         offset = tuple(float(c) for c in kernel.path_position(p['points'], p['start']) - np.asarray(p['points'][0], float))
@@ -5254,30 +5292,54 @@ _MOD_CACHE = {}          # w procesie roboczym: bryła i wycięty fragment ostat
 
 
 def mod_preview(shape, ids, points, size, kind, margin, cache=None):
-    """Dokładny podgląd zaokrąglenia / fazy: tylko nowo powstała powierzchnia (siatka). Duża bryła -> mały fragment wokół zaznaczenia."""
+    """Dokładny podgląd zaokrąglenia / fazy: tylko nowo powstała powierzchnia (siatka). Duża bryła -> fragment wokół
+    całego zakresu operacji (zaznaczone krawędzie + krawędzie styczne dołączane przez OpenCascade - podgląd pokazuje
+    dokładnie to, co zrobi Zastosuj). Wynik na całej bryle zostaje w pamięci procesu (mod_final_job go oddaje)."""
     local_ids = ids
+    full = True
+    scope = set(ids or ())
+    if points is None and ids:
+        scope = kernel.blend_scope(shape, ids, kind)[0] or set(ids)
     try:
         if len(shape.Faces()) > 10:
-            key = (None if ids is None else frozenset(ids),
+            key = (None if ids is None else frozenset(scope), kind,
                    None if points is None else tuple(tuple(np.round(q, 3)) for q in points), round(margin, 3))
             hit = cache.get('piece') if cache is not None else None
             if hit and hit[0] == key:
                 piece, mapped = hit[1], hit[2]
             else:
-                piece = kernel.local_piece(shape, ids, points, margin)
+                piece = kernel.local_piece(shape, sorted(scope) if points is None else None, points, margin)
                 mapped = None if (piece is None or points is not None) else kernel.map_edges(shape, piece, sorted(ids))
                 if cache is not None:
                     cache['piece'] = (key, piece, mapped)
             if piece is not None and (points is not None or mapped is not None):
-                shape, local_ids = piece, (None if points is not None else set(mapped))
+                shape, local_ids, full = piece, (None if points is not None else set(mapped)), False
     except Exception:
         local_ids = ids
     if points is not None:
         result = kernel.blend_vertices(shape, points, size, kind)
+        made = kernel.new_faces(shape, result)
     else:
-        result = kernel.blend(shape, local_ids, size, kind)
-    made = kernel.new_faces(shape, result)
-    return kernel.display_mesh(kernel.compound(made), .3) if made else kernel.display_mesh(result, .3)
+        try:
+            result, made, _scope = kernel.blend_full(shape, local_ids, size, kind)
+        except kernel.CadError:
+            if kind == 'fillet':
+                raise
+            result = kernel.blend(shape, local_ids, size, kind)       # faza klinem (krawędź kończy się na zaokrągleniach)
+            made = kernel.new_faces(shape, result)
+        if full and cache is not None:
+            cache['final'] = ((frozenset(ids), float(size), kind), result)
+    mesh = kernel.display_mesh(kernel.compound(made), .3) if made else kernel.display_mesh(result, .3)
+    if cache is not None:
+        cache['scope'] = sorted(scope)
+    return mesh
+
+
+def mod_preview_scoped(shape, ids, points, size, kind, margin, cache=None):
+    """(siatka podglądu, pełny zakres krawędzi) - zakres z OpenCascade (krawędzie styczne dołączone automatycznie)."""
+    cache = {} if cache is None else cache
+    mesh = mod_preview(shape, ids, points, size, kind, margin, cache)
+    return mesh, cache.get('scope', sorted(ids or ()))
 
 
 def mod_preview_job(token, shape, ids, points, size, kind, margin):
@@ -5289,7 +5351,20 @@ def mod_preview_job(token, shape, ids, points, size, kind, margin):
     elif _MOD_CACHE.get('token') != token:
         _MOD_CACHE.clear()
         _MOD_CACHE.update(token=token, shape=shape)
-    return mod_preview(shape, ids, points, size, kind, margin, _MOD_CACHE)
+    return mod_preview_scoped(shape, ids, points, size, kind, margin, _MOD_CACHE)
+
+
+def mod_final_job(token, ids, size, kind):
+    """W procesie roboczym (tym samym co podgląd): wynik zaokrąglenia / fazy całej bryły + siatka. Gdy podgląd policzył
+    już dokładnie ten wynik na całej bryle - bez liczenia drugi raz. Brak bryły w pamięci -> LookupError."""
+    if _MOD_CACHE.get('token') != token:
+        raise LookupError('brak bryły w pamięci procesu')
+    shape = _MOD_CACHE['shape']
+    key = (frozenset(ids), float(size), kind)
+    hit = _MOD_CACHE.get('final')
+    result = hit[1] if hit and hit[0] == key else kernel.blend(shape, set(ids), size, kind)
+    _MOD_CACHE['final'] = (key, result)
+    return result, kernel.display_mesh(result, coarse=kernel.heavy(result))
 
 
 # ---------- podglądy liczone w procesach roboczych (okno nie czeka na OpenCascade) ----------

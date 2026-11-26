@@ -51,9 +51,50 @@ def is_valid(shape):
     if any(t.IsPartner(w) for t in TRUSTED):          # ten sam kształt (także przesunięty) - sprawdzony wcześniej
         return True
     try:
+        if not is_triangle_mesh(shape):
+            heavy = heavy_faces(shape)
+            if heavy:
+                return _valid_with_heavy_faces(shape, heavy)
+    except Exception:
+        pass
+    try:
         return BRepCheck_Analyzer(shape.wrapped, True, True).IsValid()
     except TypeError:
         return shape.isValid()
+
+
+def _valid_with_heavy_faces(shape, heavy):
+    """BRepCheck bryły ze ścianami o setkach / tysiącach otworów (perforacja, wentylacja, płyty z otworami): pełna kontrola
+    takiej ściany sprawdza przecięcia każdego obrysu z każdym (kwadratowo: 5000 otworów - ponad minutę, przy każdym
+    cofnięciu i otwarciu projektu). Tu: wszystkie pozostałe ściany - pełny BRepCheck; ściany z otworami - każdy obrys
+    osobno (krawędzie, ciągłość, zamknięcie na powierzchni) bez wzajemnych przecięć obrysów; cała skorupa - bez szczelin."""
+    from OCP.BRepCheck import BRepCheck_Analyzer, BRepCheck_Wire, BRepCheck_NoError
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_WIRE
+    from OCP.TopoDS import TopoDS
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+    comp = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(comp)
+    ex = TopExp_Explorer(shape.wrapped, TopAbs_FACE)
+    while ex.More():
+        if not any(ex.Current().IsSame(h) for h in heavy):
+            builder.Add(comp, ex.Current())
+        ex.Next()
+    if not BRepCheck_Analyzer(comp, True, True).IsValid():
+        return False
+    for face in heavy:
+        wx = TopExp_Explorer(face, TopAbs_WIRE)
+        while wx.More():
+            wire = TopoDS.Wire_s(wx.Current())
+            chk = BRepCheck_Wire(wire)
+            if chk.Closed(True) != BRepCheck_NoError or chk.Orientation(face, True) != BRepCheck_NoError:
+                return False
+            if not BRepCheck_Analyzer(wire, True).IsValid():
+                return False
+            wx.Next()
+    return _free_edges(cq.Shape.cast(shape.wrapped) if not hasattr(shape, 'Faces') else shape) == 0
 
 
 def _brep_bytes(shape):
@@ -95,10 +136,180 @@ def mesh_parallel(shape, tolerance, angular=.12):
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.BRepTools import BRepTools
     try:
-        if not BRepTools.Triangulation_s(shape.wrapped, tolerance):
+        if BRepTools.Triangulation_s(shape.wrapped, tolerance):
+            return
+        heavy = heavy_faces(shape)
+        if not heavy:
             BRepMesh_IncrementalMesh(shape.wrapped, tolerance, True, angular, PARALLEL_MESH)
+            return
+        if _tiled_done(shape, heavy, tolerance):
+            return
+        _mesh_heavy_faces(shape, tolerance, angular, heavy)
+        # pozostałe ściany razem (wspólne krawędzie - spójna siatka); ściany z tysiącami otworów mają już siatkę z
+        # kawałków - BRepMesh całej bryły policzyłby je drugi raz algorytmem domyślnym (dziesiątki sekund)
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_FACE
+        from OCP.BRep import BRep_Builder
+        from OCP.TopoDS import TopoDS_Compound
+        comp = TopoDS_Compound()
+        builder = BRep_Builder()
+        builder.MakeCompound(comp)
+        ex = TopExp_Explorer(shape.wrapped, TopAbs_FACE)
+        while ex.More():
+            if not any(ex.Current().IsSame(h) for h in heavy):
+                builder.Add(comp, ex.Current())
+            ex.Next()
+        BRepMesh_IncrementalMesh(comp, tolerance, True, angular, PARALLEL_MESH)
+        _TILED[_tkey(shape)] = float(tolerance)
+        if len(_TILED) > 64:
+            _TILED.pop(next(iter(_TILED)))
     except Exception:
         pass
+
+
+_TILED = {}                 # bryły z siatką liczoną kawałkami: odchyłka (BRepTools.Triangulation tych brył zwraca False)
+
+
+def _tkey(shape):
+    return hash(shape.wrapped)            # TopoDS_Shape: TShape + położenie (stałe dla tej samej bryły)
+
+
+def _tiled_done(shape, heavy, tolerance):
+    from OCP.BRep import BRep_Tool
+    from OCP.TopLoc import TopLoc_Location
+    tol = _TILED.get(_tkey(shape))
+    if tol is None or tol > tolerance + 1e-12:
+        return False
+    return all(BRep_Tool.Triangulation_s(h, TopLoc_Location()) is not None for h in heavy)
+
+
+HEAVY_FACE_WIRES = 40       # ściana z tyloma otworami (np. perforacja) - siatka algorytmem Delabella
+
+
+def _mesh_heavy_faces(shape, tolerance, angular, heavy=None):
+    """Ściany z bardzo wieloma otworami (perforacja, wentylacja, płyta z setkami otworów): domyślny algorytm BRepMesh
+    (Watson) liczy je kwadratowo dłużej i przy ok. 1500 otworach w jednej ścianie wyczerpywał pamięć (awaria programu).
+    Te ściany siatkuje wcześniej algorytm Delabella (ok. 15 razy szybciej, ta sama odchyłka); pozostałe ściany - jak zwykle,
+    BRepMesh nie liczy już siatki ścian, które ją mają."""
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopoDS import TopoDS, TopoDS_Iterator
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    try:
+        from OCP.IMeshTools import IMeshTools_Parameters, IMeshTools_MeshAlgoType_Delabella
+    except ImportError:
+        return
+    if heavy is None:
+        heavy = heavy_faces(shape)
+
+    def delabella(face):
+        p = IMeshTools_Parameters()
+        p.Deflection, p.Angle, p.Relative, p.InParallel = float(tolerance), float(angular), True, True
+        p.MeshAlgo = IMeshTools_MeshAlgoType_Delabella
+        BRepMesh_IncrementalMesh(face, p)
+    for face in heavy:
+        try:
+            if _mesh_face_tiled(face, delabella):
+                continue
+        except Exception:
+            pass
+        delabella(face)
+
+
+def _mesh_face_tiled(face, mesher, target=150):
+    """Płaska ściana z tysiącami otworów: siatka liczona kawałkami. Obszary prostokątne rozdzielone wolnymi pasami
+    między otworami (żaden otwór nie leży na granicy) - każdy kawałek to obrys ściany przycięty do prostokąta + otwory
+    leżące w nim; siatki kawałków składane w jedną triangulację ściany (te same punkty brzegów, ta sama odchyłka).
+    Całą ścianę naraz siatkuje się kwadratowo dłużej (3300 otworów: kilkadziesiąt sekund). False - nie da się podzielić."""
+    from OCP.BRep import BRep_Tool, BRep_Builder
+    from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.TopAbs import TopAbs_FORWARD, TopAbs_REVERSED, TopAbs_FACE, TopAbs_WIRE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
+    from OCP.Poly import Poly_Triangulation, Poly_Triangle
+    from OCP.gp import gp_Pnt
+    from OCP.GeomAbs import GeomAbs_Plane
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    if not face.Location().IsIdentity() or BRepAdaptor_Surface(face).GetType() != GeomAbs_Plane:
+        return False
+    fwd = TopoDS.Face_s(face.Oriented(TopAbs_FORWARD))
+    outer = BRepTools.OuterWire_s(fwd)
+    holes, boxes = [], []
+    ex = TopExp_Explorer(fwd, TopAbs_WIRE)
+    while ex.More():
+        w = TopoDS.Wire_s(ex.Current())
+        if not w.IsSame(outer):
+            b = Bnd_Box()
+            BRepBndLib.Add_s(w, b, False)
+            holes.append(w)
+            boxes.append(b.Get())
+        ex.Next()
+    from .vent_cut import _partition
+    B = np.array(boxes, float)
+    fb = Bnd_Box()
+    BRepBndLib.Add_s(fwd, fb, False)
+    g = np.array(fb.Get())
+    leaves = []
+    _partition(B, np.arange(len(holes)), g[:3] - 1.0, g[3:] + 1.0, target, leaves)
+    if len(leaves) < 2:
+        return False
+    surf = BRep_Tool.Surface_s(fwd)
+    base = BRepBuilderAPI_MakeFace(surf, outer, True).Face()
+    nodes, tris, offset = [], [], 0
+    for idx, lo, hi in leaves:
+        box = BRepPrimAPI_MakeBox(gp_Pnt(*map(float, lo)), gp_Pnt(*map(float, hi))).Shape()
+        com = BRepAlgoAPI_Common(base, box)
+        if not com.IsDone():
+            return False
+        fx = TopExp_Explorer(com.Shape(), TopAbs_FACE)
+        pieces = []
+        while fx.More():
+            pieces.append(TopoDS.Face_s(fx.Current()))
+            fx.Next()
+        mine = [holes[i] for i in idx]
+        for pf in pieces:
+            flip = pf.Orientation() == TopAbs_REVERSED
+            mk = BRepBuilderAPI_MakeFace(TopoDS.Face_s(pf.Oriented(TopAbs_FORWARD)))
+            if len(pieces) == 1:
+                for w in mine:
+                    mk.Add(w)
+            else:                                                       # kilka kawałków obrysu w prostokącie: otwór do swojego
+                from OCP.BRepClass import BRepClass_FaceClassifier
+                from OCP.TopAbs import TopAbs_IN
+                for w in mine:
+                    v = BRep_Tool.Pnt_s(TopoDS.Vertex_s(TopExp_Explorer(w, 7).Current()))
+                    c = BRepClass_FaceClassifier(pf, v, 1e-6).State()
+                    if c == TopAbs_IN or c == 2:
+                        mk.Add(w)
+            piece = mk.Face()
+            mesher(piece)
+            loc = TopLoc_Location()
+            tri = BRep_Tool.Triangulation_s(piece, loc)
+            if tri is None:
+                return False
+            n, m = tri.NbNodes(), tri.NbTriangles()
+            P = np.array([tri.Node(i).Coord() for i in range(1, n + 1)], float)
+            T = np.array([tri.Triangle(i).Get() for i in range(1, m + 1)], np.int64)
+            if flip:
+                T = T[:, [0, 2, 1]]
+            nodes.append(P)
+            tris.append(T + offset)
+            offset += n
+    P = np.vstack(nodes)
+    T = np.vstack(tris)
+    out = Poly_Triangulation(len(P), len(T), False)
+    for i, q in enumerate(P, 1):
+        out.SetNode(i, gp_Pnt(*q))
+    for i, t in enumerate(T, 1):
+        out.SetTriangle(i, Poly_Triangle(int(t[0]), int(t[1]), int(t[2])))
+    BRep_Builder().UpdateFace(fwd, out)
+    return True
 
 
 import threading as _threading
@@ -711,26 +922,206 @@ def quick_blend_mesh(shape, indices, size, kind="fillet", segments=10, frames=No
     return DisplayMesh(vertices, triangles, {}, tuple(float(c) for c in (lo + hi) / 2), float(max(np.max(hi - lo), 1)))
 
 
-def blend(shape, indices, size, kind="fillet"):
+class EdgeIndex:
+    """Numery krawędzi bryły (jak w shape.Edges(), czyli w zaznaczeniu i siatce widoku) rozpoznawane po tożsamości
+    topologicznej (TopTools_IndexedMapOfShape, IsSame) - nie po położeniu ani kolejności trójkątów. Krawędzie
+    zdegenerowane (wierzchołek stożka, biegun kuli) nie mają numeru: FindIndex daje 0."""
+
+    def __init__(self, shape):
+        from OCP.TopTools import TopTools_IndexedMapOfShape
+        from OCP.TopExp import TopExp
+        from OCP.TopAbs import TopAbs_EDGE
+        self.map = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape.wrapped, TopAbs_EDGE, self.map)
+        self.lut = np.full(self.map.Extent() + 1, -1, np.int64)
+        for i, e in enumerate(shape.Edges()):
+            j = self.map.FindIndex(e.wrapped)
+            if j:
+                self.lut[j] = i
+
+    def FindIndex(self, edge):
+        """Numer krawędzi + 1 (0 - krawędź spoza bryły albo zdegenerowana), jak TopTools_IndexedMapOfShape."""
+        j = self.map.FindIndex(edge)
+        return int(self.lut[j]) + 1 if j else 0
+
+
+def edge_index_map(shape):
+    return EdgeIndex(shape)
+
+
+def _blend_maker(shape, edges, size, kind):
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
+    from OCP.TopoDS import TopoDS
+    if kind == 'fillet':
+        mk = BRepFilletAPI_MakeFillet(shape.wrapped)
+        for e in edges:
+            mk.Add(float(size), TopoDS.Edge_s(e.wrapped))
+        return mk
+    mk = BRepFilletAPI_MakeChamfer(shape.wrapped)
+    faces = _edge_faces(shape)
+    for e in edges:
+        face = TopoDS.Face_s(faces.FindFromKey(e.wrapped).First())
+        mk.Add(float(size), float(size), TopoDS.Edge_s(e.wrapped), face)      # faza symetryczna (jak cadquery)
+    return mk
+
+
+def _contours(mk, emap):
+    """Krawędzie, które OpenCascade faktycznie zaokrągli: każdy kontur to zaznaczona krawędź przedłużona o krawędzie
+    styczne (łańcuch G1) - [[numery krawędzi konturu], ...]."""
+    out = []
+    for ic in range(1, mk.NbContours() + 1):
+        out.append(sorted({emap.FindIndex(mk.Edge(ic, ie)) - 1 for ie in range(1, mk.NbEdges(ic) + 1)} - {-1}))
+    return out
+
+
+def blend_scope(shape, indices, kind='fillet'):
+    """Pełny zakres operacji przed jej wykonaniem: (wszystkie krawędzie, dołączone automatycznie). OpenCascade przedłuża
+    zaokrąglenie / fazę na krawędzie połączone stycznie - użytkownik musi to zobaczyć przed zatwierdzeniem."""
+    edges = shape.Edges()
+    ids = sorted(set(indices))
+    if not ids or any(i < 0 or i >= len(edges) for i in ids):
+        return set(), set()
+    try:
+        mk = _blend_maker(shape, [edges[i] for i in ids], 1.0, kind)
+        scope = {i for c in _contours(mk, edge_index_map(shape)) for i in c if i >= 0}
+    except Exception:
+        return set(ids), set()
+    scope |= set(ids)
+    return scope, scope - set(ids)
+
+
+class BlendError(CadError):
+    """Niepowodzenie zaokrąglenia / fazy z numerami krawędzi, przy których OpenCascade się zatrzymał (do podświetlenia)."""
+
+    def __init__(self, message, edges=()):
+        super().__init__(message)
+        self.edges = sorted(set(edges))
+
+
+def heavy_faces(shape, wires=None):
+    """Ściany z bardzo wieloma otworami (BRepCheck i siatkowanie liczą je kwadratowo dłużej)."""
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopoDS import TopoDS, TopoDS_Iterator
+    limit = HEAVY_FACE_WIRES if wires is None else wires
+    ex = TopExp_Explorer(shape.wrapped, TopAbs_FACE)
+    out = []
+    while ex.More():
+        it, n = TopoDS_Iterator(ex.Current()), 0
+        while it.More() and n <= limit:
+            n += 1
+            it.Next()
+        if n > limit:
+            out.append(TopoDS.Face_s(ex.Current()))
+        ex.Next()
+    return out
+
+
+def _free_edges(shape):
+    """Krawędzie należące tylko do jednej ściany (szczelina w skorupie), bez szwów i krawędzi zdegenerowanych."""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopoDS import TopoDS
+    data = _edge_faces(shape)
+    bad = 0
+    for i in range(1, data.Extent() + 1):
+        faces = data.FindFromIndex(i)
+        if faces.Size() == 1:
+            e = TopoDS.Edge_s(data.FindKey(i))
+            if BRep_Tool.Degenerated_s(e) or BRep_Tool.IsClosed_s(e, TopoDS.Face_s(faces.First())):
+                continue
+            bad += 1
+    return bad
+
+
+def _check_blend(before, result, mk, edges, size, kind):
+    """Kontrola wyniku: BRepCheck (dla brył z tysiącami otworów w jednej ścianie - tylko ściany zmienione przez
+    operację; reszta jest niezmieniona i była poprawna), liczba brył, zamknięta skorupa, objętość, wymiar powierzchni
+    zaokrąglenia (walec / torus - promień = zadany)."""
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    from OCP.TopoDS import TopoDS
+    from OCP.GeomAdaptor import GeomAdaptor_Surface
+    from OCP.BRep import BRep_Tool
+    from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Torus
+    if result is None or result.wrapped.IsNull():
+        raise CadError('OpenCascade nie zwrócił wyniku.')
+    if len(result.Solids()) != max(1, len(before.Solids())):
+        raise CadError('Wynik ma inną liczbę brył niż przed operacją - powierzchnie się przecinają.')
+    generated = []
+    for e in edges:
+        lst = mk.Generated(e.wrapped)
+        generated += [TopoDS.Face_s(f) for f in lst]
+    if heavy_faces(before):
+        parts = list(generated)
+        for f in before.Faces():                                       # ściany zmienione przez operację
+            if mk.IsDeleted(f.wrapped):
+                continue
+            mod = list(mk.Modified(f.wrapped))
+            parts += [TopoDS.Face_s(m) for m in mod if not heavy_faces(cq.Face(TopoDS.Face_s(m)))]
+        ok = BRepCheck_Analyzer(compound([cq.Face(f) for f in parts]).wrapped, True, True).IsValid() if parts else True
+    else:
+        ok = is_valid(result)
+    if not ok:
+        raise CadError('Wynik nie jest poprawną bryłą B-Rep (BRepCheck) - zostaje poprzednia geometria.')
+    if _free_edges(result):
+        raise CadError('Wynik ma szczeliny (krawędzie należące do jednej ściany) - zostaje poprzednia geometria.')
+    v0, v1 = before.Volume(), result.Volume()
+    if v1 <= 1e-9 or abs(v1 - v0) > .9 * abs(v0):
+        raise CadError('Operacja zmieniłaby objętość bryły w nieoczekiwany sposób - zostaje poprzednia geometria.')
+    if kind == 'fillet':
+        for f in generated:
+            surf = GeomAdaptor_Surface(BRep_Tool.Surface_s(f))
+            r = None
+            if surf.GetType() == GeomAbs_Cylinder:
+                r = surf.Cylinder().Radius()
+            elif surf.GetType() == GeomAbs_Torus:
+                r = surf.Torus().MinorRadius()
+            if r is not None and abs(r - size) > max(1e-6, 1e-6 * size):
+                raise CadError(f'Promień powierzchni zaokrąglenia ({r:.4f} mm) różni się od zadanego ({size:.4f} mm).')
+    return [cq.Face(f) for f in generated]
+
+
+def blend_full(shape, indices, size, kind='fillet'):
+    """Zaokrąglenie / faza wskazanych krawędzi: (bryła, nowe ściany, wszystkie krawędzie objęte operacją).
+    Krawędzie rozpoznawane przez tożsamość topologiczną w bieżącej bryle; wszystkie krawędzie jednej bryły liczone
+    razem (wspólne narożniki). Przy niepowodzeniu - BlendError z krawędziami konturu, na którym OpenCascade się zatrzymał."""
     size = positive(size, "Promień / odległość")
     edges = shape.Edges()
     ids = sorted(set(indices))
     if not ids or any(i < 0 or i >= len(edges) for i in ids):
         raise CadError("Zaznacz krawędzie bryły. Shift + klik dodaje kolejne.")
     selected = [edges[i] for i in ids]
+    emap = edge_index_map(shape)
     try:
-        # OpenCascade solves all selected edges and their common corners together.
-        result = shape.fillet(size, selected) if kind == "fillet" else shape.chamfer(size, None, selected)
-        return valid(result)
-    except Exception as exc:
+        mk = _blend_maker(shape, selected, size, kind)
+        contours = _contours(mk, emap)
+        mk.Build()
+        done = mk.IsDone()
+    except Exception:
+        done, contours, mk = False, [], None
+    if not done:
+        faulty = []
+        try:
+            if kind == 'fillet' and mk is not None:
+                for k_ in range(1, mk.NbFaultyContours() + 1):
+                    faulty += contours[mk.FaultyContour(k_) - 1] if mk.FaultyContour(k_) - 1 < len(contours) else []
+        except Exception:
+            faulty = []
+        raise BlendError("Ten promień / faza nie mieści się w geometrii. Zmniejsz wartość lub wybierz mniej krawędzi.", faulty or ids)
+    result = cq.Shape.cast(mk.Shape())
+    made = _check_blend(shape, result, mk, [edges[i] for c in contours for i in c] or selected, size, kind)
+    return result, made, {i for c in contours for i in c} | set(ids)
+
+
+def blend(shape, indices, size, kind="fillet"):
+    try:
+        return blend_full(shape, indices, size, kind)[0]
+    except CadError as exc:
         if kind != "fillet":
             try:          # faza krawędzi, której końce schodzą się z zaokrągleniami: ścięcie klinem wzdłuż krawędzi
-                return chamfer_cut(shape, ids, size)
+                return chamfer_cut(shape, sorted(set(indices)), size)
             except Exception:
                 pass
-        if isinstance(exc, CadError):
-            raise
-        raise CadError("Ten promień / faza nie mieści się w geometrii. Zmniejsz wartość lub wybierz mniej krawędzi.") from exc
+        raise exc
 
 
 def chamfer_cut(shape, indices, size):
@@ -1090,8 +1481,19 @@ def pattern_ops(kind, p):
         step = total / n if abs(abs(total) - 360.0) < 1e-9 else (total / (n - 1) if n > 1 else 0.0)
         pivot = tuple(float(c) for c in p["pivot"])
         offset = tuple(float(c) for c in p.get("offset", (0.0, 0.0, 0.0)))
+        upright = bool(p.get("upright")) and p.get("center") is not None
+        if upright:
+            # kopie bez obracania (jak cyfry na tarczy zegara): środek obiektu przechodzi po okręgu, orientacja zostaje
+            k_ = np.asarray(axis, float)
+            pv = np.asarray(pivot, float)
+            c0 = np.asarray(p["center"], float) + np.asarray(offset, float) - pv
         for i in range(1, n):
-            ops.append(("r", axis, pivot, i * step, offset))
+            if upright:
+                a = math.radians(i * step)
+                rot = c0 * math.cos(a) + np.cross(k_, c0) * math.sin(a) + k_ * float(k_ @ c0) * (1 - math.cos(a))
+                ops.append(("t", tuple(float(c) for c in rot - c0 + np.asarray(offset, float))))
+            else:
+                ops.append(("r", axis, pivot, i * step, offset))
     elif kind == "path":
         pts = np.asarray(p["points"], dtype=float)
         if len(pts) < 2:

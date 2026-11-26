@@ -196,7 +196,15 @@ class TwistTools:
 
     def twist_hover(self, x, y):
         if not self._tx_picking_axis():
-            self._hover_shell_solid(x, y)
+            if self._tx_solid(self.tx_id) is None:
+                self._hover_shell_solid(x, y)
+                return
+            # bryła już wybrana: warstwa podglądu należy do skręconej kopii (oryginał jest ukryty). Podświetlenie innej bryły
+            # pod kursorem idzie na osobną warstwę - wcześniej zastępowało podgląd i bryła znikała do pierwszego ruchu pierścienia.
+            hit = self.view.pick_face(x, y)
+            other = self.document.get(hit[0]) if hit else None
+            show = other is not None and other.kind == 'solid' and other.id != self.tx_id and other.mesh is not None
+            self.view.set_hover_mesh(other.mesh if show else None)
             return
         kind = self.tx_kind.currentData()
         if kind == 'points':
@@ -573,10 +581,12 @@ class TwistTools:
         vertices, edges = twisted
         preview = kernel.DisplayMesh(vertices, sliced.triangles, edges, mesh.center, mesh.size)
         self.twist_preview_mesh = preview
-        self.view.set_preview_mesh(preview, color=PREVIEW_COLOR, line_color=PREVIEW_LINE, width=1.6)
         if self.override.get(body.id) is None or set(self.override) != {body.id}:
-            self.override = {body.id: replace(body, visible=False)}     # oryginał ukryty tylko w widoku
+            # oryginał ukryty tylko w widoku - PRZED pokazaniem podglądu: odświeżenie widoku czyści podgląd, więc przy
+            # pierwszym podglądzie (zaraz po wskazaniu bryły) bryła znikała, a skręcona kopia pojawiała się dopiero po ruchu pierścienia
+            self.override = {body.id: replace(body, visible=False)}
             self.refresh()
+        self.view.set_preview_mesh(preview, color=PREVIEW_COLOR, line_color=PREVIEW_LINE, width=1.6)
 
     def _tx_leave(self):
         """Wyjście z narzędzia: zwolnienie pamięci podglądu (pocięte siatki), przerwanie zaległego podglądu w tle."""

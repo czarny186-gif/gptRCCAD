@@ -1383,6 +1383,22 @@ class CadView(gl.GLViewWidget):
                 self.preview_items.append(item)
         self.update()
 
+    AUTO_EDGE_COLOR = (.96, .55, .10, 1)
+
+    def set_auto_edges(self, lines, color=None):
+        """Krawędzie dołączone do operacji automatycznie (np. styczne krawędzie zaokrąglenia) - osobna pomarańczowa
+        warstwa, odróżnialna od krawędzi zaznaczonych ręcznie (niebieskie)."""
+        for item in getattr(self, 'auto_edge_items', []):
+            self.removeItem(item)
+        self.auto_edge_items = []
+        seg = _segments(list(lines or ()))
+        if seg is not None:
+            item = OverLine(pos=seg, color=color or self.AUTO_EDGE_COLOR, width=3.6, antialias=True, mode='lines')
+            item.setDepthValue(9)
+            self.addItem(item)
+            self.auto_edge_items.append(item)
+        self.update()
+
     def set_hover_mesh(self, mesh, color=(.35, .65, .94, .45), line_color=(.1, .3, .6, 1), width=2.4):
         """Podświetlenie elementu pod kursorem - osobna warstwa, więc nie zastępuje podglądu operacji ani wyboru."""
         for item in getattr(self, 'hover_items', []):

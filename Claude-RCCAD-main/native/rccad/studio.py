@@ -256,6 +256,14 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self._refine_timer.setSingleShot(True)
         self._refine_timer.setInterval(60)
         self._refine_timer.timeout.connect(lambda: self._refine_meshes())
+        self._mod_exact_timer = QTimer(self)        # zaokrąglenie / faza: dokładny podgląd po chwili bez zmian (łączy szybkie zmiany)
+        self._mod_exact_timer.setSingleShot(True)
+        self._mod_exact_timer.setInterval(self.MOD_EXACT_MS)
+        self._mod_exact_timer.timeout.connect(lambda: self._mod_exact_run())
+        self._mod_spec_timer = QTimer(self)         # zaokrąglenie / faza: wynik całej bryły liczony w tle przed Zastosuj
+        self._mod_spec_timer.setSingleShot(True)
+        self._mod_spec_timer.setInterval(self.EX_SPECULATE_MS)
+        self._mod_spec_timer.timeout.connect(lambda: self._mod_speculate())
         self._ex_spec_timer = QTimer(self)          # wyciągnięcie / wycięcie: dokładny wynik liczony w tle przed Zastosuj
         self._ex_spec_timer.setSingleShot(True)
         self._ex_spec_timer.setInterval(self.EX_SPECULATE_MS)
@@ -1675,6 +1683,11 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         cl.addWidget(self.pat_pick)
         self.pat_radius = _spin(0, 0, 1e6, 2, 1)
         self._field(cl, 'Odległość obiektu od środka (mm)', self.pat_radius)
+        self.pat_upright = QCheckBox('Odwróć kopie do pionu (jak cyfry zegara)')
+        self.pat_upright.setToolTip('Kopie nie obracają się razem z szykiem - każda zachowuje orientację oryginału, tak jak cyfry na tarczy zegara.\n'
+                                    'Działa dla szkiców (np. napisy, cyfry) i brył.')
+        self.pat_upright.toggled.connect(lambda *_: self._timers['pattern'].start())
+        cl.addWidget(self.pat_upright)
         lay.addWidget(self.pat_circ)
         self.pat_line = QWidget()
         ll = QVBoxLayout(self.pat_line)
@@ -2099,6 +2112,13 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         if self.busy:
             return
         self._step_leaving(self.mode, mode)
+        if self.mode == 'mod' and mode != 'mod':
+            self.view.set_auto_edges(None)                  # krawędzie styczne dołączone automatycznie - tylko w narzędziu
+            self._mod_auto = None
+            self._mod_exact_timer.stop()
+            self._mod_spec_timer.stop()
+            self.__dict__.pop('_mod_exact', None)
+            self.__dict__.pop('_mod_spec', None)
         if self.mode == 'color' and mode != 'color' and (getattr(self, 'co_pending', None) or getattr(self, 'co_default_new', None) is not None):
             self.co_pending, self.co_default_new = {}, None          # okno Kolor zamknięte bez Zapisz
             self.toast('Niezapisane kolory nie zostały zachowane.', 2500)
@@ -2369,6 +2389,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.update_bool_status()
             self.hint('Boolean: kliknij bryłę bazową, potem bryły-narzędzia.')
         elif mode == 'mod':
+            self._mod_shapes = {}
             self.mod_panel.show()
             self.view.edge_mode = True
             self.mod_size.blockSignals(True)
@@ -7612,10 +7633,28 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def _mod_items(self):
         """Zaznaczenie zaokrąglenia / fazy pogrupowane po bryłach: [(id, krawędzie albo None, narożniki albo None)]."""
         out = []
+        owners = self.__dict__.setdefault('_mod_shapes', {})
         for bid in dict.fromkeys([*self.edges, *self.mod_vertices]):
             ids = set(self.edges.get(bid) or ())
             pts = [np.array(q, float) for q in (self.mod_vertices.get(bid) or [])]
-            if (ids or pts) and self.document.get(bid) is not None:
+            body = self.document.get(bid)
+            if body is not None and owners.setdefault(bid, id(body.shape)) != id(body.shape):
+                # bryła zmieniła się, gdy narzędzie było otwarte (Cofnij, inna operacja): numery krawędzi dotyczą starej
+                # topologii - zaznaczenie tej bryły jest usuwane, zamiast trafić w inne krawędzie
+                self.edges = {k: v for k, v in self.edges.items() if k != bid}
+                self.mod_vertices = {k: v for k, v in self.mod_vertices.items() if k != bid}
+                owners.pop(bid, None)
+                self.toast('Bryła zmieniła się - zaznacz krawędzie ponownie.', 3500)
+                continue
+            if body is None:
+                owners.pop(bid, None)
+                continue
+            if ids:
+                bad = {i for i in ids if not 0 <= i < len(body.shape.Edges())}
+                if bad:
+                    ids = ids - bad
+                    self.edges[bid] = ids
+            if ids or pts:
                 out.append((bid, ids or None, pts or None))
         return out
 
@@ -7720,7 +7759,13 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         if not items:
             self.cancel_previews()
             self.view.set_preview_mesh(None)
+            self.view.set_auto_edges(None)
+            self._mod_auto = None
             return
+        auto = self.__dict__.get('_mod_auto')
+        if auto and (len(items) != 1 or auto[0] != items[0][0] or not set(auto[1]).isdisjoint(items[0][1] or ())):
+            self.view.set_auto_edges(None)                  # zaznaczenie się zmieniło - zakres przyjdzie z nowym podglądem
+            self._mod_auto = None
         if len(items) > 1 or (items[0][1] and items[0][2]):
             self._mod_multi_preview(items)
             return
@@ -7763,10 +7808,14 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 for attempt in range(2):
                     sent = getattr(self, '_mod_sent', None) == token and attempt == 0
                     try:
-                        mesh = workers.call_affine(('mod',), hist.mod_preview_job, token, None if sent else shape,
-                                                   None if verts else sorted(ids), points, size, kind, margin)
+                        mesh = workers.call_guarded(('mod',), hist.mod_preview_job, token, None if sent else shape,
+                                                    None if verts else sorted(ids), points, size, kind, margin, timeout=hist.blend_timeout(shape))
                         self._mod_sent = token
                         return mesh
+                    except workers.Hung as exc:
+                        self._mod_sent = None
+                        raise kernel.CadError(hist.CRASH_MESSAGE if isinstance(exc, workers.Crashed)
+                                              else hist.HUNG_MESSAGE.format(t=hist.blend_timeout(shape))) from exc
                     except workers.Unavailable as exc:
                         self._mod_sent = None
                         if isinstance(exc.__cause__, LookupError):
@@ -7775,11 +7824,15 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             cache = getattr(self, '_mod_cache', None)
             if cache is None or cache.get('token') != token:
                 cache = self._mod_cache = {'token': token}
-            return hist.mod_preview(shape, None if verts else ids, points, size, kind, margin, cache)
+            return hist.mod_preview_scoped(shape, None if verts else ids, points, size, kind, margin, cache)
 
         def show(value, error):
             if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig:
                 return
+            scope = None
+            if isinstance(value, tuple):
+                value, scope = value
+            self._mod_show_scope(bid, ids, scope)
             if error or value is None:
                 self.view.set_preview_mesh(None)
                 earlier = kind == 'fillet' and not verts and any((i.get('op') or {}).get('type') == 'mod' and (i.get('op') or {}).get('id') == bid
@@ -7790,9 +7843,108 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 return
             # tylko tworzona powierzchnia, ciepły fiolet, widoczna także przez jeszcze ostry narożnik bryły
             self.view.set_preview_mesh(value, color=MOD_PREVIEW, line_color=MOD_PREVIEW_LINE, width=2.2, on_top=True)
-            self.mod_status.setText(f'Zaznaczone {label}: {count}')
+            self.mod_status.setText(f'Zaznaczone {label}: {count}' + self._mod_scope_text())
+            if not verts:
+                self._mod_spec_timer.start()          # ustawienia stoją: dokładny wynik całej bryły liczy się w tle przed Zastosuj
 
-        self.run_preview('mod', compute, show)
+        # łączenie szybkich zmian: dokładny podgląd rusza po chwili bez zmian (szybki podgląd analityczny jest od razu)
+        self._mod_exact = (compute, show)
+        self._mod_exact_timer.start()
+    MOD_FAIL_COLOR = (.92, .16, .16, 1)
+
+    def _after_failed_mod(self):
+        """Zaokrąglenie / faza nie udało się: zaznaczenie zostaje, podgląd i strzałka wracają, krawędzie konturu, na
+        którym OpenCascade się zatrzymał - czerwone (gdy da się je wskazać)."""
+        fail = self.__dict__.pop('_mod_fail', None)
+        self._place_mod_handle()
+        if fail and fail[1]:
+            body = self.document.get(fail[0])
+            lines = [body.mesh.edges[i] for i in fail[1] if body is not None and body.mesh is not None and i in body.mesh.edges]
+            self.view.set_auto_edges(lines, self.MOD_FAIL_COLOR)
+            self.mod_status.setText(self._mod_count_text() + f'\nOperacja nie powiodła się na krawędziach zaznaczonych na czerwono ({len(lines)}). '
+                                    'Zmień wartość albo zaznaczenie - narzędzie zostaje otwarte.')
+        else:
+            self._timers['mod'].start()
+
+    MOD_EXACT_MS = 180            # po tylu ms bez zmian wartości / zaznaczenia rusza dokładny podgląd zaokrąglenia / fazy
+
+    def _mod_exact_run(self):
+        job = self.__dict__.pop('_mod_exact', None)
+        if job is not None and self.mode == 'mod':
+            self.run_preview('mod', *job)
+
+    def _mod_show_scope(self, bid, ids, scope):
+        """Krawędzie dołączone automatycznie przez OpenCascade (łańcuch styczny) - pomarańczowe, inne niż zaznaczone."""
+        auto = sorted(set(scope or ()) - set(ids or ())) if ids else []
+        self._mod_auto = (bid, auto)
+        body = self.document.get(bid)
+        lines = [body.mesh.edges[i] for i in auto if body is not None and body.mesh is not None and i in body.mesh.edges]
+        self.view.set_auto_edges(lines)
+
+    def _mod_scope_text(self):
+        auto = (self.__dict__.get('_mod_auto') or (None, []))[1]
+        if not auto:
+            return ''
+        return (f'\n+ {len(auto)} krawędzi stycznych dołączonych automatycznie (pomarańczowe) - OpenCascade zaokrągla cały '
+                'łańcuch krawędzi połączonych stycznie.')
+
+    def _mod_spec_key(self):
+        items = self._mod_items()
+        if self.mod_blend is not None or len(items) != 1 or items[0][2] or not items[0][1]:
+            return None
+        bid, ids, _ = items[0]
+        body = self.document.get(bid)
+        return (bid, id(body.shape), frozenset(ids), float(self.mod_size.value()), self.mod_kind.currentData()) if body is not None else None
+
+    def _mod_speculate(self):
+        """Wynik zaokrąglenia / fazy całej bryły liczony w tle zaraz po podglądzie - Zastosuj bierze gotowy wynik (wcześniej
+        operacja liczyła się drugi raz po zatwierdzeniu). Ten sam proces co podgląd: gdy podgląd liczył całą bryłę, wynik
+        jest już w jego pamięci."""
+        if self.mode != 'mod' or self.busy or self.step_editing or self._hv is not None:
+            return
+        key = self._mod_spec_key()
+        if key is None:
+            return
+        spec = self.__dict__.get('_mod_spec')
+        if spec is not None and spec['key'] == key:
+            return
+        if spec is not None and not spec['event'].is_set():
+            spec['next'] = True
+            return
+        import threading
+        bid, _sid, ids, size, kind = key
+        body = self.document.get(bid)
+        shape, token = body.shape, (bid, id(body.shape))
+        spec = self._mod_spec = dict(key=key, event=threading.Event(), result=None, error=None, next=False)
+
+        def run():
+            try:
+                try:
+                    if getattr(self, '_mod_sent', None) != token:
+                        raise workers.Unavailable()
+                    spec['result'] = workers.call_guarded(('mod',), hist.mod_final_job, token, sorted(ids), size, kind,
+                                                          timeout=hist.blend_timeout(shape))
+                except workers.Hung as exc:
+                    raise kernel.CadError(hist.CRASH_MESSAGE if isinstance(exc, workers.Crashed)
+                                          else hist.HUNG_MESSAGE.format(t=hist.blend_timeout(shape))) from exc
+                except (workers.Unavailable, LookupError):
+                    spec['result'] = hist.offloaded_blend(shape, set(ids), size, kind)
+            except Exception as exc:
+                spec['error'] = exc
+            finally:
+                spec['event'].set()
+            return None
+
+        work = _Work(run)
+
+        def finished(*_):
+            if spec.get('next') and self.__dict__.get('_mod_spec') is spec:
+                spec['next'] = False
+                self._mod_spec_timer.start()
+        work.signals.done.connect(finished)
+        work.signals.failed.connect(finished)
+        self.pool.start(work)
+
     def _mod_multi_preview(self, items):
         """Podgląd dla kilku brył albo krawędzi i narożników naraz: liczony w procesie w tle, tylko nowe powierzchnie."""
         size, kind = self.mod_size.value(), self.mod_kind.currentData()
@@ -7861,21 +8013,34 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.view.set_handles([])
         states = None if (verts or self.document.can_redo or self.step_editing) else self.document.states()
 
+        spec = self.__dict__.pop('_mod_spec', None)
+        self._mod_spec_timer.stop()
+        ready = spec if (spec is not None and not verts and spec['key'] == (bid, id(body.shape), frozenset(ids), float(size), kind)) else None
+
         def plain():
-            return body.changed(*hist.offloaded_shape(kernel.blend, body.shape, ids, size, kind)), recipe_of()
+            if ready is not None:             # wynik policzony w tle po podglądzie - bez liczenia drugi raz
+                ready['event'].wait()
+                if ready['error'] is None and ready['result'] is not None:
+                    return body.changed(*ready['result']), recipe_of()
+                if isinstance(ready['error'], kernel.CadError):
+                    raise ready['error']
+            return body.changed(*hist.offloaded_blend(body.shape, ids, size, kind)), recipe_of()
+
+        self._mod_fail = None
 
         def work():
             try:
                 return plain()
-            except kernel.CadError:
+            except kernel.CadError as exc:
                 timeline = hist.joint_blend(states, body.id, ids, size, kind) if states is not None else None
                 if timeline is None:
+                    self._mod_fail = (body.id, list(getattr(exc, 'edges', ()) or ()))
                     raise
                 return 'joint', timeline
 
         # zaokrąglenie / faza liczy proces liczący - okno w tym czasie działa (obracanie, oglądanie modelu)
         if verts:
-            work = lambda: (body.changed(*hist.offloaded_shape(kernel.blend_vertices, body.shape, points, size, kind)), recipe_of())
+            work = lambda: (body.changed(*hist.offloaded_guarded(body.shape, kernel.blend_vertices, body.shape, points, size, kind)), recipe_of())
         self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
 
     def _apply_mod_many(self, items):
@@ -7887,7 +8052,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             made, entries = {}, []
             for bid, ids, pts in items:
                 body = bodies[bid]
-                shape, mesh = hist.offloaded_shape(hist.mod_many_job, body.shape, sorted(ids) if ids else None, pts, size, kind)
+                shape, mesh = hist.offloaded_guarded(body.shape, hist.mod_many_job, body.shape, sorted(ids) if ids else None, pts, size, kind)
                 made[bid] = body.changed(shape, mesh) if mesh is not None else body.changed(shape)
                 entries.append(dict(id=bid, edges=hist.edge_refs(body.shape, ids) if ids else [],
                                     verts=[[float(c) for c in q] for q in pts] if pts else [],
@@ -8784,7 +8949,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             offset = tuple(float(c) for c in direction * (self.pat_radius.value() - d0))
             pivot = tuple(s.value() for s in self.pat_pivot)
             ops = kernel.pattern_ops('circ', dict(axis=self._pattern_axes(body)[self.pat_axis.currentData()], pivot=pivot, count=int(round(self.pat_ccount.value())),
-                                                  angle=self.pat_angle.value(), offset=offset))
+                                                  angle=self.pat_angle.value(), offset=offset, upright=self.pat_upright.isChecked(),
+                                                  center=tuple(float(c) for c in kernel.bounds(body.shape).center.toTuple())))
             return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
         params=dict(points=self.pat_path if self.pat_path is not None else [],count=int(round(self.pat_lcount.value())),
                     fit=self.pat_fit.isChecked(),spacing=self.pat_lgap.value())
@@ -9207,6 +9373,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         elif kind == 'circ':
             params = dict(axis=list(self._pattern_axes(body)[self.pat_axis.currentData()]), pivot=[s.value() for s in self.pat_pivot], count=int(round(self.pat_ccount.value())),
                           angle=self.pat_angle.value(), radius=self.pat_radius.value())
+            if self.pat_upright.isChecked():
+                params['upright'] = True
         else:
             params = dict(points=[[float(c) for c in q] for q in np.asarray(self.pat_path, float)], count=int(round(self.pat_lcount.value())),
                           fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())
@@ -10537,6 +10705,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             finish()
             self.toast(message + ' Dotychczasowy model pozostał bez zmian.', 7000)
             self.refresh()
+            hook = getattr(self, f'_after_failed_{self.mode}', None) if self.mode else None
+            if hook is not None:
+                hook()                 # narzędzie zostaje otwarte z tym samym zaznaczeniem - można zmienić parametry
 
         work.signals.done.connect(done)
         work.signals.failed.connect(failed)

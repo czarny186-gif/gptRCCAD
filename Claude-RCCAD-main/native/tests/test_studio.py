@@ -55,7 +55,7 @@ class StudioTests(unittest.TestCase):
 
     def preview(self):
         end=time.monotonic()+20
-        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None),getattr(self.w,'_ex_timer',None),getattr(self.w,'_ep_timer',None),getattr(self.w,'_pn_timer',None),getattr(self.w,'_cb_timer',None),getattr(self.w,'_ft_timer',None)) if t is not None]
+        timers=[t for t in (getattr(self.w,'_enc_timer',None),getattr(self.w,'_ev_timer',None),getattr(self.w,'_er_timer',None),getattr(self.w,'_ex_timer',None),getattr(self.w,'_ep_timer',None),getattr(self.w,'_pn_timer',None),getattr(self.w,'_cb_timer',None),getattr(self.w,'_ft_timer',None),getattr(self.w,'_mod_exact_timer',None)) if t is not None]
         while any(t.isActive() for t in timers) and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
             self.app.processEvents();time.sleep(.005)
         while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
@@ -1867,6 +1867,87 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],far.tolist())):w.view_double_clicked(5,5)
         self.assertEqual(w.mod_vertices,{});self.assertGreaterEqual(len(w.edges[a.id]),4);self.assertFalse(w.view.selection_items)     # ściana się nie podświetla
 
+    # 0.5.63: zaokrąglenie - krawędzie styczne dołączane przez OpenCascade widoczne przed zatwierdzeniem (pomarańczowe),
+    # wynik liczony raz (Zastosuj bierze wynik policzony w tle po podglądzie), nieudana operacja nie zamyka narzędzia
+    def test_fillet_scope_shown_result_computed_once_failure_keeps_tool(self):
+        w=self.w
+        a=Body('A',cq.Workplane().box(40,30,20).edges('|Z').fillet(4).val()).prepared();w.document.commit([a]);w.refresh()
+        top=[i for i,e in enumerate(a.shape.Edges()) if e.geomType()=='LINE' and abs(e.Center().z-10)<1e-6 and abs(e.Center().y+15)<1e-6][0]
+        w.set_mode('mod');w._mod_select(a.id,{top},False,False,mark=top);w.mod_size.setValue(2)
+        w._timers['mod'].stop();w.update_mod_preview();self.preview()
+        self.assertEqual(len(w._mod_auto[1]),7);self.assertTrue(w.view.auto_edge_items)               # cały górny obwód
+        self.assertEqual(w.edges[a.id],{top})                                                         # zaznaczenie bez zmian
+        self.assertIn('stycznych dołączonych automatycznie',w.mod_status.text())
+        self.assertEqual(w.view.auto_edge_items[0].color,w.view.AUTO_EDGE_COLOR)
+        # wynik całej bryły liczy się w tle po podglądzie; Zastosuj go bierze - bez drugiego liczenia
+        end=time.monotonic()+30
+        while time.monotonic()<end and (w._mod_spec_timer.isActive() or not (w.__dict__.get('_mod_spec') and w._mod_spec['event'].is_set())):
+            self.app.processEvents();time.sleep(.01)
+        self.assertTrue(w._mod_spec['event'].is_set());self.assertIsNone(w._mod_spec['error'])
+        with patch.object(hist,'offloaded_blend',side_effect=AssertionError('liczone drugi raz')),patch.object(hist,'offloaded_shape',side_effect=AssertionError('liczone drugi raz')):
+            w.apply_mod();self.wait()
+        body=w.document.get(a.id);self.assertLess(body.shape.Volume(),a.shape.Volume())
+        self.assertEqual(len(k.new_faces(a.shape,body.shape)),8);self.assertIsNone(w.mode);self.assertFalse(w.view.auto_edge_items)
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),a.shape.Volume(),6)
+        w.redo();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),body.shape.Volume(),6)
+        w.undo();self.wait()
+        # za duży promień: model i historia bez zmian, narzędzie otwarte z zaznaczeniem, krawędzie problemu czerwone
+        steps=len(w.document.states());w.set_mode('mod');w._mod_select(a.id,{top},False,False,mark=top);w.mod_size.setValue(30)
+        w._timers['mod'].stop();w._mod_exact_timer.stop();w._mod_spec_timer.stop()
+        w.apply_mod();self.wait()
+        self.assertEqual(w.mode,'mod');self.assertEqual(w.edges[a.id],{top});self.assertEqual(len(w.document.states()),steps)
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),a.shape.Volume(),6)
+        self.assertTrue(w.view.auto_edge_items);self.assertEqual(w.view.auto_edge_items[0].color,w.MOD_FAIL_COLOR)
+        w.mod_size.setValue(1.5);w.apply_mod();self.wait();self.assertIsNone(w.mode)                   # zmiana wartości bez ponownego otwierania
+        self.assertLess(w.document.get(a.id).shape.Volume(),a.shape.Volume())
+
+    # 0.5.63: stabilność narzędzia zaokrąglenia - wielokrotne otwieranie i anulowanie, szybkie zmiany wartości, zmiana
+    # zaznaczenia w trakcie podglądu, usunięcie bryły po anulowaniu, nowy projekt w trakcie podglądu, zapis i odczyt
+    def test_fillet_tool_stability_cancel_reselect_delete_switch_project(self):
+        w=self.w;a=Body('A',cq.Workplane().box(40,30,20).faces('>Z').workplane().hole(6).val()).prepared()
+        b=Body('B',k.transform(k.box(10,10,10),(60,0,0))).prepared();w.document.commit([a,b]);w.refresh()
+        ea=sorted(w.document.get(a.id).mesh.edges);eb=sorted(w.document.get(b.id).mesh.edges)
+        steps=len(w.document.states())
+        for n in range(30):
+            w.set_mode('mod');w._mod_select(a.id,{ea[n%len(ea)]},False,False,mark=ea[n%len(ea)])
+            for v in (.5,1.0,1.5,.8,2.0)[:1+n%5]:w.mod_size.setValue(v)              # szybkie zmiany wartości
+            w._timers['mod'].stop();w.update_mod_preview()
+            if n%3==0:w._mod_select(b.id,{eb[0]},False,False,mark=eb[0])              # zaznaczenie zmienione w trakcie podglądu
+            w.set_mode(None)                                                          # anulowanie (Esc)
+        self.preview();self.assertEqual(len(w.document.states()),steps);self.assertIsNone(w.mode)
+        self.assertFalse(w.view.auto_edge_items);self.assertFalse(w.view.preview_items)
+        w.set_mode('mod');w._mod_select(b.id,{eb[0]},False,False,mark=eb[0]);w.update_mod_preview();w.set_mode(None)
+        w.objects_delete(b.id);self.wait();self.assertIsNone(w.document.get(b.id))      # usunięcie bryły po anulowaniu
+        w.set_mode('mod');w._mod_select(a.id,{ea[0]},False,False,mark=ea[0]);w.mod_size.setValue(1)
+        w._timers['mod'].stop();w.update_mod_preview()
+        with patch.object(w,'confirm_discard',return_value=True):w.new_project()         # nowy projekt w trakcie podglądu
+        self.preview();self.assertEqual(w.document.bodies,());self.assertIsNone(w.mode)
+        c=Body('C',k.box(20,20,20)).prepared();w.document.commit([c]);w.refresh()
+        w.set_mode('mod');w._mod_select(c.id,{0},False,False,mark=0);w.mod_size.setValue(2);w.apply_mod();self.wait()
+        path=os.path.join(tempfile.mkdtemp(),'z.rccadx');w.document.save(path)
+        from rccad.document import Document
+        back=Document.load(path);self.assertAlmostEqual(back.bodies[0].shape.Volume(),w.document.bodies[0].shape.Volume(),6)
+        infos,cur=back.infos();self.assertEqual(infos[-1]['op']['type'],'mod')
+        again=hist.run_recipe(back.states()[cur-1][0],infos[-1]['op'])                  # przeliczenie kroku po odczycie
+        self.assertAlmostEqual(again[0].shape.Volume(),back.bodies[0].shape.Volume(),6)
+
+    def test_fillet_selection_dropped_when_body_changes_with_tool_open(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh()
+        w.set_mode('mod');w._mod_select(a.id,{0,1},False,False,mark=0);self.assertTrue(w._mod_items())
+        changed=w.document.get(a.id).changed(cq.Workplane().box(20,20,20).faces('>Z').workplane().hole(5).val())
+        w.document.commit([changed])                                                       # inna topologia (np. Cofnij / Ponów)
+        self.assertEqual(w._mod_items(),[]);self.assertEqual(w.edges,{})
+        w.set_mode(None)
+        # Esc anuluje, Enter zatwierdza
+        w.set_mode('mod');b=w.document.get(a.id);e=[i for i in b.mesh.edges][:1]
+        w._mod_select(a.id,set(e),False,False,mark=e[0]);w.mod_size.setValue(1)
+        from PySide6.QtTest import QTest
+        QTest.keyClick(w,Qt.Key_Escape);self.app.processEvents();self.assertIsNone(w.mode)
+        self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),b.shape.Volume(),9)
+        w.set_mode('mod');w._mod_select(a.id,set(e),False,False,mark=e[0]);w.mod_size.setValue(1)
+        QTest.keyClick(w,Qt.Key_Return);self.wait();self.assertIsNone(w.mode)
+        self.assertLess(w.document.get(a.id).shape.Volume(),b.shape.Volume())
+
     def test_local_piece_preview_matches_edge_and_pattern_candidate_prefers_sketch(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared()
         piece=k.local_piece(a.shape,{0},None,5.0);self.assertIsNotNone(piece);m=k.map_edges(a.shape,piece,[0]);self.assertIsNotNone(m)
@@ -2363,6 +2444,31 @@ class StudioTests(unittest.TestCase):
             bb=w.document.get(a.id).shape.BoundingBox()
             self.assertAlmostEqual((bb.zmin,bb.xmin,bb.ymin)[(2,0,1).index(axis)],0.0,3)
         self.assertEqual(w.document.infos()[0][-1]['op']['plane'],'XZ')
+
+    # 0.5.63: szyk kołowy z odwróceniem kopii do pionu - jak cyfry na tarczy zegara (szkic i bryła)
+    def test_circular_pattern_upright_copies_like_clock_digits(self):
+        w=self.w
+        sk=Body('Cyfra',k.polyline('XY',[(-2,20),(2,20),(2,28),(-2,28),(-2,20)]),'sketch','XY').prepared()     # 4 × 8 nad środkiem
+        sol=Body('Klocek',k.transform(k.box(4,8,3),(-2,-48,0))).prepared()
+        w.document.commit([sk,sol]);w.refresh()
+        for b,radius in ((sk,24.0),(sol,44.0)):
+            w.set_mode('pattern');w.pat_id=b.id;w.pat_kind.setCurrentIndex(1);w.pat_ccount.setValue(12);w.pat_angle.setValue(360)
+            for s_ in w.pat_pivot:s_.setValue(0)
+            w.pat_radius.setValue(radius);w.pat_upright.setChecked(True);w.update_pattern_preview()
+            w.apply_pattern();self.wait();w.set_mode(None)
+            copies=[x for x in w.document.bodies if x.name.startswith(b.name+' — szyk')]
+            self.assertEqual(len(copies),11)
+            for c in copies:
+                bb=c.shape.BoundingBox()
+                self.assertAlmostEqual(bb.xlen,4,4);self.assertAlmostEqual(bb.ylen,8,4)                 # orientacja oryginału
+                self.assertAlmostEqual(math.hypot(bb.center.x,bb.center.y),radius,4)                 # środek na okręgu
+            op=w.document.infos()[0][-1]['op'];self.assertTrue(op['params']['upright'])
+            again=hist.run_recipe(w.document.states()[w.document.infos()[1]-1][0],op)                # przeliczenie z historii
+            self.assertEqual(len([x for x in again if x.name.startswith(b.name+' — szyk')]),11)
+        w.set_mode('pattern');w.pat_id=sk.id;w.pat_kind.setCurrentIndex(1);w.pat_upright.setChecked(False);w.pat_ccount.setValue(4)
+        w.update_pattern_preview();w.apply_pattern();self.wait();w.set_mode(None)
+        turned=[x for x in w.document.bodies if x.name.startswith('Cyfra — szyk') and abs(x.shape.BoundingBox().xlen-8)<1e-4]
+        self.assertEqual(len(turned),2)                                                                # bez odwrócenia: kopie obrócone o 90° i 270°
 
     def test_circular_pattern_pick_center_shows_grid_with_axes(self):
         w=self.w
@@ -3430,6 +3536,31 @@ class StudioTests(unittest.TestCase):
         self.assertIsNone(w.mode);self.assertEqual(w.view.handles,[]);self.assertFalse(w.view.selection_items)
 
     # TWIST etap 4: szybki podgląd na kopii siatki - kąt z pola i pierścienia, Anuluj / Esc przywracają widok, nic nie trafia do projektu
+    # 0.5.63: TWIST - skręcona kopia widoczna od razu po wskazaniu bryły (mała i duża siatka, zaznaczona wcześniej i klikiem)
+    def test_twist_preview_visible_right_after_picking_body(self):
+        w=self.w
+        small=Body('S',k.box(20,20,60)).prepared()
+        big=Body('D',cq.Workplane().text('RCCAD',30,40).val().translate(cq.Vector(80,0,0))).prepared()
+        w.document.commit([small,big]);w.refresh();self.app.processEvents()
+        def wait():
+            end=time.monotonic()+60
+            while time.monotonic()<end and (w._tx_timer.isActive() or any(s_['running'] or s_['pending'] for s_ in w._pv.values())):
+                self.app.processEvents();time.sleep(.01)
+            self.app.processEvents()
+        def visible(bid):return next(x for x in w.view.bodies if x.id==bid).visible
+        for bid in (small.id,big.id):
+            w.set_mode(None);w.selected=[bid];w.toggle_mode('twist');wait()
+            self.assertIsNotNone(w.twist_preview_mesh,bid);self.assertTrue(w.view.preview_items,bid);self.assertFalse(visible(bid))
+            items=list(w.view.preview_items)
+            for target in (bid,None,small.id if bid!=small.id else big.id):          # ruch myszy nad bryłą, tłem i inną bryłą
+                with patch.object(w.view,'pick_face',return_value=(target,0,(0,0,0)) if target else None):w.view_hover(50,50)
+                self.app.processEvents();self.assertEqual(w.view.preview_items,items,target)
+            w.set_mode(None);w.selected=[];w.toggle_mode('twist')
+            with patch.object(w.view,'pick_body',return_value=bid):w.pick_twist(5,5)
+            wait()
+            self.assertTrue(w.view.preview_items,bid);self.assertFalse(visible(bid))
+        w.set_mode(None)
+
     def test_twist_stage4_live_preview_on_mesh_copy(self):
         w=self.w
         shape=cq.Workplane().box(20,30,80).faces('>Z').workplane().hole(8).val().translate(cq.Vector(0,0,40))
@@ -6815,8 +6946,10 @@ class StudioTests(unittest.TestCase):
     def test_file_menu_and_context_menu_open(self):
         from rccad import shell_ui as ui
         seen=[]
+        from pathlib import Path as _P
         with patch.object(ui.PopupMenu,'popup_at',lambda menu,pos:seen.append(('ctx',len(menu.actions)))),\
-             patch.object(ui.RichMenu,'popup_at',lambda menu,pos:seen.append(('rich',len(menu.actions)))):
+             patch.object(ui.RichMenu,'popup_at',lambda menu,pos:seen.append(('rich',len(menu.actions)))),\
+             patch.object(self.w,'_autosave_path',return_value=_P(tempfile.gettempdir())/'brak-autozapisu.rccadx'):   # „Otwórz autozapis” zależy od wcześniejszych testów
             self.w.file_menu()
             a,b=self.make_solids()
             with patch.object(self.w.view,'pick_body',return_value=a.id):self.w.context_menu(5,5)
@@ -7116,6 +7249,9 @@ class StudioTests(unittest.TestCase):
         w.edges={a.id:{0,1}};w.mod_size.setValue(2)
         with patch.object(w,'run_preview') as later:
             w.update_mod_preview()
+            later.assert_not_called()                       # 0.5.63: szybkie zmiany łączone - dokładny podgląd po chwili bez zmian
+            self.assertTrue(w._mod_exact_timer.isActive())
+            w._mod_exact_timer.stop();w._mod_exact_run()
         later.assert_called_once()                          # dokładny podgląd idzie w tło
         self.assertTrue(w.view.preview_items)               # a analityczny jest już widoczny
 
