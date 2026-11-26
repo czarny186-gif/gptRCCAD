@@ -25,7 +25,7 @@ TOOL_OF = {'extrude': 'extrude', 'revolve': 'revolve', 'mod': 'mod', 'shell': 's
            'transform': None, 'featmove': None, 'mate': None, 'scale': 'scale', 'thread': 'thread',
            'ply_wall': 'ply_wall', 'ply_between': 'ply_between', 'sheet': 'sheet', 'sheetbuild': None, 'sheet_tabwall': 'tabwall',
            'ply_panel': 'ply', 'ply_joints': 'ply_joints', 'link': 'link', 'gear': 'gear', 'gear_pair': 'gearpair', 'twist': 'twist',
-           'enclosure': 'enclosure', 'enc_hole': 'enchole', 'enc_vent': 'encvent', 'enc_rib': 'encrib'}   # None: tryb z przepisu
+           'enclosure': 'enclosure', 'enc_hole': 'enchole', 'enc_vent': 'encvent', 'enc_rib': 'encrib', 'enc_ext': 'encext', 'enc_part': 'encpart'}   # None: tryb z przepisu
 # narzędzia otwierane na modelu sprzed kroku bez odtworzenia wyboru - elementy wskazuje się ponownie, Zastosuj zastępuje krok
 FRESH_OF = {'thread_real': 'thread', 'flange': 'flange', 'text': 'text'}
 PREVIEW_TOL = .2

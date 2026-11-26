@@ -247,15 +247,15 @@ def regenerate(bodies, recipe):
         rec.update(out_lid=lid.id, folder=base.folder or name)
     ops = []
     for b in parts:
-        for kind, key in (('hole', 'enclosure_holes'), ('vent', 'enclosure_vents'), ('rib', 'enclosure_ribs')):
+        for kind, key in (('hole', 'enclosure_holes'), ('vent', 'enclosure_vents'), ('rib', 'enclosure_ribs'), ('ext', 'enclosure_ext'), ('part', 'enclosure_parts')):
             for r in (b.meta or {}).get(key, []):
-                ops.append((r.get('seq', 0), kind, dict(r, type={'hole': 'enc_hole', 'vent': 'enc_vent', 'rib': 'enc_rib'}[kind])))
+                ops.append((r.get('seq', 0), kind, dict(r, type={'hole': 'enc_hole', 'vent': 'enc_vent', 'rib': 'enc_rib', 'ext': 'enc_ext', 'part': 'enc_part'}[kind])))
     ops.sort(key=lambda x: x[0])
     # części bez otworów: przebudowa definicji (meta otworów wyczyszczona, operacje dołożone ponownie niżej)
     cleaned = []
     for b in bodies:
         if b in parts:
-            meta = {k: v for k, v in (b.meta or {}).items() if k not in ('enclosure_holes', 'enclosure_vents', 'enclosure_ribs')}
+            meta = {k: v for k, v in (b.meta or {}).items() if k not in ('enclosure_holes', 'enclosure_vents', 'enclosure_ribs', 'enclosure_ext', 'enclosure_parts')}
             from dataclasses import replace
             b = replace(b, meta=meta)
         cleaned.append(b)
@@ -270,6 +270,15 @@ def regenerate(bodies, recipe):
                 faces.append(dict(point=pt, normal=nm))
             from .enclosure_rib_ui import run as run_rib
             out = run_rib(out, dict(r, faces=faces))
+            continue
+        if kind == 'part':                                 # przegrody: położenie względem wnętrza - bez zmian, osobne bryły te same
+            from .enclosure_partition_ui import run as run_part
+            out = run_part(out, r)
+            continue
+        if kind == 'ext':                                  # mocowania zewnętrzne: powierzchnia przeniesiona, osobne bryły te same
+            pt, nm = rematch_wall(target.shape, r['face']['point'], r['face']['normal'], old_env, new_env)
+            from .enclosure_external_ui import run as run_ext
+            out = run_ext(out, dict(r, face=dict(point=pt, normal=nm)))
             continue
         point, normal = rematch_wall(target.shape, r['point'], r['normal'], old_env, new_env)
         r = dict(r, point=point, normal=normal)
@@ -305,5 +314,5 @@ def convert(bodies, recipe):
     if first is None:
         raise kernel.CadError('Obudowy już nie ma.')
     ids = {b.id for b in group(bodies, first)}
-    drop = ('enclosure', 'enclosure_part', 'enclosure_holes', 'enclosure_vents', 'enclosure_ribs', 'enclosure_sig', 'enclosure_mode')
+    drop = ('enclosure', 'enclosure_part', 'enclosure_holes', 'enclosure_vents', 'enclosure_ribs', 'enclosure_ext', 'enclosure_parts', 'enclosure_sig', 'enclosure_mode')
     return [replace(b, meta={k: v for k, v in (b.meta or {}).items() if k not in drop} or None) if b.id in ids else b for b in bodies]

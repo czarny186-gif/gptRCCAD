@@ -960,6 +960,15 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         for k in range(3):
             x0, y0 = 11 + k * 9, 27 + k * 3
             p.drawPolygon(QPolygonF([QPointF(x0, y0), QPointF(x0 + 12, y0 - 9), QPointF(x0 + 12, y0 - 17), QPointF(x0, y0 - 8)]))
+    elif kind == 'x_encext':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(12, 8, 24, 30))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.4))
+        for x in (4, 36):
+            p.drawRoundedRect(QRectF(x, 30, 8, 12), 2, 2)
+        p.setBrush(QColor(255, 255, 255)); p.setPen(pen(INK, 1.8)); p.drawEllipse(QPointF(8, 37), 1.8, 1.8); p.drawEllipse(QPointF(40, 37), 1.8, 1.8)
+    elif kind == 'x_encpart':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 8, 38, 32))
+        p.setBrush(QColor(255, 222, 180)); p.setPen(pen(ORANGE, 2.6)); p.drawRect(QRectF(21, 10, 4, 28))
     elif kind == 'x_enccheck':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
         p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
@@ -1208,6 +1217,17 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.setPen(pen(ink, 3.0)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(29, 17)]))
             p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(38, 36), 7, 7)
             p.setPen(pen(QColor(255, 255, 255), 2.2)); p.drawLine(QPointF(38, 32), QPointF(38, 37)); p.drawPoint(QPointF(38, 40))
+        elif name == 'encpart':
+            # przegrody: wnętrze obudowy podzielone pomarańczową przegrodą na dwie komory
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(5, 9, 38, 30))
+            p.setBrush(QColor(255, 255, 255)); p.setPen(pen(acc, 2.6)); p.drawRect(QRectF(21.5, 11, 4, 26))
+        elif name == 'encext':
+            # mocowania zewnętrzne: obudowa z dwoma uszami montażowymi (pomarańczowe) z otworami
+            p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawRect(QRectF(13, 9, 22, 28))
+            p.setBrush(QColor(255, 255, 255)); p.setPen(pen(acc, 2.4))
+            for x in (4, 35):
+                p.drawRoundedRect(QRectF(x, 29, 9, 12), 2, 2)
+            p.setPen(pen(ink, 1.6)); p.drawEllipse(QPointF(8.5, 35), 1.9, 1.9); p.drawEllipse(QPointF(39.5, 35), 1.9, 1.9)
         elif name == 'encrib':
             # żebra wzmacniające: płyta w rzucie z trzema pomarańczowymi żebrami
             p.setBrush(QColor(soft)); p.setPen(pen(ink, 2.2)); p.drawPolygon(QPolygonF([QPointF(4, 34), QPointF(30, 42), QPointF(44, 30), QPointF(18, 22)]))

@@ -1,13 +1,18 @@
-# RCCAD Desktop 0.5.59 — Generator obudów, etap 16: żebra wzmacniające
+# RCCAD Desktop 0.5.60 — Generator obudów, etapy 17-18: mocowania zewnętrzne i przegrody wewnętrzne
+
+- **Mocowania zewnętrzne** (Obudowy → Mocowania zewnętrzne): uchwyt ścienny, kołnierz, ucho, otwory kluczowe i podłużne, uchwyt narożny, zaczep DIN TH35-7,5 / TH35-15 (IEC/EN 60715: 35 / 27 / 1 mm), VESA MIS-D 75 / 100 (M4), nóżki, gniazda gumowych nóżek, klips do paska, uchwyt opaski, obejma rury, według szkicu; rozmieszczenie pojedyncze / symetryczne / narożne / szyki / ręczne / wskazane punkty, przesuwanie i obrót strzałkami; integralne, osobne albo odłączane z otworami; kontrole kolizji, dostępu narzędzia, otworów ślepych.
+- **Przegrody wewnętrzne** (Obudowy → Przegrody wewnętrzne): pełne, częściowe, perforowane, wyjmowane / wsuwane (prowadnice, kontrola wyjmowania na całej drodze), poziome, pionowe, ukośne, zakrzywione, półki, kanały kablowe i powietrza, według szkicu; przepusty; komory (liczba, wymiary, udziały, propozycja według komponentów) i przypisanie komponentów do komór. Przegroda nie jest certyfikowaną izolacją.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.59 — Generator obudów, etap 16: żebra wzmacniające
 
 - **Nowe narzędzie Obudowy → Żebra wzmacniające**: powierzchnie wewnętrzne / zewnętrzne, płaskie / zakrzywione (Shift - kilka), rodzaje: pojedyncze, równoległe, krzyżowe, siatka prostokątna i trójkątna, plaster miodu, promieniowe, narożne, wzmocnienia słupków, według szkicu.
 - Parametry: grubość, wysokość stała / narastająca / ze ściętymi końcami, długość, rozstaw, liczba, kąt, pochylenie boków, zaokrąglenie podstawy, margines, odstęp od komponentów, minimalna długość fragmentu; strzałki wysokości i rozstawu z uproszczonym podglądem.
 - Dopasowanie do powierzchni (także zakrzywionych) i przeszkód: komponenty (obniżanie / skracanie / dzielenie), pokrywa, otwory słupków, otwory i wentylacja w powierzchni; usuwanie krótkich i niepołączonych fragmentów, usuwanie wybranych żeber z listy.
 - Żebra połączone objętościowo z częścią (jedna bryła B-Rep), krok historii z edycją, cofaniem i regeneracją obudowy. Bez deklaracji wytrzymałości.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.58 — Generator obudów: usunięte ograniczenia etapów 3-15
 
