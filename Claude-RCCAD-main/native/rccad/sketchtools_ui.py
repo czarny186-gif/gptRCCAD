@@ -766,6 +766,9 @@ class SketchTools:
     def dim_label_press(self, x, y):
         """Lewy klik w wartość wymiaru: zaznacza linię wymiaru i otwiera pole do wpisania nowej wartości."""
         cid = self._dim_item_at(x, y, labels_only=True)
+        if cid is not None and str(cid).startswith('encv:') and self.mode == 'enclosure' and not self.busy:
+            self._dim_edit_open(cid)                 # Generator obudów: wartość przy strzałce - wpisanie liczby
+            return True
         if cid is None or self.busy or self.document.get(cid) is None:
             return False                         # wymiary tylko do odczytu (np. przestrzeń obudowy) nie otwierają edycji
         self.selected = [cid]
@@ -805,6 +808,9 @@ class SketchTools:
             value = float(text)
         except ValueError:
             self.toast('Wpisz liczbę (mm).')
+            return
+        if str(edit.cid).startswith('encv:'):
+            self.enc_value_entered(edit.cid, value)
             return
         if value <= 0:
             self.toast('Wymiar musi być większy od zera.')

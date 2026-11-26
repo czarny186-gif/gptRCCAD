@@ -30,7 +30,7 @@ LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymi
                'Wklejanie': 'file', 'Importowanie SVG': 'file', 'Importowanie modelu': 'file', 'Koło zębate': 'gear', 'Para kół zębatych': 'gearpair',
                'Zaokrąglenie szkicu': 's_sfillet', 'Fazowanie szkicu': 's_sfillet', 'Skręcenie (TWIST)': 'twist',
                'Połączenie szkiców': 's_sjoin', 'Lustro szkicu': 's_smirror', 'Wymiar szkicu': 's_sdim',
-               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod', 'Definicja obudowy': 'enclosure', 'Obudowa prostokątna': 'enclosure'}
+               'Zmiana zaokrąglenia': 'mod', 'Zmiana fazy': 'mod', 'Usunięcie zaokrąglenia': 'mod', 'Usunięcie fazy': 'mod', 'Definicja obudowy': 'enclosure', 'Obudowa prostokątna': 'enclosure', 'Obudowa z pokrywą': 'enclosure'}
 
 
 def _num(value, unit=''):
@@ -4332,7 +4332,8 @@ def reads(recipe, current):
     if kind == 'enclosure':
         spec = recipe.get('spec') or {}
         face = (spec.get('frame') or {}).get('face') or {}
-        return {s['id'] for s in spec.get('sources', [])} | ({face['id']} if face.get('id') else set())
+        cut = ((spec.get('split') or {}).get('face') or {}) if (spec.get('split') or {}).get('enabled') else {}
+        return {s['id'] for s in spec.get('sources', [])} | {f['id'] for f in (face, cut) if f.get('id')}
     if kind == 'gear':
         return {recipe['replace']} if recipe.get('replace') else set()
     if kind == 'gear_pair':

@@ -2119,7 +2119,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.view.plane_pick = False
         self.view.edge_mode = False
         self.view.tints = {}
-        if getattr(self, '_enc_hover', None) is not None or getattr(self, 'enc_items', None):
+        if getattr(self, '_enc_hover', None) is not None or getattr(self, 'enc_items', None) or (getattr(self, 'enc', None) or {}).get('section') is not None:
             self.view.set_hover_mesh(None)       # Generator obudów: podświetlenie i wymiary znikają razem z narzędziem
             self._enc_hover = None
             self._enclosure_end()
@@ -9424,6 +9424,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def handle_dragged(self, hid, delta):
         if hid=='section':
             self.section_dragged(delta);return
+        if str(hid).startswith('enc:') and self.mode == 'enclosure':
+            self.enc_handle_dragged(hid, delta)          # Generator obudów: strzałki ścian i płaszczyzny podziału
+            return
         if hid == 'ex':
             if self._hv is None:
                 self._hv = self.ex_value.value()
@@ -9526,6 +9529,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self._sc_update()
         elif hid.startswith('tl'):
             self._tl_handles()
+        elif hid.startswith('enc:'):
+            self.enc_handle_released(hid)
         else:
             self._place_gizmo()
 
@@ -9832,6 +9837,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         extra = list(getattr(self, 'enc_items', None) or []) if self.mode == 'enclosure' else []     # wymiary X / Y / Z przestrzeni obudowy
         self.view.set_dims([*dims.view_items(bodies, self.selected), *extra])        # wymiary: purpurowe linie konstrukcyjne nad modelem
         bodies = [b for b in bodies if b.kind != 'cline']
+        bodies = self.enc_view_bodies(bodies)          # Generator obudów: elementy w środku można ukryć w podglądzie
         self.view.set_models(bodies, highlighted, self.edges)
         self.view.set_threads({b.id: b.threads for b in bodies if b.threads and b.visible})   # gwinty: lekkie linie, bez geometrii
         if getattr(self, 'th_pick', None) is not None:

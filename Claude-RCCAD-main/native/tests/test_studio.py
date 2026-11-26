@@ -54,6 +54,9 @@ class StudioTests(unittest.TestCase):
 
     def preview(self):
         end=time.monotonic()+20
+        timer=getattr(self.w,'_enc_timer',None)
+        while timer is not None and timer.isActive() and time.monotonic()<end:       # Generator obudów: opóźnione dokładne przeliczenie
+            self.app.processEvents();time.sleep(.005)
         while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
             self.app.processEvents();time.sleep(.005)
         self.app.processEvents()
@@ -4360,7 +4363,7 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(BRepCheck_Analyzer(en.shape.wrapped).IsValid());self.assertAlmostEqual(en.shape.Volume(),outer-inner,3)
         self.assertIs(w.document.get(a.id).shape,a.shape);self.assertIs(w.document.get(b.id).shape,b.shape)   # źródła bez zmian
         for p in (a.shape.Center(),b.shape.Center()):self.assertEqual(k.point_state(en.shape,p.toTuple()),'out')  # elementy nie wycięte
-        spec=encm.EnclosureSpec.from_json(en.meta['enclosure']);self.assertEqual(spec.version,2);self.assertEqual(spec.walls['bottom'],4)
+        spec=encm.EnclosureSpec.from_json(en.meta['enclosure']);self.assertEqual(spec.version,encm.SPEC_VERSION);self.assertEqual(spec.walls['bottom'],4)
         info=w.document.infos()[0][-1];self.assertEqual(info['label'],'Obudowa prostokątna');self.assertEqual(info['op']['type'],'enclosure')
         self.assertIn(en.id,{x.id for x in w.export_bodies()})                               # zwykła bryła: eksport, inne narzędzia
         moved=[a,replace(b,shape=b.shape.translate((20,0,0))).prepared()]
@@ -4384,6 +4387,135 @@ class StudioTests(unittest.TestCase):
         e2=w.document.get(w.selected[0]);self.assertAlmostEqual(e2.shape.Volume(),40*20*17.5-36*16*12,2)
         w.set_mode('enclosure');w.enc_set_ids([]);self.assertFalse(w.enc_apply.isEnabled())
         QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode)
+
+    # Generator obudów, etap 3: sześć strzałek na ścianach (odstępy / wymiary zewnętrzne / grubości), tryb symetryczny,
+    # wartości przy strzałkach do wpisania, przezroczystość, widoczność elementów, podświetlenie ściany, przekrój,
+    # uproszczony podgląd przy przeciąganiu i dokładna bryła po puszczeniu (bez nieaktualnych wyników)
+    def test_enclosure_stage3_handles_live_preview(self):
+        from rccad import enclosure as encm
+        w=self.w;a=Body('A',k.box(40,20,10)).prepared();w.document.commit([a]);w.refresh()
+        w.selected=[a.id];w.set_mode('enclosure');self.preview()
+        ids=sorted(h['id'] for h in w.view.handles);self.assertEqual(ids,sorted(f'enc:{s}' for s in encm.SIDES))
+        self.assertEqual(w._enc_shown[0],'exact')
+        lay0=w.enc['layout'];x_minus=w.enc['layout']['outer'][0][0]
+        calls=[]
+        with patch.object(w,'run_preview',side_effect=lambda *a_:calls.append(a_)):
+            w.handle_dragged('enc:x+',3.0);w.handle_dragged('enc:x+',5.04)       # przeciąganie: bez dokładnych przeliczeń
+            self.assertEqual(calls,[]);self.assertEqual(w._enc_shown[0],'quick')
+        self.assertFalse(w.enc_clear_link.isChecked())                             # jedna strona - „Jednakowe” wyłączone
+        self.assertAlmostEqual(w.enc_clear['x+'].value(),7.0);self.assertAlmostEqual(w.enc_clear['x-'].value(),2.0)   # pole idzie za strzałką
+        self.assertAlmostEqual(w.enc['layout']['outer'][0][0],x_minus)                # pozostałe ściany stoją
+        tip=next(h for h in w.view.handles if h['id']=='enc:x+')['start']
+        self.assertAlmostEqual(float(tip[0]),40+7+2,4)                                 # strzałka przy przesuniętej ścianie
+        self.assertIsNotNone(w._enc_hover)                                             # aktywna ściana podświetlona
+        w.handle_released('enc:x+');self.preview();self.assertEqual(w._enc_shown[0],'exact')
+        self.assertAlmostEqual(w._enc_exact_result['mesh'].vertices[:,0].max(),49,3)  # dokładna bryła po puszczeniu
+        # tryb symetryczny
+        w.enc_sym.setChecked(True);w.handle_dragged('enc:y+',1.0);w.handle_released('enc:y+')
+        self.assertAlmostEqual(w.enc_clear['y+'].value(),3.0);self.assertAlmostEqual(w.enc_clear['y-'].value(),3.0)
+        # wartości przy strzałkach: pole edycji, wpisanie liczby
+        item=next(i for i in w.view.dim_items if i['id']=='encv:z+');self.assertAlmostEqual(item['value'],2.0)
+        w.view.dim_layout();rect=next(r for r,i in w.view.dim_rects if i=='encv:z+')
+        self.assertTrue(w.dim_label_press(rect.center().x(),rect.center().y()));self.assertTrue(w._dim_editor.isVisible())
+        w._dim_editor.setText('4,5');w._dim_edit_done()
+        self.assertAlmostEqual(w.enc_clear['z+'].value(),4.5);self.assertAlmostEqual(w.enc_clear['z-'].value(),4.5)   # symetrycznie
+        # pola liczbowe -> strzałki
+        w.enc_sym.setChecked(False);w.enc_clear['z+'].setValue(10)
+        top=next(h for h in w.view.handles if h['id']=='enc:z+')['start'];self.assertAlmostEqual(float(top[2]),10+10+2,4)
+        # wymiary zewnętrzne: wpisany wymiar X zmienia stronę X+
+        w.enc_handles.setCurrentIndex(w.enc_handles.findData('outer'))
+        self.assertEqual({i['id'] for i in w.view.dim_items if str(i['id']).startswith('encv:')},{'encv:X','encv:Y','encv:Z'})
+        before=w.enc['layout']['outer_size'][0];w.enc_value_entered('encv:X',before+4)
+        self.assertAlmostEqual(w.enc['layout']['outer_size'][0],before+4);self.assertAlmostEqual(w.enc_clear['x+'].value(),11.0)
+        w.enc_value_entered('encv:X',1);self.assertAlmostEqual(w.enc['layout']['outer_size'][0],before+4)   # za mały - odrzucony
+        # grubości ścianek: strzałka zmienia ściankę, wnętrze bez zmian
+        w.enc_handles.setCurrentIndex(w.enc_handles.findData('walls'));inner=w.enc['layout']['inner_size'].copy()
+        w.handle_dragged('enc:z-',1.5);w.handle_released('enc:z-')
+        self.assertAlmostEqual(w.enc_wall['bottom'].value(),3.5);self.assertTrue(np.allclose(w.enc['layout']['inner_size'],inner))
+        w.handle_dragged('enc:x-',-9);self.assertAlmostEqual(w.enc_wall['x-'].value(),encm.MIN_WALL);w.handle_released('enc:x-')
+        w.enc_mode.setCurrentIndex(w.enc_mode.findData('open'));self.assertNotIn('enc:z+',{h['id'] for h in w.view.handles})
+        w.enc_mode.setCurrentIndex(w.enc_mode.findData('closed'))
+        # nieaktualny wynik nie jest pokazywany
+        w.enc_clear['y-'].setValue(5);sig_old=w._enc_sig_of(w.enc_spec());w._enc_exact()
+        w.enc_clear['y-'].setValue(6);self.preview()
+        self.assertEqual(w._enc_shown,('exact',w._enc_sig_of(w.enc_spec())));self.assertNotEqual(sig_old,w._enc_shown[1])
+        # przezroczystość, widoczność elementów, przekrój
+        w.enc_alpha.setValue(90);self.assertAlmostEqual(w.view.preview_items[0].opts['color'][3],.1,3)
+        w.enc_inner.setChecked(False);self.assertNotIn(a.id,{b.id for b in w.view.bodies if b.visible})
+        w.enc_inner.setChecked(True);self.assertIn(a.id,{b.id for b in w.view.bodies if b.visible})
+        w.enc_cut.setChecked(True);self.assertIsNotNone(w.view.section_plane)
+        self.assertTrue(np.allclose(w.view.section_plane[:3],[0,-1,0]))
+        self.assertEqual(len(w.document.bodies),1);self.assertTrue(a.visible)                       # podgląd nic nie dodaje
+        from PySide6.QtTest import QTest
+        QTest.keyClick(w,Qt.Key_Escape);self.assertIsNone(w.mode);self.assertIsNone(w.view.section_plane)
+        self.assertEqual(w.view.handles,[]);self.assertEqual(len(w.document.bodies),1)
+
+    # Generator obudów, etap 4: podział na podstawę i pokrywę - kierunki, położenie mm / %, strzałka płaszczyzny,
+    # połączenia (płaskie, zakładki, pióro i wpust), luz, kolizje, widok rozstrzelony, dwie bryły w grupie obudowy
+    def test_enclosure_stage4_split_joints_explode(self):
+        from rccad import enclosure as encm
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        w=self.w;a=Body('A',k.box(40,20,10)).prepared();w.document.commit([a]);w.refresh()
+        env=encm.envelope([a],encm.EnclosureSpec(sources=[encm.SourceRef(id=a.id)]))
+        for mode in ('closed','open'):
+            for sm in ('x','y','z','plane'):
+                for j in encm.JOINTS:
+                    sp=encm.EnclosureSpec(sources=[encm.SourceRef(id=a.id)],mode=mode,
+                                          split=dict(enabled=True,mode=sm,plane='YZ',unit='%' if sm!='plane' else 'mm',position=60 if sm!='plane' else 21,joint=j))
+                    full=encm.box_enclosure(env,sp).Volume();r=encm.split_enclosure(env,sp,[a])
+                    for part in (r['base'],r['lid']):
+                        self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid());self.assertEqual(len(part.Solids()),1)
+                    total=r['base'].Volume()+r['lid'].Volume()
+                    if j=='flat':self.assertAlmostEqual(total,full,3)
+                    else:self.assertLess(total,full);self.assertGreater(total,full*.95)    # luz montażowy = ubytek materiału
+                    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+                    self.assertLess(encm._volume(BRepAlgoAPI_Common(r['base'].wrapped,r['lid'].wrapped).Shape())[0],1e-6)   # części się nie przenikają
+        # walidacja: połączenie szersze niż ścianka, głębokość < wysokość, płaszczyzna poza obudową, pełna bryła
+        bad=lambda **kw:encm.split_check(env,encm.EnclosureSpec(split=dict(enabled=True,mode='z',**kw)),encm.box_layout(env,encm.EnclosureSpec()))
+        for kw in (dict(joint='lap_in',width=1.9),dict(joint='tongue',width=1.0,gap=.6),dict(joint='lap_out',height=3,depth=2),dict(unit='mm',position=99)):
+            with self.assertRaises(k.CadError):bad(**kw)
+        with self.assertRaises(k.CadError):encm.split_check(env,encm.EnclosureSpec(mode='solid',split=dict(enabled=True,joint='tongue')),encm.box_layout(env,encm.EnclosureSpec(mode='solid')))
+        # kolizja występu z elementem
+        self.assertEqual(encm.joint_collisions(k.box(4,4,4),encm.EnclosureSpec(sources=[encm.SourceRef(id=a.id)]),[a]),['A'])
+        # okno: włączenie podziału, strzałka płaszczyzny, mm <-> %, widok rozstrzelony
+        w.selected=[a.id];w.set_mode('enclosure');w.enc_split_on.setChecked(True);self.preview()
+        self.assertIn('enc:split',{h['id'] for h in w.view.handles});self.assertTrue(w.view.custom_plane_items)
+        self.assertEqual(w._enc_shown[0],'exact');self.assertIn('lid',w._enc_exact_result)
+        z0=w.enc['plane'][0][2];w.handle_dragged('enc:split',2.0);w.handle_released('enc:split')
+        self.assertAlmostEqual(w.enc['plane'][0][2],z0+2,2)                                # strzałka przesuwa płaszczyznę
+        z1=w.enc['plane'][0][2];w.enc_split_unit.setCurrentIndex(w.enc_split_unit.findData('mm'))
+        self.assertAlmostEqual(w.enc['plane'][0][2],z1,2)                                  # przeliczenie jednostki - płaszczyzna stoi
+        self.assertAlmostEqual(w.enc_split_pos.value(),z1-(0-2-2),2)                       # mm od dolnej ściany obudowy
+        w.enc_joint.setCurrentIndex(w.enc_joint.findData('tongue'));self.preview()
+        self.assertTrue(w.enc_apply.isEnabled())
+        lid_top=w._enc_exact_result['lid'].vertices[:,2].max()
+        w.enc_explode.setChecked(True);w.enc_explode_dist.setValue(15)
+        with patch.object(w.view,'set_preview_mesh') as spm:
+            w._enc_redisplay()
+        self.assertAlmostEqual(float(spm.call_args[0][0].vertices[:,2].max()),lid_top+15,3)          # pokrywa odsunięta o 15 mm
+        self.assertEqual(spm.call_args[0][0].vertices[:,2].min(),w._enc_exact_result['base'].vertices[:,2].min())
+        self.assertEqual(len(w.document.bodies),1)                                         # rozstrzelenie tylko w podglądzie
+        # ściana elementu jako płaszczyzna podziału
+        w.enc_split_mode.setCurrentIndex(w.enc_split_mode.findData('face'));self.assertTrue(w.enc['picking_split'])
+        w.enc['split_face']=dict(id=a.id,point=[20.0,10.0,10.0],name='A');w.enc['picking_split']=False
+        w.enc_split_pos.setValue(-1);self.assertAlmostEqual(w.enc['plane'][0][2],9.0,4)
+        w.enc_split_mode.setCurrentIndex(w.enc_split_mode.findData('z'))
+        w.enc_split_unit.setCurrentIndex(w.enc_split_unit.findData('%'));w.enc_split_pos.setValue(60);self.preview()
+        w.apply_enclosure();self.wait();self.assertIsNone(w.mode)
+        parts=[x for x in w.document.bodies if (x.meta or {}).get('enclosure_part')]
+        self.assertEqual(sorted(x.meta['enclosure_part'] for x in parts),['base','lid'])
+        self.assertEqual({x.folder for x in parts},{'Obudowa 1'});self.assertEqual(sorted(w.selected),sorted(x.id for x in parts))
+        self.assertEqual({x.name for x in parts},{'Obudowa 1 - podstawa','Obudowa 1 - pokrywa'})
+        from rccad.objects import category
+        self.assertEqual({category(x) for x in parts},{'encl'})
+        for x in parts:self.assertTrue(BRepCheck_Analyzer(x.shape.wrapped).IsValid())
+        self.assertIs(w.document.get(a.id).shape,a.shape)
+        info=w.document.infos()[0][-1];self.assertEqual(info['label'],'Obudowa z pokrywą')
+        out=hist.RUNNERS['enclosure']([a],info['op']);self.assertEqual(len([x for x in out if (x.meta or {}).get('enclosure_part')]),2)
+        path=Path(tempfile.mkdtemp())/'enc4.rccadx';w.document.save(path);loaded=Document.load(path)
+        self.assertEqual({loaded.get(x.id).folder for x in parts},{'Obudowa 1'})
+        w.undo();self.wait();self.assertFalse(any((x.meta or {}).get('enclosure_part') for x in w.document.bodies))
+        w.redo();self.wait();self.assertEqual(len([x for x in w.document.bodies if (x.meta or {}).get('enclosure_part')]),2)
 
     # 0.5.49: Wymiar - punkt może być też miejscem na siatce (przyciąganie jak przy rysowaniu linii); stały punkt zostaje,
     # przesuwa się kształt drugiego końca; dwa stałe punkty - sama linia wymiaru (pomiar)

@@ -50,8 +50,8 @@ def category(body):
     DXF), a reszta jak dotąd - szkice, teksty, bryły."""
     if body.kind == 'cline':
         return 'cline'
-    if body.kind == 'encl':
-        return 'encl'             # definicja obudowy (Generator obudów)
+    if body.kind == 'encl' or (body.kind == 'solid' and (body.meta or {}).get('enclosure')):
+        return 'encl'             # definicja obudowy i obudowy z Generatora obudów (także podstawa i pokrywa)
     source = getattr(body, 'source', '')
     if source in ('step', 'svg', 'dxf'):
         return source

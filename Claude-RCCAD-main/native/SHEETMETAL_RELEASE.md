@@ -1,4 +1,25 @@
-# RCCAD Desktop 0.5.52 — Generator obudów, etap 2: prostokątna obudowa
+# RCCAD Desktop 0.5.53 — Generator obudów, etapy 3 i 4: manipulatory, podgląd, podstawa i pokrywa
+
+- **Etap 3 - interaktywny podgląd obudowy** (Obudowy → Utwórz obudowę):
+  - sześć strzałek na ścianach obudowy (X−, X+, Y−, Y+, Z−, Z+) - przeciąganie zmienia tylko tę stronę, pozostałe ściany stoją;
+  - przełącznik strzałek: odstępy od elementów / wymiary zewnętrzne / grubości ścianek; „Symetrycznie” zmienia też przeciwną stronę;
+  - wartości przy strzałkach (purpurowe ramki) - klik otwiera pole do wpisania liczby; pola w okienku idą za strzałką na żywo, a zmiana pola przestawia strzałki;
+  - przezroczystość podglądu, „Pokaż elementy w środku”, podświetlenie ściany pod strzałką, „Przekrój podglądu” (oś X / Y / Z, położenie od środka) - wszystko tylko w podglądzie;
+  - przy przeciąganiu uproszczony podgląd bez liczenia bryły; po puszczeniu (i chwilę po zmianie pola) dokładna bryła B-Rep liczona w tle; wynik starszego przeliczenia nigdy nie zastępuje nowszego.
+- **Etap 4 - podział na podstawę i pokrywę:**
+  - kierunek: wzdłuż osi X / Y / Z obudowy, według płaszczyzny XY / XZ / YZ albo według klikniętej płaskiej ściany elementu;
+  - położenie w mm albo w % wymiaru obudowy (przełączenie jednostki nie przesuwa płaszczyzny); zielona strzałka przesuwa płaszczyznę podziału;
+  - połączenia: płaskie powierzchnie styku, zakładka wewnętrzna, zakładka zewnętrzna, pióro i wpust - szerokość, wysokość, głębokość i luz montażowy;
+  - podział BRepAlgoAPI_Splitter, połączenie operacjami Boolean; obie części sprawdzane (jedna poprawna bryła każda, BRepCheck_Analyzer); kontrola, czy połączenie mieści się w ściankach i nie wchodzi w elementy w środku;
+  - widok złożony / rozstrzelony z regulowaną odległością - tylko w podglądzie, położenie brył w projekcie bez zmian;
+  - Zastosuj / Enter: dwie osobne bryły „Obudowa N - podstawa” i „Obudowa N - pokrywa” w grupie „Obudowa N” (krok „Obudowa z pokrywą”, Cofnij / Ponów, zapis projektu); elementy źródłowe bez zmian.
+- Obudowy z generatora są na liście Obiekty w pozycji „Obudowy”.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.52 — Generator obudów, etap 2: prostokątna obudowa
 
 - **Obudowy → Utwórz obudowę** tworzy teraz prostokątną obudowę jako bryłę B-Rep: zewnętrzny prostopadłościan (BRepPrimAPI_MakeBox) minus wnętrze (BRepAlgoAPI_Cut), sprawdzona BRepCheck_Analyzer.
   - odstępy od elementów X−, X+, Y−, Y+, Z−, Z+ i grubości czterech ścianek bocznych, dna i góry; „Jednakowe” wiąże wszystkie odstępy (albo wszystkie grubości) jednym parametrem;
@@ -7,10 +28,6 @@
   - złe wartości zablokowane (odstęp ≥ 0, ścianka ≥ 0,2 mm; Zastosuj wyłączone, gdy obudowa nie może powstać);
   - podgląd liczony w tle, półprzezroczysty - nic nie trafia do projektu; Zastosuj / Enter dodaje nową bryłę „Obudowa N” (krok „Obudowa prostokątna”, Cofnij / Ponów, zapis), elementy źródłowe bez zmian i nieodejmowane od obudowy;
   - przeliczenie historii buduje obudowę z aktualnego położenia elementów; projekty z etapu 1 (definicja obudowy) wczytują się jak dotąd.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.51 — Generator obudów, etap 1: elementy, układ, przestrzeń
 
