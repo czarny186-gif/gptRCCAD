@@ -41,7 +41,12 @@ def peak_mb():
         k32 = ctypes.WinDLL('kernel32')
         psapi = ctypes.WinDLL('psapi')
         k32.GetCurrentProcess.restype = wintypes.HANDLE
-        psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb)
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        try:
+            psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb)
+        except Exception:
+            return float('nan')                                         # pomiar pamięci niedostępny - test liczy dalej czas
         return c.PeakWorkingSetSize / 2 ** 20
 
 
