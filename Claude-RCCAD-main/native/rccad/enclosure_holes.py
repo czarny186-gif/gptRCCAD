@@ -317,6 +317,109 @@ def offset_region(region, d):
     return out
 
 
+def _monotone_pieces(curve, a, b, perp, samples=48):
+    """Podział krzywej (Geom) na odcinki parametru, na których współrzędna prostopadła do kierunku przesunięcia jest
+    monotoniczna (pochodna nie zmienia znaku) - wtedy obszar omiatany przez odcinek jest prostym czworobokiem."""
+    from OCP.gp import gp_Pnt, gp_Vec
+    ts = np.linspace(a, b, samples + 1)
+
+    def deriv(t):
+        p, v = gp_Pnt(), gp_Vec()
+        curve.D1(float(t), p, v)
+        return float(np.dot([v.X(), v.Y(), v.Z()], perp))
+
+    ds = [deriv(t) for t in ts]
+    cuts = [a]
+    for i in range(samples):
+        if ds[i] * ds[i + 1] < 0:                     # zmiana znaku - bisekcja
+            lo, hi = ts[i], ts[i + 1]
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                if deriv(lo) * deriv(mid) <= 0:
+                    hi = mid
+                else:
+                    lo = mid
+            cuts.append((lo + hi) / 2)
+    cuts.append(b)
+    return [(cuts[i], cuts[i + 1]) for i in range(len(cuts) - 1) if cuts[i + 1] - cuts[i] > 1e-9]
+
+
+def minkowski_segment(region, frame, axis, before, after):
+    """Dokładna suma Minkowskiego obszaru płaskiego z odcinkiem wzdłuż osi ścianki (0 - u, 1 - v) od -before do +after:
+    obszar przesunięty na oba końce odcinka + obszary omiatane przez każdą krawędź (krawędzie krzywoliniowe dzielone
+    na części monotoniczne). Suma (BRepAlgoAPI_Fuse) i scalenie ścian (UnifySameDomain) - jedna ściana płaska."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Transform
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.Geom import Geom_TrimmedCurve
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopTools import TopTools_ListOfShape
+    from OCP.gp import gp_Pnt, gp_Trsf, gp_Vec
+    from .enclosure import _unified
+    import cadquery as cq
+    before, after = max(0.0, float(before)), max(0.0, float(after))
+    if before + after <= 1e-9:
+        return region
+    o, u, v, n = frame[:4]
+    d = np.asarray(u if axis == 0 else v, float)
+    perp = np.asarray(v if axis == 0 else u, float)
+    a3, b3 = -d * before, d * after
+
+    def moved(shape, vec):
+        t = gp_Trsf()
+        t.SetTranslation(gp_Vec(*map(float, vec)))
+        return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+    from OCP.TopoDS import TopoDS
+    pieces = [moved(region, a3), moved(region, b3)]
+    ref = np.asarray(cq.Shape.cast(region).Faces()[0].normalAt().toTuple(), float)
+    for e in cq.Shape.cast(region).Edges():
+        loc = TopLoc_Location()
+        curve = BRep_Tool.Curve_s(e.wrapped, loc, 0.0, 0.0)
+        if curve is None:
+            continue
+        f, l = BRep_Tool.Range_s(e.wrapped)
+        if not loc.IsIdentity():
+            curve = curve.Transformed(loc.Transformation())
+        for t0, t1 in _monotone_pieces(curve, f, l, perp):
+            p0, p1 = curve.Value(t0), curve.Value(t1)
+            if abs(float(np.dot(np.array([p1.X() - p0.X(), p1.Y() - p0.Y(), p1.Z() - p0.Z()]), perp))) < 1e-7:
+                continue                              # odcinek równoległy do kierunku - omiatanie bez pola
+            seg = BRepBuilderAPI_MakeEdge(Geom_TrimmedCurve(curve, t0, t1)).Edge()
+            e_a, e_b = TopoDS.Edge_s(moved(seg, a3)), TopoDS.Edge_s(moved(seg, b3))
+            P = lambda q, vec: gp_Pnt(*(np.array([q.X(), q.Y(), q.Z()]) + vec).tolist())
+            wire = BRepBuilderAPI_MakeWire()
+            wire.Add(e_a)
+            wire.Add(BRepBuilderAPI_MakeEdge(P(p1, a3), P(p1, b3)).Edge())
+            wire.Add(e_b)
+            wire.Add(BRepBuilderAPI_MakeEdge(P(p0, b3), P(p0, a3)).Edge())
+            if not wire.IsDone():
+                raise kernel.CadError('Luz kierunkowy: nie udało się zbudować obszaru omiatanego krawędzią.')
+            mf = BRepBuilderAPI_MakeFace(wire.Wire(), True)
+            if mf.IsDone() and cq.Shape.cast(mf.Face()).Area() > 1e-9:
+                face = mf.Face()
+                fn = np.asarray(cq.Face(face).normalAt().toTuple(), float)
+                if float(fn @ ref) < 0:                   # ta sama orientacja co obszar - ściany scalają się w jedną
+                    face = TopoDS.Face_s(face.Reversed())
+                pieces.append(face)
+    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(pieces[0])
+    for x in pieces[1:]:
+        tools.Append(x)
+    op = BRepAlgoAPI_Fuse()
+    op.SetArguments(args)
+    op.SetTools(tools)
+    op.SetRunParallel(True)
+    op.Build()
+    if not op.IsDone():
+        raise kernel.CadError('Luz kierunkowy: suma obszarów nie powiodła się.')
+    out = _unified(op.Shape())
+    faces = cq.Shape.cast(out).Faces()
+    if len(faces) == 1:
+        return faces[0].wrapped
+    return cq.Compound.makeCompound(faces).wrapped
+
+
 def _check_region(region):
     """Profil płaski: niepusty, bez samoprzecięć (BRepCheck)."""
     from OCP.BRepCheck import BRepCheck_Analyzer
@@ -372,13 +475,9 @@ def build_profile(p, frame, faces=None, sketch_faces=None):
         if mode == 'exact':
             base = min(c.values())
             shape = offset_region(region, base) if base > 0 else region
-            for key, vec in (('l', (-1, 0)), ('r', (1, 0)), ('b', (0, -1)), ('t', (0, 1))):     # dodatkowy luz w jednym kierunku
-                extra = c[key] - base
-                if extra > 1e-9:
-                    from .enclosure import _boolean
-                    moved = _moved(shape, frame, vec[0] * extra, vec[1] * extra, 0.0, centre)
-                    half = _moved(shape, frame, vec[0] * extra / 2, vec[1] * extra / 2, 0.0, centre)
-                    shape = _boolean('fuse', _boolean('fuse', shape, half, 'luz kierunkowy'), moved, 'luz kierunkowy')
+            # dodatkowy luz w poszczególnych kierunkach: dokładna suma Minkowskiego z odcinkami wzdłuż u i v
+            shape = minkowski_segment(shape, frame, 0, c['l'] - base, c['r'] - base)
+            shape = minkowski_segment(shape, frame, 1, c['b'] - base, c['t'] - base)
         elif mode == 'circle':
             r = float(np.max(np.hypot(uv[:, 0] - centre[0], uv[:, 1] - centre[1]))) + max(c.values())
             shape = _circle_face(centre[0], centre[1], r, frame)

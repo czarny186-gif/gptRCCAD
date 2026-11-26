@@ -8,8 +8,8 @@ obszaru do podświetlenia w widoku):
   ścianki w punktach próbnych),
 - poprawność brył (BRepCheck_Analyzer), niepołączone fragmenty, otwarte / nieprawidłowe powłoki, samoprzecięcia
   (BOPAlgo_ArgumentAnalyzer),
-- możliwość włożenia elementów i otwierania / zamykania obudowy - położenia pośrednie (kontrola próbkowana: nie
-  gwarantuje wykrycia wszystkich kolizji podczas ruchu).
+- możliwość włożenia elementów i otwierania / zamykania obudowy - na całej drodze ruchu (sweep: postęp zachowawczy według
+  odległości ramek ścian; przy styku ramek sprawdzenie co 0,5 mm przesunięcia / 1 mm lub 1° obrotu).
 Rzeczywista kolizja objętościowa (część wspólna > TOL_VOLUME) jest odróżniana od dozwolonego styku powierzchni
 (odległość < TOL_DIST, objętość wspólna zerowa). Przed dokładnymi operacjami - wstępne sprawdzenie ramek (Bounding Box)."""
 from __future__ import annotations
@@ -62,6 +62,92 @@ def _distance(a, b, limit):
     if not d.IsDone():
         return None
     return float(d.Value()), (np.array(d.PointOnShape1(1).Coord()), np.array(d.PointOnShape2(1).Coord())) if d.NbSolution() else None
+
+
+MIN_STEP = .5              # mm - przesunięcie: największy ruch ścian o stykających się ramkach między sprawdzeniami
+ROT_STEP = 1.0             # mm - obrót (zawias): największy ruch takich ścian między sprawdzeniami części wspólnej,
+ROT_MIN = 0.017453292519943295   # ale nie rzadziej niż co 1° (duże pokrywy)
+MAX_STEPS = 4000
+
+
+def _faces_of(shape):
+    import cadquery as cq
+    return [f.wrapped for f in cq.Shape.cast(shape).Faces()]
+
+
+def _face_boxes(faces):
+    """Ramki (AABB) ścian: (N, 2, 3) - ramka zawiera ścianę."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    out = []
+    for f in faces:
+        b = Bnd_Box()
+        BRepBndLib.Add_s(f, b)
+        x0, y0, z0, x1, y1, z1 = b.Get() if not b.IsVoid() else (0, 0, 0, 0, 0, 0)
+        out.append(((x0, y0, z0), (x1, y1, z1)))
+    return np.asarray(out, float).reshape(-1, 2, 3)
+
+
+def _moved_boxes(boxes, R, t):
+    """Ramki ścian po ruchu sztywnym: ramka obróconych narożników (zawiera obróconą ścianę - ograniczenie bezpieczne)."""
+    lo, hi = boxes[:, 0], boxes[:, 1]
+    corners = np.stack([np.where(np.array([k & 1, k & 2, k & 4], bool), hi, lo) for k in range(8)], axis=1)
+    moved = corners @ R.T + t
+    return np.stack([moved.min(axis=1), moved.max(axis=1)], axis=1)
+
+
+def _box_gaps(A, B):
+    """Odległości między ramkami (macierz N_A x N_B) - dolne ograniczenia odległości par ścian."""
+    gap = np.maximum(0.0, np.maximum(A[:, None, 0] - B[None, :, 1], B[None, :, 0] - A[:, None, 1]))
+    return np.sqrt((gap ** 2).sum(axis=2))
+
+
+def sweep(fixed, motion, total, speed, label, xform=None, axis=None):
+    """Kontrola ruchu na całej drodze (postęp zachowawczy). Dla każdej pary ścian (nieruchoma, ruchoma) dolne ograniczenie
+    ich odległości = odległość ramek (ramka zawiera ścianę). Ściana
+    ruchoma przesuwa się co najwyżej z prędkością v_f na jednostkę parametru (przesunięcie: `speed`; obrót wokół osi
+    `axis` = (punkt, kierunek): największa odległość narożnika jej ramki od osi), więc do położenia u + min(odległość / v_f)
+    żadna para nie może się zetknąć - ten odcinek ruchu jest pomijany bez ryzyka przeoczenia kolizji. Gdy ramki ścian
+    się stykają: sprawdzenie części wspólnej brył (BRepAlgoAPI_Common, objętość > TOL_VOLUME = kolizja) co MIN_STEP
+    (przesunięcie) / ROT_STEP (obrót) ruchu najszybszej z tych ścian. Zwraca (opis, część wspólna) albo None."""
+    speed = max(float(speed), 1e-9)
+    ff = _faces_of(fixed)
+    fb = _face_boxes(ff)
+    mb = _face_boxes(_faces_of(motion(0.0))) if xform is not None else None
+    u, steps = 0.0, 0
+    while steps < MAX_STEPS:
+        steps += 1
+        shape_u = None
+        if xform is not None and len(fb) and len(mb):
+            R, t = xform(u)
+            moved = _moved_boxes(mb, R, t)
+            if axis is not None:                                 # prędkość ściany przy obrocie: promień od osi
+                p0, dd = (np.asarray(x, float) for x in axis)
+                dd = dd / max(float(np.linalg.norm(dd)), 1e-12)
+                corners = np.stack([np.where(np.array([k & 1, k & 2, k & 4], bool), moved[:, 1], moved[:, 0]) for k in range(8)], axis=1) - p0
+                radial = corners - (corners @ dd)[..., None] * dd
+                v = np.maximum(np.linalg.norm(radial, axis=2).max(axis=1), 1e-6)
+            else:
+                v = np.full(len(moved), speed)
+            G = _box_gaps(fb, moved)
+            contact = G <= 1e-9
+            ratio = G / v[None, :]
+            safe = float(ratio[~contact].min()) if (~contact).any() else total
+            touching_m = contact.any(axis=0)
+        else:
+            touching_m, v, safe = np.array([True]), np.array([speed]), 0.0
+        if touching_m.any():
+            vol, common = _common(fixed, shape_u if shape_u is not None else motion(u))
+            if vol is not None and vol > TOL_VOLUME:
+                return label(u), common
+            step = MIN_STEP / float(v[touching_m].max()) if axis is None else max(ROT_STEP / float(v[touching_m].max()), ROT_MIN)
+            adv = (min(safe, step) if safe > 0 else step) if axis is None else max(min(safe, step), ROT_MIN)
+        else:
+            adv = safe
+        if u >= total:
+            return None
+        u = min(total, u + max(adv, 1e-6))
+    return None
 
 
 def _marker(p, q=None, r=1.0):
@@ -154,7 +240,7 @@ def run(parts, components, spec=None, posts=None, closure_solids=None, cut_tools
         clearance=None, min_material=MIN_MATERIAL, insertion_dir=None):
     """Pełna kontrola. parts: dict nazwa -> bryła (TopoDS), components: lista Body (elementy źródłowe), posts: lista
     (nazwa, bryła) mocowań, closure_solids: lista (nazwa, bryła) elementów zamknięcia, cut_tools: lista (nazwa, bryła)
-    narzędzi otworów / wentylacji, motion: funkcja(t) -> przekształcona pokrywa dla t w (0, 1] (ruch otwierania).
+    narzędzi otworów / wentylacji, motion: (funkcja(u) -> pokrywa w położeniu u, zakres u, największa prędkość punktu, opis(u)) - ruch otwierania sprawdzany w sposób ciągły (sweep).
     Zwraca listę wyników (poziom, tekst, kształt obszaru albo None, id elementu albo None)."""
     out = []
     add = lambda lvl, text, shape=None, ref=None: out.append((lvl, text, shape, ref))
@@ -243,18 +329,13 @@ def run(parts, components, spec=None, posts=None, closure_solids=None, cut_tools
         else:
             add('ok', 'Podstawa i pokrywa: bez przenikania (najwyżej styk powierzchni).')
         if motion is not None:
-            hit = None
-            for t in np.linspace(.1, 1.0, 10):
-                moved, label = motion(float(t))
-                vol, common = _common(parts['base'], moved)
-                if vol is not None and vol > TOL_VOLUME:
-                    hit = (label, common)
-                    break
+            fn, total, speed, label, xf, axis = motion
+            hit = sweep(parts['base'], fn, total, speed, label, xf, axis)
             if hit:
                 add('error', f'Otwieranie: pokrywa koliduje z podstawą {hit[0]}.', hit[1])
             else:
-                add('ok', 'Otwieranie i zamykanie: bez kolizji w położeniach pośrednich.')
-            add('warning', 'Kontrola ruchu jest próbkowana (10 położeń) - nie gwarantuje wykrycia wszystkich kolizji podczas ruchu.')
+                add('ok', 'Otwieranie i zamykanie: bez kolizji na całej drodze ruchu (kontrola ciągła - postęp według odległości '
+                          f'ramek ścian, przy styku ramek sprawdzenie co {MIN_STEP:g} mm przesunięcia / {ROT_STEP:g} mm lub 1° obrotu).')
     # montaż elementów: wsuwanie od strony otwarcia (podstawa bez pokrywy)
     if insertion_dir is not None:
         import cadquery as cq
@@ -264,18 +345,15 @@ def run(parts, components, spec=None, posts=None, closure_solids=None, cut_tools
         for comp in components:
             if comp.kind != 'solid':
                 continue
-            blocked = None
-            for t in np.linspace(.1, 1.0, 10):
-                moved = cq.Shape.cast(comp.shape.wrapped).translate(cq.Vector(*(d * height * t))).wrapped
-                vol, common = _common(moved, base)
-                if vol is not None and vol > TOL_VOLUME:
-                    blocked = (t * height, common)
-                    break
-            if blocked:
-                add('warning', f'Montaż: „{comp.name}” nie przejdzie przez otwarcie (kolizja po {blocked[0]:.0f} mm wysuwania) - może wymagać montażu przed zamknięciem ścianek.', blocked[1], comp.id)
+            src = cq.Shape.cast(comp.shape.wrapped)
+            hit = sweep(base, lambda u, src=src: src.translate(cq.Vector(*(d * u))).wrapped, height, 1.0, lambda u: f'{u:.1f}',
+                        lambda u: (np.eye(3), d * u))
+            if hit:
+                add('warning', f'Montaż: „{comp.name}” nie przejdzie przez otwarcie (kolizja po {hit[0]} mm wysuwania) - może wymagać montażu przed zamknięciem ścianek.', hit[1], comp.id)
             else:
                 add('ok', f'Montaż: „{comp.name}” da się włożyć od strony otwarcia.', None, comp.id)
-        add('warning', 'Kontrola montażu jest próbkowana - nie gwarantuje wykrycia wszystkich kolizji podczas wkładania.')
+        add('ok', f'Kontrola montażu na całej drodze wkładania (odcinki bez możliwości kolizji pomijane z gwarancją, przy styku '
+                  f'ramek ścian - co {MIN_STEP:g} mm).')
     return out
 
 
@@ -324,16 +402,16 @@ def gather(bodies, spec, parts, hole_recipes=(), vent_recipes=(), part_of=None):
     if enc.split_of(spec)['enabled']:
         plane = enc.split_plane(env, spec, lay, bodies)
         systems = [s for s in (spec.closure or {}).get('systems', []) if s.get('enabled', True)]
-        f = None
+        f = fr = None
         if systems:
             from . import enclosure_closure as ec
             fr, f = ec.features(env, spec, lay, plane)
             interference = f['interference']
-            for key in ('base_add', 'lid_add'):
+            for key in ('base_add', 'lid_add', 'base_raw', 'lid_raw'):
                 for n, sh in enumerate(f[key]):
-                    closure_solids.append((f'{key.split("_")[0]}:{n + 1}', fr.world_shape(sh)))
+                    closure_solids.append((f'{key.split("_")[0]}:{n + 1}', fr.world_shape(fr.clip(sh) if key.endswith('add') else sh)))
         if 'lid' in parts:
-            motion = _motion(env, spec, f, parts, lay, plane)
+            motion = _motion(env, spec, f, parts, lay, plane, fr)
         insertion = np.asarray(plane[1], float)
     elif spec.mode == 'open':
         insertion = np.asarray(env.axes, float)[2]
@@ -360,11 +438,14 @@ def gather(bodies, spec, parts, hole_recipes=(), vent_recipes=(), part_of=None):
                 insertion_dir=insertion)
 
 
-def _motion(env, spec, f, parts, lay, plane):
-    """Ruch otwierania pokrywy: zawias - obrót, wsuwana - przesunięcie, inne - uniesienie (zatrzaski pomijane - ugięcie)."""
+def _motion(env, spec, f, parts, lay, plane, fr=None):
+    """Ruch otwierania pokrywy dla kontroli ciągłej: (funkcja położenia, zakres, największa prędkość punktu, opis).
+    Zawias - obrót (prędkość = największa odległość punktu pokrywy od osi), wsuwana - przesunięcie, inne - uniesienie
+    (zatrzaski pomijane - ugięcie ramion)."""
+    import math
     import cadquery as cq
     lid = cq.Shape.cast(parts['lid'])
-    ax = np.asarray(env.axes, float)
+    ax = fr.axes if fr is not None else np.asarray(env.axes, float)
     c = np.asarray(env.center, float)
     m = f['motion'] if f else None
     if m is not None and m[0] == 'hinge':
@@ -372,13 +453,31 @@ def _motion(env, spec, f, parts, lay, plane):
         pw, dw = c + ax.T @ pt, ax.T @ d
         probe = lid.rotate(cq.Vector(*pw), cq.Vector(*(pw + dw)), 10.0)
         sgn = 1 if float((probe.Center() - lid.Center()).dot(cq.Vector(*plane[1]))) >= 0 else -1
-        return lambda t: (lid.rotate(cq.Vector(*pw), cq.Vector(*(pw + dw)), sgn * angle * t).wrapped, f'przy otwarciu o {angle * t:.0f}°')
+        bb = lid.BoundingBox()
+        corners = np.array([[x, y, z] for x in (bb.xmin, bb.xmax) for y in (bb.ymin, bb.ymax) for z in (bb.zmin, bb.zmax)])
+        du = _unit_vec(dw)
+        rel = corners - pw
+        radius = float(np.max(np.linalg.norm(rel - np.outer(rel @ du, du), axis=1)))
+        def xf(u, pw=pw, du=du, sg=sgn):
+            k = du * sg
+            K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+            R = np.eye(3) + math.sin(u) * K + (1 - math.cos(u)) * K @ K          # obrót Rodriguesa wokół osi zawiasu
+            return R, pw - R @ pw
+        return (lambda u: lid.rotate(cq.Vector(*pw), cq.Vector(*(pw + dw)), sgn * math.degrees(u)).wrapped, math.radians(angle), radius,
+                lambda u: f'przy otwarciu o {math.degrees(u):.0f}°', xf, (pw, du))
     if m is not None and m[0] == 'slide':
         _k, axis, sign, length = m
         v = ax[axis] * sign
-        return lambda t: (lid.translate(cq.Vector(*(v * length * t * 1.05))).wrapped, f'przy wysunięciu o {length * t:.0f} mm')
+        return (lambda u: lid.translate(cq.Vector(*(v * u))).wrapped, length * 1.05, 1.0, lambda u: f'przy wysunięciu o {u:.0f} mm',
+                lambda u: (np.eye(3), v * u), None)
     if any(s.get('type') == 'snap' for s in (spec.closure or {}).get('systems', [])):
         return None
     n = np.asarray(plane[1], float)
     h = float(np.max(lay['outer_size']))
-    return lambda t: (lid.translate(cq.Vector(*(n * h * t))).wrapped, f'przy uniesieniu o {h * t:.0f} mm')
+    return (lambda u: lid.translate(cq.Vector(*(n * u))).wrapped, h, 1.0, lambda u: f'przy uniesieniu o {u:.0f} mm',
+            lambda u: (np.eye(3), n * u), None)
+
+
+def _unit_vec(v):
+    v = np.asarray(v, float)
+    return v / max(float(np.linalg.norm(v)), 1e-12)

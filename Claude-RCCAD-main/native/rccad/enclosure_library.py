@@ -250,15 +250,39 @@ def fit_template(spec, env, bodies=None):
 
 
 # ---------------------------------------------------------------------------------------------- montaż (DIN, ścienny)
-def mounting(env, spec, parts, bodies=None):
-    """Sposób montażu z szablonu: rowek pod szynę DIN TS35 (tylna / dolna ściana) albo uszy do montażu na ścianie."""
+def _cavity(env, spec, lay):
+    """Wnętrze obudowy (świat) - rowek i uszy nie mogą do niego wchodzić."""
     import cadquery as cq
-    from .enclosure import _boolean, _single, _unified, check_solid, layout
+    from .enclosure import _make_box
+    if 'g_in' in lay:
+        from . import enclosure_shapes as shapes
+        local = shapes.open_inner(lay, spec) if spec.mode == 'open' else shapes.solid(lay['g_in'], lay['P'])
+    else:
+        lo, hi = lay['inner']
+        if spec.mode == 'open':
+            hi = np.asarray(hi, float) + np.array([0, 0, 1.0 + float(lay['outer_size'][2])])
+        local = _make_box(lo, hi)
+    return kernel.transformed(cq.Shape.cast(local), np.asarray(env.axes, float).T, np.asarray(env.center, float)).wrapped
+
+
+def _area_at(shape, axes, center, z):
+    """Pole przekroju bryły płaszczyzną prostopadłą do osi Z przestrzeni na wysokości z (układ przestrzeni)."""
+    import cadquery as cq
+    from .enclosure import _make_box, _boolean
+    big = 1e4
+    slab = kernel.transformed(cq.Shape.cast(_make_box((-big, -big, z - 1e-3), (big, big, z + 1e-3))), axes.T, center).wrapped
+    return float(cq.Shape.cast(_boolean('common', shape, slab, 'przekrój dna')).Volume()) / 2e-3
+
+
+def mounting(env, spec, parts, bodies=None):
+    """Sposób montażu z szablonu: rowek pod szynę DIN TS35 (dno) albo uszy do montażu na ścianie - dla każdego kształtu.
+    Rowek: tylko przy płaskim dnie (przekrój dna stały na głębokości rowka) i bez naruszenia wnętrza. Uszy: płytki od
+    zewnątrz aż do środka dna, przycięte do wnętrza (zrastają się z dnem także przy ściankach zakrzywionych)."""
+    import cadquery as cq
+    from .enclosure import _boolean, _single, _unified, _volume, check_solid, layout, _make_box
     kind = (spec.process or {}).get('mounting')
     if kind not in ('din', 'wall'):
         return parts
-    if (spec.shape or 'box') not in ('box', 'rounded', 'chamfer'):
-        raise kernel.CadError('Montaż na szynie DIN / ścianie jest dostępny dla obudowy prostokątnej, zaokrąglonej i fazowanej.')
     name = 'base' if 'base' in parts else ('body' if 'body' in parts else None)
     if name is None:
         return parts
@@ -267,35 +291,52 @@ def mounting(env, spec, parts, bodies=None):
     ax = np.asarray(env.axes, float)
     c = np.asarray(env.center, float)
     W = lambda s: kernel.transformed(cq.Shape.cast(s), ax.T, c).wrapped
-    from .enclosure import _make_box
+    cavity = _cavity(env, spec, lay)
     shape = parts[name].wrapped
     if kind == 'din':
         width, depth = 35.4, 1.5                         # TS35: szerokość szyny 35 mm + luz
         if ohi[0] - olo[0] < width + 4 or lay['outer_size'][2] < 10:
             raise kernel.CadError('Obudowa za mała na rowek szyny DIN TS35 (szerokość co najmniej 39,4 mm).')
+        a0, a1 = _area_at(shape, ax, c, olo[2] + .05), _area_at(shape, ax, c, olo[2] + depth + .3)
+        if a0 <= 1e-6 or abs(a1 - a0) > .02 * a0:
+            raise kernel.CadError('Rowek szyny DIN wymaga płaskiego dna (dno tej obudowy jest zakrzywione albo pochyłe) - '
+                                  'zmień orientację kształtu albo wybierz uszy montażowe.')
         mid = (olo[0] + ohi[0]) / 2
-        groove = _make_box((mid - width / 2, olo[1] - 1, olo[2] - 1), (mid + width / 2, ohi[1] + 1, olo[2] + depth))
-        bottom = lay['inner'][0][2] - olo[2]
-        if depth >= bottom - .4:
+        groove = W(_make_box((mid - width / 2, olo[1] - 1, olo[2] - 1), (mid + width / 2, ohi[1] + 1, olo[2] + depth)))
+        if _volume(_boolean('common', groove, cavity, 'rowek a wnętrze'))[0] > 1e-6 or depth + .4 >= float(lay['inner'][0][2] - olo[2]):
             raise kernel.CadError('Dno za cienkie na rowek szyny DIN - pogrub dno.')
-        shape = _boolean('cut', shape, W(groove), 'rowek szyny DIN')
+        shape = _boolean('cut', shape, groove, 'rowek szyny DIN')
     else:
         ear, hole, th = 12.0, 4.5, max(2.0, float(lay['inner'][0][2] - olo[2]))
+        cy = (olo[1] + ohi[1]) / 2
         for sx in (-1, 1):
-            x0 = olo[0] - ear if sx < 0 else ohi[0]
-            tab = _make_box((x0, (olo[1] + ohi[1]) / 2 - ear / 2, olo[2]), (x0 + ear, (olo[1] + ohi[1]) / 2 + ear / 2, olo[2] + th))
-            shape = _boolean('fuse', shape, W(tab), 'ucho montażowe')
-            cx = x0 + ear / 2
-            cyl = cq.Solid.makeCylinder(hole / 2, th + 2, cq.Vector(cx, (olo[1] + ohi[1]) / 2, olo[2] - 1)).wrapped
-            shape = _boolean('cut', shape, W(cyl), 'otwór ucha')
+            x_out = olo[0] - ear if sx < 0 else ohi[0] + ear
+            x_in = (olo[0] + ohi[0]) / 2
+            tab = W(_make_box((min(x_out, x_in), cy - ear / 2, olo[2]), (max(x_out, x_in), cy + ear / 2, olo[2] + th)))
+            tab = _boolean('cut', tab, cavity, 'ucho montażowe')
+            shape = _boolean('fuse', shape, tab, 'ucho montażowe')
+            cx = x_out - sx * ear / 2
+            cyl = W(cq.Solid.makeCylinder(hole / 2, th + 2, cq.Vector(cx, cy, olo[2] - 1)).wrapped)
+            shape = _boolean('cut', shape, cyl, 'otwór ucha')
     out = dict(parts)
     out[name] = check_solid(_single(_unified(shape), 'Obudowa z mocowaniem'))
     return out
 
 
 # ---------------------------------------------------------------------------------------------- zestawienie i eksport
-def properties(shape, density=1.24):
-    """Objętość (mm³), powierzchnia (mm²), wymiary zewnętrzne (mm) i masa (g) z gęstości (g/cm³)."""
+def print_volume(volume, area, infill=100.0, shell=1.2):
+    """Objętość materiału po wydruku: obrysy (powierzchnia × grubość obrysu, najwyżej cała objętość) + wypełnienie
+    (procent pozostałej objętości). Szacunek - rzeczywista ilość zależy od programu cięcia (slicera)."""
+    infill = max(0.0, min(100.0, float(infill)))
+    if infill >= 100.0:
+        return float(volume)
+    walls = min(float(volume), float(area) * max(0.0, float(shell)))
+    return walls + (float(volume) - walls) * infill / 100.0
+
+
+def properties(shape, density=1.24, infill=100.0, shell=1.2):
+    """Objętość (mm³), powierzchnia (mm²), wymiary zewnętrzne (mm) i masa (g) z gęstości (g/cm³); przy wypełnieniu
+    druku < 100 % masa z objętości obrysów i wypełnienia (print_volume)."""
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
     from OCP.Bnd import Bnd_Box
@@ -307,8 +348,9 @@ def properties(shape, density=1.24):
     box = Bnd_Box()
     BRepBndLib.AddOptimal_s(s, box, False, False)
     x0, y0, z0, x1, y1, z1 = box.Get()
-    vol = float(v.Mass())
-    return dict(volume=vol, area=float(a.Mass()), dims=(x1 - x0, y1 - y0, z1 - z0), mass=vol * float(density) / 1000.0)
+    vol, area = float(v.Mass()), float(a.Mass())
+    used = print_volume(vol, area, infill, shell)
+    return dict(volume=vol, area=area, dims=(x1 - x0, y1 - y0, z1 - z0), material=used, mass=used * float(density) / 1000.0)
 
 
 def group_parts(bodies, body_id):
@@ -320,15 +362,16 @@ def group_parts(bodies, body_id):
     return group(bodies, body)
 
 
-def summary(bodies, body_id, density=1.24):
+def summary(bodies, body_id, density=1.24, infill=100.0, shell=1.2):
     """Zestawienie: części (bryły) z właściwościami i sumy."""
     rows = []
     for b in group_parts(bodies, body_id):
         part = (b.meta or {}).get('enclosure_part') or 'body'
         if b.kind != 'solid' or part.startswith(('flat_', 'bends_')):
             continue
-        rows.append(dict(name=b.name, part=part, **properties(b.shape, density)))
-    total = dict(volume=sum(r['volume'] for r in rows), area=sum(r['area'] for r in rows), mass=sum(r['mass'] for r in rows))
+        rows.append(dict(name=b.name, part=part, **properties(b.shape, density, infill, shell)))
+    total = dict(volume=sum(r['volume'] for r in rows), area=sum(r['area'] for r in rows), mass=sum(r['mass'] for r in rows),
+                 material=sum(r['material'] for r in rows))
     return rows, total
 
 
@@ -348,7 +391,7 @@ def _polyline_faces(shape):
     return loops
 
 
-def export(bodies, body_id, folder, density=1.24, material='PLA', formats=('step', 'stl', '3mf', 'dxf', 'svg', 'report')):
+def export(bodies, body_id, folder, density=1.24, material='PLA', formats=('step', 'stl', '3mf', 'dxf', 'svg', 'report'), infill=100.0, shell=1.2):
     """Eksport obudowy do folderu; zwraca listę zapisanych plików. Każda bryła sprawdzana BRepCheck przed zapisem."""
     import cadquery as cq
     from OCP.BRepCheck import BRepCheck_Analyzer
@@ -420,7 +463,7 @@ def export(bodies, body_id, folder, density=1.24, material='PLA', formats=('step
                 p.write_text(svg, encoding='utf-8')
                 written.append(p)
     if 'report' in formats:
-        rows, total = summary(bodies, body_id, density)
+        rows, total = summary(bodies, body_id, density, infill, shell)
         from .enclosure import EnclosureSpec
         spec = EnclosureSpec.from_json(base.meta['enclosure'])
         lines = ['część;objętość mm3;powierzchnia mm2;X mm;Y mm;Z mm;masa g']
@@ -433,7 +476,7 @@ def export(bodies, body_id, folder, density=1.24, material='PLA', formats=('step
         text = [f'{base.folder or base.name} - zestawienie parametrów', '',
                 f'Kształt: {spec.shape}; rodzaj: {spec.mode}; technologia: {(spec.process or {}).get("tech", "brak")}',
                 f'Odstępy: {spec.clearance}', f'Ścianki: {spec.walls}', f'Podział: {spec.split}', f'Zamknięcia: {(spec.closure or {}).get("systems", [])}',
-                f'Punkty montażowe: {len(spec.mounts or [])}', f'Materiał: {material}, gęstość {density:g} g/cm³', '']
+                f'Punkty montażowe: {len(spec.mounts or [])}', f'Materiał: {material}, gęstość {density:g} g/cm³' + (f', wypełnienie druku {infill:g} %, obrys {shell:g} mm' if infill < 100 else ''), '']
         for r in rows:
             text.append(f'{r["name"]}: {r["dims"][0]:.2f} × {r["dims"][1]:.2f} × {r["dims"][2]:.2f} mm, objętość {r["volume"]:.1f} mm³, '
                         f'powierzchnia {r["area"]:.1f} mm², masa {r["mass"]:.2f} g')

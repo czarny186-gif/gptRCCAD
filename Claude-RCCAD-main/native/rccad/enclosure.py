@@ -315,13 +315,29 @@ def _make_box(lo, hi):
     return maker.Shape()
 
 
+_CHECKED = []
+
+
+def is_valid(shape):
+    """BRepCheck_Analyzer (kontrole geometrii, równolegle); ostatnio sprawdzone bryły zapamiętane - ta sama bryła
+    sprawdzana w kolejnych krokach (_single → check_solid) nie jest analizowana drugi raz."""
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    for s in _CHECKED:
+        if s.IsSame(shape):
+            return True
+    ok = BRepCheck_Analyzer(shape, True, True).IsValid()
+    if ok:
+        _CHECKED.append(shape)
+        del _CHECKED[:-8]
+    return ok
+
+
 def check_solid(shape):
     """BRepCheck_Analyzer + bryła o dodatniej objętości - inaczej CadError."""
-    from OCP.BRepCheck import BRepCheck_Analyzer
     import cadquery as cq
     if shape is None or shape.IsNull():
         raise kernel.CadError('Obudowa nie powstała.')
-    if not BRepCheck_Analyzer(shape).IsValid():
+    if not is_valid(shape):
         raise kernel.CadError('Obudowa ma niepoprawną geometrię (BRepCheck).')
     out = cq.Shape.cast(shape)
     if not out.Solids() or float(out.Volume()) <= 1e-9:
@@ -392,7 +408,7 @@ def build_parts(env, spec, bodies, check_sources=True, report=None, extra=None):
             from . import enclosure_closure
             lay = layout(env, spec, bodies=bodies)
             plane = split_plane(env, spec, lay, bodies)
-            parts, rep = enclosure_closure.apply(env, spec, parts, bodies, lay, plane, check=check_sources)
+            parts, rep = enclosure_closure.apply(env, spec, parts, bodies, lay, plane, check=check_sources, seat=split.get('seat'))
             if report is not None:
                 report.extend(rep)
     else:
@@ -788,11 +804,10 @@ def _volume(shape):
 
 def _single(shape, what):
     """Jedna poprawna bryła (fragmenty < 1e-6 mm³ po operacjach są pomijane)."""
-    from OCP.BRepCheck import BRepCheck_Analyzer
     solids = [s for s in _solids(shape) if _volume(s)[0] > 1e-6]
     if len(solids) != 1:
         raise kernel.CadError(f'{what} nie jest jedną bryłą ({len(solids)} części) - zmień położenie podziału lub połączenie.')
-    if not BRepCheck_Analyzer(solids[0]).IsValid():
+    if not is_valid(solids[0]):
         raise kernel.CadError(f'{what} ma niepoprawną geometrię (BRepCheck).')
     return solids[0]
 
@@ -873,6 +888,163 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
     ax = np.asarray(env.axes, float)
     p, n = ax @ (point - c), ax @ n_world
     size = 2.0 * float(np.linalg.norm(lay['outer_size'])) + 10.0
+    direct = _profile_split(lay, spec, p, n)
+    lip = None
+    if direct is not None:                   # podział prostopadły do osi profilu: części wprost z profili (bez Splittera)
+        base, lid, lip, wl, sign, joined, _clear = direct
+        if joined:
+            return _finish_split(env, spec, base, lid, lip, n_world, bodies, check_sources, joint=split_of(spec)['joint'], clear=direct[6])
+    else:
+        base, lid = _plane_split(E, p, n, size)
+        wl = sign = None
+    return _joint_parts(env, spec, sp, lay, E, base, lid, p, n, n_world, size, bodies, check_sources, wl, sign)
+
+
+def _profile_split(lay, spec, p, n):
+    """Kształty z profilu (zaokrąglony, fazowany, cylinder, elipsa, wielokąt, kontur) dzielone płaszczyzną prostopadłą
+    do osi wyciągnięcia: podstawa i pokrywa jako wyciągnięcia profilu zewnętrznego do płaszczyzny minus wyciągnięcia
+    profilu wnętrza - same krawędzie analityczne (elipsa, okrąg), bez krzywych przecięcia z Splittera, więc dalsze
+    operacje (połączenia, zamknięcia) są wielokrotnie szybsze. Inne przypadki - None (Splitter)."""
+    if 'g_in' not in lay or spec.mode == 'open' or lay['g_out']['t'] not in ('rrect', 'ellipse', 'ngon', 'face'):
+        return None
+    from . import enclosure_shapes as shapes
+    P = np.asarray(lay['P'], float)
+    nl = P @ n
+    if abs(abs(nl[2]) - 1.0) > 1e-9:
+        return None
+    w = float((P @ p)[2])
+    go, gi = lay['g_out'], lay['g_in']
+    if not (go['w0'] + 1e-6 < w < go['w1'] - 1e-6):
+        return None
+
+    def part(a, b, ia, ib):
+        outer = shapes.solid(dict(go, w0=a, w1=b), P)
+        if spec.mode == 'solid' or ib - ia <= 1e-9:
+            return outer
+        ext_a = ia - 1.0 if ia <= a + 1e-9 else ia
+        ext_b = ib + 1.0 if ib >= b - 1e-9 else ib
+        return _boolean('cut', outer, shapes.solid(dict(gi, w0=ext_a, w1=ext_b), P), 'wycięcie wnętrza')
+
+    sign = 1.0 if nl[2] > 0 else -1.0
+    joint = split_of(spec)['joint'] if spec.mode != 'solid' else 'flat'
+    if joint in ('lap_in', 'lap_out', 'tongue') and gi['w0'] + 1e-6 < w < gi['w1'] - 1e-6:
+        built = _profile_lap(lay, spec, joint, w, sign)
+        if built is not None:
+            return built[:3] + (w, sign, True, built[3])
+    low = part(go['w0'], w, gi['w0'], min(gi['w1'], w))
+    high = part(w, go['w1'], max(gi['w0'], w), gi['w1'])
+    return ((low, high) if sign > 0 else (high, low)) + (None, w, sign, False, None)
+
+
+def _cut_tools(shape, tools, what):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.TopTools import TopTools_ListOfShape
+    args, tl = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(shape)
+    for t in tools:
+        tl.Append(t)
+    op = BRepAlgoAPI_Cut()
+    op.SetArguments(args)
+    op.SetTools(tl)
+    op.SetRunParallel(True)
+    op.Build()
+    if not op.IsDone():
+        raise kernel.CadError(f'Operacja Boolean nie powiodła się ({what}).')
+    return op.Shape()
+
+
+def _profile_lap(lay, spec, joint, w, sign):
+    """Zakładka wewnętrzna / zewnętrzna dla podziału wprost z profili: podstawa i pokrywa razem z występem i gniazdem
+    z wyciągnięć profili na właściwych wysokościach - jedna operacja dodania i jedno wycięcie na część (zamiast
+    przycinania pierścieni warstwami i osobnego gniazda). Zwraca (podstawa, pokrywa, występ) albo None."""
+    from . import enclosure_shapes as shapes
+    sp = split_of(spec)
+    wj, h, d, g = (float(sp[k]) for k in ('width', 'height', 'depth', 'gap'))
+    P, gi, go = np.asarray(lay['P'], float), lay['g_in'], lay['g_out']
+    t = lay['tr'] if gi['t'] in ('ellipse', 'ngon') else lay['tmin']
+    pr = lambda g_, a, b: shapes.solid(dict(g_, w0=min(a, b), w1=max(a, b)), P)
+    at = lambda depth: w - sign * depth              # wysokość „w stronę podstawy”
+    bot_o, top_o = (go['w0'], go['w1']) if sign > 0 else (go['w1'], go['w0'])
+    bot_i, top_i = (gi['w0'], gi['w1']) if sign > 0 else (gi['w1'], gi['w0'])
+    if h <= 0 or d <= 0 or (at(max(h, d)) - bot_i) * sign <= 1e-6:
+        return None
+    if joint == 'lap_in':
+        if wj <= 0 or wj + g >= t:
+            return None
+        lip_out = shapes.grow(gi, wj)
+        lid = _boolean('fuse', pr(go, w, top_o), pr(lip_out, at(h), w), 'występ pokrywy')
+        lid = _cut_tools(lid, [pr(gi, at(h) - sign, top_i)], 'wnętrze pokrywy')
+        base = _cut_tools(pr(go, bot_o, w), [pr(gi, bot_i, at(d)), pr(shapes.grow(gi, wj + g), at(d), w + sign)], 'gniazdo w podstawie')
+        lip = _cut_tools(pr(lip_out, at(h), w), [pr(gi, at(h) - sign, w + sign)], 'występ połączenia')
+    elif joint == 'tongue':
+        a = (t - wj) / 2
+        if wj <= 0 or a - g <= 1e-6:
+            return None
+        tongue = shapes.grow(gi, a + wj)
+        lid = _boolean('fuse', pr(go, w, top_o), pr(tongue, at(h), w), 'pióro pokrywy')
+        lid = _cut_tools(lid, [pr(shapes.grow(gi, a), at(h) - sign, w), pr(gi, w, top_i)], 'wnętrze pokrywy')
+        groove = _cut_tools(pr(shapes.grow(gi, a + wj + g), at(d), w + sign), [pr(shapes.grow(gi, a - g), at(d) - sign, w + 2 * sign)], 'wpust')
+        base = _cut_tools(pr(go, bot_o, w), [pr(gi, bot_i, w + sign), groove], 'wpust w podstawie')
+        lip = _cut_tools(pr(tongue, at(h), w), [pr(shapes.grow(gi, a), at(h) - sign, w + sign)], 'występ połączenia')
+    else:
+        if wj <= 0 or wj + g >= t:
+            return None
+        cav = shapes.grow(gi, t - wj)                   # wnętrze pokrywy w strefie zakładki (ścianka zostaje cieńsza o w)
+        lid = _cut_tools(pr(go, at(h), top_o), [pr(cav, at(h) - sign, w), pr(gi, w, top_i)], 'występ pokrywy')
+        base = _boolean('fuse', pr(go, bot_o, at(d)), pr(shapes.grow(gi, t - wj - g), at(d), w), 'gniazdo w podstawie')
+        base = _cut_tools(base, [pr(gi, bot_i, w + sign)], 'wnętrze podstawy')
+        lip = _cut_tools(pr(go, at(h), w), [pr(cav, at(h) - sign, w + sign)], 'występ połączenia')
+    if _volume(lip)[0] <= 1e-6:
+        raise kernel.CadError('Połączenie nie trafia w ścianki obudowy - zmień płaszczyznę podziału.')
+    # strefa występu z luzem (słupki zamknięć w podstawie nie mogą w nią wchodzić)
+    hz = min(h + g, (w - bot_i) * sign - .01)           # strefa nie schodzi poniżej dna wnętrza (słupki zostają przy dnie)
+    ringp = lambda b_, a_: _cut_tools(pr(shapes.grow(gi, b_), at(hz), w + sign * .01), [pr(shapes.grow(gi, a_), at(hz) - sign, w + sign)], 'strefa występu')
+    clear = {'lap_in': lambda: ringp(wj + g, -g), 'lap_out': lambda: ringp(t + 1.0, t - wj - g),
+             'tongue': lambda: ringp((t - wj) / 2 + wj + g, (t - wj) / 2 - g)}[joint]() if (spec.closure or {}).get('systems') else None
+    return base, lid, lip, clear
+
+
+def _profile_joint(lay, joint, t, w, h, d, g, wl, sign):
+    """Występ (pokrywa) i gniazdo (podstawa) połączenia jako wyciągnięcia odsuniętych profili od razu na swojej
+    wysokości wzdłuż osi profilu: występ od płaszczyzny podziału o h w stronę podstawy, gniazdo o d (+1 mm nad)."""
+    from . import enclosure_shapes as shapes
+    P, gi, go = np.asarray(lay['P'], float), lay['g_in'], lay['g_out']
+    span = lambda depth, over: (wl - depth, wl + over) if sign > 0 else (wl - over, wl + depth)
+
+    def prism(g, a, b):
+        return shapes.solid(dict(g, w0=a, w1=b), P)
+
+    def ring(g_out, a_grow, z0, z1):
+        inner = prism(shapes.grow(gi, a_grow), z0 - 1.0, z1 + 1.0) if a_grow is not None else None
+        outer = prism(g_out, z0, z1)
+        return outer if inner is None else _boolean('cut', outer, inner, 'pierścień połączenia')
+
+    l0, l1 = span(h, 0.0)
+    s0, s1 = span(d, 1.0)
+    big = shapes.grow(gi, t + 1.0)
+    if joint == 'lap_in':
+        lip = ring(shapes.grow(gi, w), 0.0, l0, l1)
+        seat = prism(shapes.grow(gi, w + g), s0, s1)
+    elif joint == 'lap_out':
+        lip = ring(go, t - w, l0, l1)
+        seat = ring(big, t - w - g, s0, s1)
+    else:
+        a = (t - w) / 2
+        lip = ring(shapes.grow(gi, a + w), a, l0, l1)
+        seat = ring(shapes.grow(gi, a + w + g), a - g, s0, s1)
+    return lip, seat
+
+
+def _box_corners(lo, hi):
+    lo, hi = np.asarray(lo, float), np.asarray(hi, float)
+    return [np.where([k & 1, k & 2, k & 4], hi, lo) for k in range(8)]
+
+
+def _plane_split(E, p, n, size):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.TopTools import TopTools_ListOfShape
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
     face = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(*map(float, p)), gp_Dir(*map(float, n))), -size, size, -size, size).Face()
     args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
     args.Append(E)
@@ -893,7 +1065,12 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
         raise kernel.CadError('Płaszczyzna podziału nie dzieli obudowy na dwie części.')
     if len(base_parts) > 1 or len(lid_parts) > 1:
         raise kernel.CadError('Płaszczyzna dzieli obudowę na więcej niż dwie części - zmień położenie podziału.')
-    base, lid = base_parts[0], lid_parts[0]
+    return base_parts[0], lid_parts[0]
+
+
+def _joint_parts(env, spec, sp, lay, E, base, lid, p, n, n_world, size, bodies, check_sources, wl=None, sign=None):
+    c = np.asarray(env.center, float)
+    ax = np.asarray(env.axes, float)
     lip = None
     joint = sp['joint'] if spec.mode != 'solid' else 'flat'
     if joint != 'flat':
@@ -905,7 +1082,9 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
             t = lay['tr'] if lay['g_in']['t'] in ('ellipse', 'ngon') else lay['tmin']
             ring = lambda a, b: _boolean('cut', shapes.solid(shapes.grow(lay['g_in'], b), lay['P']),
                                          shapes.solid(shapes.grow(lay['g_in'], a), lay['P']), 'pierścień połączenia')
-            if joint == 'lap_in':
+            if wl is not None:
+                region = seat = None
+            elif joint == 'lap_in':
                 region, seat = ring(0.0, w), shapes.solid(shapes.grow(lay['g_in'], w + g), lay['P'])
             elif joint == 'lap_out':
                 region, seat = ring(t - w, t + 1.0), ring(t - w - g, t + 1.0)
@@ -922,14 +1101,37 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
             a_lo, a_hi = (t_lo - w) / 2, (t_hi - w) / 2
             region = _ring(lay, a_lo, a_hi, a_lo + w, a_hi + w)
             seat = _ring(lay, a_lo - g, a_hi - g, a_lo + w + g, a_hi + w + g)
-        lip = _boolean('common', region, _slab(p, n, -h, 0.0, size), 'występ połączenia')
-        if 'g_in' not in lay or spec.mode == 'open' or joint == 'lap_out':
-            lip = _boolean('common', lip, E, 'występ w ściance')       # kształty z profilu: pierścień i tak leży w ściance
+        if 'g_in' in lay:
+            ring_c = lambda a_, b_: _boolean('cut', shapes.solid(shapes.grow(lay['g_in'], b_), lay['P']),
+                                             shapes.solid(shapes.grow(lay['g_in'], a_), lay['P']), 'strefa występu')
+            zone = {'lap_in': lambda: ring_c(-g, w + g), 'lap_out': lambda: ring_c(t - w - g, t + 1.0),
+                    'tongue': lambda: ring_c((t - w) / 2 - g, (t - w) / 2 + w + g)}[joint]
+        else:
+            zone = {'lap_in': lambda: _ring(lay, np.full(3, -g), np.full(3, -g), np.full(3, w + g), np.full(3, w + g)),
+                    'lap_out': lambda: _ring(lay, t_lo - w - g, t_hi - w - g, t_lo + big, t_hi + big),
+                    'tongue': lambda: _ring(lay, (t_lo - w) / 2 - g, (t_hi - w) / 2 - g, (t_lo - w) / 2 + w + g, (t_hi - w) / 2 + w + g)}[joint]
+        floor = float(min((np.array(c_) - p) @ n for c_ in _box_corners(*lay['inner'])))      # dno wnętrza wzdłuż normalnej
+        clear = _boolean('common', zone(), _slab(p, n, max(-h - g, floor + g + .01), .01, size), 'strefa występu') if (spec.closure or {}).get('systems') else None
+        if wl is not None:               # podział wprost z profili: pierścienie od razu na swojej wysokości (bez przycinania)
+            lip, cut = _profile_joint(lay, joint, t, w, h, d, g, wl, sign)
+        else:
+            lip = _boolean('common', region, _slab(p, n, -h, 0.0, size), 'występ połączenia')
+            if 'g_in' not in lay or spec.mode == 'open' or joint == 'lap_out':
+                lip = _boolean('common', lip, E, 'występ w ściance')       # kształty z profilu: pierścień i tak leży w ściance
+            cut = _boolean('common', seat, _slab(p, n, -d, 1.0, size), 'gniazdo połączenia')
         if _volume(lip)[0] <= 1e-6:
             raise kernel.CadError('Połączenie nie trafia w ścianki obudowy - zmień płaszczyznę podziału.')
-        cut = _boolean('common', seat, _slab(p, n, -d, 1.0, size), 'gniazdo połączenia')
         base = _boolean('cut', base, cut, 'gniazdo w podstawie')
         lid = _boolean('fuse', lid, lip, 'występ pokrywy')
+    else:
+        clear = None
+    return _finish_split(env, spec, base, lid, lip, n_world, bodies, check_sources, joint, clear)
+
+
+def _finish_split(env, spec, base, lid, lip, n_world, bodies, check_sources, joint, clear=None):
+    c = np.asarray(env.center, float)
+    ax = np.asarray(env.axes, float)
+    if lip is not None:
         base, lid = _unified(base), _unified(lid)
     base = _single(base, 'Podstawa')
     lid = _single(lid, 'Pokrywa')
@@ -940,6 +1142,7 @@ def split_enclosure(env, spec, bodies=None, check_sources=True):
         if hits:
             raise kernel.CadError('Połączenie koliduje z elementami wewnętrznymi: ' + ', '.join(hits) + ' - zmień podział lub wymiary połączenia.')
     out['lip'] = None if lip is None else to_world(lip)
+    out['seat'] = None if clear is None else to_world(clear)
     return out
 
 

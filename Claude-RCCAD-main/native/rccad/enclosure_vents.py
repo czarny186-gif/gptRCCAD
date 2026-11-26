@@ -7,7 +7,7 @@ podłużne, szczeliny zaokrąglone, promieniowy, żaluzje (szczeliny ukośne prz
 (0 - wypełnienie automatyczne), kąt obrotu, margines od krawędzi obszaru, minimalna szerokość materiału między otworami.
 
 Geometria: profile 2D otworów (ściany płaskie) wyciągnięte przez ściankę; cięcie zbiorcze - jedna operacja
-BRepAlgoAPI_Cut z listą narzędzi (partiami po BATCH), wycinane wyłącznie w docelowej części. Kontrola jak w otworach
+BRepAlgoAPI_Cut z listą wszystkich narzędzi (równolegle, prefiltr OBB), wycinane wyłącznie w docelowej części. Kontrola jak w otworach
 na element: usunięta objętość = sama ścianka (inaczej uszkodzenie mocowania / zamknięcia / sąsiedniej ścianki albo wyjście
 poza ściankę). Powierzchnia otwarta liczona z rzeczywistych profili, udział - względem pola obszaru."""
 from __future__ import annotations
@@ -181,23 +181,23 @@ def area_region(p, frame):
 
 
 def _cut_many(shape, tools):
-    """Cięcie zbiorcze: jedna operacja Boolean z listą narzędzi (partiami po BATCH) zamiast setek osobnych cięć."""
+    """Cięcie zbiorcze: jedna operacja Boolean ze wszystkimi narzędziami (równolegle, z prefiltrem OBB) - nowa ściana z
+    otworami powstaje raz, a nie po każdej partii."""
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
     from OCP.TopTools import TopTools_ListOfShape
-    for start in range(0, len(tools), BATCH):
-        args, tl = TopTools_ListOfShape(), TopTools_ListOfShape()
-        args.Append(shape)
-        for t in tools[start:start + BATCH]:
-            tl.Append(t)
-        op = BRepAlgoAPI_Cut()
-        op.SetArguments(args)
-        op.SetTools(tl)
-        op.SetRunParallel(True)
-        op.Build()
-        if not op.IsDone():
-            raise kernel.CadError('Wycięcie otworów wentylacyjnych nie powiodło się.')
-        shape = op.Shape()
-    return shape
+    args, tl = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(shape)
+    for t in tools:
+        tl.Append(t)
+    op = BRepAlgoAPI_Cut()
+    op.SetArguments(args)
+    op.SetTools(tl)
+    op.SetRunParallel(True)
+    op.SetUseOBB(True)
+    op.Build()
+    if not op.IsDone():
+        raise kernel.CadError('Wycięcie otworów wentylacyjnych nie powiodło się.')
+    return op.Shape()
 
 
 def tools(target_shape, frame, p):
@@ -229,19 +229,18 @@ def build(target_shape, frame, p):
     if p['pattern'] == 'louver':                        # żaluzje: szczeliny ukośne (kąt względem normalnej, w kierunku „góra”)
         a = math.radians(max(-75.0, min(75.0, float(p['louver']))))
         vent_frame = (*frame[:4], n * math.cos(a) - v * math.sin(a))
-    faces, open_area, tools = [], 0.0, []
+    open_area, all_area, tools = 0.0, 0.0, []
     for h in holes:
         f = hole_face(h, frame)
         fr = vent_frame if h[4] == 'vent' else frame
         tools.append(eh._prism(f, fr, 1.0, -t - 1.0))
+        a = cq.Shape.cast(f).Area()
+        all_area += a
         if h[4] == 'vent':
-            open_area += cq.Shape.cast(f).Area()
-    size = 1e4
-    slab = kernel.transformed(cq.Shape.cast(_make_box((-size, -size, -t), (size, size, 0.0))), np.column_stack([u, v, n]), o).wrapped
-    expected = 0.0
-    for start in range(0, len(tools), BATCH):          # objętość narzędzi w samej ściance (bez nakładania - otwory rozłączne)
-        comp = cq.Compound.makeCompound([cq.Shape.cast(x) for x in tools[start:start + BATCH]]).wrapped
-        expected += _volume(_boolean('common', comp, slab, 'otwory w ściance'))[0]
+            open_area += a
+    # objętość otworów w samej ściance: pole profilu × grubość (graniastosłup - także ukośny - przecina płaską ściankę
+    # na wysokości t mierzonej wzdłuż normalnej; otwory rozłączne)
+    expected = all_area * t
     before = _volume(target_shape.wrapped)[0]
     result = _cut_many(target_shape.wrapped, tools)
     removed = before - _volume(result)[0]

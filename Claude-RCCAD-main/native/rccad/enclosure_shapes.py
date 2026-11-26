@@ -32,7 +32,7 @@ ORIENT_LABELS = {'z': 'Oś Z (pionowo)', 'x': 'Oś X (poziomo)', 'y': 'Oś Y (po
 TRAP_ORIENT_LABELS = {'x': 'Pochylone ścianki X', 'y': 'Pochylone ścianki Y'}
 SHAPE_DEFAULTS = dict(radius=5.0, chamfer=4.0, diameter=0.0, dx=0.0, dy=0.0, sides=6, angle=15.0, front=0.0, back=0.0,
                       orient='', auto=True, cmode='concave', degree=6.0, min_radius=2.0, min_neck=0.0, accuracy=.1, simplify=0.0,
-                      min_fragment=.5, connect=True, sketch=None)
+                      min_fragment=.5, connect=True, sketch=None, layers=1)
 MAX_ANGLE = 60.0
 MIN_SIZE = 0.2
 SQ2 = math.sqrt(2.0)
@@ -112,6 +112,9 @@ def grow(g, d):
     elif t == 'face':
         from .enclosure_contour import offset
         g.update(face=offset(g['face'], d, 'odsunięcie profilu') if abs(d) > 1e-12 else g['face'], w0=g['w0'] - d, w1=g['w1'] + d)
+    elif t == 'stack':                                     # warstwy: każda odsunięta i wydłużona (suma odsuniętych warstw)
+        g['layers'] = [grow(dict(L, t='face'), d) for L in g['layers']]
+        g.update(w0=g['w0'] - d, w1=g['w1'] + d)
     elif t == 'desk':
         cos = 1 / math.sqrt(1 + g['tan'] ** 2)
         g.update(h0=g['h0'] + d / cos - d * g['tan'] + d, u0=g['u0'] - d, u1=g['u1'] + d, v0=g['v0'] - d, v1=g['v1'] + d, w0=g['w0'] - d)
@@ -173,6 +176,9 @@ def _shape_pts(pts2, axes, along, value):
 
 def bbox(g, P):
     """Ramka profilu w układzie przestrzeni (lo, hi)."""
+    if g['t'] == 'stack':
+        boxes = [bbox(dict(L, t='face'), P) for L in g['layers']]
+        return np.min([b[0] for b in boxes], axis=0), np.max([b[1] for b in boxes], axis=0)
     pts2, axes, along, (s0, s1), _ = profile(g)
     shape = np.vstack([_shape_pts(pts2, axes, along, s0), _shape_pts(pts2, axes, along, s1)])
     local = shape @ P                       # wiersze P - osie kształtu w układzie przestrzeni: local = s @ P
@@ -181,6 +187,9 @@ def bbox(g, P):
 
 def mesh(g, P, world, caps=(True, True), key0=0, faces=True):
     """Szybka siatka podglądu (bez OCC): graniastosłup z obrysu profilu (profile są wypukłe - wachlarz trójkątów)."""
+    if g['t'] == 'stack':
+        from .enclosure import merge_meshes
+        return merge_meshes([mesh(dict(L, t='face'), P, world, caps, key0 + 1000 * n, faces) for n, L in enumerate(g['layers'])])
     pts2, axes, along, (s0, s1), corners = profile(g)
     n = len(pts2)
     a = _shape_pts(pts2, axes, along, s0) @ P
@@ -211,6 +220,25 @@ def solid(g, P):
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
     from OCP.gp import gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Vec
     t = g['t']
+    if t == 'stack':                                       # kontur warstwowy: suma wyciągnięć warstw (przekrój zmienny)
+        from .enclosure import _unified
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+        from OCP.TopTools import TopTools_ListOfShape
+        prisms = [solid(dict(L, t='face'), P) for L in g['layers']]
+        if len(prisms) == 1:
+            return prisms[0]
+        args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+        args.Append(prisms[0])
+        for x in prisms[1:]:
+            tools.Append(x)
+        op = BRepAlgoAPI_Fuse()
+        op.SetArguments(args)
+        op.SetTools(tools)
+        op.SetRunParallel(True)
+        op.Build()
+        if not op.IsDone():
+            raise kernel.CadError('Suma warstw konturu nie powiodła się.')
+        return _unified(op.Shape())
     pts2, axes, along, (s0, s1), _ = profile(g)
     if s1 - s0 < 1e-6:
         raise kernel.CadError('Obudowa ma zerową długość.')
@@ -490,6 +518,10 @@ def open_inner(lay, spec):
     T = 2.0 + float(np.max(lay['outer_size']))
     if g['t'] in ('rrect', 'ellipse', 'ngon', 'face'):
         g['w1'] += T
+        return solid(g, lay['P'])
+    if g['t'] == 'stack':
+        top = max(range(len(g['layers'])), key=lambda n: g['layers'][n]['w1'])
+        g['layers'] = [dict(L, w1=L['w1'] + T) if n == top else L for n, L in enumerate(g['layers'])]
         return solid(g, lay['P'])
     if g['t'] == 'desk':
         g['h0'] += T

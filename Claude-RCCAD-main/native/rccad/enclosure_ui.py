@@ -279,13 +279,16 @@ class EnclosureTools:
                 ('min_neck', 'Min. szerokość przewężeń', _spin(shapes.SHAPE_DEFAULTS['min_neck'], 0, enc.MAX_VALUE, 2, .5, ' mm')),
                 ('accuracy', 'Dokładność obrysu', _spin(shapes.SHAPE_DEFAULTS['accuracy'], .01, 10, 3, .05, ' mm')),
                 ('simplify', 'Tolerancja uproszczenia', _spin(shapes.SHAPE_DEFAULTS['simplify'], 0, 100, 3, .1, ' mm')),
-                ('min_fragment', 'Pomijaj fragmenty mniejsze niż', _spin(shapes.SHAPE_DEFAULTS['min_fragment'], 0, 1e6, 2, .5, ' mm²')))
+                ('min_fragment', 'Pomijaj fragmenty mniejsze niż', _spin(shapes.SHAPE_DEFAULTS['min_fragment'], 0, 1e6, 2, .5, ' mm²')),
+                ('layers', 'Warstwy przekroju (1 = stały)', QSpinBox()))
         for n, (key, title, box) in enumerate(rows):
-            if key == 'sides':
-                box.setRange(3, 64)
-                box.setValue(shapes.SHAPE_DEFAULTS['sides'])
+            if key in ('sides', 'layers'):
+                box.setRange(3, 64) if key == 'sides' else box.setRange(1, 12)
+                box.setValue(shapes.SHAPE_DEFAULTS[key])
                 box.setButtonSymbols(QSpinBox.NoButtons)
                 box.setKeyboardTracking(False)
+                if key == 'layers':
+                    box.setToolTip('Przekrój zmienny: elementy dzielone na warstwy wzdłuż osi kształtu, każda warstwa ma własny obrys')
             box.valueChanged.connect(lambda *_: self._enc_params_changed())
             label = _label(title, 'label')
             grid.addWidget(label, n, 0)
@@ -316,9 +319,10 @@ class EnclosureTools:
 
     SHAPE_FIELDS = {'box': (), 'rounded': ('radius',), 'chamfer': ('chamfer',), 'cylinder': ('diameter',), 'ellipse': ('dx', 'dy'),
                     'polygon': ('sides', 'diameter'), 'trapezoid': ('angle',), 'desk': ('angle', 'front', 'back'),
-                    'contour': ('degree', 'min_radius', 'min_neck', 'accuracy', 'simplify', 'min_fragment')}
-    CONTOUR_FIELDS = {'convex': ('accuracy', 'simplify'), 'concave': ('degree', 'min_neck', 'accuracy', 'simplify', 'min_fragment'),
-                      'exact': ('min_neck', 'accuracy', 'simplify', 'min_fragment'), 'smooth': ('degree', 'min_radius', 'min_neck', 'accuracy', 'simplify', 'min_fragment'),
+                    'contour': ('degree', 'min_radius', 'min_neck', 'accuracy', 'simplify', 'min_fragment', 'layers')}
+    CONTOUR_FIELDS = {'convex': ('accuracy', 'simplify', 'layers'), 'concave': ('degree', 'min_neck', 'accuracy', 'simplify', 'min_fragment', 'layers'),
+                      'exact': ('min_neck', 'accuracy', 'simplify', 'min_fragment', 'layers'),
+                      'smooth': ('degree', 'min_radius', 'min_neck', 'accuracy', 'simplify', 'min_fragment', 'layers'),
                       'sketch': ('accuracy', 'simplify')}
 
     def _enc_pick_csketch(self):
@@ -1298,7 +1302,7 @@ class EnclosureTools:
         spec.mode = self.enc_mode.currentData()
         spec.shape = self.enc_shape.currentData()
         if spec.shape != 'box':
-            spec.shape_params = dict({k: (int(b.value()) if k == 'sides' else float(b.value())) for k, (_l, b) in self.enc_shape_rows.items()},
+            spec.shape_params = dict({k: (int(b.value()) if k in ('sides', 'layers') else float(b.value())) for k, (_l, b) in self.enc_shape_rows.items()},
                                      orient=self.enc_orient.currentData() or '', auto=self.enc_auto.isChecked())
             if spec.shape == 'contour':
                 spec.shape_params.update(cmode=self.enc_cmode.currentData(), connect=self.enc_connect.isChecked(), sketch=self.enc.get('csketch'))
@@ -1794,7 +1798,7 @@ class EnclosureTools:
             set_check(self.enc_auto, p.get('auto', True))
             for key, (_l, box) in self.enc_shape_rows.items():
                 if key in p and p[key] is not None:
-                    set_spin(box, int(p[key]) if key == 'sides' else float(p[key]))
+                    set_spin(box, int(p[key]) if key in ('sides', 'layers') else float(p[key]))
             if spec.shape == 'contour':
                 set_combo(self.enc_cmode, p.get('cmode'))
                 set_check(self.enc_connect, p.get('connect', True))

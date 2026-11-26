@@ -1,14 +1,25 @@
-# RCCAD Desktop 0.5.57 — Generator obudów, etap 15: szablony, eksport, zestawienie
+# RCCAD Desktop 0.5.58 — Generator obudów: usunięte ograniczenia etapów 3-15
+
+- **Zamknięcia dla wszystkich kształtów** (cylinder, elipsa, wielokąt, trapez, pulpit, kontur, zaokrąglenia w innej osi) i dla podziału płaszczyzną bazową / ścianą elementu (prostopadłego do osi obudowy): elementy na rzeczywistym obrysie przekroju, przycinane do obrysu zewnętrznego, kontrola krzywizny i pochylenia ścianek; pokrywa wsuwana / jaskółczy ogon - nadal tylko proste równoległe ścianki.
+- **Ciągła kontrola ruchu** (otwieranie, wysuwanie, zawiasy, wkładanie elementów) zamiast 10 próbek: odcinki bez możliwości kolizji pomijane z gwarancją, przy zbliżeniu ścian sprawdzenie co 0,5 mm / 1 mm lub 1°.
+- **Kontur o zmiennym przekroju** (warstwy przekroju).
+- **Dokładny luz kierunkowy** w trybie rzutu konturu (suma Minkowskiego).
+- **Rowek DIN i uszy montażowe** dla wszystkich kształtów (rowek - przy płaskim dnie).
+- **Wydajność**: wentylacja z wieloma otworami ok. 3,7× szybciej, obudowy eliptyczne z połączeniem ok. 2-3× szybciej.
+- **Masa z wypełnieniem druku** (wypełnienie %, grubość obrysów).
+- **Poprawione błędy**: słupki śrub / magnesów przenikały się z zakładką pokrywy; dwa zawiasy mogły na siebie nachodzić; pokrywa na jaskółczy ogon nie dawała się wysunąć (wypust czołowy).
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.57 — Generator obudów, etap 15: szablony, eksport, zestawienie
 
 - **Biblioteka 12 konfiguracji** (Utwórz obudowę → Szablon): uniwersalna, PCB, wyświetlacza, sterownika, zasilacza, czujnika, pilota, pulpitowa, na szynę DIN, wentylowana, z uszczelką, ścienna - parametry i reguły, dopasowywane do elementów; wentylacja z szablonu jako osobne kroki historii.
 - **Szablony użytkownika**: „Zapisz jako szablon…” (folder Ustawienia/Szablony obudów), bez elementów i geometrii.
 - **Sposób montażu**: rowek pod szynę DIN TS35 w dnie, uszy z otworami do montażu na ścianie.
 - **Zestawienie** (Kontrola obudowy → krok 3): objętość, powierzchnia, wymiary zewnętrzne i szacunkowa masa z gęstości materiału.
 - **Eksport do folderu**: STEP (części i całość), STL, 3MF, DXF (rozwinięcia blach z liniami gięcia, płyty laserowe), SVG (kontury), zestawienie CSV i TXT; bryły sprawdzane BRepCheck przed zapisem.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.56 — Generator obudów, etapy 8-14
 

@@ -144,6 +144,24 @@ class EnclosureLibraryTools:
         grid.addWidget(self.chk_material, 0, 1)
         grid.addWidget(_label('Gęstość', 'label'), 1, 0)
         grid.addWidget(self.chk_density, 1, 1)
+        self.chk_infill = QDoubleSpinBox()
+        self.chk_infill.setRange(0, 100)
+        self.chk_infill.setDecimals(0)
+        self.chk_infill.setSuffix(' %')
+        self.chk_infill.setValue(100)
+        self.chk_infill.setToolTip('Druk 3D: wypełnienie wnętrza ścianek (100 % = pełny materiał)')
+        self.chk_shell = QDoubleSpinBox()
+        self.chk_shell.setRange(0, 20)
+        self.chk_shell.setDecimals(2)
+        self.chk_shell.setSuffix(' mm')
+        self.chk_shell.setValue(1.2)
+        self.chk_shell.setToolTip('Druk 3D: łączna grubość obrysów przy każdej powierzchni')
+        for box in (self.chk_infill, self.chk_shell):
+            box.valueChanged.connect(lambda *_: self._chk_summary_update())
+        grid.addWidget(_label('Wypełnienie druku', 'label'), 2, 0)
+        grid.addWidget(self.chk_infill, 2, 1)
+        grid.addWidget(_label('Grubość obrysów', 'label'), 3, 0)
+        grid.addWidget(self.chk_shell, 3, 1)
         lay.addLayout(grid)
         self.chk_props = _label('', 'value')
         self.chk_props.setWordWrap(True)
@@ -170,13 +188,15 @@ class EnclosureLibraryTools:
             self.chk_props.setText('')
             return
         try:
-            rows, total = lib.summary(self.document.bodies, target, float(self.chk_density.value()))
+            rows, total = lib.summary(self.document.bodies, target, float(self.chk_density.value()), float(self.chk_infill.value()),
+                                      float(self.chk_shell.value()))
         except (kernel.CadError, Exception) as e:                  # zestawienie nie może zablokować okna kontroli
             self.chk_props.setText(f'Zestawienie niedostępne: {e}')
             return
         lines = [f'{r["name"]}: {r["dims"][0]:.1f} × {r["dims"][1]:.1f} × {r["dims"][2]:.1f} mm, {r["volume"] / 1000:.2f} cm³, '
                  f'{r["area"] / 100:.1f} cm², ~{r["mass"]:.1f} g' for r in rows]
-        lines.append(f'Razem: {total["volume"] / 1000:.2f} cm³ materiału, szacunkowa masa ~{total["mass"]:.1f} g')
+        lines.append(f'Razem: {total["volume"] / 1000:.2f} cm³ objętości części, {total["material"] / 1000:.2f} cm³ materiału, '
+                     f'szacunkowa masa ~{total["mass"]:.1f} g')
         self.chk_props.setText('\n'.join(lines))
         self.chk_summary = (rows, total)
 
@@ -193,9 +213,10 @@ class EnclosureLibraryTools:
         formats = tuple(formats or [k for k, b in self.chk_formats.items() if b.isChecked()])
         bodies = list(self.document.bodies)
         density, material = float(self.chk_density.value()), self.chk_material.currentText()
+        infill, shell = float(self.chk_infill.value()), float(self.chk_shell.value())
 
         def compute():
-            return lib.export(bodies, target, folder, density, material, formats)
+            return lib.export(bodies, target, folder, density, material, formats, infill, shell)
 
         def show(files, error):
             if error:

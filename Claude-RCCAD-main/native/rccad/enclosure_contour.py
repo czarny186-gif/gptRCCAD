@@ -305,17 +305,81 @@ def _check(region):
 
 
 def layout(env, spec, p, P, c_lo, c_hi, t_lo, t_hi, hs, bodies, points, margin):
-    """Profil wewnętrzny (odstęp) i zewnętrzny (grubość ścianki) - opisy 'face' dla rccad.enclosure_shapes."""
-    region = base_region(env, spec, p, P, bodies, points)
+    """Profil wewnętrzny (odstęp) i zewnętrzny (grubość ścianki) - opisy 'face' dla rccad.enclosure_shapes; przy
+    `layers` > 1 - przekrój zmienny: opis 'stack' (warstwy wzdłuż osi kształtu, każda z własnym obrysem)."""
     cc = float(max(c_lo[0], c_hi[0], c_lo[1], c_hi[1])) + margin
     if p['cmode'] == 'smooth':
         cc = max(cc, float(p['min_radius']))            # wypukłe narożniki z promieniem co najmniej minimalnym
     tr = float(max(t_lo[0], t_hi[0], t_lo[1], t_hi[1]))
+    w0, w1 = -hs[2] - c_lo[2] - margin, hs[2] + c_hi[2] + margin
+    n_layers = int(p.get('layers') or 1)
+    if n_layers > 1 and p['cmode'] != 'sketch':
+        return _layered(env, spec, p, P, c_lo, c_hi, t_lo, t_hi, hs, bodies, margin, cc, tr, w0, w1, n_layers)
+    region = base_region(env, spec, p, P, bodies, points)
     inner = offset(region, cc, 'odsunięcie o odstęp') if cc > 0 else region
     _check(inner)
     outer = offset(inner, tr, 'odsunięcie o grubość ścianki')
     _check(outer)
-    w0, w1 = -hs[2] - c_lo[2] - margin, hs[2] + c_hi[2] + margin
     g_in = dict(t='face', face=inner, w0=w0, w1=w1, acc=float(p['accuracy']))
     g_out = dict(t='face', face=outer, w0=w0 - t_lo[2], w1=w1 + t_hi[2], acc=float(p['accuracy']))
     return g_in, g_out, dict(area=_face_area(inner))
+
+
+def _layered(env, spec, p, P, c_lo, c_hi, t_lo, t_hi, hs, bodies, margin, cc, tr, w0, w1, n_layers):
+    """Przekrój zmienny: elementy cięte na warstwy wzdłuż osi kształtu (BRepAlgoAPI_Common z warstwą), obrys każdej
+    warstwy osobno (z zapasem pionowym = odstęp, żeby stopnie wnętrza nie dotykały elementów), wnętrze = suma wyciągnięć
+    obrysów + odstęp, zewnętrze = suma wyciągnięć obrysów + ścianka, każda warstwa zewnętrzna dłuższa o grubość dna /
+    góry - półki między warstwami mają co najmniej tę grubość. Warstwy bez geometrii łączone z sąsiednimi."""
+    import cadquery as cq
+    from dataclasses import replace
+    from .enclosure import _boolean, _make_box, _volume
+    from .enclosure_shapes import source_points
+    if bodies is None:
+        raise kernel.CadError('Kontur warstwowy wymaga geometrii elementów.')
+    n_layers = max(2, min(12, n_layers))
+    by_id = {b.id: b for b in bodies}
+    M = np.asarray(env.axes, float).T @ np.asarray(P, float).T             # układ kształtu -> świat
+    c = np.asarray(env.center, float)
+    big = 2.0 * float(np.linalg.norm(hs)) + 100.0
+    vz = float(max(c_lo[2], c_hi[2])) + margin
+    edges = np.linspace(-hs[2], hs[2], n_layers + 1)
+    bands = []
+    for k in range(n_layers):
+        lo, hi = edges[k] - vz, edges[k + 1] + vz
+        slab = kernel.transformed(cq.Shape.cast(_make_box((-big, -big, lo), (big, big, hi))), M, c).wrapped
+        sliced = []
+        for src in spec.sources:
+            b = by_id.get(src.id)
+            if b is None or b.kind not in ('solid', 'mesh'):
+                continue
+            piece = _boolean('common', b.shape.wrapped, slab, 'warstwa elementu')
+            if _volume(piece)[0] > 1e-6:
+                sliced.append(replace(b, shape=cq.Shape.cast(piece), mesh=None))
+        if not sliced:
+            if bands:
+                bands[-1][1] = edges[k + 1]
+            continue
+        sub_ids = {x.id for x in sliced}
+        sub_spec = replace(spec, sources=[s_ for s_ in spec.sources if s_.id in sub_ids])
+        pts = source_points(env, sub_spec, sliced)
+        region = base_region(env, sub_spec, dict(p, layers=1), P, sliced, pts)
+        bands.append([edges[k], edges[k + 1], region])
+    if not bands:
+        raise kernel.CadError('Brak geometrii elementów do obrysu.')
+    bands[0][0] = -hs[2]
+    acc = float(p['accuracy'])
+    lin, lout = [], []
+    for n, (a, b, region) in enumerate(bands):
+        inner = offset(region, cc, 'odsunięcie o odstęp') if cc > 0 else region
+        _check(inner)
+        outer = offset(inner, tr, 'odsunięcie o grubość ścianki')
+        _check(outer)
+        ia = w0 if n == 0 else a
+        ib = w1 if n == len(bands) - 1 else b
+        lin.append(dict(face=inner, w0=ia, w1=ib, acc=acc))
+        lout.append(dict(face=outer, w0=ia - t_lo[2], w1=ib + t_hi[2], acc=acc))
+    if len(lin) == 1:
+        return dict(t='face', **lin[0]), dict(t='face', **lout[0]), dict(area=_face_area(lin[0]['face']), layer_count=1)
+    g_in = dict(t='stack', layers=lin, w0=w0, w1=w1, acc=acc)
+    g_out = dict(t='stack', layers=lout, w0=w0 - t_lo[2], w1=w1 + t_hi[2], acc=acc)
+    return g_in, g_out, dict(area=max(_face_area(L['face']) for L in lin), layer_count=len(lin))

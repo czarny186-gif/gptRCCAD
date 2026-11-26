@@ -4785,7 +4785,7 @@ class StudioTests(unittest.TestCase):
                 self.assertTrue(BRepCheck_Analyzer(part.wrapped).IsValid(),kind);self.assertEqual(len(part.Solids()),1,kind)
             self.assertFalse([t for l,t in rep if l=='error'],kind)
             base_vol[kind]=parts['base'].Volume()
-            if kind in ('hinge','slide','dovetail','screw','magnet'):self.assertTrue(any('próbkowana' in t for l,t in rep),kind)   # ruch sprawdzony, oznaczony
+            if kind in ('hinge','slide','dovetail','screw','magnet'):self.assertTrue(any('całej drodze ruchu' in t for l,t in rep),kind)   # ruch sprawdzony na całej drodze
         # elementy współpracujące: śruby - słupki i otwory, magnesy - gniazda w obu częściach, uszczelka - ciągły rowek
         rep=[];parts,_t,_i=encm.build_parts(env,spec([dict(type='magnet')]),bodies,True,rep)
         fr=C.Frame(env,spec([dict(type='magnet')]),encm.layout(env,spec([])),encm.split_plane(env,spec([]),encm.layout(env,spec([]))))
@@ -4934,7 +4934,7 @@ class StudioTests(unittest.TestCase):
         res=CU.check_spec(bodies,spec);levels={r[0] for r in res}
         self.assertNotIn('error',levels,[r[1] for r in res if r[0]=='error'])
         texts=' '.join(r[1] for r in res)
-        for word in ('BRepCheck','spójna','powłoki','samoprzecięć','grubość','styk powierzchni','Mocowania sprawdzone','Systemy zamykania','przenikania','Otwieranie','Montaż','próbkowana'):
+        for word in ('BRepCheck','spójna','powłoki','samoprzecięć','grubość','styk powierzchni','Mocowania sprawdzone','Systemy zamykania','przenikania','Otwieranie','Montaż','całej drodze'):
             self.assertIn(word,texts)
         # kolizja objętościowa z podświetlanym obszarem; styk powierzchni - poprawny
         box=k.box(10,10,10);inside=Body('W',k.box(4,4,4).translate((8,3,3))).prepared();touch=Body('T',k.box(4,4,4).translate((10,3,3))).prepared()
@@ -5087,10 +5087,15 @@ class StudioTests(unittest.TestCase):
         base=dict(L.TEMPLATES['universal'][2],closure={});sp=L.template_spec(base,src);sp.envelope=env
         ref=encm.build_parts(env,sp,bodies)[0];sp.process=dict(mounting='din');din=encm.build_parts(env,sp,bodies)[0]
         self.assertLess(din['base'].Volume(),ref['base'].Volume()-30);self.assertAlmostEqual(din['lid'].Volume(),ref['lid'].Volume(),4)
-        sp.process=dict(mounting='wall');wall=encm.build_parts(env,sp,bodies)[0]
+        sp.process=dict(mounting='wall');wall=encm.build_parts(env,sp,bodies)[0];sp.process=dict(mounting='din')
         self.assertAlmostEqual(wall['base'].BoundingBox().xlen,ref['base'].BoundingBox().xlen+24,4)
-        sp.shape='cylinder'
-        with self.assertRaises(k.CadError):L.mounting(env,sp,ref,bodies)
+        sp.shape='cylinder';sp.shape_params=dict(orient='x')                  # dno zakrzywione - rowek DIN odrzucony, uszy działają
+        with self.assertRaises(k.CadError):encm.build_parts(env,sp,bodies)
+        sp.process=dict(mounting='wall');self.assertEqual(len(encm.build_parts(env,sp,bodies)[0]['base'].Solids()),1)
+        sp.shape='cylinder';sp.shape_params={};sp.process=dict(mounting='din')
+        cyl=encm.build_parts(env,sp,bodies)[0];self.assertEqual(len(cyl['base'].Solids()),1)
+        # masa z wypełnieniem druku: obrysy (pole × grubość) + procent reszty
+        pr2=L.properties(k.box(10,10,10),1.24,20.0,1.0);self.assertAlmostEqual(pr2['material'],min(1000,600*1.0)+(1000-600)*.2,6)
         # okno: szablon wczytany do pól, Zastosuj = obudowa + kroki wentylacji (Cofnij usuwa kolejno)
         w=self.w;w.document.commit(bodies);w.refresh();w.selected=[b.id for b in bodies];w.set_mode('enclosure');self.preview()
         self.assertEqual(w.enc_tpl.count(),12+len(L.user_templates()))
@@ -5127,7 +5132,8 @@ class StudioTests(unittest.TestCase):
         mf=next(p for p in w._enc_exported if p.suffix=='.3mf');self.assertTrue(zipfile.is_zipfile(mf))
         csv=next(p for p in w._enc_exported if p.suffix=='.csv').read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(csv),4);self.assertTrue(csv[-1].startswith('RAZEM'));self.assertAlmostEqual(float(csv[-1].split(';')[-1]),total['mass'],2)
-        w.chk_material.setCurrentIndex(w.chk_material.findText('ABS'));self.assertAlmostEqual(w.chk_summary[1]['mass'],total['volume']*1.04/1000,9);w.set_mode(None)
+        w.chk_material.setCurrentIndex(w.chk_material.findText('ABS'));self.assertAlmostEqual(w.chk_summary[1]['mass'],total['volume']*1.04/1000,9)
+        w.chk_shell.setValue(.4);w.chk_infill.setValue(15);self.assertLess(w.chk_summary[1]['mass'],total['volume']*1.04/1000*.9);self.assertIn('materiału',w.chk_props.text());w.set_mode(None)
         # płaskie części: laser - obrysy DXF / SVG; blacha - rozwinięcia DXF z modułu blach
         for tech in ('laser','sheet'):
             sp=mk(tech);out=encm.run(bodies,dict(type='enclosure',spec=sp.to_json(),out='E'+tech,name=tech,out_lid='L'+tech,folder=tech))
@@ -5135,6 +5141,69 @@ class StudioTests(unittest.TestCase):
             dx=[p for p in files if p.suffix=='.dxf'];self.assertTrue(dx,tech)
             for p in dx:self.assertGreater(len(list(ezdxf.readfile(str(p)).modelspace())),0)
             if tech=='laser':self.assertTrue(any(p.suffix=='.svg' and '<path' in p.read_text(encoding='utf-8') for p in files))
+
+    # Ograniczenia etapów 3-15 usunięte: zamknięcia dla wszystkich kształtów i podziału płaszczyzną, przekrój warstwowy
+    # konturu, dokładny luz kierunkowy, szybka wentylacja, ciągła kontrola ruchu (jaskółczy ogon), słupki przy zakładce
+    def test_enclosure_limits_removed(self):
+        import math, time as _t
+        from rccad import enclosure as encm, enclosure_closure as C, enclosure_holes as H, enclosure_vents as V, enclosure_check as EC
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        b=Body('A',k.box(30,16,10)).prepared();bodies=[b];src=[encm.SourceRef(id=b.id)];env=encm.envelope(bodies,encm.EnclosureSpec(sources=src))
+        Cl={k_:8.0 for k_ in ('x-','x+','y-','y+','z-','z+')};Wl={k_:3.0 for k_ in ('x-','x+','y-','y+','bottom','top')}
+        def mk(shape,prm,systems,joint='lap_in',split=None):
+            return encm.EnclosureSpec(sources=src,envelope=env,shape=shape,shape_params=dict(prm),clearance=dict(Cl),walls=dict(Wl),
+                                      split=split or dict(enabled=True,mode='z',unit='%',position=60,joint=joint),closure=dict(systems=systems))
+        # zamknięcia na kształtach innych niż prostopadłościan: bryły poprawne, bez przenikania części, nic nie wystaje poza obrys
+        for shape,prm,sy in (('cylinder',{},'screw'),('polygon',dict(sides=6),'snap'),('desk',{},'magnet'),('contour',{},'screw'),('ellipse',{},'hinge'),
+                             ('trapezoid',{},'snap')):
+            systems=[dict(type=sy,params=dict(length=12.0) if sy=='hinge' else dict(width=5.0,length=6.0) if sy=='snap' else {})]
+            rep=[];parts,_t2,_i=encm.build_parts(env,mk(shape,prm,systems,'flat' if sy=='hinge' else 'lap_in'),bodies,True,rep)
+            self.assertFalse([t for l,t in rep if l=='error'],(shape,sy))
+            for x in parts.values():self.assertTrue(BRepCheck_Analyzer(x.wrapped).IsValid(),shape);self.assertEqual(len(x.Solids()),1,shape)
+            self.assertLess(encm._volume(encm._boolean('common',parts['base'].wrapped,parts['lid'].wrapped,'t'))[0],1e-3,shape)
+            self.assertTrue(any('całej drodze ruchu' in t for l,t in rep) or sy=='snap',shape)
+            if sy!='hinge':
+                ref=encm.build_parts(env,mk(shape,prm,[]),bodies)[0]
+                for name in ('base','lid'):
+                    bb,rb=parts[name].BoundingBox(),ref[name].BoundingBox()
+                    self.assertLessEqual(bb.xlen,rb.xlen+1e-6,shape);self.assertLessEqual(bb.ylen,rb.ylen+1e-6,shape)
+        # trapez: zatrzaski tylko na pionowych ściankach (pochyłe pominięte automatycznie)
+        lay=encm.layout(env,mk('trapezoid',{},[]));fr=C.Frame(env,mk('trapezoid',{},[]),lay,encm.split_plane(env,mk('trapezoid',{},[]),lay))
+        sides={tuple(it['side']) for it in C.auto_items(fr,dict(type='snap',params=dict(width=5.0,length=6.0)))};self.assertEqual(len(sides),2)
+        # podział płaszczyzną bazową XY z zamknięciem (wcześniej tylko osie X / Y / Z)
+        sp=mk('box',{},[dict(type='screw')],split=dict(enabled=True,mode='plane',plane='XY',unit='mm',position=8.0,joint='flat'))
+        rep=[];parts,_t2,_i=encm.build_parts(env,sp,bodies,True,rep);self.assertFalse([t for l,t in rep if l=='error'])
+        # zakładka + śruby: słupki podstawy nie wchodzą w strefę występu pokrywy (wcześniej przenikanie części)
+        rep=[];parts,_t2,_i=encm.build_parts(env,mk('box',{},[dict(type='screw')]),bodies,True,rep);self.assertFalse([t for l,t in rep if l=='error'])
+        # pokrywa na jaskółczy ogon: koniec zamknięty z prostym wypustem - pokrywa się wysuwa (kontrola ciągła wykrywała blokadę)
+        sp=mk('box',{},[dict(type='dovetail')],'flat');lay=encm.layout(env,sp)
+        sp.split=dict(enabled=True,mode='z',unit='mm',position=float(lay['inner'][1][2]-lay['outer'][0][2]),joint='flat')
+        rep=[];parts,_t2,_i=encm.build_parts(env,sp,bodies,True,rep);self.assertFalse([t for l,t in rep if l=='error'])
+        # kontrola ciągła wykrywa kolizję między położeniami, które dawne próbkowanie (co 10 %) omijało: przeszkoda 0,6 mm
+        lid=encm._make_box((0,0,0),(10,10,2));wall=encm._make_box((0,0,30.0),(10,10,30.6))
+        import cadquery as cq
+        hit=EC.sweep(wall,lambda u:cq.Shape.cast(lid).translate(cq.Vector(0,0,u)).wrapped,100.0,1.0,lambda u:f'{u:.1f}',lambda u:(np.eye(3),np.array([0,0,u])))
+        self.assertIsNotNone(hit);self.assertTrue(27.5<=float(hit[0])<=30.7,hit[0])
+        # przekrój warstwowy konturu: mniej materiału niż przekrój stały, bryła poprawna, elementy wewnątrz
+        plate=Body('P',k.box(80,50,4)).prepared();tower=Body('T',k.box(16,16,30).translate((10,10,4))).prepared();bb2=[plate,tower]
+        s2=[encm.SourceRef(id=x.id) for x in bb2];e2=encm.envelope(bb2,encm.EnclosureSpec(sources=s2));vols=[]
+        for layers in (1,3):
+            sp=encm.EnclosureSpec(sources=s2,envelope=e2,shape='contour',shape_params=dict(cmode='convex',layers=layers),
+                                  clearance={k_:2.0 for k_ in Cl},walls={k_:2.0 for k_ in Wl})
+            out=encm.run(bb2,dict(type='enclosure',spec=sp.to_json(),out='E',name='K'),check_sources=True);e=next(x for x in out if x.id=='E')
+            self.assertTrue(BRepCheck_Analyzer(e.shape.wrapped).IsValid());vols.append(e.shape.Volume())
+            for x in bb2:self.assertLess(encm._volume(encm._boolean('common',e.shape.wrapped,x.shape.wrapped,'t'))[0],1e-4)
+        self.assertLess(vols[1],vols[0]*.85)
+        # luz kierunkowy w trybie dokładnego rzutu: suma Minkowskiego z prostokątem (pole dokładne)
+        fr2=H.wall_frame((0,0,0.0),np.array([0,0,1.0]),(0,1.0,0))
+        rect=H._plane_face([(-5,-2),(5,-2),(5,2),(-5,2)],fr2)
+        r=H.minkowski_segment(H.offset_region(rect,.5),fr2,0,.5,2.5);r=H.minkowski_segment(r,fr2,1,0.0,1.5)
+        self.assertAlmostEqual(cq.Shape.cast(r).Area(),40+.5*2*14+math.pi*.25+3*5+1.5*14,6);self.assertEqual(len(cq.Shape.cast(r).Faces()),1)
+        # wentylacja: jedna operacja cięcia dla wszystkich otworów (1000+ otworów w rozsądnym czasie)
+        box=encm._boolean('cut',encm._make_box((0,0,0),(200,200,50)),encm._make_box((2,2,2),(198,198,60)),'x')
+        fr3=H.wall_frame((100,100,0.0),np.array([0,0,-1.0]),(0,1.0,0));t0=_t.time()
+        shape,info=V.build(cq.Shape.cast(box),fr3,dict(pattern='circle',size=3.0,web=1.5,cu=0,cv=0,width=180,height=180,margin=2))
+        self.assertGreater(info['count'],1000);self.assertLess(_t.time()-t0,40);self.assertTrue(BRepCheck_Analyzer(shape.wrapped).IsValid())
 
     # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
     def test_enclosure_stage14a_print(self):

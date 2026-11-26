@@ -5,11 +5,13 @@ połączenia wciskane, rowek pod uszczelkę. Każdy system generuje elementy w o
 dodawane (BRepAlgoAPI_Fuse) i narzędzia tnące (BRepAlgoAPI_Cut), wszystko w układzie przestrzeni elementów (oś podziału i
 płaszczyzna z etapu 4), potem przeniesione do świata. Rozmieszczenie automatyczne (narożniki, boki, tylna ścianka) z
 ręczną korektą każdego elementu (przesunięcie, włączenie). Kontrole: elementy nie wchodzą w komponenty, części po
-złożeniu się nie przenikają (poza zamierzonym wciskiem), otwieranie / wysuwanie / unoszenie pokrywy sprawdzane w
-położeniach pośrednich - kontrola próbkowana nie gwarantuje wykrycia wszystkich kolizji podczas ruchu. Program nie
+złożeniu się nie przenikają (poza zamierzonym wciskiem), otwieranie / wysuwanie / unoszenie pokrywy sprawdzane w sposób
+ciągły (rccad.enclosure_check.sweep - postęp według odległości minimalnej, bez pomijania położeń pośrednich). Program nie
 deklaruje wytrzymałości zatrzasków ani szczelności obudowy - wymagają one obliczeń i prób fizycznych.
 
-Zakres: obudowa prostokątna (także z zaokrąglonymi / sfazowanymi narożnikami), podział wzdłuż osi X / Y / Z."""
+Zakres: wszystkie kształty obudowy (prostokątna, zaokrąglona, sfazowana, cylinder, elipsa, wielokąt, trapez, pulpit,
+kontur); podział wzdłuż osi X / Y / Z, płaszczyzną bazową albo ścianą elementu - prostopadły do jednej z osi przestrzeni.
+Pokrywa wsuwana i jaskółczy ogon wymagają prostych, równoległych ścianek (obudowa prostokątna)."""
 from __future__ import annotations
 
 import math
@@ -40,30 +42,145 @@ def _unit(v):
     return v / max(float(np.linalg.norm(v)), 1e-12)
 
 
+def _section(solid, i, s, a, b):
+    """Przekrój bryły płaszczyzną (oś i = s) jako wielokąty 2D we współrzędnych (a, b) - największy obrys pierwszy."""
+    import cadquery as cq
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+    from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+    from OCP.TopTools import TopTools_HSequenceOfShape
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+    n, p = np.zeros(3), np.zeros(3)
+    n[i], p[i] = 1.0, s
+    sec = BRepAlgoAPI_Section(solid, gp_Pln(gp_Pnt(*map(float, p)), gp_Dir(*map(float, n))), False)
+    sec.Build()
+    if not sec.IsDone():
+        raise kernel.CadError('Przekrój obudowy w płaszczyźnie podziału nie powiódł się.')
+    edges = TopTools_HSequenceOfShape()
+    for e in cq.Shape.cast(sec.Shape()).Edges():
+        edges.Append(e.wrapped)
+    wires = TopTools_HSequenceOfShape()
+    ShapeAnalysis_FreeBounds.ConnectEdgesToWires_s(edges, 1e-5, False, wires)
+    polys = []
+    for k in range(1, wires.Length() + 1):
+        w = cq.Wire(wires.Value(k))
+        n_pts = max(64, 8 * len(w.Edges()))
+        pts = np.array([w.positionAt(t).toTuple() for t in np.linspace(0, 1, n_pts, endpoint=False)])[:, [a, b]]
+        area = .5 * float(np.sum(pts[:, 0] * np.roll(pts[:, 1], -1) - np.roll(pts[:, 0], -1) * pts[:, 1]))
+        if abs(area) > 1e-6:
+            polys.append(pts if area > 0 else pts[::-1])
+    if not polys:
+        raise kernel.CadError('Płaszczyzna podziału nie przecina wnętrza obudowy.')
+    polys.sort(key=lambda q: -abs(.5 * float(np.sum(q[:, 0] * np.roll(q[:, 1], -1) - np.roll(q[:, 0], -1) * q[:, 1]))))
+    return polys
+
+
+def _ray(poly, origin, d):
+    """Pierwsze przecięcie promienia z obrysem: (odległość, punkt, normalna zewnętrzna krawędzi)."""
+    best = None
+    q0, q1 = poly, np.roll(poly, -1, axis=0)
+    e = q1 - q0
+    den = d[0] * e[:, 1] - d[1] * e[:, 0]
+    w = q0 - origin
+    with np.errstate(divide='ignore', invalid='ignore'):
+        t = (w[:, 0] * e[:, 1] - w[:, 1] * e[:, 0]) / den
+        u = (w[:, 0] * d[1] - w[:, 1] * d[0]) / den
+    ok = np.isfinite(t) & (t > 1e-9) & (u >= -1e-9) & (u <= 1 + 1e-9)
+    if not ok.any():
+        return None
+    j = int(np.argmin(np.where(ok, t, np.inf)))
+    nrm = np.array([e[j, 1], -e[j, 0]])                  # obrys przeciwnie do wskazówek zegara - normalna na zewnątrz
+    nrm /= max(float(np.linalg.norm(nrm)), 1e-12)
+    return float(t[j]), origin + d * t[j], nrm
+
+
 class Frame:
     """Układ podziału w przestrzeni elementów: oś podziału i, osie płaszczyzny a, b; płaszczyzna s; ramki wnętrza i
-    zewnętrza; grubości ścianek po stronach; promień / faza wewnętrznych narożników."""
+    zewnętrza; grubości ścianek po stronach; promień / faza wewnętrznych narożników.
+
+    Płaszczyzna podziału może być dowolna (osie X / Y / Z, płaszczyzna bazowa, ściana elementu), byle prostopadła do
+    jednej z osi przestrzeni elementów; gdy normalna wskazuje przeciwnie do osi, układ jest odwracany (macierz F).
+    Kształty inne niż prostopadłościan wyciągnięty wzdłuż osi podziału (cylinder, elipsa, wielokąt, trapez, pulpit,
+    kontur, zaokrąglenia w innej osi) - tryb 'profile': przekroje wnętrza i zewnętrza w płaszczyźnie podziału
+    (BRepAlgoAPI_Section), elementy rozmieszczane na rzeczywistym obrysie, dodawane bryły przycinane do obrysu
+    zewnętrznego obudowy (nigdy nie wystają), krzywizna i pochylenie ścianek sprawdzane dla zatrzasków i zawiasów."""
 
     def __init__(self, env, spec, lay, plane):
-        from .enclosure import split_of
-        sp = split_of(spec)
-        if sp['mode'] not in ('x', 'y', 'z'):
-            raise kernel.CadError('System zamykania wymaga podziału wzdłuż osi X, Y albo Z obudowy.')
-        if (spec.shape or 'box') not in ('box', 'rounded', 'chamfer'):
-            raise kernel.CadError('System zamykania jest dostępny dla obudowy prostokątnej (także z zaokrąglonymi lub sfazowanymi narożnikami).')
+        import cadquery as cq
         if spec.mode == 'solid':
             raise kernel.CadError('Pełna bryła nie ma wnętrza - system zamykania wymaga obudowy pustej w środku.')
         self.env, self.spec, self.lay = env, spec, lay
-        self.i = 'xyz'.index(sp['mode'])
-        self.a, self.b = [k for k in range(3) if k != self.i]
-        c = np.asarray(env.center, float)
         ax = np.asarray(env.axes, float)
-        self.s = float(ax[self.i] @ (np.asarray(plane[0], float) - c))
-        self.ilo, self.ihi = (np.asarray(x, float) for x in lay['inner'])
-        self.olo, self.ohi = (np.asarray(x, float) for x in lay['outer'])
-        self.t_lo, self.t_hi = self.ilo - self.olo, self.ohi - self.ihi
+        c = np.asarray(env.center, float)
+        nw = _unit(plane[1])
+        dots = ax @ nw
+        i = int(np.argmax(np.abs(dots)))
+        if abs(abs(dots[i]) - 1.0) > 1e-6:
+            raise kernel.CadError('System zamykania wymaga płaszczyzny podziału prostopadłej do osi X, Y albo Z przestrzeni elementów '
+                                  '(płaszczyzna bazowa / ściana równoległa do boku obudowy).')
+        self.i = i
+        self.a, self.b = [k for k in range(3) if k != i]
+        F = np.eye(3)
+        if dots[i] < 0:                                   # pokrywa po stronie -osi: układ odwrócony (i oraz a), prawoskrętny
+            F[i, i] = F[self.a, self.a] = -1.0
+        self.F = F
+        self.axes = F @ ax
+        self.s = float(self.axes[i] @ (np.asarray(plane[0], float) - c))
+        fl = lambda lo, hi: (np.minimum(F @ lo, F @ hi), np.maximum(F @ lo, F @ hi))
+        self.ilo, self.ihi = fl(*(np.asarray(x, float) for x in lay['inner']))
+        self.olo, self.ohi = fl(*(np.asarray(x, float) for x in lay['outer']))
         g = lay.get('g_in') or {}
-        self.corner = float(g.get('r', 0.0)) * (1 - 1 / math.sqrt(2)) + float(g.get('c', 0.0)) / 2
+        self.kind = 'box'
+        self.S_in = self.S_out = None
+        if g and (g.get('t') != 'rrect' or int(np.argmax(np.abs(np.asarray(lay['P'], float)[2]))) != i):
+            from . import enclosure_shapes as shapes
+            self.kind = 'profile'
+            to_f = lambda sh: kernel.transformed(cq.Shape.cast(sh), F, np.zeros(3)).wrapped
+            self.S_in = to_f(shapes.solid(g, lay['P']))
+            self.S_out = to_f(shapes.solid(lay['g_out'], lay['P']))
+            self._sec = {}
+            self.sec_in = self.section(self.S_in, self.s)
+            self.sec_out = self.section(self.S_out, self.s)
+            for k, poly, lo, hi in ((self.a, self.sec_in, self.ilo, self.ihi), (self.b, self.sec_in, self.ilo, self.ihi),
+                                    (self.a, self.sec_out, self.olo, self.ohi), (self.b, self.sec_out, self.olo, self.ohi)):
+                col = 0 if k == self.a else 1
+                lo[k], hi[k] = float(poly[:, col].min()), float(poly[:, col].max())
+        self.t_lo, self.t_hi = self.ilo - self.olo, self.ohi - self.ihi
+        self.corner = float(g.get('r', 0.0)) * (1 - 1 / math.sqrt(2)) + float(g.get('c', 0.0)) / 2 if self.kind == 'box' else 0.0
+        self.tmin = float(lay.get('tmin', min(self.t_lo[self.a], self.t_hi[self.a], self.t_lo[self.b], self.t_hi[self.b])))
+
+    # ---------------------------------------------------------------- przekroje (tryb 'profile')
+    def section(self, solid, height):
+        key = (id(solid), round(float(height), 6))
+        if key not in self._sec:
+            self._sec[key] = _section(solid, self.i, height, self.a, self.b)[0]
+        return self._sec[key]
+
+    def extreme(self, k, sign):
+        """Punkt obrysu wnętrza najdalej w kierunku k·znak (współrzędne a, b)."""
+        poly = self.sec_in
+        col = 0 if k == self.a else 1
+        j = int(np.argmax(poly[:, col] * sign))
+        return poly[j]
+
+    def top_at(self, a, b):
+        """Zewnętrzna powierzchnia obudowy nad punktem (a, b) wzdłuż osi podziału (pochyła góra, krzywizna)."""
+        if self.kind == 'box':
+            return float(self.ohi[self.i])
+        from .enclosure_posts import wall_hit_exit
+        p = self.local(a, b, self.s + .01)
+        d = np.zeros(3)
+        d[self.i] = 1.0
+        dist = wall_hit_exit(self.S_out, p, d)
+        if dist is None:
+            raise kernel.CadError('Element zamknięcia poza obrysem pokrywy - przesuń go.')
+        return float(self.s + .01 + dist)
+
+    def clip(self, shape):
+        """Dodawana bryła przycięta do obrysu zewnętrznego (tryb 'profile') - słupki i zaczepy nie wystają z obudowy."""
+        if self.kind == 'box':
+            return shape
+        from .enclosure import _boolean
+        return _boolean('common', shape, self.S_out, 'przycięcie do obrysu')
 
     def local(self, a, b, n):
         p = np.zeros(3)
@@ -72,7 +189,12 @@ class Frame:
 
     def world_shape(self, shape):
         import cadquery as cq
-        return kernel.transformed(cq.Shape.cast(shape), np.asarray(self.env.axes, float).T, np.asarray(self.env.center, float)).wrapped
+        return kernel.transformed(cq.Shape.cast(shape), self.axes.T, np.asarray(self.env.center, float)).wrapped
+
+    def frame_shape(self, env_shape):
+        """Bryła w układzie przestrzeni elementów → układ ramki (odwrócenie F)."""
+        import cadquery as cq
+        return kernel.transformed(cq.Shape.cast(env_shape), self.F, np.zeros(3)).wrapped
 
     def box(self, a0, a1, b0, b1, n0, n1):
         from .enclosure import _make_box
@@ -127,10 +249,167 @@ class Frame:
                 out.append((k, sign, o, (self.ilo[o], self.ihi[o]), float(t)))
         return out
 
+    # ---------------------------------------------------------------- miejsca na ściance (zatrzaski, zawiasy)
+    def anchor(self, k, sign, pos, width, depth=0.0, what='elementu', outer=False):
+        """Miejsce elementu na ściance po stronie k·znak: punkt q na wewnętrznym obrysie (a, b), normalna na zewnątrz n,
+        styczna t, grubość ścianki wzdłuż n, odejście obrysu `sag` na szerokości elementu. Prostopadłościan - ściana
+        boczna jak dotąd (ułamek pos jej długości); tryb 'profile' - najdłuższy prosty odcinek obrysu zwrócony w tę
+        stronę (np. bok wielokąta), a gdy go brak (cylinder, elipsa) - skrajny punkt obrysu z normalną krzywej. Ścianka
+        musi być pionowa (równoległa do osi podziału) na głębokości `depth` - pochyłe boki trapezu / pulpitu są odrzucane."""
+        ca, cb = (0, 1) if k == self.a else (1, 0)
+        if self.kind == 'box':
+            o = self.b if k == self.a else self.a
+            span = (self.ilo[o], self.ihi[o])
+            c = span[0] + (span[1] - span[0]) * float(pos)
+            if c - width / 2 < span[0] + self.corner + .5 or c + width / 2 > span[1] - self.corner - .5:
+                if not outer or c - width / 2 < self.olo[o] or c + width / 2 > self.ohi[o]:
+                    raise kernel.CadError(f'Element {what} wychodzi poza ściankę - przesuń go albo zmniejsz.')
+            q = np.zeros(2)
+            q[ca] = self.ihi[k] if sign > 0 else self.ilo[k]
+            q[cb] = c
+            n = np.zeros(2)
+            n[ca] = sign
+            t = np.zeros(2)
+            t[cb] = 1.0
+            return dict(q=q, n=n, t=t, thick=float(self.t_hi[k] if sign > 0 else self.t_lo[k]), sag=0.0, half=width / 2)
+        want = np.zeros(2)
+        want[ca] = sign
+        poly = self.sec_in
+        seg = self._straight(poly, want, width)
+        if seg is not None:
+            q0, q1 = seg
+            t = _unit(q1 - q0)
+            n = np.array([t[1], -t[0]])
+            length = float(np.linalg.norm(q1 - q0))
+            q = (q0 + q1) / 2 + t * (float(pos) - .5) * max(0.0, length - width - 1.0)
+        else:
+            j = int(np.argmax(poly @ want))
+            q = poly[j]
+            t = _unit(poly[(j + 1) % len(poly)] - poly[j - 1])
+            n = np.array([t[1], -t[0]])
+            span = float(np.ptp(poly @ t))
+            q = q + t * (float(pos) - .5) * span * .5
+            hit = _ray(poly, q - n * 20.0, n)                    # rzut przesuniętego punktu z powrotem na obrys
+            if hit is None:
+                raise kernel.CadError(f'Nie znaleziono miejsca na element {what} na ściance.')
+            q = hit[1]
+        hit_out = _ray(self.sec_out, q + n * 1e-6, n)
+        if hit_out is None:
+            raise kernel.CadError(f'Nie znaleziono zewnętrznej powierzchni ścianki dla elementu {what}.')
+        thick = float(hit_out[0])
+        sag = 0.0
+        if not outer:                                           # pionowość i krzywizna ścianki na wysokości elementu
+            for dz in sorted({0.3, max(.3, depth * .5), max(.3, depth)}):
+                sec = self.section(self.S_in, self.s - dz)
+                for tt in np.linspace(-width / 2, width / 2, 7):
+                    hit = _ray(sec, q + t * tt - n * 20.0, n)
+                    if hit is None:
+                        self._reject(what)
+                    sag = max(sag, abs(20.0 - hit[0]))
+            if sag > 1e-6:                                      # obrys wypukły: element odsunięty do środka o odejście,
+                q = q - n * sag                                 # żeby jego końce nie wchodziły w ściankę
+                thick += sag
+        return dict(q=q, n=n, t=t, thick=thick, sag=float(sag), half=width / 2)
+
+    def _reject(self, what):
+        raise kernel.CadError(f'Ścianka w miejscu {what} jest pochyła albo za krótka - wybierz inną stronę albo inny system.')
+
+    @staticmethod
+    def _straight(poly, want, width):
+        """Najdłuższy prosty odcinek obrysu (kolejne krawędzie współliniowe) z normalną zewnętrzną zwróconą w stronę `want`
+        (cos > 0,8) i długością co najmniej szerokość + 1 mm."""
+        e = np.roll(poly, -1, axis=0) - poly
+        lens = np.linalg.norm(e, axis=1)
+        dirs = e / np.maximum(lens, 1e-12)[:, None]
+        best, i, nseg = None, 0, len(poly)
+        visited = 0
+        start = 0
+        for j in range(nseg):                                   # zacznij od załamania, żeby nie dzielić odcinka na końcu listy
+            if float(dirs[j] @ dirs[j - 1]) < .99995:
+                start = j
+                break
+        j = start
+        while visited < nseg:
+            a0, length, d = poly[j], lens[j], dirs[j]
+            jj = (j + 1) % nseg
+            visited += 1
+            while visited < nseg and float(dirs[jj] @ d) > .99995:
+                length += lens[jj]
+                jj = (jj + 1) % nseg
+                visited += 1
+            n = np.array([d[1], -d[0]])
+            if float(n @ want) > .8 and length >= width + 1.0 and (best is None or length > best[0]):
+                best = (length, a0, poly[jj])
+            j = jj
+        return None if best is None else (best[1], best[2])
+
+    def wall_point(self, an, m, n_up, tt):
+        q = an['q'] + an['n'] * m + an['t'] * tt
+        return self.local(q[0], q[1], self.s + n_up)
+
+    def wall_dir(self, an):
+        d = np.zeros(3)
+        d[self.a], d[self.b] = an['t'][0], an['t'][1]
+        return d
+
+    def prism_at(self, an, pts_mn, t0, t1):
+        """Graniastosłup z wielokąta (m - od wewnętrznej powierzchni ścianki na zewnątrz wzdłuż normalnej, n - wzdłuż osi
+        podziału od płaszczyzny) wyciągnięty wzdłuż stycznej ścianki od t0 do t1 (względem punktu miejsca)."""
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+        from OCP.gp import gp_Pnt, gp_Vec
+        poly = BRepBuilderAPI_MakePolygon()
+        for m, n in pts_mn:
+            poly.Add(gp_Pnt(*map(float, self.wall_point(an, m, n, t0))))
+        poly.Close()
+        face = BRepBuilderAPI_MakeFace(poly.Wire(), True).Face()
+        v = self.wall_dir(an) * (t1 - t0)
+        return BRepPrimAPI_MakePrism(face, gp_Vec(*map(float, v))).Shape()
+
+    def cyl_dir(self, point, d, r, t0, t1):
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+        from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+        if r <= 1e-6 or t1 - t0 <= 1e-6:
+            raise kernel.CadError('Element systemu zamykania ma zerowy wymiar - sprawdź parametry.')
+        d = _unit(d)
+        base = np.asarray(point, float) + d * t0
+        mk = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(*map(float, base)), gp_Dir(*map(float, d))), float(r), float(t1 - t0))
+        mk.Build()
+        return mk.Shape()
+
+    def outer_sag(self, an, t0, t1, height):
+        """Odejście zewnętrznej powierzchni ścianki od płaszczyzny stycznej w miejscu na odcinku [t0, t1] (skrzydełko zawiasu)."""
+        if self.kind == 'box':
+            return 0.0
+        sec = self.section(self.S_out, height)
+        worst = 0.0
+        for tt in np.linspace(t0, t1, 7):
+            ref = an['q'] + an['t'] * tt + an['n'] * an['thick']
+            hit = _ray(sec, ref - an['n'] * 20.0, an['n'])
+            if hit is None:
+                return math.inf
+            worst = max(worst, abs(hit[0] - 20.0))
+        return worst
+
     def corners(self, inset):
-        d = inset + self.corner
-        return [(sa, sb, (self.ihi[self.a] - d) if sa > 0 else (self.ilo[self.a] + d), (self.ihi[self.b] - d) if sb > 0 else (self.ilo[self.b] + d))
-                for sa in (-1, 1) for sb in (-1, 1)]
+        if self.kind == 'box':
+            d = inset + self.corner
+            return [(sa, sb, (self.ihi[self.a] - d) if sa > 0 else (self.ilo[self.a] + d), (self.ihi[self.b] - d) if sb > 0 else (self.ilo[self.b] + d))
+                    for sa in (-1, 1) for sb in (-1, 1)]
+        poly = self.sec_in                             # promień od środka obrysu w stronę narożnika ramki, środek elementu
+        centre = poly.mean(axis=0)                     # odsunięty od trafionej krawędzi o inset wzdłuż jej normalnej
+        half = np.array([self.ihi[self.a] - self.ilo[self.a], self.ihi[self.b] - self.ilo[self.b]]) / 2
+        out = []
+        for sa in (-1, 1):
+            for sb in (-1, 1):
+                d = _unit(np.array([sa * half[0], sb * half[1]]))
+                hit = _ray(poly, centre, d)
+                if hit is None:
+                    raise kernel.CadError('Nie udało się znaleźć miejsca na element zamknięcia w obrysie obudowy.')
+                _t, q, nrm = hit
+                p = q - nrm * (inset + self.corner)
+                out.append((sa, sb, float(p[0]), float(p[1])))
+        return out
 
 
 def params(system):
@@ -148,7 +427,14 @@ def auto_items(fr, system):
     if kind == 'snap':
         items = []
         for k, sign, o, (t0, t1), _t in fr.sides():
-            n = max(1, int(p['per_side'])) if (t1 - t0) > 3 * p['width'] else 1
+            n = max(1, int(p['per_side'])) if (t1 - t0) > 3 * p['width'] and fr.kind == 'box' else 1
+            if fr.kind == 'profile':                 # tylko ścianki pionowe i dość proste (pochyłe boki trapezu - pominięte)
+                try:
+                    an = fr.anchor(k, sign, .5, float(p['width']), depth=float(p['length']) + float(p['hook_h']) + 1.0)
+                    if an['sag'] > .35 * float(p['hook']):
+                        continue
+                except kernel.CadError:
+                    continue
             for j in range(n):
                 items.append(dict(key=f's{k}{sign:+d}_{j}', side=[k, sign], pos=(j + 1) / (n + 1), enabled=True))
         return items
@@ -156,6 +442,11 @@ def auto_items(fr, system):
         k = {'a': fr.a, 'b': fr.b}[p['side'][0]]
         sign = 1 if p['side'][1] == '+' else -1
         n = max(1, int(p['count']))
+        if fr.kind == 'profile':                     # zakrzywiona ścianka: osie kilku zawiasów nie byłyby współliniowe
+            want = np.zeros(2)
+            want[0 if k == fr.a else 1] = sign
+            if fr._straight(fr.sec_in, want, n * float(p['length']) + (n - 1) * 2.0) is None:
+                n = 1
         return [dict(key=f'h{j}', side=[k, sign], pos=(j + 1) / (n + 1), enabled=True) for j in range(n)]
     return []
 
@@ -176,13 +467,13 @@ def _screws(fr, p, items, out):
     if R <= hole / 2 + .4 or R <= s['clear'] / 2 + .4:
         raise kernel.CadError('Słupek śruby za cienki dla otworu - zwiększ średnicę słupka.')
     head = max(float(p['head']), s['clear'] + .4) + 2 * float(p['gap'])
-    top = fr.ohi[fr.i]
     lid_inner = fr.ihi[fr.i] - fr.s
     for (sa, sb, ca, cb), it in zip(fr.corners(R * .8), items):
         if not it['enabled']:
             continue
         ca, cb = ca + it['da'], cb + it['db']
-        out['base_add'].append(fr.cyl(ca, cb, R, fr.ilo[fr.i] - fr.s - .5 + fr.s, fr.s))
+        top = fr.top_at(ca, cb)                    # zewnętrzna powierzchnia pokrywy nad śrubą (także pochyła / zakrzywiona)
+        out['base_add'].append(fr.cyl(ca, cb, R, fr.ilo[fr.i] - .5, fr.s))
         if lid_inner > .2:
             out['lid_add'].append(fr.cyl(ca, cb, R, fr.s, fr.ihi[fr.i] + .5))
         depth = s['insert_len'] + 1 if p['fastening'] == 'insert' else min(fr.s - fr.ilo[fr.i] - .5, max(6.0, 2.5 * s['d']))
@@ -210,26 +501,25 @@ def _snaps(fr, p, items, out):
         if not it['enabled']:
             continue
         k, sign = it['side']
-        o = fr.b if k == fr.a else fr.a
-        t_side = fr.t_hi[k] if sign > 0 else fr.t_lo[k]
-        if H + gap >= t_side:
+        an = fr.anchor(k, sign, it['pos'], W, depth=L + Hh + 1.0, what='zatrzasku')
+        t_side, sag = an['thick'], an['sag']
+        if sag > .35 * H:
+            raise kernel.CadError('Ścianka w miejscu zatrzasku jest zbyt zakrzywiona albo pochyła - zmniejsz szerokość zatrzasku, '
+                                  'przesuń go albo wybierz śruby / magnesy.')
+        if H + gap + sag >= t_side:
             raise kernel.CadError('Zaczep zatrzasku głębszy niż ścianka - zmniejsz zaczep albo pogrub ściankę.')
-        span = (fr.ilo[o], fr.ihi[o])
-        c = span[0] + (span[1] - span[0]) * float(it['pos'])
-        t0, t1 = c - W / 2, c + W / 2
-        if t0 < span[0] + fr.corner + .5 or t1 > span[1] - fr.corner - .5:
-            raise kernel.CadError('Zatrzask wychodzi poza ściankę - przesuń go.')
+        t0, t1 = -W / 2, W / 2
         m_arm = -gap
+        P = lambda pts, a0=t0, a1=t1: fr.prism_at(an, pts, a0, a1)
         # ramię (w pokrywie, wisi w podstawie przy ściance) + mostek do ścianki pokrywy
-        out['lid_add'].append(fr.prism([(m_arm - T, -L), (m_arm, -L), (m_arm, 2.0), (m_arm - T, 2.0)], o, t0, t1, k, sign))
-        out['lid_add'].append(fr.prism([(m_arm - T, 0.0), (.5, 0.0), (.5, 2.0), (m_arm - T, 2.0)], o, t0, t1, k, sign))
+        out['lid_add'].append(P([(m_arm - T, -L), (m_arm, -L), (m_arm, 2.0), (m_arm - T, 2.0)]))
+        out['lid_add'].append(P([(m_arm - T, 0.0), (.5 + sag, 0.0), (.5 + sag, 2.0), (m_arm - T, 2.0)]))
         # zaczep z powierzchnią najazdową (od dołu) i płaskim oparciem (od góry)
-        out['lid_add'].append(fr.prism([(m_arm - .01, -L), (m_arm + H, -L + H / ramp), (m_arm + H, -L + H / ramp + Hh), (m_arm - .01, -L + H / ramp + Hh)],
-                                       o, t0, t1, k, sign))
-        # gniazdo w ściance podstawy (wnęka od środka na zaczep, z luzem)
-        out['base_cut'].append(fr.prism([(-1.0, -L - gap), (H + gap, -L - gap), (H + gap, -L + H / ramp + Hh + gap), (-1.0, -L + H / ramp + Hh + gap)],
-                                        o, t0 - gap, t1 + gap, k, sign))
-        out['flex'].append(fr.prism([(m_arm - T - H - gap, -L), (m_arm - T, -L), (m_arm - T, 0.0), (m_arm - T - H - gap, 0.0)], o, t0, t1, k, sign))
+        out['lid_add'].append(P([(m_arm - .01, -L), (m_arm + H, -L + H / ramp), (m_arm + H, -L + H / ramp + Hh), (m_arm - .01, -L + H / ramp + Hh)]))
+        # gniazdo w ściance podstawy (wnęka od środka na zaczep, z luzem; na ściance zakrzywionej - pogłębione o odejście)
+        out['base_cut'].append(P([(-1.0, -L - gap), (H + gap + sag, -L - gap), (H + gap + sag, -L + H / ramp + Hh + gap), (-1.0, -L + H / ramp + Hh + gap)],
+                                 t0 - gap, t1 + gap))
+        out['flex'].append(P([(m_arm - T - H - gap, -L), (m_arm - T, -L), (m_arm - T, 0.0), (m_arm - T - H - gap, 0.0)]))
     out['report'].append('Zatrzaski: ramiona ugięte przy montażu - wytrzymałość wymaga obliczeń i prób')
 
 
@@ -237,6 +527,9 @@ def _slide(fr, p, out, dovetail=False):
     """Pokrywa wsuwana / na jaskółczy ogon: prowadnice (rowki) w ściankach podstawy przedłużonych ponad podział, pokrywa -
     płytka z wypustami; koniec zamknięty - ogranicznik ruchu, koniec otwarty - wsuwanie; luz w rowkach z każdej strony."""
     from .enclosure import _boolean, split_of
+    if fr.kind != 'box':
+        raise kernel.CadError('Pokrywa wsuwana i jaskółczy ogon wymagają prostych, równoległych ścianek prowadnic - '
+                              'wybierz obudowę prostokątną (także zaokrągloną / sfazowaną) albo inny system zamykania.')
     if split_of(fr.spec)['joint'] != 'flat':
         raise kernel.CadError('Pokrywa wsuwana wymaga płaskiego połączenia podziału (bez zakładki i pióra).')
     axis = fr.a if p['axis'] == 'a' else fr.b
@@ -256,6 +549,9 @@ def _slide(fr, p, out, dovetail=False):
     kk = (d - gap) / d
     groove = [(-1.0, -gap / 2), (0.0, -gap / 2), (d, -gap / 2 - dl), (d, th + gap / 2 + dl), (0.0, th + gap / 2), (-1.0, th + gap / 2)]
     tongue = [(-gap - .05, gap / 2), (d - gap, gap / 2 - dl * kk), (d - gap, th - gap / 2 + dl * kk), (-gap - .05, th - gap / 2)]
+    # koniec zamknięty: wypust wysuwa się z rowka w kierunku jego głębokości - profil prosty (jaskółczy ogon by go zablokował)
+    groove_end = [(-1.0, -gap / 2), (d, -gap / 2), (d, th + gap / 2), (-1.0, th + gap / 2)]
+    tongue_end = [(-gap - .05, gap / 2), (d - gap, gap / 2), (d - gap, th - gap / 2), (-gap - .05, th - gap / 2)]
     top = th + lip
     side_lo, side_hi = fr.olo[side_axis], fr.ohi[side_axis]
     for sign in (-1, 1):                                  # przedłużone ścianki boczne (na całej długości)
@@ -266,7 +562,7 @@ def _slide(fr, p, out, dovetail=False):
     r0, r1 = (fr.ilo[axis] - d, fr.ohi[axis] + 1.0) if open_sign > 0 else (fr.olo[axis] - 1.0, fr.ihi[axis] + d)
     for sign in (-1, 1):
         out['base_cut'].append(fr.prism(groove, axis, r0, r1, side_axis, sign))
-    out['base_cut'].append(fr.prism(groove, side_axis, fr.ilo[side_axis] - d, fr.ihi[side_axis] + d, axis, closed))     # ogranicznik
+    out['base_cut'].append(fr.prism(groove_end, side_axis, fr.ilo[side_axis] - d, fr.ihi[side_axis] + d, axis, closed))     # ogranicznik
     p0, p1 = (fr.ilo[axis] - (d - gap), fr.ohi[axis]) if open_sign > 0 else (fr.olo[axis], fr.ihi[axis] + (d - gap))
     plate = fr.box(*_order(axis, side_axis, fr, (p0, p1) if open_sign > 0 else (p0, p1), (fr.ilo[side_axis] + gap, fr.ihi[side_axis] - gap)),
                    fr.s + gap / 2, fr.s + th - gap / 2)
@@ -274,7 +570,7 @@ def _slide(fr, p, out, dovetail=False):
     for sign in (-1, 1):
         plate = _boolean('fuse', plate, fr.prism(tongue, axis, t0 - (d - gap) if open_sign > 0 else t0, t1 if open_sign > 0 else t1 + (d - gap),
                                                  side_axis, sign), 'wypust pokrywy')
-    plate = _boolean('fuse', plate, fr.prism(tongue, side_axis, fr.ilo[side_axis] + gap, fr.ihi[side_axis] - gap, axis, closed), 'wypust czołowy')
+    plate = _boolean('fuse', plate, fr.prism(tongue_end, side_axis, fr.ilo[side_axis] + gap, fr.ihi[side_axis] - gap, axis, closed), 'wypust czołowy')
     out['replace_lid'] = plate
     out['motion'] = ('slide', axis, open_sign, float(fr.ohi[axis] - fr.olo[axis]))
     out['report'].append(('Jaskółczy ogon' if dovetail else 'Pokrywa wsuwana') + ' - koniec zamknięty ogranicza ruch, luz w rowkach ' + f'{gap:g} mm')
@@ -296,36 +592,41 @@ def _hinges(fr, p, items, out):
     seg = (Lh - (N - 1) * gap) / N
     if seg <= .8:
         raise kernel.CadError('Zawias za krótki dla tylu kostek.')
+    placed = []
     for it in items:
         if not it['enabled']:
             continue
         k, sign = it['side']
-        o = fr.b if k == fr.a else fr.a
-        span = (fr.ilo[o], fr.ihi[o])
-        c = span[0] + (span[1] - span[0]) * float(it['pos'])
-        if c - Lh / 2 < fr.olo[o] or c + Lh / 2 > fr.ohi[o]:
-            raise kernel.CadError('Zawias wychodzi poza ściankę - przesuń go albo skróć.')
-        t_side = fr.t_hi[k] if sign > 0 else fr.t_lo[k]
+        an = fr.anchor(k, sign, it['pos'], Lh, depth=R, what='zawiasu', outer=True)
+        for other in placed:                         # wszystkie zawiasy na jednej osi i bez nakładania
+            off = an['q'] - other['q']
+            if abs(float(an['t'] @ other['t'])) < 1 - 1e-6 or abs(float(off @ np.array([-other['t'][1], other['t'][0]]))) > 1e-4:
+                raise kernel.CadError('Osie zawiasów nie są współliniowe (zakrzywiona ścianka) - zostaw jeden zawias.')
+            if abs(float(off @ other['t'])) < Lh + gap:
+                raise kernel.CadError('Zawiasy nachodzą na siebie - rozsuń je albo skróć.')
+        placed.append(an)
+        t_side = an['thick']
         m_axis = t_side + R                          # oś zawiasu na zewnątrz ścianki, na wysokości podziału
-        axis_pt = np.zeros(3)
-        axis_pt[k] = (fr.ihi[k] if sign > 0 else fr.ilo[k]) + sign * m_axis
-        axis_pt[fr.i] = fr.s
+        axis_pt = fr.wall_point(an, m_axis, 0.0, 0.0)
+        tdir = fr.wall_dir(an)
         for j in range(N):
-            a0 = c - Lh / 2 + j * (seg + gap)
+            a0 = -Lh / 2 + j * (seg + gap)
             a1 = a0 + seg
-            knuckle = fr.cyl_axis(o, axis_pt, R, a0, a1)              # kostki współosiowe (oś wzdłuż ścianki)
+            knuckle = fr.cyl_dir(axis_pt, tdir, R, a0, a1)             # kostki współosiowe (oś wzdłuż ścianki)
             leaf_n = (-R, 0.0) if j % 2 == 0 else (0.0, R)
-            leaf = fr.prism([(t_side - .5, leaf_n[0]), (m_axis, leaf_n[0]), (m_axis, leaf_n[1]), (t_side - .5, leaf_n[1])], o, a0, a1, k, sign)
-            (out['base_add'] if j % 2 == 0 else out['lid_add']).extend([knuckle, leaf])
-        pin_cut = fr.cyl_axis(o, axis_pt, pin / 2, c - Lh / 2 - 1, c + Lh / 2 + 1)
+            sag = fr.outer_sag(an, a0, a1, fr.s + (leaf_n[0] + leaf_n[1]) / 2)
+            if not math.isfinite(sag) or sag > t_side + R:
+                raise kernel.CadError('Ścianka w miejscu zawiasu jest zbyt zakrzywiona - skróć zawias albo przesuń go.')
+            m0 = t_side - .5 - sag                         # skrzydełko sięga do ścianki także tam, gdzie się ona zakrzywia
+            leaf = fr.prism_at(an, [(m0, leaf_n[0]), (m_axis, leaf_n[0]), (m_axis, leaf_n[1]), (m0, leaf_n[1])], a0, a1)
+            if fr.kind != 'box':
+                from .enclosure import _boolean
+                leaf = _boolean('cut', leaf, fr.S_in, 'skrzydełko zawiasu')     # bez wchodzenia do wnętrza
+            (out['base_raw'] if j % 2 == 0 else out['lid_raw']).extend([knuckle, leaf])      # na zewnątrz - bez przycinania
+        pin_cut = fr.cyl_dir(axis_pt, tdir, pin / 2, -Lh / 2 - 1, Lh / 2 + 1)
         out['base_cut'].append(pin_cut)
         out['lid_cut'].append(pin_cut)
-        # oś obrotu w układzie przestrzeni: punkt i kierunek
-        axis_pt = axis_pt.copy()
-        axis_pt[o] = c
-        d = np.zeros(3)
-        d[o] = 1.0
-        out['motion'] = ('hinge', axis_pt, d, -sign, float(p['angle']))
+        out['motion'] = ('hinge', axis_pt, tdir, -sign, float(p['angle']))         # oś obrotu w układzie ramki
     out['report'].append(f'Zawiasy: sworzeń Ø{pin:g} mm (otwór współosiowy w kostkach obu części)')
 
 
@@ -360,7 +661,7 @@ def _pockets(fr, p, items, out, kind):
 def _gasket(fr, p, out, lay):
     from .enclosure import _boolean, _make_box
     w, dep = float(p['width']), float(p['depth'])
-    tmin = min(fr.t_lo[fr.a], fr.t_hi[fr.a], fr.t_lo[fr.b], fr.t_hi[fr.b])
+    tmin = min(fr.t_lo[fr.a], fr.t_hi[fr.a], fr.t_lo[fr.b], fr.t_hi[fr.b], fr.tmin)
     if w + 1.0 > tmin:
         raise kernel.CadError(f'Rowek uszczelki szerokości {w:g} mm nie mieści się w ściance {tmin:g} mm (min. 0,5 mm z każdej strony).')
     if dep >= fr.s - fr.ilo[fr.i]:
@@ -371,8 +672,8 @@ def _gasket(fr, p, out, lay):
     lo0, hi0 = grow(a0)
     if 'g_in' in lay:
         from . import enclosure_shapes as shapes
-        outer = shapes.solid(shapes.grow(lay['g_in'], a0 + w), lay['P'])
-        inner = shapes.solid(shapes.grow(lay['g_in'], a0), lay['P'])
+        outer = fr.frame_shape(shapes.solid(shapes.grow(lay['g_in'], a0 + w), lay['P']))
+        inner = fr.frame_shape(shapes.solid(shapes.grow(lay['g_in'], a0), lay['P']))
     else:
         outer, inner = _make_box(lo1, hi1), _make_box(lo0, hi0)
     ring = _boolean('cut', outer, inner, 'rowek uszczelki')
@@ -384,7 +685,8 @@ def _gasket(fr, p, out, lay):
 def features(env, spec, lay, plane):
     """Elementy wszystkich włączonych systemów: dict(base_add, base_cut, lid_add, lid_cut, flex, replace_lid, motion, report)."""
     fr = Frame(env, spec, lay, plane)
-    out = dict(base_add=[], base_cut=[], lid_add=[], lid_cut=[], flex=[], replace_lid=None, motion=None, report=[], interference=False)
+    out = dict(base_add=[], base_cut=[], lid_add=[], lid_cut=[], base_raw=[], lid_raw=[], flex=[], replace_lid=None, motion=None, report=[],
+               interference=False)
     systems = [s for s in (spec.closure or {}).get('systems', []) if s.get('enabled', True)]
     kinds = [s['type'] for s in systems]
     if 'slide' in kinds and 'dovetail' in kinds:
@@ -411,9 +713,10 @@ def features(env, spec, lay, plane):
     return fr, out
 
 
-def apply(env, spec, parts, bodies, lay, plane, check=True):
+def apply(env, spec, parts, bodies, lay, plane, check=True, seat=None):
     """Systemy zamykania dołączone do podstawy i pokrywy (dict 'base' / 'lid', bryły cq w świecie). Zwraca nowe części
-    i raport kontroli (lista (poziom, tekst))."""
+    i raport kontroli (lista (poziom, tekst)). seat - gniazdo połączenia podziału (świat): słupki dodane do podstawy
+    nie mogą go wypełnić, bo wchodzi w nie występ pokrywy."""
     from .enclosure import _boolean, _single, _unified, _volume, check_solid
     import cadquery as cq
     fr, f = features(env, spec, lay, plane)
@@ -422,9 +725,15 @@ def apply(env, spec, parts, bodies, lay, plane, check=True):
     if f['replace_lid'] is not None:
         lid = W(f['replace_lid'])
     for s in f['base_add']:
-        base = _boolean('fuse', base, W(s), 'element zamknięcia w podstawie')
+        base = _boolean('fuse', base, W(fr.clip(s)), 'element zamknięcia w podstawie')
     for s in f['lid_add']:
+        lid = _boolean('fuse', lid, W(fr.clip(s)), 'element zamknięcia w pokrywie')
+    for s in f['base_raw']:
+        base = _boolean('fuse', base, W(s), 'element zamknięcia w podstawie')
+    for s in f['lid_raw']:
         lid = _boolean('fuse', lid, W(s), 'element zamknięcia w pokrywie')
+    if seat is not None and (f['base_add'] or f['base_raw']):
+        base = _boolean('cut', base, seat.wrapped if hasattr(seat, 'wrapped') else seat, 'gniazdo połączenia przy słupkach')
     for s in f['base_cut']:
         base = _boolean('cut', base, W(s), 'gniazdo zamknięcia w podstawie')
     for s in f['lid_cut']:
@@ -441,7 +750,7 @@ def apply(env, spec, parts, bodies, lay, plane, check=True):
 
 
 def checks(fr, f, base, lid, spec, bodies):
-    """Kolizje z komponentami, przenikanie części po złożeniu, ruch pokrywy w położeniach pośrednich (próbkowanie)."""
+    """Kolizje z komponentami, przenikanie części po złożeniu, ruch pokrywy na całej drodze (kontrola ciągła)."""
     from .enclosure import _boolean, _volume
     import cadquery as cq
     out = []
@@ -464,42 +773,21 @@ def checks(fr, f, base, lid, spec, bodies):
             out.append(('warning', f'Wcisk kołków: części nachodzą na siebie o {overlap:.3f} mm³ (zamierzony wcisk).'))
         else:
             out.append(('error', f'Po złożeniu podstawa i pokrywa przenikają się ({overlap:.3f} mm³) - sprawdź elementy zamknięcia.'))
-    motion = f['motion']
-    ax = np.asarray(fr.env.axes, float)
-    c = np.asarray(fr.env.center, float)
-    lid_sh = cq.Shape.cast(lid.wrapped)
+    from .enclosure_check import _motion, sweep, MIN_STEP, ROT_STEP
     hit = None
-    if motion is not None and motion[0] == 'hinge':
-        _k, pt, d, _sgn, angle = motion
-        pw, dw = c + ax.T @ pt, ax.T @ d
-        for sgn in (1, -1):                           # kierunek otwierania: ten, w którym pokrywa unosi się od podstawy
-            probe = lid_sh.rotate(cq.Vector(*pw), cq.Vector(*(pw + dw)), sgn * 10.0)
-            if float((probe.Center() - lid_sh.Center()).dot(cq.Vector(*(ax[fr.i])))) > 0:
-                break
-        for a in np.arange(10.0, float(angle) + 1e-9, 10.0):
-            moved = lid_sh.rotate(cq.Vector(*pw), cq.Vector(*(pw + dw)), sgn * a)
-            if _volume(_boolean('common', base.wrapped, moved.wrapped, 'otwieranie'))[0] > 1e-3:
-                hit = f'przy otwarciu o {a:.0f}°'
-                break
-    elif motion is not None and motion[0] == 'slide':
-        _k, axis, sign, length = motion
-        v = ax[axis] * sign
-        for frac in (.1, .25, .5, .75, 1.0):
-            moved = lid_sh.translate(cq.Vector(*(v * length * frac * 1.05)))
-            if _volume(_boolean('common', base.wrapped, moved.wrapped, 'wysuwanie'))[0] > 1e-3:
-                hit = f'przy wysunięciu o {length * frac:.0f} mm'
-                break
-    elif not any(s.get('type') == 'snap' for s in (spec.closure or {}).get('systems', [])):
-        v = ax[fr.i]
-        for dist in (.5, 1.0, 2.0, 5.0, 10.0):
-            moved = lid_sh.translate(cq.Vector(*(v * dist)))
-            if _volume(_boolean('common', base.wrapped, moved.wrapped, 'zdejmowanie'))[0] > 1e-3 and not f['interference']:
-                hit = f'przy uniesieniu o {dist:g} mm'
-                break
+    motion = None
+    if f['motion'] is not None or not any(s.get('type') == 'snap' for s in (spec.closure or {}).get('systems', [])):
+        plane = (fr.local(0, 0, fr.s), fr.axes[fr.i])
+        motion = _motion(fr.env, spec, f, {'lid': lid.wrapped}, fr.lay, (np.asarray(fr.env.center) + fr.axes.T @ plane[0], plane[1]), fr)
+    if motion is not None and not (f['interference'] and f['motion'] is None):
+        fn, total, speed, label, xf, axis = motion
+        found = sweep(base.wrapped, fn, total, speed, label, xf, axis)
+        hit = found[0] if found else None
     if hit:
         out.append(('error', f'Pokrywa koliduje z podstawą {hit} - obudowy nie da się otworzyć.'))
-    elif motion is not None or not f['interference']:
-        out.append(('ok', 'Otwieranie sprawdzone w położeniach pośrednich (kontrola próbkowana - nie gwarantuje wykrycia wszystkich kolizji w ruchu).'))
+    elif motion is not None:
+        out.append(('ok', f'Otwieranie sprawdzone na całej drodze ruchu (odcinki bez możliwości kolizji pomijane z gwarancją, '
+                          f'przy styku ramek ścian - co {MIN_STEP:g} mm przesunięcia / {ROT_STEP:g} mm lub 1° obrotu).'))
     if any(s.get('type') == 'snap' for s in (spec.closure or {}).get('systems', [])):
         out.append(('warning', 'Zatrzaski: zdejmowanie pokrywy wymaga ugięcia ramion - kontrola ruchu pomija zaczepy; wytrzymałości nie obliczono.'))
     if any(s.get('type') == 'gasket' for s in (spec.closure or {}).get('systems', [])):
