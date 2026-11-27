@@ -6024,6 +6024,43 @@ class StudioTests(unittest.TestCase):
         for t in VL.templates():
             if t['name'].startswith('Test V2'):VL.delete_template(t['name'])
 
+    def test_tex_tool_window(self):
+        from rccad import tex_library as TL, tex_patterns as TP, vent_feature as VF
+        import rccad.studio as st
+        plate=Body('Płyta',cq.Workplane().box(60,40,6).val()).prepared()
+        w=self.w;w.document.commit([plate]);w.refresh()
+        self.assertIn('tex',st.TABS['Wzory']);self.assertIn('tex',w.tools);self.assertIn('tex',st.FAVORITE_TOOLS)
+        w.set_mode('tex');self.assertTrue(w.xt_panel.isVisible())
+        self.assertGreaterEqual(w.xt_gal.count(),16)
+        top=[f_ for f_ in plate.shape.Faces() if f_.normalAt().z>.9][0]
+        w.xt.update(target=plate.id,faces=VF.face_refs(plate.shape,[top.wrapped]));w._xt_update()
+        pit=[w.xt_gal.item(i) for i in range(w.xt_gal.count()) if w.xt_gal.item(i).data(Qt.UserRole)=='pat:dots'][0]
+        w._xt_gallery_apply(pit);self.assertEqual(w.xt['p']['pattern'],'dots')
+        self.assertTrue(w.xt_w['size'][1].isVisibleTo(w.xt_panel));self.assertFalse(w.xt_w['ham_min'][1].isVisibleTo(w.xt_panel))
+        def wait_preview():
+            end=time.monotonic()+120
+            while time.monotonic()<end and (w._xt_timer.isActive() or any(s_['running'] or s_['pending'] for s_ in w._pv.values())):
+                self.app.processEvents();time.sleep(.01)
+            self.app.processEvents()
+        wait_preview();self.assertTrue(w.xt_apply.isEnabled(),w.xt_status.text());self.assertIn('Przewidywana liczba elementów',w.xt_stats.text())
+        w.xt_level.setCurrentIndex(w.xt_level.findData('exact'));wait_preview();self.assertIsNotNone(w.xt['result'].get('shape'))
+        self.assertEqual(w.document.get(plate.id).shape.Volume(),plate.shape.Volume())
+        v0=plate.shape.Volume();w.apply_tex();end=time.monotonic()+120
+        while w.busy and time.monotonic()<end:self.app.processEvents();time.sleep(.02)
+        w.set_mode(None);self.assertEqual(w.document.infos()[0][-1]['label'],'Tekstury geometryczne')
+        self.assertGreater(w.document.get(plate.id).shape.Volume(),v0)
+        w.undo();self.wait();self.assertAlmostEqual(w.document.get(plate.id).shape.Volume(),v0,6);w.redo();self.wait()
+        import tempfile,os
+        vt=w.document.get(plate.id).shape.Volume();pp=os.path.join(tempfile.mkdtemp(),'t.rccadx');w.document.save(pp)
+        from rccad.document import Document
+        back=Document.load(pp);self.assertAlmostEqual(back.get(plate.id).shape.Volume(),vt,4)
+        self.assertEqual(back.infos()[0][-1]['op']['type'],'tex')
+        TL.save_template('Test tex',dict(p=dict(TP.DEFAULTS,pattern='honeycomb')),'Testy');self.assertIn('Test tex',[t['name'] for t in TL.templates()])
+        path=os.path.join(tempfile.mkdtemp(),'t.json');self.assertGreaterEqual(TL.export_templates(path),1);TL.delete_template('Test tex')
+        self.assertEqual(TL.import_templates(path),1);TL.delete_template('Test tex (import)') if False else None
+        for t in TL.templates():
+            if t['name'].startswith('Test tex'):TL.delete_template(t['name'])
+
     # Generator obudów, etap 14A: druk 3D - analiza nawisów, cienkich ścianek, przestrzeni roboczej, podział z kołkami
     def test_enclosure_stage14a_print(self):
         from rccad import enclosure as encm, enclosure_tech as T

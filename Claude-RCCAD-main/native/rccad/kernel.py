@@ -1695,10 +1695,20 @@ def export_shapes(shapes, path):
     if not shapes:
         raise CadError("Brak geometrii do eksportu.")
     path = Path(path)
-    formats = {".step": "STEP", ".stp": "STEP", ".stl": "STL", ".brep": "BREP", ".dxf": "DXF"}
+    formats = {".step": "STEP", ".stp": "STEP", ".stl": "STL", ".brep": "BREP", ".dxf": "DXF", ".3mf": "3MF"}
     fmt = formats.get(path.suffix.lower())
     if not fmt:
-        raise CadError("Wybierz rozszerzenie STEP, STL, BREP lub DXF.")
+        raise CadError("Wybierz rozszerzenie STEP, STL, 3MF, BREP lub DXF.")
+    if fmt == "3MF":
+        from . import tex_mesh
+        V, T = tex_mesh.shape_arrays(list(shapes))
+        if not len(T):
+            raise CadError("Brak trójkątów do zapisu w 3MF.")
+        bad = tex_mesh.watertight(V, T)
+        tex_mesh.write_3mf(path, V, T)
+        if bad:
+            raise CadError(f"Zapisano 3MF, ale siatka ma {bad} nieszczelnych krawędzi (model nie jest bryłą zamkniętą).")
+        return
     if fmt in ("STEP", "DXF") and all(is_triangle_mesh(s) for s in shapes):
         raise CadError("Siatkę z pliku STL zapiszesz jako STL (albo BREP) - STEP i DXF wymagają powierzchni bryły.")
     compound = shapes[0] if len(shapes) == 1 else cq.Compound.makeCompound(shapes)

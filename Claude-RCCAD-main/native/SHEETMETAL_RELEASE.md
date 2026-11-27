@@ -1,4 +1,19 @@
-# RCCAD Desktop 0.5.63 — zaokrąglanie i fazowanie: diagnostyka, poprawki, wydajność; szyk kołowy „jak zegar”, TWIST
+# RCCAD Desktop 0.5.64 — Tekstury geometryczne: 16 wzorów jako rzeczywista geometria na powierzchniach brył
+
+- **Nowe narzędzie: Wzory → Tekstury geometryczne.** Radełkowanie krzyżowe, proste i spiralne, plaster miodu, punkty i półkule, piramidy, fale, Voronoi, blacha ryflowana, jodełka, pierścienie koncentryczne, łuski, plecionka, powierzchnia młotkowana, siatka trójkątna i własny wzór (szkic, plik SVG / DXF albo istniejąca bryła). Dodatkowo obraz PNG / JPG / BMP jako mapa wysokości (jedna powierzchnia B-Spline, nie bryła na piksel).
+- **Powierzchnie:** płaska, walcowa, stożkowa, kulista, toroidalna, B-Spline i dowolna, także z otworami, cienkościenne, zaokrąglone, ze ściętymi krawędziami i z importu STEP. Wzór leży wzdłuż lokalnej normalnej. Na walcu liczba powtórzeń na obwodzie jest całkowita, bez podwójnych elementów na szwie. Kilka ścian: niezależny wzór, wspólny początek, kontynuacja przez krawędź, zachowanie kierunku, dopasowanie fazy (z informacją, gdy idealna ciągłość jest niemożliwa).
+- **Tryby:** wypukły, wklęsły, mieszany, oddzielne bryły i podgląd graficzny (model bez zmian). Marginesy od krawędzi i otworów, trzy sposoby obsługi granicy (przycinanie, usuwanie niepełnych, dopasowanie bez przecinania), dopasowanie rozstawu, gradienty (liniowy, promieniowy, dwukierunkowy, od punktu, wzdłuż krzywej) wysokości, głębokości, wielkości, rozstawu, gęstości, kąta i grubości ścianki.
+- **Trzy tryby dokładności:** Dokładny B-Rep, Zoptymalizowany B-Rep i Siatkowy (STL / 3MF). Wynik siatkowy jest szczelny (kontrola krawędzi) i wyraźnie oznaczony jako nie-B-Rep: bez STEP, bez zaokrągleń i fazowań. Przy zbyt wielu elementach (powyżej 6000 w trybie dokładnym i 10000 w zoptymalizowanym) albo gdy B-Rep zawiedzie na trudnej powierzchni, program przechodzi na siatkę i mówi o tym w raporcie. Największa obsługiwana liczba elementów to 20000 (powyżej - komunikat; 50000 kopuł wyczerpuje pamięć 8 GB). Eksport 3MF dodano do okna eksportu.
+- **Zabezpieczenia:** ochrona minimalnej grubości ścianki (elementy pomijane i policzone, nie po cichu), kontrola wyniku (BRepCheck, objętość, niepołączone fragmenty), czytelne komunikaty, przy błędzie model zostaje bez zmian. Podgląd na żywo w trzech poziomach (obrysy, bryły elementów, wynik), w tle, z przerwaniem, z przewidywaną liczbą elementów i złożonością.
+- **Biblioteka:** 12 gotowych konfiguracji i konfiguracje użytkownika (zapis, zmiana nazwy, duplikat, usuwanie, import i eksport JSON, zapis do pliku). Krok historii „Tekstury geometryczne”: edycja, wyłączanie, Cofnij / Ponów, zapis projektu; ściany odnajdywane po punkcie i normalnej.
+- **Ograniczenia (uczciwie):** torus, powierzchnie B-Spline / wyciągnięte i wzory z nakładającymi się elementami (łuski, plecionka) liczą się wielokrotnie wolniej niż na płaszczyźnie (np. 160 kopuł na torusie ≈ 45 s), więc granica trybu B-Rep działa tam wcześniej. Fale i obraz powstają na jednej ścianie (przy kilku zaznaczonych na pierwszej). Relief (fale, obraz) jest ograniczony siatką do 100 × 100 punktów. Dokładność wyniku siatkowego zależy od tolerancji.
+
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
+## Wcześniejsze poprawki
+
+### 0.5.63 — zaokrąglanie i fazowanie: diagnostyka, poprawki, wydajność; szyk kołowy „jak zegar”, TWIST
 
 - **Zaokrąglenie / faza: zakres widoczny przed zatwierdzeniem.** OpenCascade przedłuża zaokrąglenie na krawędzie połączone stycznie. Przykład: jedna górna krawędź bryły z zaokrąglonymi narożnikami zaokrągla cały obwód. Te krawędzie są teraz pomarańczowe, a ich liczba jest w oknie. Zaznaczone krawędzie zostają niebieskie. Podgląd dużej bryły liczył się na wycinku, który obcinał taki łańcuch, więc podgląd różnił się od wyniku. Teraz wycinek obejmuje cały zakres.
 - **Wynik liczy się raz.** Wcześniej operacja liczyła się podczas podglądu i drugi raz po Zastosuj. Teraz zaraz po podglądzie wynik całej bryły liczy się w tle, a Zastosuj / Enter go bierze. Szybkie zmiany wartości są łączone: dokładny podgląd rusza 180 ms po ostatniej zmianie.
@@ -12,10 +27,6 @@
   - Pomiary dla płyty z 10 042 krawędziami: zaokrąglenie krawędzi 87,4 s → 5,9 s, siatka: awaria → 11,2 s. Dla 5024 krawędzi: 22,6 s → 2,7 s, siatka: awaria → 5,0 s.
 - **Szyk kołowy → „Odwróć kopie do pionu (jak cyfry zegara)”**: kopie przesuwają się po okręgu bez obracania i zachowują orientację oryginału. Działa dla szkiców i brył, zapisuje się w historii.
 - **TWIST:** skręcona kopia jest widoczna od razu po wskazaniu bryły. Wcześniej ruch myszy nad modelem zastępował podgląd podświetleniem, więc bryła znikała do pierwszego ruchu pierścienia.
-
-Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
-
-## Wcześniejsze poprawki
 
 ### 0.5.62 — Generator obudów etapy 20-22 i nowe narzędzie Wentylacja
 

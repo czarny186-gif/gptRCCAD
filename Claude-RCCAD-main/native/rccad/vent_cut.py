@@ -455,7 +455,7 @@ def _partition(B, idx, lo, hi, target, leaves, depth=0):
     _partition(B, right, l2, hi, target, leaves, depth + 1)
 
 
-def cut_tiled(shape, tools, target=180, cancel=None, progress=None):
+def cut_tiled(shape, tools, target=180, cancel=None, progress=None, op='cut'):
     """Bardzo wiele otworów: cięcie i kontrola BRepCheck na kawałkach bryły (prostopadłościany rozdzielone wolnymi pasami
     między otworami - żaden otwór nie leży na granicy), potem sklejenie (Glue) i scalenie ścian (UnifySameDomain).
     Ściana z tysiącami otworów w jednym kawałku jest liczona i sprawdzana kwadratowo dłużej. Zwraca bryłę albo None
@@ -490,7 +490,7 @@ def cut_tiled(shape, tools, target=180, cancel=None, progress=None):
         com = BRepAlgoAPI_Common(shape, box)
         if not com.IsDone():
             return None
-        tile = cut_many(com.Shape(), [flat[i] for i in idx])
+        tile = (cut_many if op == 'cut' else fuse_batches)(com.Shape(), [flat[i] for i in idx])
         if not is_valid(tile):
             fx = ShapeFix_Shape(tile)
             fx.Perform()
@@ -551,6 +551,36 @@ def fuse_many(shape, parts):
     if not op.IsDone():
         raise kernel.CadError('Dołączenie łopatek żaluzji nie powiodło się.')
     return op.Shape()
+
+
+def fuse_batches(shape, tools, batch=3000, cancel=None, progress=None):
+    """Dołączenie wielu brył jedną operacją BRepAlgoAPI_Fuse na partię (równolegle, OBB) - odpowiednik cut_many."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.TopTools import TopTools_ListOfShape
+    flat = []
+    for t in tools:
+        flat += t if isinstance(t, list) else [t]
+    cur = shape
+    for i in range(0, len(flat), batch):
+        if cancel is not None and cancel():
+            raise kernel.CadError('Dołączanie przerwane - model bez zmian.')
+        args, tl = TopTools_ListOfShape(), TopTools_ListOfShape()
+        args.Append(cur)
+        for t in flat[i:i + batch]:
+            tl.Append(t)
+        op = BRepAlgoAPI_Fuse()
+        op.SetArguments(args)
+        op.SetTools(tl)
+        op.SetRunParallel(True)
+        op.SetUseOBB(True)
+        op.SetNonDestructive(True)
+        op.Build()
+        if not op.IsDone():
+            raise kernel.CadError('Dołączenie elementów tekstury nie powiodło się (BRepAlgoAPI_Fuse).')
+        cur = op.Shape()
+        if progress is not None:
+            progress(min(1.0, (i + batch) / max(len(flat), 1)))
+    return cur
 
 
 def check_result(shape, allow_islands=False, unify=True):

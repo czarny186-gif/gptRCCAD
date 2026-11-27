@@ -994,6 +994,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             for c_ in range(4 - (r_ % 2)):
                 p.drawEllipse(QPointF(12 + c_ * 8 + (4 if r_ % 2 else 0), 15 + r_ * 9), 2.6, 2.6)
         p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(36, 33), 3.2, 3.2)
+    elif kind == 'x_tex':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRoundedRect(QRectF(5, 7, 38, 34), 4, 4)
+        for r_ in range(3):
+            for c_ in range(4):
+                cx, cy = 11 + c_ * 9 + (4.5 if r_ % 2 else 0), 14 + r_ * 9
+                p.setPen(pen(INK, 1.6)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (1, 2) else QColor(ORANGE))
+                p.drawPolygon(QPolygonF([QPointF(cx, cy - 4), QPointF(cx + 4, cy), QPointF(cx, cy + 4), QPointF(cx - 4, cy)]))
     elif kind == 'x_enccheck':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
         p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
@@ -1480,6 +1487,14 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 for c_ in range(4 - (r_ % 2)):
                     q = QPointF(12 + c_ * 8 + (4 if r_ % 2 else 0), 15 + r_ * 9)
                     p.setPen(pen(ink, 1.8)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (2, 3) else QColor(acc)); p.drawEllipse(q, 2.7, 2.7)
+        elif name == 'tex':
+            # tekstury: płyta z rombowym radełkowaniem, jeden romb pomarańczowy
+            fl(_rounded(5, 7, 38, 34, 4), soft)
+            for r_ in range(3):
+                for c_ in range(4):
+                    cx, cy = 11 + c_ * 9 + (4.5 if r_ % 2 else 0), 14 + r_ * 9
+                    poly = QPolygonF([QPointF(cx, cy - 4), QPointF(cx + 4, cy), QPointF(cx, cy + 4), QPointF(cx - 4, cy)])
+                    p.setPen(pen(ink, 1.6)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (1, 2) else QColor(acc)); p.drawPolygon(poly)
         elif name == 'pattern':
             for r in range(2):
                 for c in range(2):
