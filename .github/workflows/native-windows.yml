@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 100          # testy (ok. 50 min na Windows) + kompilacja EXE
     defaults:
       run:
         shell: pwsh

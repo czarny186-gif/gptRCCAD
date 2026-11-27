@@ -84,8 +84,12 @@ def _valid_with_heavy_faces(shape, heavy):
         ex.Next()
     if not BRepCheck_Analyzer(comp, True, True).IsValid():
         return False
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
     for face in heavy:
         wx = TopExp_Explorer(face, TopAbs_WIRE)
+        wires, boxes = [], []
         while wx.More():
             wire = TopoDS.Wire_s(wx.Current())
             chk = BRepCheck_Wire(wire)
@@ -93,7 +97,24 @@ def _valid_with_heavy_faces(shape, heavy):
                 return False
             if not BRepCheck_Analyzer(wire, True).IsValid():
                 return False
+            b = Bnd_Box()
+            BRepBndLib.Add_s(wire, b, False)
+            wires.append(wire)
+            boxes.append(b.Get())
             wx.Next()
+        # przecięcia obrysów: tylko pary, których ramki na siebie zachodzą (przeciąganie po osi X) - zwykle obrys
+        # zewnętrzny z każdym otworem i nieliczne sąsiednie otwory; dla nich dokładna odległość (styk = błąd)
+        B = np.array(boxes, float)
+        order = np.argsort(B[:, 0])
+        active = []
+        for i in order:
+            active = [j for j in active if B[j, 3] >= B[i, 0] - 1e-7]
+            for j in active:
+                if (B[i, 1] <= B[j, 4] + 1e-7 and B[j, 1] <= B[i, 4] + 1e-7 and B[i, 2] <= B[j, 5] + 1e-7 and B[j, 2] <= B[i, 5] + 1e-7):
+                    dist = BRepExtrema_DistShapeShape(wires[i], wires[j])
+                    if not dist.IsDone() or dist.Value() < 1e-7:
+                        return False
+            active.append(i)
     return _free_edges(cq.Shape.cast(shape.wrapped) if not hasattr(shape, 'Faces') else shape) == 0
 
 

@@ -293,6 +293,45 @@ class BlendKernelTests(unittest.TestCase):
             self.assertLess(np.mean(ts[-10:]), max(.5, 5 * np.mean(ts[:10])))      # brak narastającego spowolnienia
         sys.stderr.write('\nStabilność (średni czas operacji s): ' + ', '.join(f'{k_}: {np.mean(v):.3f}' for k_, v in times.items()) + '\n')
 
+    def test_no_memory_growth_over_repeated_operations(self):
+        import gc
+        import tracemalloc
+        def rss():
+            try:
+                with open('/proc/self/statm') as f:
+                    return int(f.read().split()[1]) * os.sysconf('SC_PAGE_SIZE') / 2 ** 20
+            except OSError:
+                return float('nan')                                     # Windows: bez pomiaru RSS (sprawdzana sterta Pythona)
+        sh = W().box(60, 40, 30).faces('>Z').workplane().hole(8).val()
+        real = set(k.display_mesh(sh).edges)                            # bez szwu walca otworu
+        straight = [i for i, e in enumerate(sh.Edges()) if e.geomType() == 'LINE' and i in real]
+        def batch(n):
+            for j in range(n):
+                r, made, scope = k.blend_full(sh, {straight[j % len(straight)]}, .5 + (j % 5) * .2, ('fillet', 'chamfer')[j % 2])
+                k.display_mesh(r)
+        batch(40)
+        gc.collect()
+        tracemalloc.start()
+        m0, py0 = rss(), tracemalloc.get_traced_memory()[0]
+        batch(200)
+        gc.collect()
+        m1, py1 = rss(), tracemalloc.get_traced_memory()[0]
+        tracemalloc.stop()
+        sys.stderr.write(f'\nPamięć po 200 operacjach: RSS {m0:.0f} -> {m1:.0f} MB, sterta Pythona +{(py1 - py0) / 2 ** 20:.2f} MB\n')
+        self.assertLess((py1 - py0) / 2 ** 20, 5.0)
+        if m0 == m0:
+            self.assertLess(m1 - m0, 150)
+
+    def test_heavy_face_check_still_finds_overlapping_holes(self):
+        outer = cq.Wire.makePolygon([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], close=True)
+        holes = [cq.Wire.makeCircle(2, cq.Vector(5 + 12 * (i % 8), 5 + 12 * (i // 8), 0), cq.Vector(0, 0, -1)) for i in range(60)]
+        good = cq.Solid.extrudeLinear(cq.Face.makeFromWires(outer, holes), cq.Vector(0, 0, 3))
+        bad = cq.Solid.extrudeLinear(cq.Face.makeFromWires(outer, holes + [cq.Wire.makeCircle(2, cq.Vector(8, 5, 0), cq.Vector(0, 0, -1))]), cq.Vector(0, 0, 3))
+        self.assertTrue(k.heavy_faces(good))
+        self.assertTrue(k.is_valid(good))
+        self.assertFalse(k.is_valid(bad))                               # nachodzące otwory - jak pełny BRepCheck
+        self.assertFalse(bad.isValid())
+
     def test_hang_in_open_cascade_is_stopped_and_reported(self):
         from rccad import workers
         if not workers.start(wait=True):

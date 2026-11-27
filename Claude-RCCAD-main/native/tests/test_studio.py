@@ -1931,6 +1931,42 @@ class StudioTests(unittest.TestCase):
         again=hist.run_recipe(back.states()[cur-1][0],infos[-1]['op'])                  # przeliczenie kroku po odczycie
         self.assertAlmostEqual(again[0].shape.Volume(),back.bodies[0].shape.Volume(),6)
 
+    # 0.5.63: zaokrąglenie - strzałka (manipulator), krawędzie dwóch brył w jednym kroku, zamykanie w trakcie liczenia,
+    # pomiar etapów (podgląd, zatwierdzenie, odświeżenie widoku, zapis historii) i responsywność okna podczas liczenia
+    def test_fillet_handle_multi_body_close_during_work_and_stage_times(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtGui import QCloseEvent
+        from rccad import workers
+        cnt=patch.object(workers,'count',return_value=2);cnt.start();self.addCleanup(cnt.stop)
+        self.assertTrue(workers.start(wait=True))                                               # jak w programie: liczą procesy
+        self.addCleanup(workers.shutdown)
+        w=self.w
+        a=Body('A',cq.Workplane().box(200,200,10).faces('>Z').workplane().rarray(9,9,20,20).hole(4).val()).prepared()
+        b=Body('B',k.transform(k.box(20,20,20),(150,0,0))).prepared();w.document.commit([a,b]);w.refresh()
+        ea=[i for i,e in enumerate(a.shape.Edges()) if e.geomType()=='LINE' and abs(e.Center().z-5)<1e-6 and abs(e.Center().y+100)<1e-6]
+        w.set_mode('mod');w._mod_select(a.id,set(ea),False,False,mark=ea[0]);w.mod_size.setValue(1)
+        times={}
+        t0=time.monotonic();w._timers['mod'].stop();w.update_mod_preview();self.preview();times['podgląd']=time.monotonic()-t0
+        self.assertTrue(w.view.preview_items)
+        handle=next(h for h in w.view.handles if h['id']=='mod')
+        for d in (.2,.5,.9,1.3):w.handle_dragged('mod',d)                                       # przeciąganie strzałki
+        self.assertAlmostEqual(w.mod_size.value(),2.3,6);w.handle_released('mod');self.preview()
+        self.assertTrue(w.view.preview_items)
+        w._mod_select(b.id,{0},False,False,mark=0)                                               # druga bryła: jeden krok
+        steps=len(w.document.states())
+        ticks=[];beat=QTimer();beat.setInterval(10);beat.timeout.connect(lambda:ticks.append(time.monotonic()));beat.start()
+        t0=time.monotonic();w.apply_mod()
+        ev=QCloseEvent();w.closeEvent(ev);self.assertFalse(ev.isAccepted())                    # zamknięcie w trakcie liczenia: odmowa
+        self.wait();times['zatwierdzenie (2 bryły)']=time.monotonic()-t0;beat.stop()
+        gaps=np.diff(ticks) if len(ticks)>1 else np.array([0.0])
+        self.assertEqual(len(w.document.states()),steps+1)
+        self.assertLess(w.document.get(a.id).shape.Volume(),a.shape.Volume());self.assertLess(w.document.get(b.id).shape.Volume(),b.shape.Volume())
+        t0=time.monotonic();w.refresh();self.app.processEvents();times['odświeżenie widoku']=time.monotonic()-t0
+        t0=time.monotonic();w.undo();self.wait();w.redo();self.wait();times['cofnij + ponów']=time.monotonic()-t0
+        __import__('sys').stderr.write('\nZaokrąglenie - etapy (s): '+', '.join(f'{k_} {v:.2f}' for k_,v in times.items())+
+                         f'; najdłuższa przerwa okna podczas liczenia {gaps.max()*1000:.0f} ms\n')
+        self.assertLess(gaps.max(),1.0)                                                          # okno nie zamarza
+
     def test_fillet_selection_dropped_when_body_changes_with_tool_open(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh()
         w.set_mode('mod');w._mod_select(a.id,{0,1},False,False,mark=0);self.assertTrue(w._mod_items())
