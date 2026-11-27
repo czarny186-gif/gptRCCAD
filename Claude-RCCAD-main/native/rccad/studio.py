@@ -1588,6 +1588,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
         # --- szyk (prostokątny / kołowy / wzdłuż linii) ---
         self.pat_id, self.pat_path = None, None
+        self.pat_virtual, self.pat_feature = None, None
+        self._pat_feat_cache = {}
         self.pat_picking = False
         self._pat_range_frame = None
         self._pat_range_points = []
@@ -1597,8 +1599,10 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.pat_step1 = ui.StepRow(1, 'x_object', 'Obiekt do szyku', plain=True)
         self.pat_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia lub krawędź)', plain=True)
         lay.addWidget(self.pat_step1)
-        self.pat_filter = ui.Segmented([('Auto', 'auto', 'x_object'), ('Bryła', 'solid', 'x_extrude'), ('Szkic', 'sketch', 'x_area')], 20)
-        for b, tip in zip(self.pat_filter._buttons, ('Bryła albo szkic - co jest pod kursorem', 'Tylko bryły', 'Tylko szkice')):
+        self.pat_filter = ui.Segmented([('Auto', 'auto', 'x_object'), ('Bryła', 'solid', 'x_extrude'), ('Szkic', 'sketch', 'x_area'), ('Element', 'feature', 'x_feature')], 20)
+        for b, tip in zip(self.pat_filter._buttons, ('Bryła albo szkic - co jest pod kursorem', 'Tylko bryły', 'Tylko szkice',
+                                                     'Element bryły: wycięcie, otwór (przelotowy lub nie), kieszeń albo wypukłość powstała przy wyciąganiu i wycinaniu - '
+                                                     'kliknij jego ścianę, a szyk powieli sam element')):
             b.setToolTip(tip)
         lay.addWidget(self.pat_filter)
         lay.addWidget(self.pat_step2)
@@ -1723,6 +1727,13 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.pat_join.hide()
         self.pat_join.toggled.connect(lambda on: self.pat_result.setCurrentIndex(2 if on else (0 if self.pat_result.currentData() == 'join' else self.pat_result.currentIndex())))
         self.pat_result.currentIndexChanged.connect(lambda *_: self.pat_join.setChecked(self.pat_result.currentData() == 'join'))
+        self.pat_feat_merge = QCheckBox('Połącz z bryłą od razu po zakończeniu operacji')
+        self.pat_feat_merge.setChecked(True)
+        self.pat_feat_merge.setToolTip('Wycięcia i otwory są odejmowane od bryły, wypukłości do niej dodawane - powstaje jedna bryła.\n'
+                                       'Po odznaczeniu kopie elementów zostają osobnymi obiektami.')
+        self.pat_feat_merge.toggled.connect(lambda on: self.pat_result.setCurrentIndex(2 if on else 0))
+        self.pat_feat_merge.hide()
+        lay.addWidget(self.pat_feat_merge)
         self.pat_status = _label('', 'status')
         lay.addWidget(self.pat_status)
         footer = self.pat_panel.footer
@@ -2204,6 +2215,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         if hasattr(self, 'mt_angle'):
             self.mt_angle.setText('0°')
         self.pat_id, self.pat_path = None, None
+        self.pat_virtual, self.pat_feature = None, None
         self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None;self._pat_path_limits = None
         self.pat_range_button.blockSignals(True);self.pat_range_button.setChecked(False);self.pat_range_button.blockSignals(False)
         self._pattern_range_controls(False)
@@ -8579,6 +8591,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     # =====================================================================
     def reset_pattern(self):
         self.pat_id, self.pat_path = None, None
+        self.pat_virtual, self.pat_feature = None, None
         self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None;self._pat_path_limits = None
         self.pat_range_button.setChecked(False)
         self.view.tints = {}
@@ -8605,7 +8618,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def _pattern_range_toggled(self, enabled):
         self._pat_range_frame = None;self._pat_range_points = [];self._pat_range_axes = None
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         if enabled and (body is None or body.kind != 'sketch' or self.pat_kind.currentData() != 'rect'):
             self.pat_range_button.blockSignals(True);self.pat_range_button.setChecked(False);self.pat_range_button.blockSignals(False)
             self.toast('Zakres z 3 punktów działa tylko dla prostokątnego szyku szkiców.')
@@ -8701,9 +8714,40 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         pts = mesh.vertices if len(mesh.vertices) else np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()])
         return np.min(pts, axis=0), np.max(pts, axis=0)
 
+    def _pat_body(self):
+        """Obiekt szyku: element bryły (wirtualna bryła elementu, poza dokumentem) albo zwykły obiekt dokumentu."""
+        if getattr(self, 'pat_virtual', None) is not None:
+            return self.pat_virtual
+        return self.document.get(self.pat_id) if self.pat_id else None
+
+    def _pattern_feature_at(self, x, y):
+        """Element bryły pod kursorem: (bryła, ściana, wynik rozpoznania albo None, komunikat). Wynik liczony raz na ścianę."""
+        from . import pat_feature
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid' or body.mesh is None:
+            return None
+        try:
+            face, _ = self.view.face_at(body, hit, curved=True)
+        except kernel.CadError:
+            return None
+        key = (body.id, id(body.shape), face.hashCode())
+        cache = self._pat_feat_cache
+        if key not in cache:
+            if len(cache) > 40:
+                cache.clear()
+            try:
+                cache[key] = (pat_feature.feature_from_face(body.shape, face), '')
+            except kernel.CadError as exc:
+                cache[key] = (None, str(exc))
+        feat, message = cache[key]
+        return body, face, feat, message
+
     def _pattern_candidate(self, x, y):
         """Co zostanie wybrane pod kursorem: bid obiektu lub None. Szkic ma pierwszeństwo przed bryłą (chyba że filtr mówi inaczej)."""
         mode = self.pat_filter.currentData()
+        if mode == 'feature':
+            return self.view.pick_body(x, y)
         if mode in ('auto', 'sketch'):
             hit = self.view.nearest_edge(x, y, kinds=('sketch',))
             if hit:
@@ -8718,7 +8762,25 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             return hit[0] if hit else None
         return solid
 
+    def _pattern_hover_feature(self, x, y):
+        found = self._pattern_feature_at(x, y)
+        key = None if found is None else (found[0].id, found[1].hashCode())
+        if getattr(self, '_pat_hover_feat', None) != key:
+            self._pat_hover_feat = key
+            if found is None:
+                self.view.set_selection_meshes(None)
+                self.pat_step1.set_state('active', 'Kliknij ścianę elementu (otwór, wycięcie, wypukłość)')
+            else:
+                body, face, feat, message = found
+                shown = kernel.display_mesh(feat['tool']) if feat else kernel.display_mesh(face)
+                self.view.set_selection_meshes([shown], color=(1, .55, .1, .45) if feat else (.6, .6, .6, .3), line_color=(.95, .42, .02, 1))
+                label = 'nie rozpoznano elementu' if feat is None else ('wycięcie / otwór' if feat['kind'] == 'cut' else 'wypukłość')
+                self.pat_step1.set_state('active', f'{body.name}: {label}')
+        self.view.setCursor(Qt.PointingHandCursor if found is not None and found[2] is not None else Qt.ArrowCursor)
+
     def _pattern_hover(self, x, y):
+        if self.pat_filter.currentData() == 'feature':
+            return self._pattern_hover_feature(x, y)
         bid = self._pattern_candidate(x, y)
         body = self.document.get(bid) if bid else None
         if getattr(self, '_pat_hover_id', 0) != bid:
@@ -8734,7 +8796,37 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 self.pat_step1.set_state('active', ('Szkic: ' if body.kind == 'sketch' else 'Bryła: ') + body.name)
         self.view.setCursor(Qt.PointingHandCursor if body is not None else Qt.ArrowCursor)
 
+    def _pick_pattern_feature(self, x, y):
+        found = self._pattern_feature_at(x, y)
+        self.view.set_hover_body(None)
+        self.view.set_selection_meshes(None)
+        self._pat_hover_feat = None
+        if found is None:
+            self.toast('Kliknij ścianę bryły, której element ma być powielony.')
+            return
+        host, _face, feat, message = found
+        if feat is None:
+            self.toast(message or 'Nie rozpoznano elementu na tej ścianie.', 5000)
+            return
+        tool = feat['tool']
+        label = 'Wycięcie' if feat['kind'] == 'cut' else 'Wypukłość'
+        self.pat_id = host.id
+        self.pat_feature = dict(kind=feat['kind'], tool=tool, faces=feat['faces'])
+        self.pat_virtual = Body(label, tool, 'solid', 'XY', id=host.id + '#el', mesh=kernel.display_mesh(tool))
+        low, high = self._mesh_bounds(self.pat_virtual.mesh)
+        for spin, size in zip(self.pat_gaps, high - low):
+            spin.blockSignals(True)
+            spin.setValue(round(float(size) * 1.25 + 1.0, 1))
+            spin.blockSignals(False)
+        self.pat_feat_merge.setChecked(True)
+        self._pattern_defaults(self.pat_virtual)
+        self.view.set_selection_meshes([self.pat_virtual.mesh], color=(1, .55, .1, .45), line_color=(.95, .42, .02, 1))
+        self.update_pattern_status()
+
     def pick_pattern(self, x, y):
+        if self.pat_id is None and self.pat_filter.currentData() == 'feature':
+            self._pick_pattern_feature(x, y)
+            return
         if self.pat_id is None:
             bid = self._pattern_candidate(x, y)
             self.view.set_hover_body(None)
@@ -8778,7 +8870,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.update_pattern_status()
 
     def update_pattern_status(self):
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         path = self.pat_kind.currentData() == 'path'
         self.pat_range_button.setEnabled(body is not None and body.kind == 'sketch' and self.pat_kind.currentData() == 'rect')
         if body is None:
@@ -8791,6 +8883,12 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         for axis, pic in zip('XYZ', self.pat_axis_pics):
             pic.setToolTip(f'Oś {axis} świata' if solid else
                            (f'Kierunek {axis} w płaszczyźnie szkicu' if axis != 'Z' else 'Prostopadle do płaszczyzny szkicu'))
+        feature = self.pat_feature is not None
+        self.pat_feat_merge.setVisible(feature)
+        self.pat_radius.setEnabled(not feature)
+        self.pat_result._buttons[1].setEnabled(not feature)    # element: „Jeden element” (grupa) nie ma sensu
+        if feature:
+            self.pat_step1.set_state('done', ('Wycięcie' if self.pat_feature['kind'] == 'cut' else 'Wypukłość') + ' w bryle: ' + (self.document.get(self.pat_id).name if self.document.get(self.pat_id) else ''))
         self.pat_join.setEnabled(body is not None and body.kind == 'solid')
         self.pat_result._buttons[2].setEnabled(solid)          # „Jedna bryła” tylko dla brył
         if not solid and self.pat_result.currentData() == 'join':
@@ -8847,7 +8945,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self._pattern_set([self.pat_radius], [d])
 
     def _pattern_pivot_changed(self):
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         if body is not None and body.mesh is not None:
             self._pattern_set([self.pat_radius], [self._radial(body)[0]])
         if self.pat_picking:
@@ -8867,7 +8965,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def _pattern_pick_frame(self):
         """Płaszczyzna szyku kołowego: płaszczyzna szkicu, a dla bryły - prostopadła do osi obrotu, przez środek obiektu."""
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         if body is None or body.mesh is None:
             return None
         if body.kind == 'sketch':
@@ -9249,7 +9347,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def _place_pattern_handles(self):
         """Szyk prostokątny: strzałki X, Y, Z na obiekcie - przeciągnięcie zmienia odstęp w tym kierunku (przez zero:
         kopie przechodzą na drugą stronę). Koniec strzałki stoi na pierwszej kopii."""
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         if self.mode != 'pattern' or body is None or body.mesh is None:
             self.view.set_handles([])
             return
@@ -9333,7 +9431,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         """Podgląd na żywo: kopie siatki obiektu przekształcone macierzami (bez OCC), więc zmiana parametru jest natychmiastowa."""
         if self.mode != 'pattern':
             return
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         if body is not None and self.pat_kind.currentData()=='circ':
             self.view.sel_vertices=[np.array([s.value() for s in self.pat_pivot],float)]
         elif self.pat_range_button.isChecked():
@@ -9360,7 +9458,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def apply_pattern(self):
         if self.busy:
             return
-        body = self.document.get(self.pat_id) if self.pat_id else None
+        body = self._pat_body()
         if body is None:
             self.toast('Kliknij bryłę lub szkic, który ma być powielony.')
             return
@@ -9374,6 +9472,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             return
         join = self.pat_join.isChecked() and body.kind == 'solid'
         kind = self.pat_kind.currentData()
+        if self.pat_feature is not None:
+            join = self.pat_feat_merge.isChecked()
         if kind == 'rect':
             if self.pat_range_button.isChecked() and len(self._pat_range_points)<3:
                 self.toast('Wskaż oba końce zakresu na siatce szkicu.');return
@@ -9389,6 +9489,25 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                           fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())
             if self._pat_path_limits is not None:params.update(start=self._pat_path_limits[0],end=self._pat_path_limits[1])
         recipe = dict(type='pattern', id=body.id, kind=kind, params=params, join=join, out=[uuid.uuid4().hex for _ in ops])
+        if self.pat_feature is not None:
+            from . import pat_feature
+            recipe['id'] = self.pat_id
+            recipe['feature'] = dict(kind=self.pat_feature['kind'], tool=pat_feature.pack(self.pat_feature['tool']))
+            existing = list(self.document.bodies)
+            label = 'Szyk elementu'
+
+            def build_feature():
+                return list(hist.offloaded(hist.run_pattern, existing, recipe))
+
+            def apply_feature(new):
+                self.document.pending_op = recipe
+                self.document.commit(new)
+                self.selected = []
+
+            self.view.set_preview_mesh(None)
+            self.view.set_selection_meshes(None)
+            self.run_operation(label, build_feature, apply_feature, after=lambda: self.set_mode(None))
+            return
         if not join and self.pat_result.currentData() == 'group':
             recipe['group'] = uuid.uuid4().hex             # „jako jeden element”: oryginał i kopie w jednej grupie
         targets = self._multi_targets(body.id, ('solid', 'sketch'))

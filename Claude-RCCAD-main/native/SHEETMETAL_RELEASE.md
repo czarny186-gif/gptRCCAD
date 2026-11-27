@@ -1,3 +1,11 @@
+# RCCAD Desktop 0.5.65 — Szyk elementów bryły: otwory, wycięcia i wypukłości z opcją łączenia
+
+- **Szyk → filtr „Element”.** Do puli wskazywanych obiektów doszły elementy bryły powstałe przy wyciąganiu i wycinaniu: otwory (przelotowe i nieprzelotowe), wycięcia, kieszenie oraz wypukłości (czopy, żebra). Wystarczy kliknąć ścianę elementu - program rozpoznaje cały element z geometrii B-Rep (obszar ścian połączonych krawędziami wklęsłymi albo wypukłymi, zamknięty płaskimi wiekami), podświetla go na pomarańczowo i podpisuje jako wycięcie / otwór albo wypukłość.
+- **Wszystkie rodzaje szyku** (prostokątny, kołowy, wzdłuż linii) powielają sam element w bryle, z podglądem na żywo, uchwytami i jednym krokiem historii (Cofnij cofa całość, zapis projektu zachowuje element).
+- **Nowa opcja „Połącz z bryłą od razu po zakończeniu operacji”** (domyślnie włączona): kopie wycięć są odejmowane od bryły, kopie wypukłości dodawane do niej - wynik to jedna bryła. Po odznaczeniu kopie zostają osobnymi obiektami w folderze na liście Obiekty.
+- **Zabezpieczenia:** element rozpoznany tylko wtedy, gdy jego objętość jest wyraźnie mniejsza od bryły i zgodna z rodzajem (wypukłość leży w bryle, wycięcie poza nią); kopie leżące całkowicie poza bryłą dają czytelny komunikat zamiast pustej operacji; przy błędzie model zostaje bez zmian.
+- **Ograniczenia (uczciwie):** element z zaokrągleniem u podstawy albo na obrzeżu, a także leżący na powierzchni walcowej (nieplanarna granica), nie jest rozpoznawany - program mówi o tym komunikatem. W szyku elementu pole odległości od środka obrotu jest zablokowane (element zostaje na swoim miejscu, kopie powstają wokół niego).
+
 # RCCAD Desktop 0.5.64 — Tekstury geometryczne: 16 wzorów jako rzeczywista geometria na powierzchniach brył
 
 - **Nowe narzędzie: Wzory → Tekstury geometryczne.** Radełkowanie krzyżowe, proste i spiralne, plaster miodu, punkty i półkule, piramidy, fale, Voronoi, blacha ryflowana, jodełka, pierścienie koncentryczne, łuski, plecionka, powierzchnia młotkowana, siatka trójkątna i własny wzór (szkic, plik SVG / DXF albo istniejąca bryła). Dodatkowo obraz PNG / JPG / BMP jako mapa wysokości (jedna powierzchnia B-Spline, nie bryła na piksel).

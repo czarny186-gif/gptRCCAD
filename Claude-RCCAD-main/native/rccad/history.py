@@ -1569,7 +1569,34 @@ def _mirror_matrix(normal, origin):
     return m
 
 
+def run_pattern_feature(bodies, recipe):
+    """Szyk elementu bryły (otwór, wycięcie, wypukłość): kopie bryły elementu odejmowane od bryły / dodawane do niej
+    („Połącz”) albo zostawione jako osobne obiekty."""
+    from . import pat_feature
+    from types import SimpleNamespace
+    host = _body(bodies, recipe['id'])
+    feat = recipe['feature']
+    tool = pat_feature.unpack(feat['tool'])
+    ops, _moved = pattern_ops_for(SimpleNamespace(shape=tool), recipe)
+    copies = [kernel.apply_op(tool, op) for op in ops]
+    if not copies:
+        raise kernel.CadError('Zwiększ ilość kopii.')
+    if recipe.get('join'):
+        merged = kernel.boolean('subtract' if feat['kind'] == 'cut' else 'union', host.shape, copies)
+        if abs(float(merged.Volume()) - float(host.shape.Volume())) < 1e-7 * max(1.0, float(host.shape.Volume())):
+            raise kernel.CadError('Kopie elementu nie zmieniły bryły - leżą poza nią. Zmień odstępy lub kierunek.')
+        return _replace(bodies, host.changed(merged))
+    out = pad_ids(recipe.get('out', ()), len(copies), (recipe.get('out') or [host.id])[0])
+    label = 'Wycięcie' if feat['kind'] == 'cut' else 'Element'
+    folder = recipe.get('folder') or unique_folder(bodies, f'{host.name} — {label.lower()} — szyk')
+    made = [Body(f'{label} — szyk {i + 1}', sh, 'solid', host.plane, id=out[i], folder=folder, color=host.color,
+                 mesh=kernel.display_mesh(sh)) for i, sh in enumerate(copies)]
+    return [*bodies, *prepared_many(made)]
+
+
 def run_pattern(bodies, recipe):
+    if recipe.get('feature'):
+        return run_pattern_feature(bodies, recipe)
     body = _body(bodies, recipe['id'])
     ops, moved = pattern_ops_for(body, recipe)
     source = kernel.apply_op(body.shape, moved) if moved else body.shape

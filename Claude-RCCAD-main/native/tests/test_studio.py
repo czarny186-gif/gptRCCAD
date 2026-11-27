@@ -6024,6 +6024,56 @@ class StudioTests(unittest.TestCase):
         for t in VL.templates():
             if t['name'].startswith('Test V2'):VL.delete_template(t['name'])
 
+    def _pick_feature_face(self,w,body,point):
+        v=cq.Vertex.makeVertex(*point);face=min(body.shape.Faces(),key=lambda f_:f_.distance(v))
+        with patch.object(w.view,'pick_face',return_value=(body.id,np.array(face.normalAt(cq.Vector(*point)).toTuple()),np.array(point,float))),\
+             patch.object(w.view,'face_at',return_value=(face,None)):
+            w.pick_pattern(10,10)
+
+    # 0.5.65: szyk elementów bryły (otwory, wycięcia, wypukłości) z opcją łączenia z bryłą
+    def test_pattern_of_solid_features_cut_and_boss(self):
+        w=self.w
+        base=cq.Workplane('XY').box(80,40,20).faces('>Z').workplane().pushPoints([(-30,0)]).hole(6).val()
+        base=cq.Workplane(obj=base).faces('>Z').workplane().pushPoints([(20,0)]).circle(5).extrude(6).val()
+        host=Body('Płyta z elementami',base).prepared();w.document.commit([host]);w.refresh()
+        vol=host.shape.Volume()
+        self.assertEqual(w.pat_filter.count() if hasattr(w.pat_filter,'count') else len(w.pat_filter._buttons),4)
+        # otwór: 3 kopie co 12 mm, połączone z bryłą
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3)
+        self._pick_feature_face(w,host,(-27,0,0))
+        self.assertIsNotNone(w.pat_feature);self.assertEqual(w.pat_feature['kind'],'cut')
+        self.assertTrue(w.pat_feat_merge.isVisibleTo(w.pat_panel));self.assertTrue(w.pat_feat_merge.isChecked())
+        w.pat_counts[0].setValue(3);w.pat_gaps[0].setValue(12);w.update_pattern_preview();w.apply_pattern();self.wait();self.wait();w.set_mode(None)
+        self.assertEqual(len(w.document.bodies),1)
+        holes=w.document.bodies[0]
+        self.assertLess(holes.shape.Volume(),vol-2*math.pi*9*20*.99)
+        self.assertEqual(len([f_ for f_ in holes.shape.Faces() if f_.geomType()=='CYLINDER']),3+1)       # 3 otwory + czop
+        # wypukłość: kopie jako osobne obiekty (bez łączenia)
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3)
+        self._pick_feature_face(w,holes,(25,0,13))
+        self.assertEqual(w.pat_feature['kind'],'add')
+        w.pat_feat_merge.setChecked(False)
+        w.pat_counts[0].setValue(1);w.pat_counts[1].setValue(2);w.pat_gaps[1].setValue(14);w.update_pattern_preview();w.apply_pattern();self.wait();self.wait();w.set_mode(None)
+        extra=[b for b in w.document.bodies if b.name.startswith('Element — szyk')]
+        self.assertEqual(len(extra),1);self.assertAlmostEqual(extra[0].shape.Volume(),math.pi*25*6,2)
+        # i to samo połączone
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3)
+        main=next(b for b in w.document.bodies if not b.name.startswith('Element'))
+        before=main.shape.Volume()
+        self._pick_feature_face(w,main,(25,0,13));self.assertTrue(w.pat_feat_merge.isChecked())
+        w.pat_counts[0].setValue(1);w.pat_counts[1].setValue(2);w.pat_gaps[1].setValue(14);w.apply_pattern();self.wait();self.wait();w.set_mode(None)
+        main2=next(b for b in w.document.bodies if not b.name.startswith('Element'))
+        self.assertAlmostEqual(main2.shape.Volume()-before,math.pi*25*6,2)
+        w.undo();self.wait()
+        self.assertAlmostEqual(next(b for b in w.document.bodies if not b.name.startswith('Element')).shape.Volume(),before,2)
+
+    def test_pattern_feature_rejects_plain_body_face(self):
+        w=self.w
+        host=Body('Kostka',cq.Workplane().box(30,30,30).val()).prepared();w.document.commit([host]);w.refresh()
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3)
+        self._pick_feature_face(w,host,(15,0,0))
+        self.assertIsNone(w.pat_feature);self.assertIsNone(w.pat_id)
+
     def test_tex_tool_window(self):
         from rccad import tex_library as TL, tex_patterns as TP, vent_feature as VF
         import rccad.studio as st

@@ -892,6 +892,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             if kind == 'x_pat_group':
                 pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); pn.setDashPattern([2.4, 1.8]); p.setPen(pn); p.setBrush(Qt.NoBrush)
                 p.drawRoundedRect(QRectF(2.5, 13, 43, 20), 6, 6)
+    elif kind == 'x_feature':
+        # element bryły (otwór / wycięcie / wypukłość): blok z pomarańczowym otworem i wypukłością
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(5, 18, 38, 22), 3, 3)
+        p.setBrush(QColor('#ffffff')); p.setPen(pen(ORANGE, 2.4)); p.drawEllipse(QRectF(10, 22, 12, 12))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2)); p.drawRoundedRect(QRectF(28, 8, 10, 12), 2, 2)
     elif kind == 'x_pattern' or kind == 'x_pat_rect':
         for r in range(2):
             for c in range(3):
