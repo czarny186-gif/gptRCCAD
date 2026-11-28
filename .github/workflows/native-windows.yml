@@ -186,6 +186,5 @@ jobs:
             Claude-RCCAD-main/native/SHEETMETAL_RELEASE.md > release-notes.md
           printf '\n[Testy Windows](https://github.com/%s/actions/runs/%s)\n' \
             "$GH_REPO" "$RUN_ID" >> release-notes.md
-          gh release create "$RELEASE_TAG" release-assets/RCCAD-Desktop-Windows-x64.zip release-assets/SHA256.txt \
-            --target "$TESTED_SHA" --latest \
-            --title "RCCAD Desktop ${RELEASE_TAG#rccad-performance-v} — Performance Engine" --notes-file release-notes.md
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -qx true
+          gh release upload "$RELEASE_TAG" release-assets/RCCAD-Desktop-Windows-x64.zip release-assets/SHA256.txt
