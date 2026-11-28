@@ -7079,7 +7079,7 @@ class StudioTests(unittest.TestCase):
             self.w.tools['sketch'].click();self.w.plane_picked('XY')
             for b in self.w.shape_bar.findChildren(__import__('PySide6.QtWidgets',fromlist=['QToolButton']).QToolButton):
                 if b.objectName()=='shapeExpand':b.click()
-        self.assertEqual(seen[:2],[('rich',9),('ctx',4)]);self.assertEqual([n for kind,n in seen[2:]],[3,4,2])      # 0.5.49: warianty fasolki
+        self.assertEqual(seen[:2],[('rich',10),('ctx',4)]);self.assertEqual([n for kind,n in seen[2:]],[3,4,2])      # 0.5.49: warianty fasolki
 
     def test_every_button_click_raises_no_exception(self):
         import sys

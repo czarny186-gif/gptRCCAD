@@ -45,6 +45,9 @@ class JobQueue:
         self.name = name
         self.pool = pool
 
+    def waitForDone(self, timeout=-1):
+        return self.pool.waitForDone(timeout)
+
     def start(self, work, priority=0):
         manager = self.manager
         job = Job(next(manager._ids), work.label, self.name, priority, manager.revision())
