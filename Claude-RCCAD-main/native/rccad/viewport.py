@@ -1,5 +1,6 @@
 """Native Qt/OpenGL viewport with picking against displayed CAD edge curves."""
 from __future__ import annotations
+from ctypes import c_void_p
 import math
 import time
 import numpy as np
@@ -11,7 +12,8 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QVector3D, QVector4D, QColor
 from OpenGL import GL
-from PySide6.QtGui import QMatrix4x4, QSurfaceFormat
+from PySide6.QtGui import QMatrix4x4, QOpenGLContext, QSurfaceFormat
+from PySide6.QtOpenGL import QOpenGLBuffer
 from .document import Body
 from . import kernel
 from .sectionview import clip_segments
@@ -452,6 +454,125 @@ class OffsetMesh(SectionMesh):
             super().paint()
         finally:
             GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
+
+
+class SharedSolidMesh(OffsetMesh):
+    """Draw rigid occurrences from one set of OpenGL buffers."""
+
+    def __init__(self, instances, **kwargs):
+        super().__init__(**kwargs)
+        self.instances = tuple((bid, QMatrix4x4(matrix.ravel().tolist())) for bid, matrix in instances)
+        self._instance = QMatrix4x4()
+        self._matrices = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
+        self._instance_key = None
+        self._instancing_failed = False
+
+    def modelViewMatrix(self):
+        return super().modelViewMatrix() * self._instance
+
+    def mvpMatrix(self):
+        return self.projectionMatrix() * self.modelViewMatrix()
+
+    def _program(self, context):
+        view = self.view()
+        cached = getattr(view, '_instance_shader', None)
+        if cached is not None and cached[0] is context:
+            return cached[1]
+
+        from OpenGL.GL import shaders as compiler
+        vertex = """#version 330
+            layout(location = 0) in vec3 a_position;
+            layout(location = 1) in vec3 a_normal;
+            layout(location = 2) in mat4 a_instance;
+            uniform mat4 u_mvp;
+            uniform mat3 u_normal;
+            uniform vec4 u_color;
+            out vec4 v_color;
+            out vec3 v_normal;
+            void main() {
+                gl_Position = u_mvp * a_instance * vec4(a_position, 1.0);
+                v_normal = u_normal * mat3(a_instance) * a_normal;
+                v_color = u_color;
+            }
+        """
+        source = shaders.getShaderProgram('rccad').shaders[1].code
+        fragment = '#version 330\nout vec4 color_out;\n' + source.replace('varying ', 'in ').replace('gl_FragColor', 'color_out')
+        program = compiler.compileProgram(compiler.compileShader(vertex, GL.GL_VERTEX_SHADER),
+                                          compiler.compileShader(fragment, GL.GL_FRAGMENT_SHADER))
+        view._instance_shader = (context, program)
+        return program
+
+    def _draw_instanced(self, instances, context):
+        program = self._program(context)
+        self.setupGLState()
+        if dirty := self.parseMeshData():
+            self.upload_vertex_buffers(dirty)
+
+        key = tuple(bid for bid, _ in instances)
+        if not self._matrices.isCreated() and not self._matrices.create():
+            raise RuntimeError('OpenGL instance buffer unavailable')
+        if not self._matrices.bind():
+            raise RuntimeError('OpenGL instance buffer could not be bound')
+        if self._instance_key != key:
+            matrices = np.array([matrix.data() for _, matrix in instances], dtype=np.float32)
+            self._matrices.allocate(matrices, matrices.nbytes)
+            self._instance_key = key
+
+        enabled = []
+        GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
+        GL.glPolygonOffset(2.0, 2.0)
+        try:
+            for column in range(4):
+                index = 2 + column
+                GL.glVertexAttribPointer(index, 4, GL.GL_FLOAT, False, 64, c_void_p(16 * column))
+                GL.glEnableVertexAttribArray(index)
+                enabled.append(index)
+                GL.glVertexAttribDivisor(index, 1)
+            self._matrices.release()
+            for index, buffer in enumerate((self.m_vbo_position, self.m_vbo_normal)):
+                buffer.bind()
+                GL.glVertexAttribPointer(index, 3, GL.GL_FLOAT, False, 0, None)
+                buffer.release()
+                GL.glEnableVertexAttribArray(index)
+                enabled.append(index)
+            GL.glUseProgram(program)
+            GL.glUniformMatrix4fv(GL.glGetUniformLocation(program, 'u_mvp'), 1, False,
+                                  np.asarray(self.mvpMatrix().data(), dtype=np.float32))
+            GL.glUniformMatrix3fv(GL.glGetUniformLocation(program, 'u_normal'), 1, False,
+                                  np.asarray(self.modelViewMatrix().normalMatrix().data(), dtype=np.float32))
+            GL.glUniform4f(GL.glGetUniformLocation(program, 'u_color'), *self.opts['color'])
+            self.m_ibo_faces.bind()
+            GL.glDrawElementsInstanced(GL.GL_TRIANGLES, self.faces.size, GL.GL_UNSIGNED_INT, None, len(instances))
+        finally:
+            self.m_ibo_faces.release()
+            self._matrices.release()
+            GL.glUseProgram(0)
+            for index in enabled:
+                if index >= 2:
+                    GL.glVertexAttribDivisor(index, 0)
+                GL.glDisableVertexAttribArray(index)
+            GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
+
+    def paint(self):
+        visible = self.view()._visible_body_ids()
+        instances = [(bid, matrix) for bid, matrix in self.instances if bid in visible]
+        if not instances:
+            return
+        context = QOpenGLContext.currentContext()
+        if (not self._instancing_failed and context is not None and not context.isOpenGLES()
+                and context.format().version() >= (3, 3)):
+            try:
+                self._draw_instanced(instances, context)
+                return
+            except Exception:
+                self._instancing_failed = True
+                self.meshDataChanged()
+        try:
+            for _, matrix in instances:
+                self._instance = matrix
+                super().paint()
+        finally:
+            self._instance = QMatrix4x4()
 
 
 class OverLine(SectionLine):
@@ -920,6 +1041,21 @@ class CadView(gl.GLViewWidget):
             return None
         return float(xy[0][0]), float(xy[0][1])
 
+    def _batch_fill(self, members, meshes, rgba):
+        prototype = next((mesh.render_prototype for mesh in meshes if mesh.render_prototype is not None), None)
+        if prototype is not None and len(prototype.triangles) >= 512 and all(
+            mesh is prototype or mesh.render_prototype is prototype for mesh in meshes
+        ):
+            instances = [(body.id, np.eye(4) if mesh is prototype else mesh.render_transform)
+                         for body, mesh in zip(members, meshes)]
+            return SharedSolidMesh(instances, meshdata=_meshdata(prototype), smooth=True,
+                                   color=rgba, shader='rccad', drawEdges=False)
+        vertices = np.concatenate([mesh.vertices for mesh in meshes])
+        offsets = np.cumsum([0] + [len(mesh.vertices) for mesh in meshes[:-1]], dtype=np.uint32)
+        triangles = np.concatenate([mesh.triangles + offset for mesh, offset in zip(meshes, offsets)])
+        combined = kernel.DisplayMesh(vertices, triangles, {}, (0., 0., 0.), 1.)
+        return OffsetMesh(meshdata=_meshdata(combined), smooth=True, color=rgba, shader='rccad', drawEdges=False)
+
     def _sync_solid_batches(self):
         """Draw idle pattern solids together; their individual CAD shapes remain pickable."""
         groups={}
@@ -941,7 +1077,7 @@ class CadView(gl.GLViewWidget):
             draw_meshes = [self._render_mesh(body) for body in members]
             signature = tuple((body.id, (id(body.mesh), id(mesh))) for body, mesh in zip(members, draw_meshes))
             previous=old.pop(key,None)
-            picked=isinstance(key,tuple) and key[1]=='picked'
+            picked=members[0].id in self.selected_bodies
             rgba=PICKED_FILL if picked else self.solid_rgba(members[0])
             if previous is not None and previous[0]==signature:
                 if getattr(previous[1],'rccad_color',None)!=rgba:      # zmieniony kolor domyślny - sam kolor, bez przebudowy
@@ -949,14 +1085,11 @@ class CadView(gl.GLViewWidget):
                 fresh[key]=previous;continue
             if previous is not None:
                 for item in previous[1:]:self.removeItem(item)
-            vertices = np.concatenate([mesh.vertices for mesh in draw_meshes])
-            offsets = np.cumsum([0] + [len(mesh.vertices) for mesh in draw_meshes[:-1]], dtype=np.uint32)
-            triangles = np.concatenate([mesh.triangles + offset for mesh, offset in zip(draw_meshes, offsets)])
-            edges={i:pts for i,pts in enumerate(pts for b in members for pts in b.mesh.edges.values())}
-            combined=kernel.DisplayMesh(vertices,triangles,edges,(0.,0.,0.),1.)
-            fill=OffsetMesh(meshdata=_meshdata(combined),smooth=True,color=rgba,shader='rccad',drawEdges=False);fill.rccad_color=rgba
+            fill = self._batch_fill(members, draw_meshes, rgba)
+            fill.rccad_color = rgba
+            edges = (points for body in members for points in body.mesh.edges.values())
             fill.setGLOptions('opaque');self.addItem(fill)
-            items=[fill];segments=_segments(edges.values())
+            items=[fill];segments=_segments(edges)
             if segments is not None:
                 line=SectionLine(pos=segments,color=PICKED_COLOR if picked else EDGE_COLOR,width=4.0 if picked else 1.5,antialias=True,mode='lines')
                 line.setGLOptions('translucent');self.addItem(line);items.append(line)

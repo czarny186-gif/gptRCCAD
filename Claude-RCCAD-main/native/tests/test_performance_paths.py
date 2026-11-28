@@ -129,6 +129,32 @@ class IndexedPickingTests(unittest.TestCase):
             sync.assert_called_once()
         self.assertEqual(self.v._parts[body.id]['color'], (.2, .3, .4, 1.0))
 
+    def test_heavy_rigid_batch_uses_one_graphics_buffer_and_keeps_world_picking(self):
+        from rccad.viewport import SharedSolidMesh
+
+        vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        triangles = np.tile(np.array([[0, 1, 2]], dtype=np.uint32), (512, 1))
+        prototype = k.DisplayMesh(vertices, triangles, {}, (.5, .5, 0), 1)
+        bodies = []
+        for index in range(24):
+            transform = np.eye(4)
+            transform[0, 3] = 2 * index
+            shape = k.box(1, 1, 1).translate((2 * index, 0, 0))
+            bodies.append(Body(str(index), shape, group='batch', mesh=k.placed_mesh(prototype, transform)))
+
+        self.v.set_models(bodies)
+        fill = self.v._solid_batches['batch'][1]
+        self.assertIsInstance(fill, SharedSolidMesh)
+        self.assertEqual(len(fill.opts['meshdata'].faces()), 512)
+        self.assertEqual(len(fill.instances), 24)
+        bid, matrix = fill.instances[-1]
+        self.assertEqual(bid, bodies[-1].id)
+        self.assertEqual(matrix.map(QVector3D()).x(), 46)
+        self.assertEqual(self.v.bodies[-1].mesh.vertices[0, 0], 46)
+        self.v.set_section_plane([0, 0, 1, 0])
+        self.assertFalse(self.v._solid_batches)
+        self.assertEqual(self.v._parts[bid]['fill'].opts['meshdata'].vertexes()[0, 0], 46)
+
     def test_empty_overlays_do_not_schedule_repaints(self):
         with patch.object(self.v, 'update') as update, patch.object(self.v.overlay, 'update') as overlay_update:
             self.v.set_threads({})

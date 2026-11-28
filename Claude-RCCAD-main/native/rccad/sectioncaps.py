@@ -4,8 +4,9 @@ import weakref
 import numpy as np
 import pyqtgraph.opengl as gl
 from OpenGL import GL
-from PySide6.QtCore import QObject,Signal,QRunnable,QThreadPool,QTimer
+from PySide6.QtCore import QThreadPool, QTimer
 from shiboken6 import isValid
+from .jobs import Work
 from .perfcache import LRU
 from .sectionmesh import section_frame
 
@@ -33,31 +34,24 @@ class _MaterialLines(gl.GLLinePlotItem):
         finally:GL.glDepthFunc(GL.GL_LESS)
 
 
-class _CapSignals(QObject):
-    done=Signal(object)
-
-
-class _CapWork(QRunnable):
-    def __init__(self,requests):
-        super().__init__();self.requests=requests;self.signals=_CapSignals()
-    def run(self):
-        from .sectionmesh import cap_mesh,cached_cap_mesh
-        from . import workers
-        results=[]
-        for bid,key,mesh,plane,matrix,token in self.requests:
-            error=None
-            try:
-                if workers.ready():
-                    try:
-                        answer=workers.call_affine(('section-material',bid),cached_cap_mesh,token,None,plane,matrix)
-                        if answer[0]=='missing':answer=workers.call_affine(('section-material',bid),cached_cap_mesh,token,mesh,plane,matrix)
-                        value=answer[1]
-                    except workers.Unavailable:value=cap_mesh(mesh,plane,matrix)
-                else:value=cap_mesh(mesh,plane,matrix)
-            except Exception as exc:
-                value=None;error=str(exc)
-            results.append((bid,key,mesh,value,error))
-        self.signals.done.emit(results)
+def _compute_caps(requests):
+    from .sectionmesh import cap_mesh,cached_cap_mesh
+    from . import workers
+    results=[]
+    for bid,key,mesh,plane,matrix,token in requests:
+        error=None
+        try:
+            if workers.ready():
+                try:
+                    answer=workers.call_affine(('section-material',bid),cached_cap_mesh,token,None,plane,matrix)
+                    if answer[0]=='missing':answer=workers.call_affine(('section-material',bid),cached_cap_mesh,token,mesh,plane,matrix)
+                    value=answer[1]
+                except workers.Unavailable:value=cap_mesh(mesh,plane,matrix)
+            else:value=cap_mesh(mesh,plane,matrix)
+        except Exception as exc:
+            value=None;error=str(exc)
+        results.append((bid,key,mesh,value,error))
+    return results
 
 
 def _follows(old_key,key):
@@ -85,6 +79,9 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
         self._cap_pool=QThreadPool(self);self._cap_pool.setMaxThreadCount(1)
         self._cap_timer=QTimer(self);self._cap_timer.setSingleShot(True);self._cap_timer.setInterval(25)
         self._cap_timer.timeout.connect(self._start_caps)
+
+    def bind_jobs(self, manager):
+        self._cap_pool = manager.bind('Przekroje', self._cap_pool)
 
     def _place(self,patch,key):
         """Pokazuje gotowy przekrój przesunięty na bieżącą (równoległą) płaszczyznę."""
@@ -121,7 +118,16 @@ class SectionCaps(gl.GLGraphicsItem.GLGraphicsItem):
         view=self.view()
         if view is None or not isValid(view) or view.section_plane is None:self._pending.clear();return
         requests=list(self._pending.values());self._pending.clear();self._running=True
-        work=self._cap_work=_CapWork(requests);work.signals.done.connect(self._caps_ready);self._cap_pool.start(work)
+        work = self._cap_work = Work(lambda: _compute_caps(requests), 'Obliczanie przekroju')
+        work.signals.done.connect(self._caps_ready)
+        work.signals.failed.connect(self._caps_failed)
+        self._cap_pool.start(work)
+
+    def _caps_failed(self, message):
+        self.last_error = message
+        self._running = False
+        if self._pending:
+            self._cap_timer.start()
 
     def _caps_ready(self,results):
         self._running=False

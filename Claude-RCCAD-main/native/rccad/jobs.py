@@ -2,6 +2,11 @@
 from collections import deque
 from dataclasses import asdict, dataclass
 from itertools import count
+import time
+
+from PySide6.QtCore import QObject, QRunnable, Signal
+
+from .kernel import CadError
 
 
 @dataclass
@@ -58,3 +63,42 @@ class JobQueue:
         except Exception:
             finish('failed_to_submit')
             raise
+
+
+class WorkSignals(QObject):
+    done = Signal(object)
+    failed = Signal(str)
+    progress = Signal(object)
+
+
+class Work(QRunnable):
+    def __init__(self, function, label='Zadanie w tle'):
+        super().__init__()
+        self.function = function
+        self.label = label
+        self.job = None
+        self.signals = WorkSignals()
+        self.elapsed_ms = None
+
+    def run(self):
+        if self.job is not None:
+            self.job.state = 'running'
+        start = time.perf_counter()
+        try:
+            try:
+                value = self.function()
+            finally:
+                self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+                if self.job is not None:
+                    self.job.duration_ms = self.elapsed_ms
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, CadError) else f'Operacja nie powiodła się: {exc}'
+            try:
+                self.signals.failed.emit(message)
+            except RuntimeError:
+                pass        # okno zamknięte, zanim praca w tle się skończyła (np. przygotowanie rozwinięcia)
+            return
+        try:
+            self.signals.done.emit(value)
+        except RuntimeError:
+            pass

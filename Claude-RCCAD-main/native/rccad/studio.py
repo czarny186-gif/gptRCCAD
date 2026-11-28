@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from weakref import WeakValueDictionary
 import numpy as np
-from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QIcon, QKeySequence, QMatrix4x4, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFontComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
@@ -21,7 +21,7 @@ from . import snap as snapping
 icons_green = '#2fa56d'
 icons_orange = '#f09a22'
 from .perfcache import LRU
-from .jobs import JobManager
+from .jobs import JobManager, Work as _Work, WorkSignals as _Signals
 from .spatial import BoundsTree
 
 from .document import Body, Document, source_of
@@ -184,44 +184,6 @@ class _HistChip(QToolButton):
         self.editRequested.emit()
 
 
-class _Signals(QObject):
-    done = Signal(object)
-    failed = Signal(str)
-    progress = Signal(object)
-
-
-class _Work(QRunnable):
-    def __init__(self, function, label='Zadanie w tle'):
-        super().__init__()
-        self.function = function
-        self.label = label
-        self.job = None
-        self.signals = _Signals()
-        self.elapsed_ms = None
-
-    def run(self):
-        if self.job is not None:
-            self.job.state = 'running'
-        start = time.perf_counter()
-        try:
-            try:
-                value = self.function()
-            finally:
-                self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-                if self.job is not None:
-                    self.job.duration_ms = self.elapsed_ms
-        except Exception as exc:
-            message = str(exc) if isinstance(exc, kernel.CadError) else f'Operacja nie powiodła się: {exc}'
-            try:
-                self.signals.failed.emit(message)
-            except RuntimeError:
-                pass        # okno zamknięte, zanim praca w tle się skończyła (np. przygotowanie rozwinięcia)
-            return
-        try:
-            self.signals.done.emit(value)
-        except RuntimeError:
-            pass
-
 
 def _spin(value, low=-1e6, high=1e6, decimals=3, step=1.0):
     box = QDoubleSpinBox()
@@ -349,6 +311,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.resize(1400, 850)
         self.setStyleSheet(ui.style())
         self.view = CadView(self)
+        self.view.section_caps.bind_jobs(self.jobs)
         self.view.click_mode = True
         self.setCentralWidget(self.view)
         self.view.sketchMoved.connect(self.sketch_moved)

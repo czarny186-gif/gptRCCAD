@@ -1634,7 +1634,17 @@ def placed_mesh(mesh, matrix):
         triangles = triangles[:, ::-1].copy()          # odbicie lustrzane odwraca kolejność wierzchołków trójkątów
     edges = {key: (np.asarray(points, float) @ rotation.T + shift).astype(np.float32) for key, points in mesh.edges.items()}
     center = tuple(np.asarray(mesh.center, float) @ rotation.T + shift)
-    return DisplayMesh(vertices, triangles, edges, center, mesh.size, mesh.fine, mesh.face_ids)
+    result = DisplayMesh(vertices, triangles, edges, center, mesh.size, mesh.fine, mesh.face_ids)
+    if np.linalg.det(rotation) > 0 and np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-9):
+        transform = np.eye(4)
+        transform[:3] = m[:3, :4]
+        if mesh.render_prototype is not None:
+            result.render_prototype = mesh.render_prototype
+            transform = transform @ mesh.render_transform
+        else:
+            result.render_prototype = mesh
+        result.render_transform = transform
+    return result
 
 
 def _step_parts(root):
@@ -1725,6 +1735,8 @@ class DisplayMesh:
     size: float
     fine: bool = True          # False: zgrubna siatka pokazana od razu; dokładną liczy się w tle (refine)
     face_ids: np.ndarray | None = None
+    render_prototype: DisplayMesh | None = None
+    render_transform: np.ndarray | None = None
 
 
 FINE_ANGLE = .2             # dokładna siatka: odchyłka kątowa (rad) - otwór R2 ma 32 odcinki na obwodzie, duże łuki prowadzi odchyłka liniowa
