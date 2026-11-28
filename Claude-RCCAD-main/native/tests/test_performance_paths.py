@@ -9,8 +9,9 @@ import cadquery as cq
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QMatrix4x4,QVector3D
 from rccad import kernel as k,history as h,workers
-from rccad.document import Body
+from rccad.document import Body, Document
 from rccad.viewport import CadView,_pick_data,_PICK
+from rccad.objects import ObjectsPanel
 from rccad.perfcache import LRU
 from rccad.spatial import BoundsTree
 
@@ -24,6 +25,19 @@ class CacheAndBoundsTests(unittest.TestCase):
         c[0]=np.zeros(16,dtype=np.uint8);self.assertEqual(c.bytes,64)
         c[99]=np.zeros(128,dtype=np.uint8);self.assertNotIn(99,c);self.assertEqual(c.bytes,64)
         c.clear();self.assertEqual(c.bytes,0)
+
+    def test_document_keeps_visible_meshes_when_the_cache_evicts_them(self):
+        doc = Document()
+        doc._mesh_cache = LRU(max_entries=1)
+        first = Body('First', k.box(10, 10, 10)).prepared()
+        second = Body('Second', k.box(12, 10, 10))
+        third = Body('Third', k.box(14, 10, 10))
+        doc._mesh_cache[id(first.shape)] = first.shape, first.mesh
+        bodies = doc.meshed([replace(first, mesh=None), second, third])
+        self.assertIs(bodies[0].mesh, first.mesh)
+        self.assertTrue(all(body.mesh is not None for body in bodies))
+        self.assertNotIn(id(first.shape), doc._mesh_cache)
+        self.assertIn(id(third.shape), doc._mesh_cache)
 
     def test_more_than_256_active_meshes_stay_cached(self):
         _PICK.clear();meshes=[]
@@ -106,12 +120,99 @@ class IndexedPickingTests(unittest.TestCase):
         self.v.set_section_plane([1,0,0,-6]);cut=self.v._edge_projection(b);self.assertTrue(np.all(cut[0][:,0]>=6-1e-5))
         self.v.set_section_plane(None);np.testing.assert_allclose(self.v._edge_projection(b)[0],first[0])
 
+    def test_unchanged_presentation_skips_scene_updates(self):
+        with patch.object(self.v, '_sync_solid_batches', wraps=self.v._sync_solid_batches) as sync:
+            self.v.set_models(self.bodies)
+            sync.assert_not_called()
+            body = replace(self.bodies[0], color=(.2, .3, .4))
+            self.v.set_models([body, *self.bodies[1:]])
+            sync.assert_called_once()
+        self.assertEqual(self.v._parts[body.id]['color'], (.2, .3, .4, 1.0))
+
+    def test_empty_overlays_do_not_schedule_repaints(self):
+        with patch.object(self.v, 'update') as update, patch.object(self.v.overlay, 'update') as overlay_update:
+            self.v.set_threads({})
+            self.v.set_dims([])
+            update.assert_not_called()
+            overlay_update.assert_not_called()
+
+    def test_whole_body_selection_reuses_edge_positions(self):
+        body = self.bodies[0]
+        line, = self.v._parts[body.id]['lines']
+        positions = line.pos
+        self.v.set_models(self.bodies, [body.id])
+        self.assertIs(self.v._parts[body.id]['lines'][0], line)
+        self.assertIs(line.pos, positions)
+        self.assertEqual(line.width, 4.0)
+        self.v.set_models(self.bodies)
+        self.assertIs(self.v._parts[body.id]['lines'][0], line)
+        self.assertEqual(line.width, 1.5)
+
+    def test_panel_selection_keeps_rows_and_updates_folded_folder(self):
+        panel = ObjectsPanel(self.v)
+        items = [('a', 'solid', 1, 'A', '', ''), ('b', 'solid', 2, 'B', '', 'Folder')]
+        panel.update_items(items, [], set(), set())
+        row = panel.rows['a']
+        header, _ = panel._folder_headers[0]
+        panel.update_items(items, ['a', 'b'], set(), set())
+        self.assertIs(panel.rows['a'], row)
+        self.assertIs(panel._folder_headers[0][0], header)
+        self.assertTrue(row.property('sel'))
+        self.assertEqual(header.property('sel'), 'true')
+        panel.update_items(items, [], set(), set())
+        self.assertFalse(row.property('sel'))
+        self.assertEqual(header.property('sel'), 'false')
+
     def test_visibility_and_mesh_replacement_invalidate_scene(self):
         xy=self.v.project_one((5,0,4));self.v.set_models([self.bodies[0]])
         self.assertEqual(self.v.pick_body(*xy),self.bodies[0].id)
         self.v.set_models([replace(self.bodies[0],visible=False)]);self.assertIsNone(self.v.pick_body(*xy))
         moved=self.bodies[0].changed(k.box(12,10,8).translate((1000,0,0)));self.v.set_models([moved]);self.assertIsNone(self.v.pick_body(*xy))
         self.assertNotIn(moved.id,self.v._visible_body_ids())
+
+
+class MeshQueueTests(unittest.TestCase):
+    def test_mesh_queue_bounds_in_flight_work_and_preserves_order(self):
+        active = []
+        queue_sizes = []
+
+        class Future:
+            def __init__(self, shape):
+                self.shape = shape
+                active.append(self)
+
+            def result(self, timeout):
+                active.remove(self)
+                return self.shape, None
+
+        class Pool:
+            def submit(self, _function, shape, *_args):
+                future = Future(shape)
+                queue_sizes.append(len(active))
+                return future
+
+        with patch.object(workers, 'size', return_value=2), patch.object(workers, '_next_pool', return_value=Pool()):
+            self.assertEqual(workers.mesh_many([(i, True) for i in range(20)]), [(i, None) for i in range(20)])
+        self.assertFalse(active)
+        self.assertEqual(max(queue_sizes), 4)
+
+    def test_cancelled_mesh_queue_never_falls_back_to_local_geometry(self):
+        generation = workers._abort_gen
+
+        class Future:
+            def result(self, timeout):
+                workers._abort_gen += 1
+                raise RuntimeError('cancelled')
+
+            def cancel(self):
+                pass
+
+        with patch.object(workers, '_abort_gen', generation), patch.object(workers, 'size', return_value=1), \
+             patch.object(workers, '_next_pool') as pool, patch.object(workers, '_mesh_local') as local:
+            pool.return_value.submit.return_value = Future()
+            with self.assertRaises(workers.Aborted):
+                workers.mesh_many([(i, True) for i in range(3)])
+            local.assert_not_called()
 
 
 class CachedOperationTests(unittest.TestCase):

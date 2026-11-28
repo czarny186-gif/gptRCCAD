@@ -12,6 +12,7 @@ import cadquery as cq
 import numpy as np
 from .kernel import CadError, DisplayMesh, Frame, display_mesh, heavy, mesh_deferred, valid
 from . import kernel
+from .perfcache import LRU
 
 
 def _mesh(shape):
@@ -215,7 +216,7 @@ class Document:
         self.pending_icon = None
         self.pending_op = None
         self._brep_cache = {}      # id(kształt) -> (kształt, bajty BREP): kolejne zapisy i autozapisy nie eksportują ponownie niezmienionej geometrii
-        self._mesh_cache = {}      # id(kształt) -> (kształt, siatka): siatki wyświetlania liczone leniwie, tylko dla bieżącego stanu
+        self._mesh_cache = LRU(256 * 1024 * 1024, max_entries=2000)
         self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
         self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
         self.reproject = set()      # szkice na powierzchni z nieaktualnym obrazem (wygaszone - liczone dopiero przy pokazaniu)
@@ -468,17 +469,18 @@ class Document:
         """Bryły z uzupełnionymi siatkami (stany historii wczytane z pliku nie mają siatek, dopóki nie zostaną pokazane)."""
         if all(b.mesh is not None for b in bodies):
             return tuple(bodies)
-        todo = {}
+        todo, visible_meshes = {}, {}
         for b in bodies:
             if b.mesh is None:
-                hit = self._mesh_cache.get(id(b.shape))
+                key = id(b.shape)
+                hit = self._mesh_cache.get(key)
                 if hit is None or hit[0] is not b.shape:
-                    todo.setdefault(id(b.shape), b)
+                    todo.setdefault(key, b)
+                else:
+                    visible_meshes[key] = hit[1]
         if todo:
             # kilka brył naraz liczy się w procesach liczących (każda na innym rdzeniu), pojedyncza - tutaj
             from . import workers
-            if len(self._mesh_cache) + len(todo) > 2000:
-                self._mesh_cache.clear()
             items = list(todo.values())
             for b, (mesh, error) in zip(items, workers.mesh_many([(b.shape, b.kind == 'solid') for b in items], coarse=True)):
                 if error is not None:       # kształt z drobnym błędem: i tak się pokazuje (przeskok w historii nie może się zatrzymać)
@@ -486,16 +488,18 @@ class Document:
                         mesh = display_mesh(b.shape)
                     except Exception:
                         mesh = None
-                self._mesh_cache[id(b.shape)] = (b.shape, mesh)
+                key = id(b.shape)
+                self._mesh_cache[key] = (b.shape, mesh)
+                visible_meshes[key] = mesh
         out = []
         by_id = {b.id: b for b in bodies}
         for b in bodies:
             if b.mesh is None:
-                hit = self._mesh_cache.get(id(b.shape))
-                if hit is None or hit[0] is not b.shape or hit[1] is None:
+                mesh = visible_meshes.get(id(b.shape))
+                if mesh is None:
                     out.append(b)
                     continue
-                b = replace(b, mesh=hit[1])
+                b = replace(b, mesh=mesh)
                 surface = (b.meta or {}).get('surface') if b.kind == 'sketch' else None
                 target = by_id.get(surface['target']) if surface else None
                 if target is not None and not b.visible:

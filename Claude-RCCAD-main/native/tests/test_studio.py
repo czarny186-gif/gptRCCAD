@@ -7242,6 +7242,50 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(len(pts));span=pts.max(axis=0)-pts.min(axis=0)
         self.assertEqual(sorted(round(float(x)) for x in span),[2,2,20])        # sam pas zaokrąglenia R2 wzdłuż krawędzi 20 mm
 
+    def test_cancelled_preview_cannot_restart_queue_while_new_preview_runs(self):
+        w = self.w
+        shown = []
+        show = lambda value, error: shown.append((value, error))
+        with patch.object(w.pool, 'start') as submit, patch('rccad.workers.abort'):
+            w.run_preview('test', lambda: 'old', show)
+            old = submit.call_args.args[0]
+            w.cancel_background()
+            w.run_preview('test', lambda: 'running', show)
+            running = submit.call_args.args[0]
+            w.run_preview('test', lambda: 'latest', show)
+            old.run()
+            self.assertEqual(submit.call_count, 2)
+            self.assertTrue(w._pv['test']['running'])
+            running.run()
+            self.assertEqual(submit.call_count, 3)
+            submit.call_args.args[0].run()
+        self.assertEqual(shown, [('latest', None)])
+        self.assertFalse(w._pv['test']['running'])
+
+    def test_refinement_prioritizes_view_and_discards_results_after_document_switch(self):
+        w = self.w
+        doc = w.document
+        bodies = []
+        for index in range(5):
+            body = Body(str(index), k.box(10 + index, 10, 10)).prepared()
+            bodies.append(replace(body, mesh=replace(body.mesh, fine=False)))
+        doc.commit(bodies)
+        w.refresh()
+        with patch.object(w.view, '_visible_body_ids', return_value={bodies[-1].id}), \
+             patch.object(w.pool, 'start') as submit:
+            w._refine_meshes()
+            w._refine_meshes()
+        submit.assert_called_once()
+        self.assertEqual(w._refining, {id(b.shape) for b in (bodies[-1], *bodies[:3])})
+        work = submit.call_args.args[0]
+        with patch('rccad.workers.fine_meshes', return_value=[replace(bodies[-1].mesh, fine=True)]) as compute:
+            w.document = Document()
+            work.run()
+        self.assertIs(compute.call_args.args[0][0], bodies[-1].shape)
+        self.assertFalse(w._refining)
+        self.assertFalse(doc.bodies[-1].mesh.fine)
+        self.assertIsNone(w.document.fine_mesh(bodies[-1].shape))
+
     def test_heavy_body_shows_coarse_mesh_then_refines_in_background(self):
         import cadquery as cq
         from rccad import workers

@@ -468,10 +468,23 @@ class ObjectsPanel(QFrame):
         keys = {f'{it[1]}:{it[5]}' for it in items if it[5]}
         self._folded |= keys - self._seen            # nowa grupa: od razu zwinięta (rozwija ją strzałka)
         self._seen |= keys
-        sig = (tuple(items), tuple(selected), tuple(sorted(hidden)), tuple(sorted(locked)), tuple(sorted(self._folded)))
-        if sig == self._sig:
+        selected = frozenset(selected)
+        structure = (tuple(items), frozenset(hidden), frozenset(locked), frozenset(self._folded))
+        if self._sig == (structure, selected):
             return
-        self._sig = sig
+        if self._sig is not None and structure == self._sig[0]:
+            previous_selection = self._sig[1]
+            for oid in selected ^ previous_selection:
+                row = self.rows.get(oid)
+                if row is not None:
+                    self._set_selected(row, oid in selected)
+            for header, members in self._folder_headers:
+                active = members <= selected
+                if active != (members <= previous_selection):
+                    self._set_selected(header, 'true' if active else 'false')
+            self._sig = (structure, selected)
+            return
+        self._sig = (structure, selected)
         self._items = items
         rows = units(items)
         self._members = {u[0]: list(u[6]) for u in rows}
@@ -484,6 +497,7 @@ class ObjectsPanel(QFrame):
         lay.setSpacing(2)
         hooks = dict(hide=self.hide_toggled.emit, lock=self.lock_toggled.emit, **{'del': self.delete_requested.emit})
         self.rows = {}
+        self._folder_headers = []
         any_item = False
 
         def add_row(unit, indent):
@@ -538,16 +552,18 @@ class ObjectsPanel(QFrame):
             lay.addLayout(head)
             if cat in self._folded:
                 continue
-            done_folders = set()
+            folders = {}
+            for unit in group:
+                if unit[5]:
+                    folders.setdefault(unit[5], []).append(unit)
             for unit in group:
                 folder = unit[5]
                 if not folder:
                     add_row(unit, 0)
                     continue
-                if folder in done_folders:
+                inside = folders.pop(folder, None)
+                if inside is None:
                     continue
-                done_folders.add(folder)
-                inside = [u for u in group if u[5] == folder]
                 ids = [m for u in inside for m in u[6]]
                 key = f'{cat}:{folder}'
                 fh = FolderHead(folder, len(inside), key in self._folded, all(m in hidden for m in ids), dict(
@@ -559,6 +575,7 @@ class ObjectsPanel(QFrame):
                 fh.renamed.connect(self.folder_rename.emit)
                 fh.editing.connect(self._set_editing)
                 lay.addWidget(fh)
+                self._folder_headers.append((fh, frozenset(ids)))
                 if key not in self._folded:
                     for u in inside:
                         add_row(u, 18)
@@ -573,6 +590,14 @@ class ObjectsPanel(QFrame):
         self.scroll.setWidget(body)
         self.scroll.verticalScrollBar().setValue(keep)
         self.relayout()
+
+    @staticmethod
+    def _set_selected(widget, value):
+        widget.setProperty('sel', value)
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
 
     def folders(self):
         return sorted({it[5] for it in getattr(self, '_items', ()) if it[5]})

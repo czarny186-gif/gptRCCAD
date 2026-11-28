@@ -731,7 +731,18 @@ class CadView(gl.GLViewWidget):
         self._section_classifiers={}
         self._sketch_batches=[];self._sketch_batch_key=None
         self._scene_revision=0;self._scene_signature=None
+        self._presentation_signature = None
+        self.frame_samples = None
         self._projection_cache=LRU(96*1024*1024)
+
+    def paintGL(self):
+        samples = self.frame_samples
+        if samples is None:
+            super().paintGL()
+            return
+        start = time.perf_counter()
+        super().paintGL()
+        samples.record(start, time.perf_counter())
 
     def _refresh_grid(self):
         """Siatka zagęszcza się przy przybliżaniu (min. GRID_PX px między cienkimi liniami) i podąża za środkiem widoku."""
@@ -805,6 +816,7 @@ class CadView(gl.GLViewWidget):
             for item in self._cache.pop(bid)[1]:
                 self.removeItem(item)
         self._parts.clear()
+        self._presentation_signature = None
         self.set_models(self.bodies, self.selected_bodies, self.selected_edges)
 
     THREAD_COLOR = (.16, .45, .86, 1)      # gwint: niebieska linia śrubowa
@@ -814,9 +826,11 @@ class CadView(gl.GLViewWidget):
         przy zmianie gwintów - obracanie widoku nic nie kosztuje."""
         from .threads import thread_lines
         store = self.__dict__.setdefault('_thread_items', {})
+        changed = False
         for bid in list(store):
             if bid not in items:
                 self.removeItem(store.pop(bid)[1])
+                changed = True
         for bid, threads in items.items():
             key = repr(threads)
             old = store.get(bid)
@@ -828,10 +842,12 @@ class CadView(gl.GLViewWidget):
             item = SectionLine(pos=segs.reshape(-1, 3), color=self.THREAD_COLOR, width=1.5, antialias=True, mode='lines')
             self.addItem(item)
             store[bid] = (key, item)
+            changed = True
             m = self._body_m.get(bid)
             if m is not None:
                 item.setTransform(m)
-        self.update()
+        if changed:
+            self.update()
 
     def set_thread_preview(self, thread):
         """Podgląd gwintu przed zatwierdzeniem (niebieski, rysowany od razu - bez liczenia geometrii)."""
@@ -971,11 +987,21 @@ class CadView(gl.GLViewWidget):
         signature=tuple((b.id,id(b.mesh),id(b.shape),b.kind,b.visible) for b in self.bodies)
         if signature!=self._scene_signature:
             self._scene_signature=signature;self._scene_revision+=1
-        live_ids={b.id for b in self.bodies}
-        self.section_caps.retain_bodies(live_ids)
-        self._section_classifiers={bid:c for bid,c in self._section_classifiers.items() if bid in live_ids}
+            live_ids = {b.id for b in self.bodies}
+            self.section_caps.retain_bodies(live_ids)
+            self._section_classifiers = {bid: c for bid, c in self._section_classifiers.items() if bid in live_ids}
         self.selected_bodies = set(selected_bodies)
         self.selected_edges = selected_edges or {}
+        presentation = (
+            signature, tuple((b.group, b.folder, b.color) for b in self.bodies),
+            frozenset(self.selected_bodies),
+            {bid: frozenset(edges) for bid, edges in self.selected_edges.items()},
+            dict(self.tints), self.default_color, self.xray,
+            None if self.section_plane is None else tuple(self.section_plane),
+            frozenset(self._body_m),
+        )
+        if presentation == self._presentation_signature:
+            return
         batched=self._sync_solid_batches()
         live = set()
         centers = []
@@ -1007,20 +1033,33 @@ class CadView(gl.GLViewWidget):
                         self.addItem(fill)
                 elif fill is not None and old_parts.get('color') != shown:
                     fill.setColor(shown)
-                for line in old_parts.get('lines', ()):
-                    self.removeItem(line)
-                lines = []
+                previous = old_parts.get('line_key')
                 base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
-                for hot, color_, width_ in ((False, base, 2.3 if body.kind == 'sketch' else 1.5), (True, PICKED_COLOR if picked else PREVIEW_COLOR, 4.0 if picked else 3.5)):
-                    seg = _segments([pts for index, pts in mesh.edges.items() if (index in sel or picked) == hot])
-                    if seg is None:
-                        continue
-                    line = (OverLine if body.kind == 'sketch' else SectionLine)(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
-                    if body.kind != 'sketch':
-                        line.setGLOptions('additive' if self.xray else 'translucent')
-                    line.section_body_id=body.id
-                    self.addItem(line)
-                    lines.append(line)
+                base_width = 2.3 if body.kind == 'sketch' else 1.5
+                lines = old_parts.get('lines', [])
+                reuse_lines = (previous is not None and not sel and not previous[2]
+                               and previous[0] == id(mesh) and previous[3:] == line_key[3:])
+                if reuse_lines:
+                    for line in lines:
+                        line.setData(color=PICKED_COLOR if picked else base, width=4.0 if picked else base_width)
+                else:
+                    for line in lines:
+                        self.removeItem(line)
+                    lines = []
+                    styles = (
+                        (False, base, base_width),
+                        (True, PICKED_COLOR if picked else PREVIEW_COLOR, 4.0 if picked else 3.5),
+                    )
+                    for hot, color_, width_ in styles:
+                        seg = _segments([pts for index, pts in mesh.edges.items() if (index in sel or picked) == hot])
+                        if seg is None:
+                            continue
+                        line = (OverLine if body.kind == 'sketch' else SectionLine)(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
+                        if body.kind != 'sketch':
+                            line.setGLOptions('additive' if self.xray else 'translucent')
+                        line.section_body_id=body.id
+                        self.addItem(line)
+                        lines.append(line)
                 parts = self._parts[body.id] = dict(fill_key=fill_key, line_key=line_key, fill=fill, lines=lines, color=shown, cap_solid=body.kind=='solid' and bool(body.shape.Solids()))
                 self._cache[body.id] = (line_key, ([fill] if fill is not None else []) + lines)
                 if body.id in self._body_m:
@@ -1040,6 +1079,7 @@ class CadView(gl.GLViewWidget):
         self.sketch_centers = centers
         self.section_caps.update_section()
         self._sync_sketch_batches()
+        self._presentation_signature = presentation
         self.update()
 
     def _sync_sketch_batches(self):
@@ -2250,7 +2290,10 @@ class CadView(gl.GLViewWidget):
         return out
 
     def set_dims(self, items):
-        self.dim_items = list(items)
+        items = list(items)
+        if not items and not self.dim_items:
+            return
+        self.dim_items = items
         self.dim_layout()
         self.overlay.update()
 

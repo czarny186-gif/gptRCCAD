@@ -1,3 +1,15 @@
+# RCCAD Desktop 0.5.66 — Wydajność widoku i kolejki teselacji
+
+- Panel Obiekty aktualizuje zaznaczenie bez przebudowy listy.
+- Widok pomija odświeżenie niezmienionej sceny i zachowuje bufory krawędzi przy zaznaczaniu całej bryły.
+- Teselacja dopracowuje najpierw bryły w kadrze. Kolejka ma ograniczoną liczbę zadań, a cache siatek ma limit pamięci.
+- Spóźniony wynik anulowanego podglądu nie uruchamia kolejnego zadania przed czasem.
+- **Plik → Wydajność…** otwiera monitor z eksportem JSON.
+
+W teście Qt aktualizacja zaznaczenia w panelu z 1000 widocznymi pozycjami zajęła 0,12 ms wobec 2129,7 ms w wersji 0.5.65. Pomiar dotyczy panelu, bez pomiaru FPS widoku 3D. Wydanie zawiera dotychczasowe optymalizacje. Adaptacyjne LOD, profile wydajności, współdzielenie buforów GPU i zachowanie hierarchii STEP pozostają do wdrożenia.
+
+Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
+
 # RCCAD Desktop 0.5.65 — Szyk elementów bryły: otwory, wycięcia i wypukłości z opcją łączenia
 
 - **Szyk → filtr „Element”.** Do puli wskazywanych obiektów doszły elementy bryły powstałe przy wyciąganiu i wycinaniu: otwory (przelotowe i nieprzelotowe), wycięcia, kieszenie oraz wypukłości (czopy, żebra). Wystarczy kliknąć ścianę elementu - program rozpoznaje cały element z geometrii B-Rep (obszar ścian połączonych krawędziami wklęsłymi albo wypukłymi, zamknięty płaskimi wiekami), podświetla go na pomarańczowo i podpisuje jako wycięcie / otwór albo wypukłość.

@@ -19,6 +19,7 @@ nie liczy wszystkiego od nowa.
 from __future__ import annotations
 
 import atexit
+from collections import deque
 import os
 import threading
 
@@ -371,21 +372,55 @@ def mesh_many(items, tolerance=.12, coarse=False):
     Przy co najmniej MIN_PARALLEL kształtach i gotowych procesach liczą procesy (po kolei rozdzielane), inaczej - bieżący proces.
     coarse=True: duże bryły dostają zgrubną siatkę (dokładną dolicza potem okno w tle)."""
     items = list(items)
-    from . import kernel
-    if len(items) >= MIN_PARALLEL and ready():
+    slots = size()
+    if len(items) < MIN_PARALLEL or not slots:
+        return [_mesh_local(shape, solid, tolerance, False) for shape, solid in items]
+
+    generation = _abort_gen
+    queued = deque()
+    pending = iter(items)
+
+    def submit(item):
+        if generation != _abort_gen:
+            raise Aborted()
+        shape, solid = item
+        pool = _next_pool()
         try:
-            futures = [_next_pool().submit(_mesh_job, shape, tolerance, solid, coarse) for shape, solid in items]
+            future = pool.submit(_mesh_job, shape, tolerance, solid, coarse) if pool else None
         except Exception:
-            futures = None
-        if futures is not None:
-            out = []
-            for (shape, solid), future in zip(items, futures):
+            future = None
+        queued.append((item, future))
+
+    results = []
+    try:
+        for _ in range(min(len(items), 2 * slots)):
+            submit(next(pending))
+        while queued:
+            if generation != _abort_gen:
+                raise Aborted()
+            (shape, solid), future = queued.popleft()
+            result = None
+            if future is not None:
                 try:
-                    out.append(future.result(timeout=TIMEOUT))
-                except Exception:          # ten jeden kształt liczy się tutaj (procesy działają dalej)
-                    out.append(_mesh_local(shape, solid, tolerance, False))
-            return out
-    return [_mesh_local(shape, solid, tolerance, False) for shape, solid in items]
+                    result = future.result(timeout=TIMEOUT)
+                except Exception:
+                    if generation != _abort_gen:
+                        raise Aborted()
+            if generation != _abort_gen:
+                raise Aborted()
+            following = next(pending, None)
+            if following is not None:
+                submit(following)
+            if result is None:
+                result = _mesh_local(shape, solid, tolerance, False)
+            results.append(result)
+        if generation != _abort_gen:
+            raise Aborted()
+        return results
+    finally:
+        for _, future in queued:
+            if future is not None:
+                future.cancel()
 
 
 def _mesh_local(shape, solid, tolerance, coarse):

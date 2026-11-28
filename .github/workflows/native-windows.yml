@@ -94,7 +94,9 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
           else
+            awk '/^# RCCAD Desktop / { if (section++) exit } { print }' \
+              Claude-RCCAD-main/native/SHEETMETAL_RELEASE.md > release-notes.md
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --verify-tag --title "RCCAD Desktop ${GITHUB_REF_NAME#rccad-desktop-v}" \
-              --notes-file Claude-RCCAD-main/native/SHEETMETAL_RELEASE.md
+              --notes-file release-notes.md
           fi

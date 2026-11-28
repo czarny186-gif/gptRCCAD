@@ -8,6 +8,7 @@ import uuid
 import cadquery as cq
 from dataclasses import replace
 from pathlib import Path
+from weakref import WeakValueDictionary
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QIcon, QKeySequence, QMatrix4x4, QShortcut
@@ -192,17 +193,21 @@ class _Work(QRunnable):
         super().__init__()
         self.function = function
         self.signals = _Signals()
+        self.elapsed_ms = None
 
     def run(self):
+        start = time.perf_counter()
         try:
             value = self.function()
         except Exception as exc:
+            self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
             message = str(exc) if isinstance(exc, kernel.CadError) else f'Operacja nie powiodła się: {exc}'
             try:
                 self.signals.failed.emit(message)
             except RuntimeError:
                 pass        # okno zamknięte, zanim praca w tle się skończyła (np. przygotowanie rozwinięcia)
             return
+        self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         try:
             self.signals.done.emit(value)
         except RuntimeError:
@@ -246,6 +251,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
     def __init__(self):
         super().__init__()
         self.document = Document()
+        self._performance_monitor = None
         self.pool = QThreadPool.globalInstance()
         self.warm_pool = QThreadPool(self)            # osobny wątek na rozwinięcia liczone w tle (nie blokuje operacji)
         self.warm_pool.setMaxThreadCount(1)
@@ -253,6 +259,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         QTimer.singleShot(1500, workers.start)        # procesy liczące startują w tle, gdy okno jest już widoczne
         self._warming = set()
         self._refining = set()
+        self._refine_failed = WeakValueDictionary()
         self._refine_timer = QTimer(self)
         self._refine_timer.setSingleShot(True)
         self._refine_timer.setInterval(60)
@@ -10276,42 +10283,64 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.setWindowTitle(f"{'● ' if self.document.dirty else ''}{name} — RCCAD")
 
     def _refine_meshes(self):
-        """Dokładne siatki dla brył pokazanych zgrubnie - w tle (procesy liczące), bez blokowania okna i bez kroku historii.
-        Gotowa siatka podmienia zgrubną, gdy bryła nadal jest w modelu; wcześniej policzone biorą się z pamięci od razu."""
-        todo, changed = [], False
-        for b in self.document.bodies:
-            if b.mesh is None or b.mesh.fine or id(b.shape) in self._refining:
+        """Dopracuj siatki krótkimi partiami w tle, zaczynając od obiektów w kadrze."""
+        if self._refining:
+            return
+        doc = self.document
+        candidates = [b for b in doc.bodies if b.mesh is not None and not b.mesh.fine]
+        if not candidates:
+            return
+        visible = self.view._visible_body_ids()
+        todo = {}
+        changed = False
+        for body in sorted(candidates, key=lambda b: (b.id not in visible, not b.visible)):
+            shape = body.shape
+            key = id(shape)
+            if key in todo or self._refine_failed.get(key) is shape:
                 continue
-            ready = self.document.fine_mesh(b.shape)
+            ready = doc.fine_mesh(shape)
             if ready is not None:
-                changed = self.document.refined(b.shape, ready) or changed
-            else:
-                todo.append(b.shape)
+                changed = doc.refined(shape, ready) or changed
+                continue
+            todo[key] = shape
+            if len(todo) == 4:
+                break
         if changed:
             self.refresh()
         if not todo:
             return
-        keys = {id(shape) for shape in todo}
-        self._refining |= keys
+        shapes = tuple(todo.values())
+        self._refining.update(todo)
         from . import workers
 
         def done(meshes):
-            self._refining -= keys
+            monitor = self._performance_monitor
+            if monitor is not None and monitor.isVisible():
+                monitor._mesh_time = work.elapsed_ms
+            self._refining.difference_update(todo)
+            if self.document is not doc:
+                self._refine_timer.start()
+                return
             hit = False
-            for shape, mesh in zip(todo, meshes or []):
-                if mesh is not None:
-                    hit = self.document.refined(shape, mesh) or hit
+            for index, shape in enumerate(shapes):
+                mesh = meshes[index] if meshes is not None and index < len(meshes) else None
+                if mesh is None:
+                    self._refine_failed[id(shape)] = shape
+                else:
+                    hit = doc.refined(shape, mesh) or hit
             if hit:
                 self.refresh()
+            else:
+                self._refine_timer.start()
 
         def failed(_message):
-            self._refining -= keys
+            done(None)
 
-        work = _Work(lambda: workers.fine_meshes(todo))
+        work = _Work(lambda: workers.fine_meshes(shapes))
         work.signals.done.connect(done)
         work.signals.failed.connect(failed)
         self._refine_work = work
-        self.pool.start(work)
+        self.pool.start(work, -1)
 
     # ---------- historia ----------
     def _hist_ctx(self):
@@ -10813,6 +10842,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         def done(value):
             if state['cancelled']:
                 return
+            monitor = self._performance_monitor
+            if monitor is not None and monitor.isVisible():
+                monitor._geometry_time = work.elapsed_ms
             try:
                 self.document.pending_label = label
                 self.document.pending_icon = hist.LABEL_ICONS.get(label)
@@ -10892,6 +10924,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         gen, compute, show = st['pending']
         st['pending'] = None
         st['running'] = True
+        st['active'] = gen
         work = _Work(compute)
         st['work'] = work
         work.signals.done.connect(lambda value, g=gen: self._pv_done(key, g, show, value, None))
@@ -10900,13 +10933,16 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
 
     def _pv_done(self, key, gen, show, value, error):
         st = self._pv[key]
-        st['running'] = False
+        if st.get('active') != gen:
+            return
         if st['gen'] == gen:
             try:
                 show(value, error)
             except Exception:
                 pass
-        self._pv_next(key)
+        if st.get('active') == gen:
+            st.pop('active')
+            self._pv_next(key)
 
     def cancel_background(self):
         """Przycisk „Anuluj liczenie” pod kostką: przerywa operację, podglądy i przygotowania w tle (procesy liczące są
@@ -10918,7 +10954,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self._cancel_op()                 # wynik operacji zostaje pominięty, okno przestaje czekać
         self.cancel_previews()
         for st in self._pv.values():
-            st['running'] = False             # następny podgląd może ruszyć od razu (stary wynik i tak jest pomijany)
+            st['running'] = False             # następny podgląd może ruszyć od razu
+            st.pop('active', None)
         self._extrude_spec_clear()
         workers.abort()
         self.override = {}
@@ -11368,11 +11405,21 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                    None,
                    (px('f_help'), 'Pomoc', 'Samouczek: jak korzystać z programu', self.show_help),
                    None,
+                   (px('f_about'), 'Wydajność…', 'Monitor wydajności i raport diagnostyczny', self.show_performance),
                    (px('f_about'), 'O programie', 'Wersja, data utworzenia i twórca', self.show_about)]
         menu = ui.RichMenu(self, entries, 'Plik', 330)
         self._popup = menu
         button = self.tools['file']
         menu.popup_at(button.mapToGlobal(QPoint(0, button.height() + 10)))
+
+    def show_performance(self):
+        from .performance_monitor import PerformanceMonitor
+
+        if self._performance_monitor is None:
+            self._performance_monitor = PerformanceMonitor(self)
+        self._performance_monitor.show()
+        self._performance_monitor.raise_()
+        self._performance_monitor.activateWindow()
 
     def show_about(self):
         from .about import AboutDialog
