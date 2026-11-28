@@ -30,7 +30,7 @@ Baza porównawcza to RCCAD Desktop 0.5.65, commit `39bf577`. Raport dotyczy loka
 10. Menedżer zadań śledzi identyfikatory, priorytety, rewizje, czas i wynik pracy pul Studio. Monitor może pokazać zadania aktywne i ostatnio zakończone. Procesy OCCT są nadal odizolowane od interfejsu.
 
 11. Duże jednorodne partie sztywnych wystąpień współdzielą indeksy, wierzchołki i normalne w jednym zestawie buforów OpenGL. OpenGL 3.3+ rysuje widoczne wystąpienia wywołaniem indeksowanym z instancjami. Starszy sterownik wykorzystuje ten sam bufor po kolei. Przekroje, mieszane partie, odbicia i siatki bez wspólnego wzorca korzystają z dotychczasowego renderowania. Geometria B-Rep i dane zaznaczania pozostają w położeniach obiektów.
-12. Zadania przekrojów korzystają z tego samego rejestru zadań co operacje Studio. Zachowują osobny jednoprocesowy tor kolejki Qt, dzięki czemu interaktywny przekrój nie czeka w kolejce długich operacji modelowania.
+12. Zadania przekrojów korzystają z tego samego rejestru zadań co operacje Studio. Zachowują osobny jednowątkowy tor kolejki Qt, dzięki czemu interaktywny przekrój nie czeka w kolejce długich operacji modelowania.
 
 ## Pomiar przed i po
 
@@ -46,6 +46,15 @@ Python 3.12, Linux, trzy dostępne logiczne CPU, Intel Xeon Platinum 8573C, Qt o
 Scenariusz 10 000 pozycji mierzy widok ze zwiniętymi folderami. Wyników nie należy porównywać wprost ze scenariuszami z widocznymi wierszami. W dodatkowym przebiegu `test_perf.StudioPerf` bezczynne odświeżenie okna z dokumentem o 242 stanach zajęło średnio 24,8 ms przed zmianą i 0,4 ms po zmianie. Obie próby przypięto do tego samego logicznego CPU. Odświeżenie po dodaniu kroku zajęło 28,9 i 27,7 ms. Pierwsze zbudowanie paska historii zajęło odpowiednio 354,8 i 440,3 ms. Pojedyncze pomiary przebudowy nie potwierdzają przyspieszenia całej aplikacji.
 
 Z katalogu `native` uruchom `PYTHONPATH=. python tests/bench_object_selection.py`. Dla baseline uruchom ten sam skrypt z `PYTHONPATH` wskazującym katalog `native` kopii `39bf577`.
+
+Na tym samym wirtualnym wyświetlaczu, przy użyciu OpenGL 4.5 Mesa llvmpipe, `PYTHONPATH=. python tests/bench_gpu_instancing.py` porównał poprzednie łączenie siatek z buforami instancji. Podane bajty pochodzą z OpenGL i obejmują wierzchołki, normalne, indeksy i macierze wypełnienia. Krawędzie, inne elementy sceny i całkowite VRAM są poza pomiarem. Mediana siedmiu odczytów klatki zawiera kopiowanie obrazu z bufora.
+
+| Wystąpienia części | Bajty wypełnienia przed | Bajty wypełnienia po | Czas odczytu klatki przed → po |
+| ---: | ---: | ---: | ---: |
+| 24 | 7 239 168 | 303 168 | 78,19 → 83,63 ms |
+| 100 | 30 163 200 | 308 032 | 264,40 → 271,75 ms |
+
+Test pokazał mniejszą alokację buforów oraz dłuższy odczyt klatki na tym programowym sterowniku.
 
 ## Regresja i ograniczenia
 
