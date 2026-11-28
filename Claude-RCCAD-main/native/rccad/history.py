@@ -1949,7 +1949,7 @@ def run_enc_fit(bodies, recipe):
     return run(bodies, recipe)
 
 
-def run_vent(bodies, recipe):
+def run_vent(bodies, recipe, pre=None):
     """Wzory: Wentylacja - otwory i perforacje na powierzchniach bryły (rccad.vent_feature); Gyroid 3D - rccad.vent_gyroid."""
     if recipe.get('gyroid'):
         from dataclasses import replace
@@ -1967,13 +1967,13 @@ def run_vent(bodies, recipe):
             return [b for b in out if b.id != ids[0]] + [Body(f'{tb.name} - Gyroid', cq.Shape.cast(res), id=ids[0], folder=tb.folder).prepared()]
         return _replace(out, replace(tb, shape=cq.Shape.cast(res), mesh=None).prepared())
     from .vent_feature import run
-    return run(bodies, recipe)
+    return run(bodies, recipe, pre)
 
 
-def run_tex(bodies, recipe):
+def run_tex(bodies, recipe, pre=None):
     """Wzory: Tekstury geometryczne - rzeczywista geometria wzorów na powierzchniach brył (rccad.tex_engine)."""
     from .tex_engine import run
-    return run(bodies, recipe)
+    return run(bodies, recipe, pre)
 
 
 def run_enc_regen(bodies, recipe):

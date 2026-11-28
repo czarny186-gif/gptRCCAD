@@ -30,6 +30,10 @@ from rccad.studio import TABS
 from rccad.studio import StudioWindow
 
 
+def kernel_display(face):
+    return k.display_mesh(face)
+
+
 class StudioTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -6096,6 +6100,70 @@ class StudioTests(unittest.TestCase):
         w.pat_ccount.setValue(5);w.pat_angle.setValue(360);w.update_pattern_preview();w.apply_pattern();self.wait();self.wait();w.set_mode(None)
         res=w.document.bodies[0].shape
         self.assertGreater(res.Volume()-p.shape.Volume(),4*850);self.assertTrue(res.isValid())
+
+    # 0.5.68: wentylacja i tekstury - podświetlenie jednej ściany, brak zbędnego przeliczania, Zastosuj z wyniku podglądu
+    def test_vent_tex_hover_highlights_only_hovered_face(self):
+        from rccad import vent_feature as VF
+        w=self.w;plate=Body('Płyta',cq.Workplane().box(60,40,6).val()).prepared();w.document.commit([plate]);w.refresh()
+        top=[f_ for f_ in plate.shape.Faces() if f_.normalAt().z>.9][0]
+        for mode,hover in (('tex',w.tex_hover),('vent',w.vent_hover)):
+            w.set_mode(mode)
+            with patch.object(w.view,'pick_face',return_value=(plate.id,np.array([0,0,1.]),np.array([1,1,3.]))),patch.object(w.view,'face_at',return_value=(top,None)),\
+                 patch.object(w.view,'set_hover_mesh') as hov:
+                hover(10,10)
+            mesh=hov.call_args[0][0]
+            self.assertIsNotNone(mesh);self.assertLess(len(mesh.triangles),len(plate.mesh.triangles))              # tylko ściana, nie cała bryła
+            self.assertEqual(len(mesh.triangles),len(kernel_display(top).triangles))
+        w.set_mode(None)
+
+    def test_tex_preview_skips_unchanged_and_apply_reuses_result(self):
+        from rccad import vent_feature as VF, tex_engine as te
+        w=self.w;plate=Body('Płyta',cq.Workplane().box(60,40,6).val()).prepared();w.document.commit([plate]);w.refresh()
+        top=[f_ for f_ in plate.shape.Faces() if f_.normalAt().z>.9][0]
+        w.set_mode('tex');w.xt.update(target=plate.id,faces=VF.face_refs(plate.shape,[top.wrapped]))
+        w.xt_level.setCurrentIndex([i for i in range(w.xt_level.count()) if w.xt_level.itemData(i)=='exact'][0])
+        calls=[]
+        real=te._build_once
+        def counted(*a,**k):
+            calls.append(1);return real(*a,**k)
+        with patch.object(te,'_build_once',counted):
+            w._xt_update();w._xt_timer.stop();w._xt_preview(force=True);self.preview()
+            self.assertTrue(w.xt_apply.isEnabled());first=len(calls);self.assertGreaterEqual(first,1)
+            w._xt_update();w._xt_timer.stop();w._xt_preview();self.preview()          # nic się nie zmieniło: bez przeliczania
+            self.assertEqual(len(calls),first);self.assertTrue(w.xt_apply.isEnabled())
+            w.apply_tex();self.wait()
+            self.assertEqual(len(calls),first)                                          # Zastosuj bierze wynik podglądu
+        self.assertGreater(len(w.document.bodies[0].shape.Faces()),20)
+        w.set_mode(None)
+
+    def test_vent_preview_skips_unchanged_and_apply_reuses_result(self):
+        from rccad import vent_feature as VF
+        w=self.w;plate=Body('Płyta',cq.Workplane().box(60,40,6).val()).prepared();w.document.commit([plate]);w.refresh()
+        top=[f_ for f_ in plate.shape.Faces() if f_.normalAt().z>.9][0]
+        w.set_mode('vent');w.vn.update(target=plate.id,faces=VF.face_refs(plate.shape,[top.wrapped]))
+        w.vn_level.setCurrentIndex([i for i in range(w.vn_level.count()) if w.vn_level.itemData(i)=='exact'][0])
+        calls=[]
+        real=VF.plan
+        def counted(*a,**k):
+            calls.append(1);return real(*a,**k)
+        with patch.object(VF,'plan',counted):
+            w._vn_update();w._vn_timer.stop();w._vn_preview(force=True);self.preview()
+            self.assertTrue(w.vn_apply.isEnabled());first=len(calls)
+            w._vn_update();w._vn_timer.stop();w._vn_preview();self.preview()
+            self.assertEqual(len(calls),first);self.assertTrue(w.vn_apply.isEnabled())
+            w.apply_vent();self.wait()
+            self.assertEqual(len(calls),first)
+        self.assertGreater(len(w.document.bodies[0].shape.Faces()),20)
+        w.set_mode(None)
+
+    def test_library_thumbnails_load_in_background(self):
+        w=self.w;w.set_mode('vent');self.app.processEvents()
+        self.assertGreater(w.vn_lib.count(),20)
+        end=time.monotonic()+60
+        while w._thumb_queue.jobs and time.monotonic()<end:
+            self.app.processEvents();time.sleep(.01)
+        self.assertFalse(w._thumb_queue.jobs);self.assertFalse(w.vn_lib.item(0).icon().isNull())
+        w.set_mode(None)
 
     def test_tex_tool_window(self):
         from rccad import tex_library as TL, tex_patterns as TP, vent_feature as VF

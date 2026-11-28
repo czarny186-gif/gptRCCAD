@@ -326,6 +326,7 @@ class TextureTools:
 
     def _tex_begin(self):
         self.xt = self._tex_fresh()
+        self._xt_cache = self._xt_done = None
         self.xt_panel.show()
         self._xt_sync()
         self._xt_gallery_fill()
@@ -341,6 +342,10 @@ class TextureTools:
                                 'grad_curve': 'Kliknij szkic krzywej gradientu.'}.get(what, ''))
 
     def tex_hover(self, x, y):
+        if self.xt.get('pick', 'faces') == 'faces':
+            self._hover_one_face(x, y)
+            return
+        self._hover_one_key = None
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         self.view.set_hover_mesh(body.mesh if body is not None and self.xt.get('pick') in ('faces', 'custom_body', 'region_sketch', 'zone_sketch', 'custom_sketch', 'grad_curve') else None)
@@ -691,11 +696,13 @@ class TextureTools:
             it.setData(Qt.UserRole, iid)
             it.setSizeHint(QSize(78, 92))
             if iid not in self._xt_thumbs:
-                try:
-                    self._xt_thumbs[iid] = QIcon(lib.thumbnail(params, 56))
-                except Exception:
-                    self._xt_thumbs[iid] = QIcon()
-            it.setIcon(self._xt_thumbs[iid])
+                from . import thumbcache as tc
+                if not hasattr(self, '_thumb_queue'):
+                    self._thumb_queue = tc.Queue()
+                self._thumb_queue.add(self._xt_thumbs, iid, lambda params=params: tc.cached_pixmap('tex', params, 56, lambda: lib.thumbnail(params, 56)), self.xt_gal)
+                it.setIcon(tc.placeholder(56))
+            else:
+                it.setIcon(self._xt_thumbs[iid])
             self.xt_gal.addItem(it)
 
     def _xt_gallery_apply(self, item):
@@ -752,18 +759,25 @@ class TextureTools:
         if recipe is None or self.mode != 'tex':
             return
         level = self.xt_level.currentData()
-        sig = repr((recipe, level)) if not recipe['p'].get('image') else repr((recipe['p'].get('mode'), recipe['p'].get('pattern'), level, id(recipe['p'].get('image')), recipe['p']['image'].get('contrast')))
-        sig = (sig, hash(repr({k: v for k, v in recipe['p'].items() if k not in ('image', 'custom_loops')})), len(repr(recipe['p'].get('custom_loops'))), repr(recipe['p'].get('image') and {k: v for k, v in recipe['p']['image'].items() if k != 'data'}))
-        self._xt_sig = sig
         bodies = list(self.document.bodies)
+        sig = (te.signature(bodies, recipe), level)
+        done = getattr(self, '_xt_done', None)
+        if not force and done is not None and done['sig'] == sig and self.xt.get('result') is not None:
+            self.xt_apply.setEnabled(done['ok'])       # nic się nie zmieniło od ostatniego podglądu - nie liczy się od nowa
+            self.xt_status.setText(done['status'])
+            return
+        self._xt_sig = sig
+        token = self._xt_token = object()            # nowe żądanie przerywa liczenie poprzedniego (nie czeka się na niepotrzebny wynik)
         _STATE.update(cancel=False, progress=0.0)
+        reuse = getattr(self, '_xt_cache', None)
+        reuse = reuse['value'] if reuse and reuse['base'] == sig[0] else None          # plan / narzędzia tego samego zadania z poprzedniego podglądu
 
         def compute():
-            cancel = lambda: _STATE['cancel']
+            cancel = lambda: _STATE['cancel'] or self._xt_token is not token
             if level == 'fast':
-                pl = te.plan(bodies, recipe, cancel=cancel)
+                pl = reuse['plan'] if reuse and reuse.get('plan') is not None else te.plan(bodies, recipe, cancel=cancel)
                 return dict(plan=pl, report=pl['report'], count=pl['count'], meshes=_outline_mesh(pl), level=level, stats=dict(count=pl['count']))
-            res = te.build(bodies, recipe, cancel=cancel, progress=lambda f: _STATE.update(progress=f), exact=level == 'exact')
+            res = te.build(bodies, recipe, cancel=cancel, progress=lambda f: _STATE.update(progress=f), exact=level == 'exact', pre=reuse)
             res['level'] = level
             res['count'] = res['plan']['count']
             res['meshes'] = _outline_mesh(res['plan'])
@@ -789,10 +803,17 @@ class TextureTools:
                 self.view.set_layers_preview([])
                 return
             self.xt['result'] = value
+            self._xt_done = dict(sig=sig, level=level)
+            old = getattr(self, '_xt_cache', None)
+            keep = old['value'] if old and old['base'] == sig[0] else {}
+            # zapamiętany najpełniejszy wynik tego zadania: gotowy kształt > narzędzia elementów > sam plan (Zastosuj z niego korzysta)
+            best = value if (value.get('shape') is not None or value.get('ups') is not None or not keep) else keep
+            self._xt_cache = dict(base=sig[0], value=best)
             self._xt_show(value)
             ok = bool(value.get('count')) or bool(value['plan']['groups'] and any(g.field is not None for g in value['plan']['groups']))
             self.xt_apply.setEnabled(ok)
             self.xt_status.setText('Enter albo Zastosuj nakłada teksturę.' if ok else 'Żaden element nie mieści się w obszarze.')
+            self._xt_done.update(ok=ok, status=self.xt_status.text())
         self._xt_poll.start()
         self.run_preview('tex', compute, show)
 
@@ -903,9 +924,12 @@ class TextureTools:
         label = 'Tekstury geometryczne'
         preview_only = recipe['p'].get('mode') == 'preview'
 
+        cache = getattr(self, '_xt_cache', None)
+        pre = cache['value'] if cache and cache['base'] == te.signature(existing, recipe) else None     # wynik podglądu tego samego zadania
+
         def build_step():
             from .history import run_tex
-            return run_tex(existing, recipe)
+            return run_tex(existing, recipe, pre)
 
         def apply(bodies):
             if preview_only:
@@ -918,6 +942,7 @@ class TextureTools:
         def after():
             self.view.set_preview_mesh(None)
             self.xt.update(result=None)
+            self._xt_cache = self._xt_done = None
 
         self._xt_timer.stop()
         if preview_only:

@@ -1000,12 +1000,16 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawEllipse(QPointF(12 + c_ * 8 + (4 if r_ % 2 else 0), 15 + r_ * 9), 2.6, 2.6)
         p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(36, 33), 3.2, 3.2)
     elif kind == 'x_tex':
-        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRoundedRect(QRectF(5, 7, 38, 34), 4, 4)
-        for r_ in range(3):
-            for c_ in range(4):
-                cx, cy = 11 + c_ * 9 + (4.5 if r_ % 2 else 0), 14 + r_ * 9
-                p.setPen(pen(INK, 1.6)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (1, 2) else QColor(ORANGE))
-                p.drawPolygon(QPolygonF([QPointF(cx, cy - 4), QPointF(cx + 4, cy), QPointF(cx, cy + 4), QPointF(cx - 4, cy)]))
+        # tekstura geometryczna: płyta w rzucie izometrycznym z wypukłymi piramidkami (inna niż perforowana kratka wentylacji)
+        P = lambda pts: QPolygonF([QPointF(*q) for q in pts])
+        p.setPen(pen(BLUE, 2.2)); p.setBrush(QColor(BLUE_SOFT)); p.drawPolygon(P([(4, 24), (24, 14), (44, 24), (24, 34)]))
+        p.setBrush(QColor('#c3d8ee')); p.drawPolygon(P([(4, 24), (24, 34), (24, 42), (4, 32)]))
+        p.setBrush(QColor('#a9c6e4')); p.drawPolygon(P([(24, 34), (44, 24), (44, 32), (24, 42)]))
+        for (cx, cy), hot in (((15, 24), False), ((30, 25), True)):
+            base = ((cx - 6, cy), (cx, cy + 3), (cx + 6, cy), (cx, cy - 3)); apex = (cx, cy - 9)
+            p.setPen(pen(INK, 1.6)); p.setBrush(QColor(ORANGE) if hot else QColor(255, 255, 255))
+            p.drawPolygon(P([base[0], base[1], apex])); p.setBrush(QColor(255, 196, 120) if hot else QColor(232, 240, 250))
+            p.drawPolygon(P([base[1], base[2], apex]))
     elif kind == 'x_enccheck':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRect(QRectF(5, 10, 30, 28))
         p.setPen(pen(QColor(30, 132, 73), 3.4)); p.drawPolyline(QPolygonF([QPointF(12, 24), QPointF(18, 30), QPointF(30, 16)]))
@@ -1493,13 +1497,16 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                     q = QPointF(12 + c_ * 8 + (4 if r_ % 2 else 0), 15 + r_ * 9)
                     p.setPen(pen(ink, 1.8)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (2, 3) else QColor(acc)); p.drawEllipse(q, 2.7, 2.7)
         elif name == 'tex':
-            # tekstury: płyta z rombowym radełkowaniem, jeden romb pomarańczowy
-            fl(_rounded(5, 7, 38, 34, 4), soft)
-            for r_ in range(3):
-                for c_ in range(4):
-                    cx, cy = 11 + c_ * 9 + (4.5 if r_ % 2 else 0), 14 + r_ * 9
-                    poly = QPolygonF([QPointF(cx, cy - 4), QPointF(cx + 4, cy), QPointF(cx, cy + 4), QPointF(cx - 4, cy)])
-                    p.setPen(pen(ink, 1.6)); p.setBrush(QColor(255, 255, 255) if (r_, c_) != (1, 2) else QColor(acc)); p.drawPolygon(poly)
+            # tekstury: płyta w rzucie izometrycznym z wypukłymi piramidkami, jedna pomarańczowa
+            P = lambda pts: QPolygonF([QPointF(*q) for q in pts])
+            p.setPen(pen(ink, 2.2)); p.setBrush(soft); p.drawPolygon(P([(4, 24), (24, 14), (44, 24), (24, 34)]))
+            p.setBrush(QColor(255, 255, 255, 70) if white else QColor('#c3d8ee')); p.drawPolygon(P([(4, 24), (24, 34), (24, 42), (4, 32)]))
+            p.setBrush(QColor(255, 255, 255, 100) if white else QColor('#a9c6e4')); p.drawPolygon(P([(24, 34), (44, 24), (44, 32), (24, 42)]))
+            for (cx, cy), hot in (((15, 24), False), ((30, 25), True)):
+                base = ((cx - 6, cy), (cx, cy + 3), (cx + 6, cy), (cx, cy - 3)); apex = (cx, cy - 9)
+                p.setPen(pen(ink, 1.6)); p.setBrush(QColor(acc) if hot else QColor(255, 255, 255))
+                p.drawPolygon(P([base[0], base[1], apex])); p.setBrush(QColor(255, 220, 160) if hot else QColor(232, 240, 250))
+                p.drawPolygon(P([base[1], base[2], apex]))
         elif name == 'pattern':
             for r in range(2):
                 for c in range(2):

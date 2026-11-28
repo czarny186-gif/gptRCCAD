@@ -957,14 +957,35 @@ def _stats(pl, ctx, ups, downs):
                 raised=len(ups), recessed=len(downs), complexity=complexity(pl['count'])['label'], est_seconds=complexity(pl['count'])['seconds'])
 
 
-def _build_once(bodies, recipe, cancel=None, progress=None, exact=True):
+def _freeze(x):
+    """Wartość -> postać porównywalna i haszowalna (tablice po zawartości, nie po skróconym zapisie)."""
+    import hashlib
+    if isinstance(x, dict):
+        return tuple((k, _freeze(v)) for k, v in sorted(x.items(), key=lambda kv: str(kv[0])) if k not in ('id', 'out_ids'))
+    if isinstance(x, (list, tuple)):
+        return tuple(_freeze(v) for v in x)
+    if isinstance(x, np.ndarray):
+        return ('nd', x.shape, hashlib.md5(np.ascontiguousarray(x).tobytes()).hexdigest())
+    if isinstance(x, (bytes, bytearray)):
+        return ('by', hashlib.md5(bytes(x)).hexdigest())
+    if isinstance(x, (str, int, float, bool)) or x is None:
+        return x
+    return repr(x)
+
+
+def signature(bodies, recipe):
+    """Podpis zadania: parametry przepisu (bez identyfikatorów kroku) i geometria wszystkich obiektów - to samo zadanie ma ten sam podpis."""
+    return (_freeze(recipe), tuple((b.id, id(b.shape), id(b.mesh)) for b in bodies))
+
+
+def _build_once(bodies, recipe, cancel=None, progress=None, exact=True, pre=None):
     """Operacja Tekstury: (bryła wynikowa, plan, raport, statystyki). exact=False - tylko plan i narzędzia (podgląd przestrzenny)."""
     import cadquery as cq
     from .enclosure import _volume
     t0 = time.time()
     p = params(recipe)
     mode = p.get('mode', 'convex')
-    pl = plan(bodies, recipe, cancel)
+    pl = pre['plan'] if pre and pre.get('plan') is not None else plan(bodies, recipe, cancel)      # plan z podglądu - bez ponownego liczenia
     tb = pl['target']
     solid = tb.shape.wrapped
     report = list(pl['report'])
@@ -988,14 +1009,19 @@ def _build_once(bodies, recipe, cancel=None, progress=None, exact=True):
     ctx.seam_check = acc != 'mesh' and any(str(r.get('kind', '')).lower() in ('cone', 'torus', 'bspline', 'other') for r in recipe.get('faces') or [])
     if n == 0 and not any(g.field is not None for g in pl['groups']):
         raise kernel.CadError('Żaden element tekstury nie mieści się w obszarze - zmień rozmiar, marginesy albo obszar.')
-    ups, downs = build_tools(pl, recipe, ctx, cancel, progress)
-    stats = _stats(pl, ctx, ups, downs)
-    if ctx.count['thin']:
-        report.append(('warning', f'{ctx.count["thin"]} elementów pominięto, bo pozostałaby ścianka cieńsza niż {p["min_wall"]:g} mm (ochrona grubości). Zmniejsz głębokość albo wyłącz ochronę.'))
-    if ctx.count['bad']:
-        report.append(('warning', f'{ctx.count["bad"]} elementów nie udało się zbudować (zbyt duże względem krzywizny albo niepoprawny profil).'))
+    if pre and pre.get('ups') is not None and pre.get('acc') == acc and pre.get('ctx') is not None:
+        # narzędzia elementów z podglądu przestrzennego: nie buduje się ich drugi raz, zostaje tylko Boolean
+        ups, downs, ctx, stats = pre['ups'], pre['downs'], pre['ctx'], pre['stats']
+        report = list(pre['report'])
+    else:
+        ups, downs = build_tools(pl, recipe, ctx, cancel, progress)
+        stats = _stats(pl, ctx, ups, downs)
+        if ctx.count['thin']:
+            report.append(('warning', f'{ctx.count["thin"]} elementów pominięto, bo pozostałaby ścianka cieńsza niż {p["min_wall"]:g} mm (ochrona grubości). Zmniejsz głębokość albo wyłącz ochronę.'))
+        if ctx.count['bad']:
+            report.append(('warning', f'{ctx.count["bad"]} elementów nie udało się zbudować (zbyt duże względem krzywizny albo niepoprawny profil).'))
     if not exact:
-        return dict(shape=None, plan=pl, ups=ups, downs=downs, ctx=ctx, report=report, stats=stats)
+        return dict(shape=None, plan=pl, ups=ups, downs=downs, ctx=ctx, report=report, stats=stats, acc=acc)
     if not ups and not downs:
         raise kernel.CadError('Żaden element nie spełnia wymagań (ochrona grubości, krzywizna, obszar) - zmień parametry.')
     v0 = _volume(solid)[0]
@@ -1062,7 +1088,7 @@ def _build_once(bodies, recipe, cancel=None, progress=None, exact=True):
 
 
 
-def build(bodies, recipe, cancel=None, progress=None, exact=True):
+def build(bodies, recipe, cancel=None, progress=None, exact=True, pre=None):
     """Operacja Tekstury. Relief (fale, obraz) z siatką punktów bywa numerycznie wrażliwy w operacji Boolean - przy niepoprawnym
     wyniku siatka jest rzedsza (do 3 prób), zamiast od razu zgłaszać błąd."""
     is_field = (recipe.get('p') or {}).get('pattern') in ('waves', 'image')
@@ -1073,7 +1099,9 @@ def build(bodies, recipe, cancel=None, progress=None, exact=True):
         if attempt:
             rec = dict(recipe, p=dict(recipe.get('p') or {}, _cell_k=k))
         try:
-            res = _build_once(bodies, rec, cancel, progress, exact)
+            if pre is not None and exact and pre.get('shape') is not None and not attempt:
+                return pre                                           # wynik dokładnego podglądu tego samego zadania - bez liczenia od nowa
+            res = _build_once(bodies, rec, cancel, progress, exact, pre if not attempt else None)
             if attempt:
                 res['report'].append(('warning', f'Siatka reliefu została zrzedzona {k:.2f}× (pierwsza próba dawała niepoprawną bryłę).'))
             return res
@@ -1121,15 +1149,16 @@ def _separate(tools, cancel=None):
     return comp
 
 
-def run(bodies, recipe):
-    """Krok historii 'tex': bryła z teksturą (ta sama bryła, nowa geometria) albo nowa bryła z oddzielnych elementów."""
+def run(bodies, recipe, pre=None):
+    """Krok historii 'tex': bryła z teksturą (ta sama bryła, nowa geometria) albo nowa bryła z oddzielnych elementów.
+    pre - wynik podglądu tego samego zadania (plan, narzędzia albo gotowy wynik): nie liczy się go drugi raz."""
     from dataclasses import replace
     if recipe.get('disabled'):
         return list(bodies)
     p = params(recipe)
     if p.get('mode') == 'preview':
         return list(bodies)
-    res = build(bodies, recipe)
+    res = build(bodies, recipe, pre=pre)
     out = []
     sep = res.get('separate')
     for b in bodies:

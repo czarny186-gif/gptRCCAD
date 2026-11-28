@@ -1,3 +1,12 @@
+# RCCAD Desktop 0.5.68 — Wentylacja i Tekstury: szybsze otwieranie, bez zbędnego przeliczania, podświetlenie jednej ściany
+
+- **Podświetlenie ściany:** przy wskazywaniu powierzchni w Wentylacji i Teksturach świeci się tylko ściana pod kursorem (pomarańczowa), a nie cała bryła. Zaznaczone ściany nadal świecą się trwale.
+- **Nowa ikona Tekstur geometrycznych:** płyta w rzucie izometrycznym z wypukłymi piramidkami (dawna kratka rombów była zbyt podobna do Wentylacji).
+- **Szybkie otwieranie okien:** miniatury wzorów rysują się po jednej w tle głównego wątku i są zapisywane na dysku (folder Ustawienia/thumbs), więc okno Wentylacji otwiera się od razu (zmierzone: z ok. 6,7 s do ok. 0,5 s; miniatury dochodzą po kolei, a od drugiego uruchomienia są gotowe).
+- **Bez zbędnego przeliczania:** niezmieniona konfiguracja nie uruchamia podglądu od nowa (porównanie pełnej zawartości zadania i geometrii obiektów, także dla tablic i obrazów). Zastosuj korzysta z wyniku podglądu tego samego zadania: po podglądzie dokładnym zastosowanie jest natychmiastowe (zmierzone: tekstura ok. 7 s → 0,5 s), po podglądzie przestrzennym nie buduje się drugi raz planu i narzędzi elementów (zostaje sam Boolean). Zmiana poziomu podglądu nie liczy planu od nowa.
+- **Przerywanie starych obliczeń:** nowe żądanie podglądu przerywa poprzednie, więc długie liczenie nieaktualnej konfiguracji nie blokuje kolejnych.
+- **Ograniczenia (uczciwie):** pierwsze rysowanie miniatur (jednorazowe) nadal trwa kilka sekund, ale w tle. Gyroid 3D i podglądy graficzne nie korzystają z ponownego użycia wyniku. Samo wykonanie Boolean dla bardzo wielu elementów nie stało się szybsze - skrócono tylko powtarzanie pracy.
+
 # RCCAD Desktop 0.5.67 — Szyk elementów: elementy na walcach i z zaokrągleniami
 
 - **Naprawa zgłoszona po 0.5.66:** szyk kołowy elementów nie działał na walcach i na zaokrągleniach. Teraz element jest rozpoznawany także wtedy, gdy leży na powierzchni walcowej (otwór radialny w rurze, czop na wałku, kieszeń na walcu) - wieko elementu powstaje na powierzchni walca, a nie jako płaskie.

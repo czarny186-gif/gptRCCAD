@@ -4092,6 +4092,22 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.view.set_hover_body(bid)
         return bid
 
+    def _hover_one_face(self, x, y):
+        """Podświetla tylko ścianę pod kursorem (nie całą bryłę); siatka ściany liczona raz na ścianę."""
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        face = None
+        if body is not None and body.kind == 'solid' and body.shape is not None:
+            try:
+                face, _ = self.view.face_at(body, hit, curved=True)
+            except kernel.CadError:
+                face = None
+        key = (body.id, id(body.shape), face.hashCode()) if face is not None else None
+        if key == getattr(self, '_hover_one_key', None) and (key is None or getattr(self.view, 'hover_items', None)):
+            return
+        self._hover_one_key = key
+        self.view.set_hover_mesh(kernel.display_mesh(face) if face is not None else None, color=(1, .6, .15, .5), line_color=(.95, .42, .02, 1), width=3.0)
+
     def _hover_face_only(self, x, y):
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None

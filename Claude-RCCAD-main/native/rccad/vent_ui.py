@@ -403,6 +403,7 @@ class VentTools:
     # ------------------------------------------------------------------ cykl życia
     def _vent_begin(self):
         self.vn = self._vent_fresh()
+        self._vn_cache = self._vn_done = None
         self.vn_panel.show()
         self._vn_sync_widgets()
         self._vn_library_fill()
@@ -418,6 +419,10 @@ class VentTools:
                                 'add': 'Klikaj miejsca nowych otworów na ścianie.', 'end_face': 'Kliknij powierzchnię końcową otworów.'}.get(what, ''))
 
     def vent_hover(self, x, y):
+        if self.vn.get('pick', 'faces') == 'faces':
+            self._hover_one_face(x, y)
+            return
+        self._hover_one_key = None
         hit = self.view.pick_face(x, y)
         body = self.document.get(hit[0]) if hit else None
         self.view.set_hover_mesh(body.mesh if body is not None and self.vn.get('pick') in ('faces', 'zone_comp', 'region_sketch', 'zone_sketch', 'custom_sketch') else None)
@@ -673,15 +678,21 @@ class VentTools:
             self.vn_lib.addItem(it)
 
     def _vn_thumb(self, e):
+        """Ikona wzoru: z pamięci / pliku zapisanego w szablonie od razu, a narysowana z generatora - w kolejce w tle (z zapisem na dysk)."""
         key = e['id']
         if key not in self._vn_lib_cache:
             if e.get('thumb'):
                 import base64
                 pm = QPixmap()
                 pm.loadFromData(base64.b64decode(e['thumb']), 'PNG')
+                self._vn_lib_cache[key] = QIcon(pm)
             else:
-                pm = lib.thumbnail(e['params'])
-            self._vn_lib_cache[key] = QIcon(pm)
+                from . import thumbcache as tc
+                if not hasattr(self, '_thumb_queue'):
+                    self._thumb_queue = tc.Queue()
+                params = e['params']
+                self._thumb_queue.add(self._vn_lib_cache, key, lambda params=params: tc.cached_pixmap('vent', params, 64, lambda: lib.thumbnail(params)), self.vn_lib)
+                return tc.placeholder(64)
         return self._vn_lib_cache[key]
 
     def _vn_library_apply(self, item):
@@ -872,24 +883,33 @@ class VentTools:
         level = self.vn_level.currentData()
         if force and level == 'fast' and self.vn_auto.isChecked():
             level = 'exact'
-        sig = repr((recipe, level))
-        self._vn_sig = sig
         bodies = list(self.document.bodies)
+        sig = (vf.signature(bodies, recipe), level)
+        done = getattr(self, '_vn_done', None)
+        if not force and done is not None and done['sig'] == sig and self.vn.get('result') is not None:
+            self.vn_apply.setEnabled(done['ok'])       # nic się nie zmieniło od ostatniego podglądu - nie liczy się od nowa
+            self.vn_status.setText(done['status'])
+            return
+        self._vn_sig = sig
+        token = self._vn_token = object()            # nowe żądanie przerywa liczenie poprzedniego
+        cancelled = lambda: _STATE['cancel'] or self._vn_token is not token
         _STATE.update(cancel=False, progress=0.0)
+        reuse = getattr(self, '_vn_cache', None)
+        reuse = reuse['value'] if reuse and reuse['base'] == sig[0] else None
 
         def compute():
             gen = (recipe['areas'][0].get('generator') or '')
             if gen == 'gyroid3d':
                 return dict(gyroid=self._vn_gyroid(bodies, recipe, level == 'exact'), level=level)
             if level == 'fast':
-                pl = vf.plan(bodies, recipe, cancel=lambda: _STATE['cancel'])
+                pl = reuse['plan'] if reuse and reuse.get('plan') is not None and reuse.get('tools') is None and not reuse.get('holes_done') else vf.plan(bodies, recipe, cancel=cancelled)
                 holes = [h for p_ in pl['plans'] for h in p_['holes']]
                 for h in holes:
                     if h['status'] in ('ok', 'adjust'):
                         h['tool'] = 0
                 st = vf._stats_plan(pl, holes, recipe)
                 return dict(plan=pl, holes=holes, stats=st, report=pl['report'] + [r_ for p_ in pl['plans'] for r_ in []], level=level, meshes=_outline_meshes(pl))
-            res = vf.build(bodies, recipe, cancel=lambda: _STATE['cancel'], progress=lambda f: _STATE.update(progress=f), exact=level == 'exact')
+            res = vf.build(bodies, recipe, cancel=cancelled, progress=lambda f: _STATE.update(progress=f), exact=level == 'exact', pre=reuse)
             res['level'] = level
             res['meshes'] = _outline_meshes(res['plan'])
             if level == 'spatial':
@@ -915,6 +935,12 @@ class VentTools:
             self._vn_show(value)
             self.vn_apply.setEnabled(bool(value.get('gyroid') or value.get('stats', {}).get('count')))
             self.vn_status.setText('Enter albo Zastosuj wycina otwory.' if self.vn_apply.isEnabled() else 'Żaden otwór nie spełnia wymagań.')
+            self._vn_done = dict(sig=sig, ok=self.vn_apply.isEnabled(), status=self.vn_status.text())
+            old = getattr(self, '_vn_cache', None)
+            keep = old['value'] if old and old['base'] == sig[0] else None
+            # najpełniejszy wynik tego zadania do ponownego użycia przez Zastosuj: gotowy kształt > narzędzia > nic
+            if not value.get('gyroid') and (value.get('shape') is not None or value.get('tools') is not None or keep is None):
+                self._vn_cache = dict(base=sig[0], value=value)
             if level == 'fast' and self.vn_auto.isChecked():
                 self.vn_level.blockSignals(True)
                 self._vn_auto_exact = True
@@ -1107,9 +1133,12 @@ class VentTools:
             recipe['type'] = 'vent'
             recipe['gyroid'] = True
 
+        cache = getattr(self, '_vn_cache', None)
+        pre = cache['value'] if cache and not gyro and cache['base'] == vf.signature(existing, recipe) else None   # wynik podglądu tego samego zadania
+
         def build_step():
             from .history import run_vent
-            return run_vent(existing, recipe)
+            return run_vent(existing, recipe, pre)
 
         def apply(bodies):
             self.document.pending_op = recipe
@@ -1121,6 +1150,7 @@ class VentTools:
             self.view.set_preview_mesh(None)
             self.view.set_handles([])
             self.vn.update(result=None, sel=set())
+            self._vn_cache = self._vn_done = None
 
         self._vn_timer.stop()
         self.view.set_preview_mesh(None)

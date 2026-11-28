@@ -268,13 +268,15 @@ class _LocalMap:
         return self.m.to3d(q)
 
 
-def build(bodies, recipe, cancel=None, progress=None, exact=True):
+def build(bodies, recipe, cancel=None, progress=None, exact=True, pre=None):
     """Operacja Wentylacja: (bryła wynikowa, plan, raport, statystyki). exact=False - tylko plan i narzędzia (podgląd
-    przestrzenny), bez Boolean."""
+    przestrzenny), bez Boolean. pre - wynik podglądu tego samego zadania: gotowy kształt albo plan i narzędzia (bez liczenia od nowa)."""
     import cadquery as cq
     from .enclosure import _volume
+    if pre is not None and exact and pre.get('shape') is not None:
+        return pre
     cut_p = dict(CUT_DEFAULTS, **(recipe.get('cut') or {}))
-    pl = plan(bodies, recipe, cancel)
+    pl = pre['plan'] if pre and pre.get('plan') is not None and pre.get('tools') is not None else plan(bodies, recipe, cancel)
     tb = pl['target']
     solid = tb.shape.wrapped
     thick = vc.Thickness(solid)
@@ -282,72 +284,76 @@ def build(bodies, recipe, cancel=None, progress=None, exact=True):
     ref = None
     if cut_p['depth_mode'] == 'face' and recipe.get('end_face'):
         ref = match_faces(tb.shape, [recipe['end_face']])[0]
-    tools, blades, report = [], [], list(pl['report'])
-    all_holes = []
-    n_total = sum(len(x['holes']) for x in pl['plans'])
-    if n_total > MAX_TOOLS:
-        raise kernel.CadError(f'Za dużo otworów ({n_total}) - największa liczba to {MAX_TOOLS}; zwiększ otwory albo rozstaw.')
-    if n_total > 2000:
-        report.append(('warning', f'Duża liczba otworów ({n_total}) - dłuższe obliczenia i większy plik (każdy otwór to kilka ścian B-Rep).'))
-    thick_med = []
-    done = 0
-    for plan_ in pl['plans']:
-        for h in plan_['holes']:
-            done += 1
-            if cancel is not None and done % 50 == 0 and cancel():
-                raise kernel.CadError('Obliczenia przerwane - model bez zmian.')
-            if progress is not None and done % 50 == 0:
-                progress(.5 * done / max(n_total, 1))
-            if h['status'] not in ('ok', 'adjust'):
+    reuse = pre if (pre and pre.get('tools') is not None and pre.get('holes') is not None) else None
+    if reuse is not None:           # narzędzia otworów z podglądu przestrzennego: nie buduje się ich drugi raz, zostaje Boolean
+        tools, blades, report, all_holes = list(reuse['tools']), list(reuse.get('blades') or []), list(reuse['report']), reuse['holes']
+    else:
+        tools, blades, report = [], [], list(pl['report'])
+        all_holes = []
+        n_total = sum(len(x['holes']) for x in pl['plans'])
+        if n_total > MAX_TOOLS:
+            raise kernel.CadError(f'Za dużo otworów ({n_total}) - największa liczba to {MAX_TOOLS}; zwiększ otwory albo rozstaw.')
+        if n_total > 2000:
+            report.append(('warning', f'Duża liczba otworów ({n_total}) - dłuższe obliczenia i większy plik (każdy otwór to kilka ścian B-Rep).'))
+        thick_med = []
+        done = 0
+        for plan_ in pl['plans']:
+            for h in plan_['holes']:
+                done += 1
+                if cancel is not None and done % 50 == 0 and cancel():
+                    raise kernel.CadError('Obliczenia przerwane - model bez zmian.')
+                if progress is not None and done % 50 == 0:
+                    progress(.5 * done / max(n_total, 1))
+                if h['status'] not in ('ok', 'adjust'):
+                    all_holes.append(h)
+                    continue
+                m, q = _locate(plan_, h['c'])
+                lm = _LocalMap(m, 0, plan_['T'][plan_['mappers'].index(m)] if len(plan_['mappers']) > 1 else None)
+                hp = dict(cut_p, **{k: h[k] for k in ('dir',) if h.get(k) is not None})
+                try:
+                    if cut_p['hole_type'] in ('louver_out', 'louver_in'):
+                        t, b, why = vc.louver(h, lm, hp, thick)
+                        if t is None:
+                            h.update(status='bad', reason=why)
+                            all_holes.append(h)
+                            continue
+                        tools.append(t)
+                        blades.append(b)
+                    else:
+                        t, why = vc.tool(h, lm, hp, thick, axis, ref)
+                        if t is None or not _tool_ok(t):
+                            h.update(status='bad', reason=why or 'niepoprawna bryła narzędzia (profil)')
+                            all_holes.append(h)
+                            continue
+                        tools.append(t)
+                    # grubość w środku - wykrywanie elementów za ścianką (słupki, żebra, przegrody)
+                    P, N, X, _Y = lm.to3d(h['c'])
+                    d = vc.direction(h, P, N, X, hp, axis)
+                    tw = thick.wall(P, d)
+                    h['thickness'] = tw
+                    if tw is not None:
+                        thick_med.append(tw)
+                    h['tool'] = len(tools) - 1
+                except kernel.CadError as exc:
+                    h.update(status='bad', reason=str(exc))
                 all_holes.append(h)
-                continue
-            m, q = _locate(plan_, h['c'])
-            lm = _LocalMap(m, 0, plan_['T'][plan_['mappers'].index(m)] if len(plan_['mappers']) > 1 else None)
-            hp = dict(cut_p, **{k: h[k] for k in ('dir',) if h.get(k) is not None})
-            try:
-                if cut_p['hole_type'] in ('louver_out', 'louver_in'):
-                    t, b, why = vc.louver(h, lm, hp, thick)
-                    if t is None:
-                        h.update(status='bad', reason=why)
-                        all_holes.append(h)
-                        continue
-                    tools.append(t)
-                    blades.append(b)
-                else:
-                    t, why = vc.tool(h, lm, hp, thick, axis, ref)
-                    if t is None or not _tool_ok(t):
-                        h.update(status='bad', reason=why or 'niepoprawna bryła narzędzia (profil)')
-                        all_holes.append(h)
-                        continue
-                    tools.append(t)
-                # grubość w środku - wykrywanie elementów za ścianką (słupki, żebra, przegrody)
-                P, N, X, _Y = lm.to3d(h['c'])
-                d = vc.direction(h, P, N, X, hp, axis)
-                tw = thick.wall(P, d)
-                h['thickness'] = tw
-                if tw is not None:
-                    thick_med.append(tw)
-                h['tool'] = len(tools) - 1
-            except kernel.CadError as exc:
-                h.update(status='bad', reason=str(exc))
-            all_holes.append(h)
-    # elementy za ścianką: grubość wyraźnie większa niż typowa - otwór pominięty (nie przecina słupka / żebra)
-    if thick_med and cut_p['depth_mode'] in ('wall',):
-        med = float(np.median(thick_med))
-        skip = {h['tool'] for h in all_holes if h.get('tool') is not None and h.get('thickness') and h['thickness'] > med * float(cut_p['obstacle_factor']) + .2}
-        if skip:
-            for h in all_holes:
-                if h.get('tool') in skip:
-                    h.update(status='skip', reason='element za ścianką (słupek, żebro, przegroda) - grubość niejednoznaczna', tool=None)
-            report.append(('warning', f'{len(skip)} otworów pominięto: za ścianką jest element konstrukcyjny (lokalna grubość > {cut_p["obstacle_factor"]:g} × typowa {med:.2f} mm). Można wskazać powierzchnię końcową.'))
-            keep = [i for i in range(len(tools)) if i not in skip]
-            remap = {old: new for new, old in enumerate(keep)}
-            tools = [tools[i] for i in keep]
-            if blades:
-                blades = [blades[i] for i in keep]
-            for h in all_holes:
-                if h.get('tool') is not None:
-                    h['tool'] = remap.get(h['tool'])
+        # elementy za ścianką: grubość wyraźnie większa niż typowa - otwór pominięty (nie przecina słupka / żebra)
+        if thick_med and cut_p['depth_mode'] in ('wall',):
+            med = float(np.median(thick_med))
+            skip = {h['tool'] for h in all_holes if h.get('tool') is not None and h.get('thickness') and h['thickness'] > med * float(cut_p['obstacle_factor']) + .2}
+            if skip:
+                for h in all_holes:
+                    if h.get('tool') in skip:
+                        h.update(status='skip', reason='element za ścianką (słupek, żebro, przegroda) - grubość niejednoznaczna', tool=None)
+                report.append(('warning', f'{len(skip)} otworów pominięto: za ścianką jest element konstrukcyjny (lokalna grubość > {cut_p["obstacle_factor"]:g} × typowa {med:.2f} mm). Można wskazać powierzchnię końcową.'))
+                keep = [i for i in range(len(tools)) if i not in skip]
+                remap = {old: new for new, old in enumerate(keep)}
+                tools = [tools[i] for i in keep]
+                if blades:
+                    blades = [blades[i] for i in keep]
+                for h in all_holes:
+                    if h.get('tool') is not None:
+                        h['tool'] = remap.get(h['tool'])
     active = [h for h in all_holes if h['status'] in ('ok', 'adjust') and h.get('tool') is not None]
     stats = _stats_plan(pl, all_holes, recipe)
     if not exact:
@@ -463,12 +469,32 @@ def _mean_jac(m, reg):
         return 1.0
 
 
-def run(bodies, recipe):
+def _freeze(x):
+    import hashlib
+    if isinstance(x, dict):
+        return tuple((k, _freeze(v)) for k, v in sorted(x.items(), key=lambda kv: str(kv[0])) if k not in ('id', 'out_ids'))
+    if isinstance(x, (list, tuple)):
+        return tuple(_freeze(v) for v in x)
+    if isinstance(x, np.ndarray):
+        return ('nd', x.shape, hashlib.md5(np.ascontiguousarray(x).tobytes()).hexdigest())
+    if isinstance(x, (set, frozenset)):
+        return tuple(sorted(repr(v) for v in x))
+    if isinstance(x, (str, int, float, bool)) or x is None:
+        return x
+    return repr(x)
+
+
+def signature(bodies, recipe):
+    """Podpis zadania: parametry przepisu (bez identyfikatorów kroku) i geometria obiektów - to samo zadanie ma ten sam podpis."""
+    return (_freeze(recipe), tuple((b.id, id(b.shape), id(b.mesh)) for b in bodies))
+
+
+def run(bodies, recipe, pre=None):
     """Krok historii 'vent': bryła z wentylacją (ta sama bryła, nowa geometria); inne bryły bez zmian."""
     from dataclasses import replace
     if recipe.get('disabled'):
         return list(bodies)
-    res = build(bodies, recipe)
+    res = build(bodies, recipe, pre=pre)
     out = []
     for b in bodies:
         if b.id == recipe['target']:
