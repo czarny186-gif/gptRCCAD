@@ -2,15 +2,6 @@ name: RCCAD Desktop - Windows EXE
 
 on:
   workflow_dispatch:
-    inputs:
-      publish_run:
-        description: ID udanego przebiegu tego workflow do opublikowania
-        type: string
-        default: ''
-      release_tag:
-        description: Nowy tag wydania (rccad-performance-vX.Y.Z)
-        type: string
-        default: ''
   push:
     branches: [main]
     tags: ['rccad-desktop-v*']
@@ -23,7 +14,6 @@ permissions:
 
 jobs:
   build:
-    if: inputs.publish_run == ''
     runs-on: windows-2022
     timeout-minutes: 100          # testy (ok. 50 min na Windows) + kompilacja EXE
     defaults:
@@ -110,81 +100,3 @@ jobs:
               --verify-tag --title "RCCAD Desktop ${GITHUB_REF_NAME#rccad-desktop-v}" \
               --notes-file release-notes.md
           fi
-
-
-  publish_verified:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_run != ''
-    runs-on: windows-2022
-    permissions:
-      actions: read
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RUN_ID: ${{ inputs.publish_run }}
-      RELEASE_TAG: ${{ inputs.release_tag }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Verify the build run
-        id: tested
-        shell: bash
-        run: |
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
-          [[ "$RELEASE_TAG" =~ ^rccad-performance-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          result="$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID")"
-          jq -e '.path == ".github/workflows/native-windows.yml" and .conclusion == "success"' <<< "$result"
-          sha="$(jq -er '.head_sha' <<< "$result")"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
-        with:
-          name: RCCAD-Desktop-Windows-x64
-          path: release-assets
-          run-id: ${{ inputs.publish_run }}
-          github-token: ${{ github.token }}
-      - name: Verify and publish the tested executable
-        shell: bash
-        env:
-          TESTED_SHA: ${{ steps.tested.outputs.sha }}
-        run: |
-          cd release-assets
-          python - <<'PYCHECK'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import re
-          import struct
-          from zipfile import ZipFile
-
-          bundle = Path("RCCAD-Desktop-Windows-x64.zip")
-          checksum = Path("SHA256.txt").read_bytes()
-          expected = re.search(rb"[a-fA-F0-9]{64}", checksum)
-          expected = expected.group().decode() if expected else re.search(
-              r"[a-fA-F0-9]{64}", checksum.decode("utf-16")
-          ).group()
-          with bundle.open("rb") as file:
-              actual = hashlib.file_digest(file, "sha256").hexdigest()
-          assert actual == expected.lower()
-          with ZipFile(bundle) as package:
-              assert package.testzip() is None
-              with package.open("RCCAD Desktop/RCCAD Desktop.exe") as exe:
-                  header = exe.read(64)
-                  assert header[:2] == b"MZ"
-                  exe.seek(struct.unpack_from("<I", header, 60)[0])
-                  assert exe.read(6) == b"PE\0\0\x64\x86"
-              assert any(name.startswith("RCCAD Desktop/_internal/") for name in package.namelist())
-              report = json.loads(package.read("RCCAD Desktop/selftest_windows.json"))
-              assert report["passed"] and report["platform"].startswith("Windows")
-              assert len(report["checks"]) >= 30
-          print(f"Windows x64 · {len(report['checks'])} self-tests · SHA-256 {actual}")
-          PYCHECK
-          cd ..
-          awk '/^# RCCAD Desktop / { if (section++) exit } { print }' \
-            Claude-RCCAD-main/native/SHEETMETAL_RELEASE.md > release-notes.md
-          printf '\n[Testy Windows](https://github.com/%s/actions/runs/%s)\n' \
-            "$GH_REPO" "$RUN_ID" >> release-notes.md
-          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -qx true
-          gh release upload "$RELEASE_TAG" release-assets/RCCAD-Desktop-Windows-x64.zip release-assets/SHA256.txt
