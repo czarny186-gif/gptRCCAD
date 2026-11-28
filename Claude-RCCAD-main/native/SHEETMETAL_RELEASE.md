@@ -6,7 +6,7 @@
 - Spóźniony wynik anulowanego podglądu nie uruchamia kolejnego zadania przed czasem.
 - **Plik → Wydajność…** otwiera monitor z eksportem JSON.
 
-W teście Qt aktualizacja zaznaczenia w panelu z 1000 widocznymi pozycjami zajęła 0,12 ms wobec 2129,7 ms w wersji 0.5.65. Pomiar dotyczy panelu, bez pomiaru FPS widoku 3D. Wydanie zawiera dotychczasowe optymalizacje. Adaptacyjne LOD, profile wydajności, współdzielenie buforów GPU i zachowanie hierarchii STEP pozostają do wdrożenia.
+W teście Qt aktualizacja zaznaczenia w panelu z 1000 widocznymi pozycjami zajęła 0,12 ms wobec 2129,7 ms w wersji 0.5.65. Pomiar dotyczy panelu, bez pomiaru FPS widoku 3D. Wydanie zawiera również cztery profile renderowania, pięć poziomów LOD i cele 30, 60 lub 120 FPS, import STEP z etapowym wyświetlaniem i ścieżkami złożeń oraz wspólne bufory OpenGL dla jednorodnych, sztywnych wystąpień. Wzorce o mieszanej topologii zachowują dotychczasowe grupowanie. Raport zawiera wyniki testu OpenGL i ograniczenia pomiarów.
 
 Rozpakuj cały ZIP i uruchom `RCCAD Desktop/RCCAD Desktop.exe`.
 

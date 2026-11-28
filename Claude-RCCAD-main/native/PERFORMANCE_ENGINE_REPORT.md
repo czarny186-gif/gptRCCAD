@@ -56,6 +56,15 @@ Na tym samym wirtualnym wyświetlaczu, przy użyciu OpenGL 4.5 Mesa llvmpipe, `P
 
 Test pokazał mniejszą alokację buforów oraz dłuższy odczyt klatki na tym programowym sterowniku.
 
+`PYTHONPATH=. QT_QPA_PLATFORM=offscreen python tests/bench_scene_picking.py` sprawdził 100 promieni na scenę z rozstawionymi sześcianami. Każdy promień trafił w oczekiwany obiekt. Są to wyniki bieżącego kodu, bez porównania z bazą i bez renderowania GPU.
+
+| Obiekty | Przygotowanie położeń | Budowa widoku i indeksu | Średnie trafienie |
+| ---: | ---: | ---: | ---: |
+| 10 | 2,4 ms | 8,1 ms | 0,221 ms |
+| 100 | 18,5 ms | 5,5 ms | 0,685 ms |
+| 1 000 | 278,9 ms | 44,7 ms | 0,667 ms |
+| 10 000 | 3 218,8 ms | 606,3 ms | 0,924 ms |
+
 ## Regresja i ograniczenia
 
 Testy sprawdzają ponowne użycie wierszy i linii, zmianę koloru, widoczność, indeksowane zaznaczanie oraz wymianę siatek w tle. Testy kolejki sprawdzają priorytet brył w kadrze, odrzucenie wyniku po zmianie dokumentu oraz zakończenie anulowanego podglądu podczas pracy nowszego zadania. Zestaw 86 testów geometrii, projektu, ustawień i widoku przeszedł przed ostatnim ograniczeniem odświeżeń i poprawką kolejki podglądu. Końcowy zestaw 27 testów obejmujący kolejkę podglądu, widok, dopracowanie siatek, skręcanie, anulowanie tekstury i import STEP dla wentylacji również przeszedł. Pełny przebieg `ci_tests.py` przerwano przed końcem, więc nie jest potwierdzeniem pełnej regresji. Tryb offscreen sprawdza stan obiektów Qt oraz geometrię, ale nie tworzy sprzętowego kontekstu OpenGL. Test `PYTHONPATH=. python tests/render_instancing_smoke.py` przeszedł na Mesa llvmpipe z OpenGL 4.5. Scena zawierała 24 instancje po 8376 trójkątów. Średnia bezwzględna różnica kanału między zrzutami obu metod wyniosła 0,0031 w skali 0–255. Do porównania FPS i VRAM potrzebny jest przebieg na docelowym komputerze z aktywnym sterownikiem GPU.
