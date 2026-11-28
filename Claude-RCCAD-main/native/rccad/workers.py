@@ -367,14 +367,20 @@ def fine_meshes(shapes):
     return out
 
 
-def mesh_many(items, tolerance=.12, coarse=False):
+def mesh_many(items, tolerance=.12, coarse=False, on_result=None):
     """items: [(kształt, czy_bryła)] -> [(siatka, None) | (None, komunikat)] w tej samej kolejności.
     Przy co najmniej MIN_PARALLEL kształtach i gotowych procesach liczą procesy (po kolei rozdzielane), inaczej - bieżący proces.
     coarse=True: duże bryły dostają zgrubną siatkę (dokładną dolicza potem okno w tle)."""
     items = list(items)
     slots = size()
     if len(items) < MIN_PARALLEL or not slots:
-        return [_mesh_local(shape, solid, tolerance, False) for shape, solid in items]
+        results = []
+        for shape, solid in items:
+            result = _mesh_local(shape, solid, tolerance, False)
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+        return results
 
     generation = _abort_gen
     queued = deque()
@@ -414,6 +420,8 @@ def mesh_many(items, tolerance=.12, coarse=False):
             if result is None:
                 result = _mesh_local(shape, solid, tolerance, False)
             results.append(result)
+            if on_result is not None:
+                on_result(result)
         if generation != _abort_gen:
             raise Aborted()
         return results

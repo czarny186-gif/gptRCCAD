@@ -1188,7 +1188,7 @@ def _boolean_changed(body, operation, tools):
     return body.changed(kernel.boolean(operation, body.shape, list(tools)))
 
 
-def prepared_many(bodies, lenient=False):
+def prepared_many(bodies, lenient=False, on_batch=None):
     """Siatki wielu nowych obiektów naraz (np. szyk, wyciągnięcie wielu profili): w procesach liczących równolegle,
     bez procesów - po kolei tutaj. W bloku deferred_mesh zostają bez siatek. lenient=True (import plików): kształt, który
     nie przechodzi sprawdzenia poprawności, dostaje siatkę tak jak jest (jest widoczny), zamiast przerywać całość."""
@@ -1200,34 +1200,57 @@ def prepared_many(bodies, lenient=False):
     groups = kernel.instance_groups([b.shape for b in bodies]) if len(bodies) >= 8 else [(i, [i]) for i in range(len(bodies))]
     models = [bodies[g[0]] for g in groups]
     local = [b.kind == 'mesh' and kernel.is_triangle_mesh(b.shape) for b in models]    # STL: siatka z pliku, bez procesów liczących
+    out = list(bodies)
+    completed = 0
+    batch_size = max(32, (len(bodies) + 31) // 32)
+    parts = []
+
+    def materialize(index, mesh):
+        nonlocal completed
+        model, members = groups[index]
+        for i in members:
+            if mesh is None:
+                out[i] = None
+                continue
+            if i == model:
+                mesh_i = mesh
+            else:
+                relative = kernel.relative_matrix(bodies[i].shape, bodies[model].shape)
+                mesh_i = kernel.placed_mesh(mesh, relative)
+            out[i] = replace(bodies[i], mesh=mesh_i)
+            if on_batch is not None:
+                parts.append(out[i])
+        completed += len(members)
+        if on_batch is not None and (index == 0 or len(parts) >= batch_size or completed == len(bodies)):
+            on_batch(tuple(parts), completed, len(bodies))
+            parts.clear()
+
+    def accept(result, index):
+        mesh, error = result
+        if error is not None:
+            if not lenient:
+                raise kernel.CadError(error)
+            mesh = _repair_model(bodies, groups[index], models[index])
+        materialize(index, mesh)
+
     if len(models) >= 2 and workers.ready() and not any(local):
-        meshes = []
-        # import: duże części dostają najpierw zgrubną siatkę (od razu widać model), dokładną okno dolicza w tle
-        for k, (b, (mesh, error)) in enumerate(zip(models, workers.mesh_many([(b.shape, b.kind == 'solid') for b in models], coarse=lenient))):
-            if error is not None:
-                if not lenient:
-                    raise kernel.CadError(error)
-                mesh = _repair_model(bodies, groups[k], b)
-            meshes.append(mesh)
+        items = [(body.shape, body.kind == 'solid') for body in models]
+        if on_batch is None:
+            for i, result in enumerate(workers.mesh_many(items, coarse=lenient)):
+                accept(result, i)
+        else:
+            indexes = iter(range(len(items)))
+            workers.mesh_many(items, coarse=lenient, on_result=lambda result: accept(result, next(indexes)))
     else:
-        meshes = []
-        for k, b in enumerate(models):
+        for i, body in enumerate(models):
             try:
-                meshes.append(b.prepared().mesh)
+                mesh = body.prepared().mesh
             except Exception:
                 if not lenient:
                     raise
-                meshes.append(_repair_model(bodies, groups[k], b))
-    out = list(bodies)
-    for (model, members), mesh in zip(groups, meshes):
-        for i in members:
-            if mesh is None:
-                out[i] = None            # (tylko przy imporcie) kształtu nie da się nawet pokazać - pomijany
-            elif i == model:
-                out[i] = replace(bodies[i], mesh=mesh)
-            else:
-                out[i] = replace(bodies[i], mesh=kernel.placed_mesh(mesh, kernel.relative_matrix(bodies[i].shape, bodies[model].shape)))
-    return [b for b in out if b is not None]
+                mesh = _repair_model(bodies, groups[i], body)
+            materialize(i, mesh)
+    return [body for body in out if body is not None]
 
 
 def _repair_model(bodies, group, model):

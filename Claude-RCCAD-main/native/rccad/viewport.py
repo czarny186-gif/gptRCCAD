@@ -733,16 +733,23 @@ class CadView(gl.GLViewWidget):
         self._scene_revision=0;self._scene_signature=None
         self._presentation_signature = None
         self.frame_samples = None
+        self.adaptive_detail = None
+        self._detail_meshes = {}
         self._projection_cache=LRU(96*1024*1024)
 
     def paintGL(self):
         samples = self.frame_samples
-        if samples is None:
+        detail = self.adaptive_detail
+        if samples is None and detail is None:
             super().paintGL()
             return
         start = time.perf_counter()
         super().paintGL()
-        samples.record(start, time.perf_counter())
+        end = time.perf_counter()
+        if samples is not None:
+            samples.record(start, end)
+        if detail is not None:
+            detail.frame_rendered(end - start)
 
     def _refresh_grid(self):
         """Siatka zagęszcza się przy przybliżaniu (min. GRID_PX px między cienkimi liniami) i podąża za środkiem widoku."""
@@ -931,7 +938,8 @@ class CadView(gl.GLViewWidget):
         old=self._solid_batches
         fresh={}
         for key,members in groups.items():
-            signature=tuple((b.id,id(b.mesh)) for b in members)
+            draw_meshes = [self._render_mesh(body) for body in members]
+            signature = tuple((body.id, (id(body.mesh), id(mesh))) for body, mesh in zip(members, draw_meshes))
             previous=old.pop(key,None)
             picked=isinstance(key,tuple) and key[1]=='picked'
             rgba=PICKED_FILL if picked else self.solid_rgba(members[0])
@@ -941,9 +949,9 @@ class CadView(gl.GLViewWidget):
                 fresh[key]=previous;continue
             if previous is not None:
                 for item in previous[1:]:self.removeItem(item)
-            vertices=np.concatenate([b.mesh.vertices for b in members])
-            offsets=np.cumsum([0]+[len(b.mesh.vertices) for b in members[:-1]],dtype=np.uint32)
-            triangles=np.concatenate([b.mesh.triangles+offset for b,offset in zip(members,offsets)])
+            vertices = np.concatenate([mesh.vertices for mesh in draw_meshes])
+            offsets = np.cumsum([0] + [len(mesh.vertices) for mesh in draw_meshes[:-1]], dtype=np.uint32)
+            triangles = np.concatenate([mesh.triangles + offset for mesh, offset in zip(draw_meshes, offsets)])
             edges={i:pts for i,pts in enumerate(pts for b in members for pts in b.mesh.edges.values())}
             combined=kernel.DisplayMesh(vertices,triangles,edges,(0.,0.,0.),1.)
             fill=OffsetMesh(meshdata=_meshdata(combined),smooth=True,color=rgba,shader='rccad',drawEdges=False);fill.rccad_color=rgba
@@ -981,6 +989,20 @@ class CadView(gl.GLViewWidget):
         rgb = getattr(body, 'color', None) or self.default_color
         return (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0) if rgb else SOLID_COLOR
 
+    def _render_mesh(self, body):
+        variant = self._detail_meshes.get(body.id)
+        if self.section_plane is None and variant is not None and variant[0] is body.shape:
+            return variant[1]
+        return body.mesh
+
+    def set_detail_meshes(self, meshes):
+        if (meshes.keys() == self._detail_meshes.keys()
+                and all(shape is self._detail_meshes[bid][0] and mesh is self._detail_meshes[bid][1]
+                        for bid, (shape, mesh) in meshes.items())):
+            return
+        self._detail_meshes = meshes
+        self.set_models(self.bodies, self.selected_bodies, self.selected_edges)
+
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
         self.bodies = tuple(bodies)
@@ -999,6 +1021,7 @@ class CadView(gl.GLViewWidget):
             dict(self.tints), self.default_color, self.xray,
             None if self.section_plane is None else tuple(self.section_plane),
             frozenset(self._body_m),
+            tuple((bid, id(mesh)) for bid, (_, mesh) in self._detail_meshes.items()),
         )
         if presentation == self._presentation_signature:
             return
@@ -1016,7 +1039,8 @@ class CadView(gl.GLViewWidget):
             # obraz bryły (wypełnienie w pamięci karty graficznej) zostaje, dopóki nie zmieni się siatka - zaznaczenie i kolory
             # zmieniają tylko kolor; od nowa budują się wyłącznie linie krawędzi (lekkie)
             shown = (*color[:3], .30) if self.xray and body.kind != 'sketch' else tuple(color)
-            fill_key = (id(mesh), body.kind, self.xray)
+            draw_mesh = self._render_mesh(body)
+            fill_key = (id(draw_mesh), body.kind, self.xray)
             line_key = (id(mesh), picked, sel, body.kind, self.xray)
             parts = self._parts.get(body.id)
             if parts is None or parts['fill_key'] != fill_key or parts['line_key'] != line_key:
@@ -1026,8 +1050,8 @@ class CadView(gl.GLViewWidget):
                     if fill is not None:
                         self.removeItem(fill)
                     fill = None
-                    if len(mesh.triangles):
-                        fill = OffsetMesh(meshdata=_meshdata(mesh), smooth=True, color=shown, shader='rccad', drawEdges=False)
+                    if len(draw_mesh.triangles):
+                        fill = OffsetMesh(meshdata=_meshdata(draw_mesh), smooth=True, color=shown, shader='rccad', drawEdges=False)
                         fill.setGLOptions('translucent' if self.xray else 'opaque')
                         fill.section_body_id=body.id
                         self.addItem(fill)
@@ -1756,7 +1780,7 @@ class CadView(gl.GLViewWidget):
     def set_section_plane(self,plane):
         previous_plane=self.section_plane
         self.section_plane=None if plane is None else np.asarray(plane,float)
-        if self._solid_batches or (previous_plane is not None and plane is None):
+        if self._solid_batches or self._detail_meshes or (previous_plane is not None and plane is None):
             self.set_models(self.bodies,self.selected_bodies,self.selected_edges)
         self.section_caps.update_section()
         self._set_hover_edge(None);self.hover_vertex=None

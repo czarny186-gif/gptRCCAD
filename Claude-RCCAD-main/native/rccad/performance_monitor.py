@@ -64,6 +64,7 @@ class PerformanceMonitor(QDialog):
         self.setWindowTitle('Wydajność — RCCAD')
         self.resize(500, 425)
         layout = QVBoxLayout(self)
+        layout.addLayout(studio._adaptive_detail.settings_form(self))
         self.text = QPlainTextEdit(self)
         self.text.setReadOnly(True)
         layout.addWidget(self.text)
@@ -102,13 +103,16 @@ class PerformanceMonitor(QDialog):
         return {
             **self.samples.report(now),
             'visible_bodies': sum(body.kind == 'solid' for body in bodies),
-            'visible_triangles': sum(len(mesh.triangles) for mesh in meshes),
+            'visible_triangles': sum(len(view._render_mesh(body).triangles) for body in bodies),
+            'adaptive_lod_targets': self.studio._adaptive_detail.levels,
             'coarse_meshes': sum(not mesh.fine for mesh in meshes),
             'visible_mesh_bytes': array_bytes(meshes),
             'picking_cache_bytes': _PICK.bytes + view._projection_cache.bytes,
+            'adaptive_lod_cache_bytes': self.studio._adaptive_detail.cache.bytes,
             'document_mesh_cache_bytes': self.studio.document._mesh_cache.bytes,
             'process_rss_bytes': resident_bytes(),
             'process_cpu_percent': round(100 * (cpu - last_cpu) / (now - last), 1) if now - last >= .1 else None,
+            'jobs': self.studio.jobs.report(),
             'foreground_jobs': int(self.studio.busy),
             'preview_jobs': sum(state['running'] for state in self.studio._pv.values()),
             'refinement_jobs': int(bool(self.studio._refining)),

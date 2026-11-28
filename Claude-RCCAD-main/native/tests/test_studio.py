@@ -7242,6 +7242,28 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(len(pts));span=pts.max(axis=0)-pts.min(axis=0)
         self.assertEqual(sorted(round(float(x)) for x in span),[2,2,20])        # sam pas zaokrąglenia R2 wzdłuż krawędzi 20 mm
 
+    def test_step_import_previews_parts_before_atomic_document_commit(self):
+        from PySide6.QtWidgets import QFileDialog
+
+        w = self.w
+        observations = []
+        refresh_view = w.view.set_models
+
+        def see(bodies, *args):
+            observations.append((len(bodies), len(w.document.bodies)))
+            refresh_view(bodies, *args)
+
+        shapes = [(k.box(8 + index, 10, 10).translate((index * 15, 0, 0)), 'solid', None)
+                  for index in range(3)]
+        with patch.object(QFileDialog, 'getOpenFileName', return_value=('parts.step', 'STEP')), \
+             patch('rccad.step_assembly.read_step_assembly', return_value=shapes), \
+             patch.object(w.view, 'set_models', side_effect=see):
+            w.import_model()
+            self.wait()
+        self.assertIn((1, 0), observations)
+        self.assertEqual(len(w.document.bodies), 3)
+        self.assertEqual(len(w.document.states()), 2)
+
     def test_cancelled_preview_cannot_restart_queue_while_new_preview_runs(self):
         w = self.w
         shown = []

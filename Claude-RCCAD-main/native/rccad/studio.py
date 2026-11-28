@@ -21,6 +21,7 @@ from . import snap as snapping
 icons_green = '#2fa56d'
 icons_orange = '#f09a22'
 from .perfcache import LRU
+from .jobs import JobManager
 from .spatial import BoundsTree
 
 from .document import Body, Document, source_of
@@ -186,28 +187,36 @@ class _HistChip(QToolButton):
 class _Signals(QObject):
     done = Signal(object)
     failed = Signal(str)
+    progress = Signal(object)
 
 
 class _Work(QRunnable):
-    def __init__(self, function):
+    def __init__(self, function, label='Zadanie w tle'):
         super().__init__()
         self.function = function
+        self.label = label
+        self.job = None
         self.signals = _Signals()
         self.elapsed_ms = None
 
     def run(self):
+        if self.job is not None:
+            self.job.state = 'running'
         start = time.perf_counter()
         try:
-            value = self.function()
+            try:
+                value = self.function()
+            finally:
+                self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+                if self.job is not None:
+                    self.job.duration_ms = self.elapsed_ms
         except Exception as exc:
-            self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
             message = str(exc) if isinstance(exc, kernel.CadError) else f'Operacja nie powiodła się: {exc}'
             try:
                 self.signals.failed.emit(message)
             except RuntimeError:
                 pass        # okno zamknięte, zanim praca w tle się skończyła (np. przygotowanie rozwinięcia)
             return
-        self.elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         try:
             self.signals.done.emit(value)
         except RuntimeError:
@@ -252,9 +261,11 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         super().__init__()
         self.document = Document()
         self._performance_monitor = None
-        self.pool = QThreadPool.globalInstance()
-        self.warm_pool = QThreadPool(self)            # osobny wątek na rozwinięcia liczone w tle (nie blokuje operacji)
-        self.warm_pool.setMaxThreadCount(1)
+        self.jobs = JobManager(lambda: self.document._revision)
+        self.pool = self.jobs.bind('Studio', QThreadPool.globalInstance())
+        warm = QThreadPool(self)
+        warm.setMaxThreadCount(1)
+        self.warm_pool = self.jobs.bind('Przygotowanie w tle', warm)
         from . import workers
         QTimer.singleShot(1500, workers.start)        # procesy liczące startują w tle, gdy okno jest już widoczne
         self._warming = set()
@@ -715,6 +726,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.cube.directionClicked.connect(lambda az, el: (self.view.setCameraPosition(azimuth=az, elevation=el), self.view.update()))
         self.cube.rotateClicked.connect(self._cube_rotate)
         self.cube.rollClicked.connect(self._cube_roll)
+        from .lod import AdaptiveDetail
+        self._adaptive_detail = AdaptiveDetail(self)
         self.view.cameraMoved.connect(self.cube.update)
         self.view.cameraMoved.connect(self._camera_changed)
 
@@ -10319,6 +10332,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 monitor._mesh_time = work.elapsed_ms
             self._refining.difference_update(todo)
             if self.document is not doc:
+                if work.job is not None:
+                    work.job.discarded = True
                 self._refine_timer.start()
                 return
             hit = False
@@ -10336,7 +10351,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         def failed(_message):
             done(None)
 
-        work = _Work(lambda: workers.fine_meshes(shapes))
+        work = _Work(lambda: workers.fine_meshes(shapes), "Dokładna teselacja")
         work.signals.done.connect(done)
         work.signals.failed.connect(failed)
         self._refine_work = work
@@ -10817,15 +10832,24 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self._warm_history_work = job
         self.warm_pool.start(job, -2)
 
-    def run_operation(self, label, function, apply, fit=False, after=None):
+    def run_operation(self, label, function, apply, fit=False, after=None, progress=None):
         if self.busy:
             return
         self.busy = True
-        work = _Work(function)
+        signals = _Signals() if progress is not None else None
+        compute = function if signals is None else lambda: function(signals.progress.emit)
+        work = _Work(compute, label)
         self._work = work
-        state = dict(cancelled=False)
+        state = dict(cancelled=False, finished=False)
+        if signals is not None:
+            def show_progress(value):
+                if not state['finished']:
+                    progress(value)
+
+            signals.progress.connect(show_progress)
 
         def finish():
+            state['finished'] = True
             self.busy = False
             self._work = None
             self._cancel_op = None
@@ -10833,6 +10857,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         def cancel():
             # Esc: wynik tej operacji zostanie pominięty, okno od razu wraca do pracy (proces dokończy liczenie w tle)
             state['cancelled'] = True
+            if work.job is not None:
+                work.job.discarded = True
             finish()
             self.toast('Anulowano - model pozostał bez zmian.', 3000)
             self.refresh()
@@ -10925,7 +10951,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         st['pending'] = None
         st['running'] = True
         st['active'] = gen
-        work = _Work(compute)
+        work = _Work(compute, f'Podgląd: {key}')
         st['work'] = work
         work.signals.done.connect(lambda value, g=gen: self._pv_done(key, g, show, value, None))
         work.signals.failed.connect(lambda message, g=gen: self._pv_done(key, g, show, None, message))
@@ -10941,6 +10967,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             except Exception:
                 pass
         if st.get('active') == gen:
+            work = st.pop('work')
+            if st['gen'] != gen and work.job is not None:
+                work.job.discarded = True
             st.pop('active')
             self._pv_next(key)
 
@@ -10972,6 +11001,9 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         for st in self._pv.values():
             st['gen'] += 1
             st['pending'] = None
+            work = st.get('work')
+            if work is not None and work.job is not None:
+                work.job.discarded = True
 
     def add_prepared(self, body):
         self.document.commit((*self.document.bodies, body))
@@ -11507,12 +11539,34 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.run_operation('Importowanie SVG', build_svg, self.add_prepared_many, True)
             return
 
-        def build():
+        is_step = Path(path).suffix.lower() in ('.step', '.stp')
+
+        def build(report=None):
             from .colors import imported
-            shapes = kernel.import_shapes(path)
-            # wiele elementów pliku - razem w jednym folderze na liście obiektów, bryły w różnych kolorach
-            return hist.prepared_many(imported((Body(Path(path).stem if i == 0 else f'{Path(path).stem} {i + 1}', s, kind)
-                                                for i, (s, kind) in enumerate(shapes)), Path(path).stem, source_of(path)), lenient=True)
+
+            stem = Path(path).stem
+            if is_step:
+                from .step_assembly import read_step_assembly
+                try:
+                    shapes = read_step_assembly(path)
+                except (RuntimeError, kernel.CadError):
+                    shapes = [(shape, kind, None) for shape, kind in kernel.import_shapes(path)]
+            else:
+                shapes = [(shape, kind, None) for shape, kind in kernel.import_shapes(path)]
+            bodies = []
+            for i, (shape, kind, assembly) in enumerate(shapes):
+                default_name = stem if i == 0 else f'{stem} {i + 1}'
+                names = [name for name in assembly['names'] if name] if assembly else []
+                folder = ' / '.join([stem, *names[1:-1]])[:60] if len(names) > 2 else ''
+                name = names[-1][:80] if len(names) > 1 else default_name
+                meta = {'step_assembly': assembly} if assembly else None
+                bodies.append(Body(name, shape, kind, folder=folder, meta=meta))
+            prepared = imported(bodies, stem, source_of(path))
+
+            def batch(parts, completed, total):
+                report((parts, completed, total))
+
+            return hist.prepared_many(prepared, lenient=True, on_batch=batch if report is not None else None)
 
         def add(bodies):
             if not bodies:
@@ -11520,7 +11574,22 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             self.document.commit((*self.document.bodies, *bodies))
             self._tool_select([b.id for b in bodies])
 
-        self.run_operation('Importowanie modelu', build, add, True)
+        preview = []
+        original = self.view.bodies
+
+        def show_step_progress(value):
+            parts, completed, total = value
+            first = not preview
+            preview.extend(parts)
+            self.view.set_models((*original, *preview), self.view.selected_bodies, self.view.selected_edges)
+            if first and preview and not original:
+                self.view.fit_all()
+            if self._work is not None and self._work.job is not None:
+                self._work.job.progress = completed / total
+            self.toast(f'Importowanie STEP: {completed} / {total}', 1500)
+
+        self.run_operation('Importowanie modelu', build, add, True,
+                           progress=show_step_progress if is_step else None)
 
     # =====================================================================
     # biblioteka obiektów i szkiców (zakładka Biblioteka)

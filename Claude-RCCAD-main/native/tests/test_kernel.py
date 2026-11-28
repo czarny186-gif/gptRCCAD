@@ -331,6 +331,39 @@ class KernelTests(unittest.TestCase):
             self.assertTrue(np.allclose(v.min(0), [box.xmin, box.ymin, box.zmin], atol=1e-3))
             self.assertTrue(np.allclose(v.max(0), [box.xmax, box.ymax, box.zmax], atol=1e-3))
 
+    def test_step_assembly_occurrence_paths_match_exact_nested_placements(self):
+        import tempfile
+        from pathlib import Path
+        from rccad.document import Body, Document
+        from rccad.step_assembly import read_step_assembly
+
+        component = cq.Assembly(name='Component')
+        component.add(k.box(4, 2, 1), name='part', loc=cq.Location(cq.Vector(10, 0, 0)))
+        model = cq.Assembly(name='Model')
+        model.add(component, name='left', loc=cq.Location(cq.Vector(20, 0, 0)))
+        model.add(component, name='right', loc=cq.Location(cq.Vector(40, 0, 0), cq.Vector(0, 0, 1), 90))
+        model.add(cq.Face.makePlane(3, 2, cq.Vector(0, 3, 0)), name='surface')
+        with tempfile.TemporaryDirectory() as directory:
+            step = Path(directory) / 'nested.step'
+            model.save(str(step))
+            assembly = read_step_assembly(step)
+            legacy = k.import_shapes(step)
+            self.assertEqual([kind for _, kind, _ in assembly], [kind for _, kind in legacy])
+            solids = [(shape, path) for shape, kind, path in assembly if kind == 'solid']
+            self.assertEqual(len(solids), 2)
+            self.assertEqual(len(k.instance_groups([shape for shape, _ in solids])), 1)
+            for index, ((shape, path), (expected, _)) in enumerate(zip(solids, legacy)):
+                np.testing.assert_allclose(shape.Center().toTuple(), expected.Center().toTuple(), atol=1e-7)
+                self.assertAlmostEqual(shape.Volume(), expected.Volume())
+                self.assertEqual(path['names'][0], 'Model')
+                self.assertEqual(path['indices'], [0, index, 0])
+            doc = Document()
+            doc.commit([Body('Part', shape, meta={'step_assembly': path}).prepared() for shape, path in solids])
+            project = Path(directory) / 'nested.rccadx'
+            doc.save(project)
+            restored = Document.load(project)
+            self.assertEqual([body.meta['step_assembly'] for body in restored.bodies], [path for _, path in solids])
+
     def test_import_keeps_parts_whose_check_fails(self):
         """Część, która nie przechodzi sprawdzenia poprawności, nie przerywa importu całego pliku."""
         from unittest.mock import patch

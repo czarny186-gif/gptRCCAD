@@ -129,6 +129,8 @@ class Body:
             meta = dict(meta or {}, ply=dict(self.meta['ply']))      # płyta ze sklejki zostaje płytą (grubość, metoda, połączenia)
         if self.meta and self.meta.get('link'):
             meta = dict(meta or {}, link=self.meta['link'])          # połączenie z innymi obiektami zostaje po zmianie kształtu
+        if self.meta and self.meta.get('step_assembly'):
+            meta = dict(meta or {}, step_assembly=self.meta['step_assembly'])
         return replace(self, shape=shape, mesh=_mesh(shape) if mesh is False or (mesh is None and not mesh_deferred()) else mesh, meta=meta)
 
 
