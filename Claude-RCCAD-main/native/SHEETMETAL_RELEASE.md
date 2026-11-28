@@ -1,3 +1,10 @@
+# RCCAD Desktop 0.5.69 — Szyk elementów: narożniki, krzywe wycięcia i wycięcia w walcach
+
+- **Naprawa zgłoszona po 0.5.68 (plik z 4 bryłami):** wycięty narożnik prostopadłościanu, krzywe (powierzchnia swobodna) i proste wycięcie w walcu nie były rozpoznawane, bo ich granica nie leży w jednej płaszczyźnie ani na walcu. Teraz, gdy wieka nie da się zbudować, bryła elementu powstaje przez usunięcie ścian elementu z bryły (sąsiednie ściany zasklepiają miejsce) i odjęcie wyniku od bryły. Dzięki temu rozpoznawane są także narożniki, krawędzie i wycięcia o zakrzywionym dnie.
+- **Kopie jako wycięcia, nie bryły:** pole „Połącz z bryłą od razu” było zaznaczone, ale tryb wyniku zostawał na „Osobno” (zaznaczenie już zaznaczonego pola nie wysyłało sygnału), więc powstawały osobne bryły. Teraz po wskazaniu elementu wynik ustawia się na „Jedna bryła”.
+- **Odporność łączenia:** gdy kopie zachodzą na siebie lub część wychodzi poza bryłę, kopie są odejmowane po jednej, a te, które psują bryłę, są pomijane (zamiast błędu całej operacji).
+- **Ograniczenia (uczciwie):** pojedyncza płaska ściana bez wklęsłych krawędzi nie jest uznawana za element. Jeśli po obrocie kopie leżą w całości poza bryłą (np. oś obrotu daleko od niej), program zgłasza, że nie zmieniły bryły. Oś obrotu dla elementów innych niż na walcu należy ustawić samemu.
+
 # RCCAD Desktop 0.5.68 — Wentylacja i Tekstury: szybsze otwieranie, bez zbędnego przeliczania, podświetlenie jednej ściany
 
 - **Podświetlenie ściany:** przy wskazywaniu powierzchni w Wentylacji i Teksturach świeci się tylko ściana pod kursorem (pomarańczowa), a nie cała bryła. Zaznaczone ściany nadal świecą się trwale.

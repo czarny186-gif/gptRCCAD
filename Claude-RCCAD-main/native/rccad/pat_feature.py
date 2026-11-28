@@ -280,6 +280,43 @@ def _host_axis(boundary):
     return None
 
 
+def _defeature(shape, region, kind):
+    """Wycięcie / wypukłość przez usunięcie ścian elementu z bryły (BRepAlgoAPI_Defeaturing): sąsiednie ściany się przedłużają i zasklepiają
+    miejsce po elemencie, a bryła elementu to różnica bryły przed i po. Działa też dla narożników, krawędzi i krzywych wycięć, których
+    granica nie jest płaska (tam wieka z _caps nie wystarczają)."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Defeaturing
+    from OCP.TopTools import TopTools_ListOfShape
+    faces = shape.Faces()
+    if len(region) == 1 and _kind(faces[next(iter(region))]) == 'flat':
+        return None             # pojedyncza płaska ściana bez wklęsłych krawędzi to nie element, tylko zwykły bok bryły
+    lst = TopTools_ListOfShape()
+    for i in sorted(region):
+        lst.Append(faces[i].wrapped)
+    op = BRepAlgoAPI_Defeaturing()
+    op.SetShape(shape.wrapped)
+    op.AddFacesToRemove(lst)
+    op.SetRunParallel(False)
+    op.Build()
+    if not op.IsDone() or op.Shape().IsNull():
+        return None
+    smooth = cq.Shape.cast(op.Shape())
+    v0, v1 = float(shape.Volume()), float(smooth.Volume())
+    if kind == 'cut' and v1 > v0 + 1e-6:
+        tool = smooth.cut(shape)
+    elif kind == 'add' and v1 < v0 - 1e-6:
+        tool = shape.cut(smooth)
+    else:
+        return None
+    sols = [x for x in tool.Solids() if float(x.Volume()) > 1e-6]
+    if not sols:
+        return None
+    tool = sols[0] if len(sols) == 1 else cq.Compound.makeCompound(sols)
+    try:
+        return kernel.valid(tool)
+    except kernel.CadError:
+        return None
+
+
 def _candidate(shape, start, kind):
     region = _grow(shape, start, kind)
     faces, _, _ = _adjacency(shape)
@@ -288,14 +325,22 @@ def _candidate(shape, start, kind):
     edges = _boundary(shape, region)
     if not edges:
         return None
+    tool = None
     try:
         tool = _solid_from([faces[i].copy() for i in sorted(region)] + [c.copy() for c in _caps(edges)])   # kopie: zszywanie nie może zmienić bryły
         tool = kernel.valid(tool)
+        inside = _inside_host(shape, tool)
+        if inside is None or inside != (kind == 'add'):
+            tool = None         # wypukłość leży w bryle, wycięcie jest pustką poza nią - inaczej to nie ten rodzaj elementu
     except kernel.CadError:
-        return None
-    inside = _inside_host(shape, tool)
-    if inside is None or inside != (kind == 'add'):
-        return None             # wypukłość leży w bryle, wycięcie jest pustką poza nią - inaczej to nie ten rodzaj elementu
+        tool = None
+    if tool is None:            # granica nieplanarna (narożnik, krawędź, krzywe wycięcie): usuń ściany elementu z bryły
+        try:
+            tool = _defeature(shape, region, kind)
+        except Exception:
+            tool = None
+        if tool is None:
+            return None
     return dict(kind=kind, tool=tool, faces=sorted(region), volume=float(tool.Volume()), axis=_host_axis(edges))
 
 

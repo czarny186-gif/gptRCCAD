@@ -6101,6 +6101,37 @@ class StudioTests(unittest.TestCase):
         res=w.document.bodies[0].shape
         self.assertGreater(res.Volume()-p.shape.Volume(),4*850);self.assertTrue(res.isValid())
 
+    # 0.5.69: szyk kołowy wycięć narożnych, krzywych i prostych w walcu - kopie są wycięciami w bryle, nie osobnymi bryłami
+    def _circ_feature_case(self,shape,pick,axis_key,count=4):
+        w=self.w;host=Body('Bryła z wycięciem',shape).prepared();w.document.commit([host]);w.refresh()
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3);w.pat_kind.setCurrentIndex(1)
+        face=host.shape.Faces()[pick]
+        with patch.object(w.view,'pick_face',return_value=(host.id,np.array(face.normalAt().toTuple()),np.array(face.Center().toTuple()))),\
+             patch.object(w.view,'face_at',return_value=(face,None)):
+            w.pick_pattern(10,10)
+        self.assertIsNotNone(w.pat_feature);self.assertEqual(w.pat_feature['kind'],'cut')
+        self.assertTrue(w.pat_feat_merge.isChecked());self.assertEqual(w.pat_result.currentData(),'join')
+        if axis_key:w.pat_axis.setCurrentIndex(w.pat_axis.findData(axis_key))
+        c=host.shape.BoundingBox().center
+        for s_,v in zip(w.pat_pivot,(c.x,c.y,c.z)):s_.setValue(v)
+        w.pat_ccount.setValue(count);w.pat_angle.setValue(360);w.update_pattern_preview();w.apply_pattern();self.wait();self.wait();w.set_mode(None)
+        self.assertEqual(len(w.document.bodies),1)                      # wycięcia w bryle, nie nowe bryły
+        out=w.document.bodies[0].shape
+        self.assertTrue(out.isValid());self.assertEqual(len(out.Solids()),1);self.assertLess(out.Volume(),host.shape.Volume()-1)
+        return host,out
+
+    def test_circular_pattern_of_corner_notch_curved_and_straight_cuts(self):
+        V=cq.Vector
+        box=cq.Workplane('XY').box(60,60,20).cut(cq.Workplane('XY').box(14,14,30).translate((30,30,0))).val()          # wycięty narożnik
+        notch=[i for i,f in enumerate(box.Faces()) if abs(f.Center().x-23)<.5 or abs(f.Center().y-23)<.5 if f.Area()<300]
+        host,out=self._circ_feature_case(box,notch[0],'Z',4);self.assertAlmostEqual(host.shape.Volume()-out.Volume(),3*7*7*20,delta=30)      # 3 nowe narożniki po 7x7x20
+        cyl=cq.Solid.makeCylinder(25,30).cut(cq.Solid.makeBox(20,10,40,V(14,-5,-5)))                                      # proste wycięcie (rowek) w walcu
+        cut_face=[i for i,f in enumerate(cyl.Faces()) if f.geomType()=='PLANE' and abs(f.Center().x-14)<.5 and f.Area()>100][0]
+        host,out=self._circ_feature_case(cyl,cut_face,'Z',3);self.assertGreater(host.shape.Volume()-out.Volume(),100)
+        cyl2=cq.Solid.makeCylinder(25,30).cut(cq.Solid.makeSphere(9).moved(cq.Location(V(24,0,15))))                      # krzywe wycięcie w walcu
+        sph=[i for i,f in enumerate(cyl2.Faces()) if f.geomType()=='SPHERE'][0]
+        host,out=self._circ_feature_case(cyl2,sph,'Z',3);self.assertGreater(host.shape.Volume()-out.Volume(),100)
+
     # 0.5.68: wentylacja i tekstury - podświetlenie jednej ściany, brak zbędnego przeliczania, Zastosuj z wyniku podglądu
     def test_vent_tex_hover_highlights_only_hovered_face(self):
         from rccad import vent_feature as VF

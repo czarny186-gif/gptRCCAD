@@ -1609,7 +1609,18 @@ def run_pattern_feature(bodies, recipe):
     if not copies:
         raise kernel.CadError('Zwiększ ilość kopii.')
     if recipe.get('join'):
-        merged = kernel.boolean('subtract' if feat['kind'] == 'cut' else 'union', host.shape, copies)
+        op = 'subtract' if feat['kind'] == 'cut' else 'union'
+        try:
+            merged = kernel.boolean(op, host.shape, copies)
+        except kernel.CadError:         # kopie zachodzące na siebie: dołącz je po jednej, pomijając te, które psują bryłę
+            merged, done = host.shape, 0
+            for cp in copies:
+                try:
+                    merged, done = kernel.boolean(op, merged, [cp]), done + 1
+                except kernel.CadError:
+                    continue
+            if not done:
+                raise
         if abs(float(merged.Volume()) - float(host.shape.Volume())) < 1e-7 * max(1.0, float(host.shape.Volume())):
             raise kernel.CadError('Kopie elementu nie zmieniły bryły - leżą poza nią. Zmień odstępy lub kierunek.')
         return _replace(bodies, host.changed(merged))

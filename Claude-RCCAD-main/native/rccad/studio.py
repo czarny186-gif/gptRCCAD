@@ -8835,6 +8835,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             spin.setValue(round(float(size) * 1.25 + 1.0, 1))
             spin.blockSignals(False)
         self.pat_feat_merge.setChecked(True)
+        self.pat_result.setCurrentIndex(2)          # setChecked(True) na już zaznaczonym polu nie wysyła sygnału - wynik ustaw jawnie
         self._pattern_defaults(self.pat_virtual)
         self._pattern_feature_axis()
         self.view.set_selection_meshes([self.pat_virtual.mesh], color=(1, .55, .1, .45), line_color=(.95, .42, .02, 1))
