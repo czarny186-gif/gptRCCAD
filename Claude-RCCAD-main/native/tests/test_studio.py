@@ -6074,6 +6074,29 @@ class StudioTests(unittest.TestCase):
         self._pick_feature_face(w,host,(15,0,0))
         self.assertIsNone(w.pat_feature);self.assertIsNone(w.pat_id)
 
+    # 0.5.66: szyk kołowy elementów na walcach i z zaokrągleniami
+    def test_circular_pattern_of_features_on_cylinder_and_fillets(self):
+        w=self.w;V=cq.Vector
+        tube=cq.Solid.makeCylinder(20,40).cut(cq.Solid.makeCylinder(15,40)).cut(cq.Solid.makeCylinder(3,30,V(0,0,20),V(1,0,0)))
+        host=Body('Rura z otworem',tube).prepared();w.document.commit([host]);w.refresh()
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3);w.pat_kind.setCurrentIndex(1)
+        self._pick_feature_face(w,host,(17,3,20))
+        self.assertEqual(w.pat_feature['kind'],'cut');self.assertEqual(w.pat_axis.currentData(),'Z')      # oś walca rury
+        self.assertAlmostEqual(abs(w.pat_pivot[0].value())+abs(w.pat_pivot[1].value()),0,3)
+        w.pat_ccount.setValue(6);w.pat_angle.setValue(360);w.update_pattern_preview();w.apply_pattern();self.wait();self.wait();w.set_mode(None)
+        out=w.document.bodies[0]
+        self.assertAlmostEqual(host.shape.Volume()-out.shape.Volume(),5*141.9,delta=5);self.assertTrue(out.shape.isValid())
+        # czop z promieniem u podstawy i na górze
+        plate=cq.Workplane('XY').box(80,80,20).faces('>Z').workplane().center(25,0).circle(6).extrude(8)
+        plate=plate.edges(cq.selectors.BoxSelector((18,-7,9.9),(32,7,10.1))).fillet(1.5).val()
+        p=Body('Płyta z zaokrąglonym czopem',plate).prepared();w.document.commit([p]);w.refresh()
+        w.set_mode('pattern');w.pat_filter.setCurrentIndex(3);w.pat_kind.setCurrentIndex(1)
+        self._pick_feature_face(w,p,(31,0,14));self.assertEqual(w.pat_feature['kind'],'add')
+        for s_ in w.pat_pivot:s_.setValue(0)
+        w.pat_ccount.setValue(5);w.pat_angle.setValue(360);w.update_pattern_preview();w.apply_pattern();self.wait();self.wait();w.set_mode(None)
+        res=w.document.bodies[0].shape
+        self.assertGreater(res.Volume()-p.shape.Volume(),4*850);self.assertTrue(res.isValid())
+
     def test_tex_tool_window(self):
         from rccad import tex_library as TL, tex_patterns as TP, vent_feature as VF
         import rccad.studio as st

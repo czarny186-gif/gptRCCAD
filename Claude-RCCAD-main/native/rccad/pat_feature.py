@@ -87,16 +87,67 @@ def _classify(f1, f2, edge, scale):
     return 'convex' if s < 0 else 'concave'
 
 
-def _grow(shape, start, allow):
+_KIND = {}
+
+
+def _kind(face):
+    """'flat' (płaska), 'convex' (wypukła, np. zewnętrzny walec / zaokrąglenie krawędzi) albo 'concave' (wklęsła, np. ścianka otworu)."""
+    key = face.hashCode()
+    hit = _KIND.get(key)
+    if hit is not None and hit[0].wrapped.IsSame(face.wrapped):
+        return hit[1]
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepTools import BRepTools
+    from OCP.GeomLProp import GeomLProp_SLProps
+    from OCP.TopAbs import TopAbs_REVERSED
+    kind = 'flat'
+    if face.geomType() != 'PLANE':
+        try:
+            u0, u1, v0, v1 = BRepTools.UVBounds_s(face.wrapped)
+            pr = GeomLProp_SLProps(BRep_Tool.Surface_s(face.wrapped), (u0 + u1) / 2, (v0 + v1) / 2, 2, 1e-7)
+            h = pr.MeanCurvature() if pr.IsCurvatureDefined() else 0.0
+            if face.wrapped.Orientation() == TopAbs_REVERSED:
+                h = -h
+            kind = 'flat' if abs(h) < 1e-9 else ('convex' if h < 0 else 'concave')
+        except Exception:
+            kind = 'flat'
+    if len(_KIND) > 20000:
+        _KIND.clear()
+    _KIND[key] = (face, kind)
+    return kind
+
+
+def _grow(shape, start, mode):
+    """Obszar ścian elementu. mode 'cut': krawędzie wklęsłe (otwór, kieszeń), 'add': wypukłe (czop, żebro).
+    Zaokrąglenia: gładkie przejście wchodzi w ścianę zakrzywioną; do ściany płaskiej (dno, góra) tylko ze ściany zakrzywionej
+    własnego rodzaju (np. zaokrąglony obrzeże kieszeni); zaokrąglenie przeciwnego rodzaju (np. promień u podstawy czopa) wchodzi do elementu,
+    ale na nim obszar się kończy - dalej jest już podstawa."""
     faces, adj, _ = _adjacency(shape)
-    scale = max(kernel.bounds(shape).xlen, kernel.bounds(shape).ylen, kernel.bounds(shape).zlen, 1e-6)
-    region, queue = {start}, [start]
+    box = kernel.bounds(shape)
+    scale = max(box.xlen, box.ylen, box.zlen, 1e-6)
+    main = 'concave' if mode == 'cut' else 'convex'
+    mine = 'concave' if mode == 'cut' else 'convex'
+    region, terminal, queue = {start}, set(), [start]
     while queue:
         i = queue.pop()
+        if i in terminal:
+            continue
+        ta = _kind(faces[i])
         for edge, j in adj[i]:
             if j in region:
                 continue
-            if _classify(faces[i], faces[j], edge, scale) in allow:
+            cls = _classify(faces[i], faces[j], edge, scale)
+            tx = _kind(faces[j])
+            if cls == 'smooth':
+                if tx == 'flat':
+                    ok = ta in (mine, 'flat')
+                else:
+                    ok = True
+                    if tx != mine:
+                        terminal.add(j)
+            else:
+                ok = cls == main
+            if ok:
                 region.add(j)
                 queue.append(j)
             if len(region) > 4000:
@@ -105,26 +156,40 @@ def _grow(shape, start, allow):
 
 
 def _boundary(shape, region):
+    """Krawędzie granicy obszaru razem ze ścianą po drugiej stronie: [(krawędź, ściana)]."""
     faces, adj, _ = _adjacency(shape)
-    out, seen = [], []
+    out = []
     for i in region:
         for edge, j in adj[i]:
             if j in region:
                 continue
-            if any(edge.wrapped.IsSame(e.wrapped) for e in seen):
+            if any(edge.wrapped.IsSame(e.wrapped) for e, _f in out):
                 continue
-            seen.append(edge)
-            out.append(edge)
+            out.append((edge, faces[j]))
     return out
 
 
-def _caps(edges):
-    """Płaskie „wieka” zamykające granicę obszaru: jedno na każdą zamkniętą pętlę krawędzi."""
+def _surface_cap(wire, outside):
+    """Wieko leżące na powierzchni sąsiedniej ściany (np. na walcu, gdy element siedzi na walcu)."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.ShapeFix import ShapeFix_Face
+    from OCP.TopoDS import TopoDS
+    mk = BRepBuilderAPI_MakeFace(BRep_Tool.Surface_s(outside.wrapped), wire.wrapped, True)
+    if not mk.IsDone():
+        raise FeatureError('Nie udało się domknąć elementu na zakrzywionej powierzchni.')
+    fix = ShapeFix_Face(mk.Face())
+    fix.Perform()
+    return cq.Face(TopoDS.Face_s(fix.Face()))
+
+
+def _caps(boundary):
+    """„Wieka” zamykające granicę obszaru: jedno na każdą zamkniętą pętlę krawędzi - płaskie albo na powierzchni sąsiedniej ściany."""
     from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
     from OCP.TopTools import TopTools_HSequenceOfShape
     from OCP.TopoDS import TopoDS
     seq = TopTools_HSequenceOfShape()
-    for e in edges:
+    for e, _f in boundary:
         seq.Append(e.wrapped)
     wires = TopTools_HSequenceOfShape()
     ShapeAnalysis_FreeBounds.ConnectEdgesToWires_s(seq, 1e-5, False, wires)
@@ -133,17 +198,18 @@ def _caps(edges):
         wire = cq.Wire(TopoDS.Wire_s(wires.Value(k)))
         if not wire.IsClosed():
             raise FeatureError('Granica elementu nie jest zamknięta - nie da się jej domknąć.')
-        pts = np.array([v.toTuple() for v in wire.Vertices()], float)
-        if len(pts) > 3:
-            c = pts - pts.mean(axis=0)
-            if np.linalg.svd(c, compute_uv=False)[-1] > 1e-3 * max(np.ptp(pts, axis=0).max(), 1e-6):
-                # węzły nie leżą w jednej płaszczyźnie: obwód nieplanarny (np. element na walcu) - nie domykamy
-                raise FeatureError('Element ma nieplanarną granicę (np. leży na powierzchni walcowej) - nie można go powielić jako bryły.')
+        first = wire.Edges()[0]
+        outside = next(f for e, f in boundary if e.wrapped.IsSame(first.wrapped))
+        wire = wire.copy()       # głęboka kopia: budowa wieka dopisuje krzywe 2D i nie może zmienić krawędzi bryły
         try:
-            cap = cq.Face.makeFromWires(wire)
+            if outside.geomType() == 'PLANE':
+                caps.append(cq.Face.makeFromWires(wire))
+            else:
+                caps.append(_surface_cap(wire, outside))
+        except FeatureError:
+            raise
         except Exception as exc:
-            raise FeatureError('Nie udało się domknąć granicy elementu płaską ścianą.') from exc
-        caps.append(cap)
+            raise FeatureError('Nie udało się domknąć granicy elementu.') from exc
     return caps
 
 
@@ -170,6 +236,12 @@ def _solid_from(faces):
     return solid
 
 
+def _state(shape, point):
+    """Położenie punktu względem bryły; kompozyt (wynik Boolean) klasyfikuje się po jego bryłach - klasyfikator na kompozycie bywa błędny."""
+    states = [kernel.point_state(sol, point, 1e-6) for sol in (shape.Solids() or [shape])]
+    return 'in' if 'in' in states else ('on' if 'on' in states else 'out')
+
+
 def _inside_host(host, tool, samples=7):
     """True, gdy wnętrze bryły elementu leży w bryle (wypukłość), False - poza nią (wycięcie), None - niejednoznacznie."""
     box = kernel.bounds(tool)
@@ -181,9 +253,9 @@ def _inside_host(host, tool, samples=7):
     while len(votes) < samples and tries < 400:
         tries += 1
         point = low + rng.random(3) * (high - low)
-        if kernel.point_state(tool, point, 1e-6) != 'in':
+        if _state(tool, point) != 'in':
             continue
-        state = kernel.point_state(host, point, 1e-6)
+        state = _state(host, point)
         if state != 'on':
             votes.append(state == 'in')
     if len(votes) < 3:
@@ -192,8 +264,24 @@ def _inside_host(host, tool, samples=7):
     return True if share > .8 else (False if share < .2 else None)
 
 
-def _candidate(shape, start, allow, kind):
-    region = _grow(shape, start, allow)
+def _host_axis(boundary):
+    """Oś walca, na którym siedzi element (granica leży na ścianie walcowej): ((x, y, z), (dx, dy, dz)) albo None."""
+    from OCP.BRep import BRep_Tool
+    from OCP.Geom import Geom_CylindricalSurface
+    for _e, outside in boundary:
+        if outside.geomType() != 'CYLINDER':
+            continue
+        try:
+            surf = Geom_CylindricalSurface.DownCast_s(BRep_Tool.Surface_s(outside.wrapped))
+            ax = surf.Position().Axis()
+            return ((ax.Location().X(), ax.Location().Y(), ax.Location().Z()), (ax.Direction().X(), ax.Direction().Y(), ax.Direction().Z()))
+        except Exception:
+            continue
+    return None
+
+
+def _candidate(shape, start, kind):
+    region = _grow(shape, start, kind)
     faces, _, _ = _adjacency(shape)
     if len(region) >= len(faces):
         return None
@@ -201,14 +289,14 @@ def _candidate(shape, start, allow, kind):
     if not edges:
         return None
     try:
-        tool = _solid_from([faces[i] for i in sorted(region)] + _caps(edges))
+        tool = _solid_from([faces[i].copy() for i in sorted(region)] + [c.copy() for c in _caps(edges)])   # kopie: zszywanie nie może zmienić bryły
         tool = kernel.valid(tool)
     except kernel.CadError:
         return None
     inside = _inside_host(shape, tool)
     if inside is None or inside != (kind == 'add'):
         return None             # wypukłość leży w bryle, wycięcie jest pustką poza nią - inaczej to nie ten rodzaj elementu
-    return dict(kind=kind, tool=tool, faces=sorted(region), volume=float(tool.Volume()))
+    return dict(kind=kind, tool=tool, faces=sorted(region), volume=float(tool.Volume()), axis=_host_axis(edges))
 
 
 def feature_from_face(shape, face):
@@ -219,9 +307,9 @@ def feature_from_face(shape, face):
         raise FeatureError('Nie znaleziono wskazanej ściany w bryle.')
     total = float(shape.Volume())
     found = []
-    for allow, kind in ((('concave', 'smooth'), 'cut'), (('convex', 'smooth'), 'add')):
+    for kind in ('cut', 'add'):
         try:
-            c = _candidate(shape, start, allow, kind)
+            c = _candidate(shape, start, kind)
         except FeatureError:
             c = None
         if c is not None and 1e-9 < c['volume'] < MAX_SHARE * total:

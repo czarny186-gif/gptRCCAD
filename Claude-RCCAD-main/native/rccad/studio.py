@@ -8591,6 +8591,8 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         self.pat_line.setVisible(kind == 'path')
         self.pat_step2.setVisible(kind == 'path')
         self.pat_panel.adjustSize()
+        if self.pat_feature is not None:
+            self._pattern_feature_axis()
         self.update_pattern_status()
 
     def _pattern_range_controls(self, enabled):
@@ -8779,6 +8781,21 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
                 self.pat_step1.set_state('active', ('Szkic: ' if body.kind == 'sketch' else 'Bryła: ') + body.name)
         self.view.setCursor(Qt.PointingHandCursor if body is not None else Qt.ArrowCursor)
 
+    def _pattern_feature_axis(self):
+        """Element na walcu: w szyku kołowym oś obrotu i środek ustawiają się na osi tego walca (gdy jest równoległa do osi świata)."""
+        axis = self.pat_feature.get('axis') if self.pat_feature else None
+        if not axis or self.pat_kind.currentData() != 'circ':
+            return
+        origin, direction = np.array(axis[0], float), np.array(axis[1], float)
+        for i, key in enumerate(('X', 'Y', 'Z')):
+            unit = np.zeros(3)
+            unit[i] = 1.0
+            if abs(abs(float(direction @ unit)) - 1.0) < 1e-6:
+                self.pat_axis.setCurrentIndex(self.pat_axis.findData(key))
+                self._pattern_set(self.pat_pivot, origin)
+                self.toast('Element leży na walcu - środek i oś obrotu ustawiono na osi tego walca.', 4000)
+                return
+
     def _pick_pattern_feature(self, x, y):
         found = self._pattern_feature_at(x, y)
         self.view.set_hover_body(None)
@@ -8794,7 +8811,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
         tool = feat['tool']
         label = 'Wycięcie' if feat['kind'] == 'cut' else 'Wypukłość'
         self.pat_id = host.id
-        self.pat_feature = dict(kind=feat['kind'], tool=tool, faces=feat['faces'])
+        self.pat_feature = dict(kind=feat['kind'], tool=tool, faces=feat['faces'], axis=feat.get('axis'))
         self.pat_virtual = Body(label, tool, 'solid', 'XY', id=host.id + '#el', mesh=kernel.display_mesh(tool))
         low, high = self._mesh_bounds(self.pat_virtual.mesh)
         for spin, size in zip(self.pat_gaps, high - low):
@@ -8803,6 +8820,7 @@ class StudioWindow(StepEditTools, TiltTools, TwistTools, SketchTools, SketchPlac
             spin.blockSignals(False)
         self.pat_feat_merge.setChecked(True)
         self._pattern_defaults(self.pat_virtual)
+        self._pattern_feature_axis()
         self.view.set_selection_meshes([self.pat_virtual.mesh], color=(1, .55, .1, .45), line_color=(.95, .42, .02, 1))
         self.update_pattern_status()
 

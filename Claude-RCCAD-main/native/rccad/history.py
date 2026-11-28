@@ -1600,7 +1600,11 @@ def run_pattern_feature(bodies, recipe):
     host = _body(bodies, recipe['id'])
     feat = recipe['feature']
     tool = pat_feature.unpack(feat['tool'])
-    ops, _moved = pattern_ops_for(SimpleNamespace(shape=tool), recipe)
+    fake = SimpleNamespace(shape=tool)
+    if recipe['kind'] == 'circ':        # element zostaje na swoim miejscu: promień = jego bieżąca odległość od osi
+        d0, _dir = radial(np.array(kernel.bounds(tool).center.toTuple(), float), recipe['params']['pivot'], recipe['params']['axis'])
+        recipe = dict(recipe, params=dict(recipe['params'], radius=float(d0)))
+    ops, _moved = pattern_ops_for(fake, recipe)
     copies = [kernel.apply_op(tool, op) for op in ops]
     if not copies:
         raise kernel.CadError('Zwiększ ilość kopii.')

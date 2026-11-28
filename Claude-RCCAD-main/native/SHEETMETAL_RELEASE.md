@@ -1,3 +1,12 @@
+# RCCAD Desktop 0.5.67 — Szyk elementów: elementy na walcach i z zaokrągleniami
+
+- **Naprawa zgłoszona po 0.5.66:** szyk kołowy elementów nie działał na walcach i na zaokrągleniach. Teraz element jest rozpoznawany także wtedy, gdy leży na powierzchni walcowej (otwór radialny w rurze, czop na wałku, kieszeń na walcu) - wieko elementu powstaje na powierzchni walca, a nie jako płaskie.
+- **Zaokrąglenia:** promień u podstawy czopa, zaokrąglony czub i zaokrąglony brzeg kieszeni wchodzą do elementu i są powielane razem z nim.
+- **Oś walca:** po wskazaniu elementu na walcu szyk kołowy sam ustawia oś obrotu i środek na osi tego walca (gdy jest równoległa do osi X, Y lub Z); komunikat informuje o tym.
+- **Odległość od środka w szyku kołowym elementu** nie przesuwa już elementu (kopie zawsze powstają na bieżącym promieniu elementu).
+- **Poprawki wewnętrzne:** rozpoznawanie elementu nie zmienia już geometrii wskazanej bryły (wieka budowane na kopiach krawędzi), a położenie punktów w wyniku Boolean (kompozyt) jest klasyfikowane po bryłach.
+- **Ograniczenia (uczciwie):** oś walca ustawia się automatycznie tylko dla osi równoległych do X, Y lub Z (dla innych ustaw środek ręcznie); elementów na stożku, kuli i torusie nie testowałem osobno (środek obrotu trzeba tam wskazać samemu).
+
 # RCCAD Desktop 0.5.66 — Wydajność widoku i kolejki teselacji
 
 - Panel Obiekty aktualizuje zaznaczenie bez przebudowy listy.
